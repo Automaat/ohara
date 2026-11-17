@@ -19,7 +19,8 @@ const fieldMessages: Record<string, Record<number, string>> = {
 	tmdb_id: { 409: 'Tytuł z tym identyfikatorem TMDB już istnieje.' },
 	kind: { 409: 'Nie można zmienić typu tytułu, który ma wydania.' },
 	title_id: { 422: 'Wybrany tytuł nie istnieje.' },
-	edition_id: { 422: 'Wybrane wydanie nie istnieje.' }
+	edition_id: { 422: 'Wybrane wydanie nie istnieje.' },
+	phrase: { 409: 'Ta fraza już jest na liście.' }
 };
 
 function messageFor(status: number, body: ErrorBody): string {

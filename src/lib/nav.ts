@@ -6,7 +6,8 @@ export const sections: NavSection[] = [
 			{ href: '/', label: 'Kolekcja', icon: 'book' },
 			{ href: '/titles', label: 'Tytuły', icon: 'repositories' },
 			{ href: '/scan', label: 'Skanuj', icon: 'plus' },
-			{ href: '/scan/queue', label: 'Do uzupełnienia', icon: 'pending' }
+			{ href: '/scan/queue', label: 'Do uzupełnienia', icon: 'pending' },
+			{ href: '/deals', label: 'Okazje', icon: 'tag' }
 		]
 	}
 ];

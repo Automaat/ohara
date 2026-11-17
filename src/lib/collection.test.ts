@@ -232,7 +232,8 @@ describe('copy form', () => {
 			shop: 'OLX',
 			acquired_as: 'used',
 			condition: 'good',
-			notes: ''
+			notes: '',
+			max_price_cents: null
 		});
 		expect(form.price).toBe('49,99');
 		const parsed = copyPayload(form, 3);
@@ -244,8 +245,30 @@ describe('copy form', () => {
 			shop: 'OLX',
 			acquired_as: 'used',
 			condition: 'good',
-			notes: ''
+			notes: '',
+			max_price_cents: null
 		});
+	});
+
+	it('keeps the maximum price of a wishlist copy only', () => {
+		const form = copyToForm({
+			edition_id: 3,
+			status: 'wishlist',
+			price_cents: null,
+			purchased_on: null,
+			shop: '',
+			acquired_as: null,
+			condition: null,
+			notes: '',
+			max_price_cents: 6000
+		});
+		expect(form.max_price).toBe('60,00');
+		const wish = copyPayload(form, 3);
+		expect(wish.ok && wish.value.max_price_cents).toBe(6000);
+		const owned = copyPayload({ ...form, status: 'owned' }, 3);
+		expect(owned.ok && owned.value.max_price_cents).toBeNull();
+		const blank = copyPayload({ ...form, max_price: ' ' }, 3);
+		expect(blank.ok && blank.value.max_price_cents).toBeNull();
 	});
 
 	it('strips price and date from a wishlist copy', () => {
@@ -266,7 +289,8 @@ describe('copy form', () => {
 
 	it.each([
 		[{ price: 'dużo' }, 'price_cents'],
-		[{ purchased_on: '1.11.2026' }, 'purchased_on']
+		[{ purchased_on: '1.11.2026' }, 'purchased_on'],
+		[{ status: 'wishlist' as const, max_price: 'tanio' }, 'max_price_cents']
 	])('rejects %j on %s', (patch, field) => {
 		const parsed = copyPayload({ ...copyToForm(null), ...patch }, 3);
 		expect(!parsed.ok && parsed.issue.field).toBe(field);

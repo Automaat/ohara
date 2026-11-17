@@ -248,7 +248,8 @@ function scanCopyPayload(f: QuickForm, editionID: number, requestKey: string) {
 			shop: f.shop,
 			acquired_as: f.acquired_as,
 			condition: '',
-			notes: ''
+			notes: '',
+			max_price: ''
 		},
 		editionID
 	);

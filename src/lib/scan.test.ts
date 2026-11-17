@@ -365,6 +365,7 @@ describe('saveScan', () => {
 			acquired_as: 'new',
 			condition: null,
 			notes: '',
+			max_price_cents: null,
 			request_key: 'k1'
 		});
 	});

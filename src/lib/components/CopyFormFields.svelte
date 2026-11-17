@@ -34,7 +34,15 @@
 	} = $props();
 
 	const errorFor = (field: string) => (issue?.field === field ? issue.message : undefined);
-	const fieldKeys = ['price_cents', 'purchased_on', 'shop', 'acquired_as', 'condition', 'notes'];
+	const fieldKeys = [
+		'price_cents',
+		'purchased_on',
+		'shop',
+		'acquired_as',
+		'condition',
+		'notes',
+		'max_price_cents'
+	];
 	const general = $derived(issue && !fieldKeys.includes(issue.field) ? issue.message : null);
 </script>
 
@@ -61,6 +69,15 @@
 			placeholder="RRRR-MM-DD"
 			bind:value={form.purchased_on}
 			error={errorFor('purchased_on')}
+		/>
+	{:else}
+		<Field
+			label="Cena maksymalna (zł)"
+			hint="Powiadomienie na Telegramie o każdej nowej ofercie w tej cenie lub taniej."
+			inputmode="decimal"
+			placeholder="60"
+			bind:value={form.max_price}
+			error={errorFor('max_price_cents')}
 		/>
 	{/if}
 	<Field

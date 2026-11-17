@@ -23,6 +23,7 @@ Same layout and tooling as `../baratie`. `package.json` and
     /lookup/           # GET /api/lookup/{barcode}: provider registry + lookup_cache
       /books/          # BN, Open Library, Google Books providers (fixtures in testdata/)
     /scanqueue/        # /api/scan-queue: barcodes the scanner could not resolve
+    /deals/            # wishlist deal hunter: OLX, Pepper, Ceneo sources, matcher, Telegram alerts
     /server/           # router: /health, /metrics, /api/*, SPA fallback
     /web/              # serves the built SPA, index.html for client routes
     /metrics/          # Prometheus collectors on a private registry (ohara_*)
@@ -62,6 +63,12 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   priority. Every provider gets `ohara_lookup_provider_requests_total`,
   `ohara_lookup_provider_errors_total` and `ohara_lookup_cache_hits_total`.
 - DB tests call `dbtest.Migrated(t)`; each gets its own schema.
+- Deal sources implement `deals.Source`. A run matches listing titles to
+  wishlist copies (all title words, the edition's format for movies, the
+  author's surname for books, minus the editable reject phrases), stores
+  each listing once in `price_observation` (`source`, `external_id`) and
+  queues one `deal_alert` per new listing at or below the copy's
+  `max_price_cents`. Alerts are retried up to 5 times within a week.
 - A barcode no provider resolves goes to `scan_queue`; a trigger on `edition`
   removes it once an edition carries that barcode.
 
@@ -88,14 +95,18 @@ the container port beyond the LAN.
 
 ## Configuration
 
-| Variable                     | Default                         | Purpose                                                                                    |
-| ---------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------ |
-| `DATABASE_URL` or `PG*`      | —                               | Postgres connection (required). Prefer `PG*` when the password has URL-special characters. |
-| `OHARA_ADDR`                 | `:8000`                         | Listen address                                                                             |
-| `OHARA_WEB_DIR`              | unset (`/app/web` in the image) | Built SPA to serve                                                                         |
-| `OHARA_ACCESS_LOG`           | `false`                         | One log line per request                                                                   |
-| `OHARA_LOOKUP_STUB`          | `false`                         | Register the stub lookup provider (placeholder candidate for every barcode)                |
-| `OHARA_GOOGLE_BOOKS_API_KEY` | unset                           | Enable the Google Books provider (keyless clients get no quota)                            |
+| Variable                                                   | Default                         | Purpose                                                                                                 |
+| ---------------------------------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL` or `PG*`                                    | —                               | Postgres connection (required). Prefer `PG*` when the password has URL-special characters.              |
+| `OHARA_ADDR`                                               | `:8000`                         | Listen address                                                                                          |
+| `OHARA_WEB_DIR`                                            | unset (`/app/web` in the image) | Built SPA to serve                                                                                      |
+| `OHARA_ACCESS_LOG`                                         | `false`                         | One log line per request                                                                                |
+| `OHARA_LOOKUP_STUB`                                        | `false`                         | Register the stub lookup provider (placeholder candidate for every barcode)                             |
+| `OHARA_GOOGLE_BOOKS_API_KEY`                               | unset                           | Enable the Google Books provider (keyless clients get no quota)                                         |
+| `OHARA_DEALS_INTERVAL`                                     | `0s` (off)                      | Deal search schedule, at least `10m` (e.g. `2h`), jittered ±10%; `POST /api/deals/run` works either way |
+| `OHARA_DEALS_DELAY`                                        | `5s`                            | Pause between two source requests, jittered ±50%                                                        |
+| `OHARA_TELEGRAM_BOT_TOKEN`, `OHARA_TELEGRAM_CHAT_ID`       | unset (no alerts)               | Telegram bot for deal alerts; set both or neither                                                       |
+| `OHARA_DEALS_{OLX,PEPPER,CENEO}_URL`, `OHARA_TELEGRAM_URL` | public endpoints                | Point the sources and Telegram at test doubles                                                          |
 
 ## Commands
 

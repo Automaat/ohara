@@ -1,0 +1,739 @@
+{
+ "nextPage": "https://data.bn.org.pl/api/institutions/bibs.json?isbnIssn=9788308049396&limit=10&sinceId=3252370",
+ "bibs": [
+  {
+   "id": 3252369,
+   "zone": "institution",
+   "createdDate": "2014-11-10T12:00:00.000Z",
+   "updatedDate": "2026-11-03T06:07:35.486Z",
+   "deleted": false,
+   "deletedDate": null,
+   "language": "polski",
+   "subject": "Frank, Jakub Józef (1726-1791) Frankiści (sekta)",
+   "subjectPlace": "Polska Podole (kraina historyczna)",
+   "subjectTime": "d1752 d1791 1701-1800",
+   "subjectWork": "",
+   "isbnIssn": "9788308049396",
+   "author": "Tokarczuk, Olga (1962- ) Tokarczuk, Olga (1962- ) Wydawnictwo Literackie",
+   "placeOfPublication": "Kraków : Polska",
+   "location": "1 1 1",
+   "title": "Księgi Jakubowe (pol.) Księgi Jakubowe albo Wielka podróż przez siedem granic, pięć języków i trzy duże religie, nie licząc tych małych : opowiadana przez zmarłych, a przez autorkę dopełniona metodą koniektury, z wielu rozmaitych ksiąg zaczerpnięta, a także wspomożona imaginacją, która to jest największym naturalnym darem człowieka / Księgi Jakubowe Wielka podróż przez siedem granic, pięć języków i trzy duże religie, nie licząc tych małych",
+   "udc": "821.162.1-3 04",
+   "publisher": "Wydawnictwo Literackie Wydawnictwo Literackie,",
+   "kind": "książka",
+   "domain": "",
+   "formOfWork": "Książki",
+   "genre": "Powieść polska",
+   "timePeriodOfCreation": "2014",
+   "audienceGroup": "",
+   "demographicGroup": "Literatura polska",
+   "nationalBibliographyNumber": "UWD 2014/32458",
+   "publicationYear": "2014",
+   "languageOfOriginal": "polski",
+   "marc": {
+    "leader": "03918nam a2200949 i 4500",
+    "fields": [
+     {
+      "001": "b0000003252369"
+     },
+     {
+      "005": "20261103060735.4"
+     },
+     {
+      "008": "141110s2014    pl a         |000 f pol  "
+     },
+     {
+      "009": "991030653629705066"
+     },
+     {
+      "015": {
+       "ind1": " ",
+       "ind2": " ",
+       "subfields": [
+        {
+         "a": "UWD 2014/32458"
+        }
+       ]
+      }
+     },
+     {
+      "020": {
+       "ind1": " ",
+       "ind2": " ",
+       "subfields": [
+        {
+         "a": "9788308049396"
+        },
+        {
+         "q": "(oprawa twarda) :"
+        },
+        {
+         "c": "zł 69,90"
+        }
+       ]
+      }
+     },
+     {
+      "035": {
+       "ind1": " ",
+       "ind2": " ",
+       "subfields": [
+        {
+         "a": "991030653629705066"
+        }
+       ]
+      }
+     },
+     {
+      "035": {
+       "ind1": " ",
+       "ind2": " ",
+       "subfields": [
+        {
+         "a": "(EXLNZ-48OMNIS_NETWORK)9910052672005606"
+        }
+       ]
+      }
+     },
+     {
+      "035": {
+       "ind1": " ",
+       "ind2": " ",
+       "subfields": [
+        {
+         "a": "(PL)b0000003252369"
+        }
+       ]
+      }
+     },
+     {
+      "035": {
+       "ind1": " ",
+       "ind2": " ",
+       "subfields": [
+        {
+         "a": "(PL-WaBN)b32523695-48omnis_nlop"
+        }
+       ]
+      }
+     },
+     {
+      "035": {
+       "ind1": " ",
+       "ind2": " ",
+       "subfields": [
+        {
+         "a": "b32523695"
+        }
+       ]
+      }
+     },
+     {
+      "035": {
+       "ind1": " ",
+       "ind2": " ",
+       "subfields": [
+        {
+         "a": "(OCoLC)894985787"
+        }
+       ]
+      }
+     },
+     {
+      "035": {
+       "ind1": " ",
+       "ind2": " ",
+       "subfields": [
+        {
+         "a": "xx003546034"
+        }
+       ]
+      }
+     },
+     {
+      "035": {
+       "ind1": " ",
+       "ind2": " ",
+       "subfields": [
+        {
+         "a": "xx004498550"
+        }
+       ]
+      }
+     },
+     {
+      "035": {
+       "ind1": " ",
+       "ind2": " ",
+       "subfields": [
+        {
+         "a": "xx003257599"
+        }
+       ]
+      }
+     },
+     {
+      "040": {
+       "ind1": " ",
+       "ind2": " ",
+       "subfields": [
+        {
+         "a": "WA N"
+        },
+        {
+         "c": "WA N"
+        },
+        {
+         "d": "WA N"
+        },
+        {
+         "d": "OLSZT 003"
+        },
+        {
+         "d": "WA N"
+        },
+        {
+         "d": "Ł M"
+        },
+        {
+         "d": "WA N"
+        },
+        {
+         "d": "WA U"
+        },
+        {
+         "d": "WA N"
+        }
+       ]
+      }
+     },
+     {
+      "041": {
+       "ind1": "0",
+       "ind2": " ",
+       "subfields": [
+        {
+         "a": "pol"
+        }
+       ]
+      }
+     },
+     {
+      "045": {
+       "ind1": "2",
+       "ind2": " ",
+       "subfields": [
+        {
+         "b": "d1752"
+        },
+        {
+         "b": "d1791"
+        }
+       ]
+      }
+     },
+     {
+      "046": {
+       "ind1": " ",
+       "ind2": " ",
+       "subfields": [
+        {
+         "k": "2014"
+        }
+       ]
+      }
+     },
+     {
+      "080": {
+       "ind1": " ",
+       "ind2": " ",
+       "subfields": [
+        {
+         "a": "821.162.1-3"
+        }
+       ]
+      }
+     },
+     {
+      "084": {
+       "ind1": " ",
+       "ind2": " ",
+       "subfields": [
+        {
+         "a": "04"
+        }
+       ]
+      }
+     },
+     {
+      "100": {
+       "ind1": "1",
+       "ind2": " ",
+       "subfields": [
+        {
+         "a": "Tokarczuk, Olga"
+        },
+        {
+         "d": "(1962- )"
+        }
+       ]
+      }
+     },
+     {
+      "240": {
+       "ind1": "1",
+       "ind2": "0",
+       "subfields": [
+        {
+         "a": "Księgi Jakubowe"
+        },
+        {
+         "l": "(pol.)"
+        }
+       ]
+      }
+     },
+     {
+      "245": {
+       "ind1": "1",
+       "ind2": "0",
+       "subfields": [
+        {
+         "a": "Księgi Jakubowe albo Wielka podróż przez siedem granic, pięć języków i trzy duże religie, nie licząc tych małych :"
+        },
+        {
+         "b": "opowiadana przez zmarłych, a przez autorkę dopełniona metodą koniektury, z wielu rozmaitych ksiąg zaczerpnięta, a także wspomożona imaginacją, która to jest największym naturalnym darem człowieka /"
+        },
+        {
+         "c": "Olga Tokarczuk."
+        }
+       ]
+      }
+     },
+     {
+      "246": {
+       "ind1": "3",
+       "ind2": "0",
+       "subfields": [
+        {
+         "a": "Księgi Jakubowe"
+        }
+       ]
+      }
+     },
+     {
+      "246": {
+       "ind1": "3",
+       "ind2": "0",
+       "subfields": [
+        {
+         "a": "Wielka podróż przez siedem granic, pięć języków i trzy duże religie, nie licząc tych małych"
+        }
+       ]
+      }
+     },
+     {
+      "260": {
+       "ind1": " ",
+       "ind2": " ",
+       "subfields": [
+        {
+         "a": "Kraków :"
+        },
+        {
+         "b": "Wydawnictwo Literackie,"
+        },
+        {
+         "c": "2014."
+        }
+       ]
+      }
+     },
+     {
+      "300": {
+       "ind1": " ",
+       "ind2": " ",
+       "subfields": [
+        {
+         "a": "903, [9] s. :"
+        },
+        {
+         "b": "il. ;"
+        },
+        {
+         "c": "24 cm."
+        }
+       ]
+      }
+     },
+     {
+      "336": {
+       "ind1": " ",
+       "ind2": " ",
+       "subfields": [
+        {
+         "a": "Tekst"
+        },
+        {
+         "b": "txt"
+        },
+        {
+         "2": "rdacontent"
+        }
+       ]
+      }
+     },
+     {
+      "337": {
+       "ind1": " ",
+       "ind2": " ",
+       "subfields": [
+        {
+         "a": "Bez urządzenia pośredniczącego"
+        },
+        {
+         "b": "n"
+        },
+        {
+         "2": "rdamedia"
+        }
+       ]
+      }
+     },
+     {
+      "338": {
+       "ind1": " ",
+       "ind2": " ",
+       "subfields": [
+        {
+         "a": "Wolumin"
+        },
+        {
+         "b": "nc"
+        },
+        {
+         "2": "rdacarrier"
+        }
+       ]
+      }
+     },
+     {
+      "380": {
+       "ind1": " ",
+       "ind2": " ",
+       "subfields": [
+        {
+         "a": "Książki"
+        }
+       ]
+      }
+     },
+     {
+      "386": {
+       "ind1": " ",
+       "ind2": " ",
+       "subfields": [
+        {
+         "m": "Przynależność kulturowa"
+        },
+        {
+         "a": "Literatura polska"
+        }
+       ]
+      }
+     },
+     {
+      "388": {
+       "ind1": "1",
+       "ind2": " ",
+       "subfields": [
+        {
+         "a": "2001-"
+        }
+       ]
+      }
+     },
+     {
+      "500": {
+       "ind1": " ",
+       "ind2": " ",
+       "subfields": [
+        {
+         "a": "Paginacja wsteczna."
+        }
+       ]
+      }
+     },
+     {
+      "500": {
+       "ind1": " ",
+       "ind2": " ",
+       "subfields": [
+        {
+         "a": "W obrębie wydania dodruki: 2014,2015, 2018, 2019, 2020."
+        }
+       ]
+      }
+     },
+     {
+      "504": {
+       "ind1": " ",
+       "ind2": " ",
+       "subfields": [
+        {
+         "a": "Bibliogr. s. 22-20."
+        }
+       ]
+      }
+     },
+     {
+      "530": {
+       "ind1": " ",
+       "ind2": " ",
+       "subfields": [
+        {
+         "a": "Dostępne również jako e-book."
+        }
+       ]
+      }
+     },
+     {
+      "586": {
+       "ind1": " ",
+       "ind2": " ",
+       "subfields": [
+        {
+         "a": "The Nobel Prize, 2018"
+        }
+       ]
+      }
+     },
+     {
+      "600": {
+       "ind1": "1",
+       "ind2": "7",
+       "subfields": [
+        {
+         "a": "Frank, Jakub Józef"
+        },
+        {
+         "d": "(1726-1791)"
+        },
+        {
+         "v": "powieści."
+        }
+       ]
+      }
+     },
+     {
+      "648": {
+       "ind1": " ",
+       "ind2": "7",
+       "subfields": [
+        {
+         "a": "1701-1800"
+        },
+        {
+         "2": "DBN"
+        }
+       ]
+      }
+     },
+     {
+      "650": {
+       "ind1": " ",
+       "ind2": "7",
+       "subfields": [
+        {
+         "a": "Frankiści (sekta)"
+        },
+        {
+         "v": "powieści."
+        }
+       ]
+      }
+     },
+     {
+      "651": {
+       "ind1": " ",
+       "ind2": "7",
+       "subfields": [
+        {
+         "a": "Polska"
+        },
+        {
+         "2": "DBN"
+        }
+       ]
+      }
+     },
+     {
+      "651": {
+       "ind1": " ",
+       "ind2": "7",
+       "subfields": [
+        {
+         "a": "Podole (kraina historyczna)"
+        }
+       ]
+      }
+     },
+     {
+      "655": {
+       "ind1": " ",
+       "ind2": "7",
+       "subfields": [
+        {
+         "a": "Powieść polska"
+        },
+        {
+         "y": "21 w."
+        },
+        {
+         "2": "DBN"
+        }
+       ]
+      }
+     },
+     {
+      "700": {
+       "ind1": "1",
+       "ind2": " ",
+       "subfields": [
+        {
+         "a": "Tokarczuk, Olga"
+        },
+        {
+         "d": "(1962- )"
+        }
+       ]
+      }
+     },
+     {
+      "710": {
+       "ind1": "2",
+       "ind2": " ",
+       "subfields": [
+        {
+         "a": "Wydawnictwo Literackie"
+        },
+        {
+         "4": "pbl"
+        }
+       ]
+      }
+     },
+     {
+      "852": {
+       "ind1": " ",
+       "ind2": " ",
+       "subfields": [
+        {
+         "8": "22648410990005066"
+        },
+        {
+         "j": "1"
+        },
+        {
+         "h": "BDPP 63.508"
+        },
+        {
+         "b": "BN_PL"
+        },
+        {
+         "p": "888a1117927"
+        },
+        {
+         "c": "d6"
+        }
+       ]
+      }
+     },
+     {
+      "852": {
+       "ind1": " ",
+       "ind2": " ",
+       "subfields": [
+        {
+         "8": "22511431800005066"
+        },
+        {
+         "j": "1"
+        },
+        {
+         "h": "2.825.346 A"
+        },
+        {
+         "b": "BN_PL"
+        },
+        {
+         "p": "30001014899841"
+        },
+        {
+         "c": "bk1"
+        }
+       ]
+      }
+     },
+     {
+      "852": {
+       "ind1": " ",
+       "ind2": " ",
+       "subfields": [
+        {
+         "8": "22511431820005066"
+        },
+        {
+         "j": "1"
+        },
+        {
+         "h": "1.647.818"
+        },
+        {
+         "b": "BN_PL"
+        },
+        {
+         "p": "30001014899834"
+        },
+        {
+         "c": "bk6"
+        }
+       ]
+      }
+     },
+     {
+      "920": {
+       "ind1": " ",
+       "ind2": " ",
+       "subfields": [
+        {
+         "a": "978-83-08-04939-6 (oprawa twarda) :"
+        },
+        {
+         "c": "zł 69,90"
+        }
+       ]
+      }
+     },
+     {
+      "950": {
+       "ind1": " ",
+       "ind2": " ",
+       "subfields": [
+        {
+         "u": "https://eu05.alma.exlibrisgroup.com/view/uresolver/48OMNIS_NLOP/openurl?u.ignore_date_coverage=true&portfolio_pid=53680741500005066&Force_direct=true"
+        },
+        {
+         "z": "Zobacz w Polonie sygnatura: 2.825.346 A"
+        },
+        {
+         "8": "53680741500005066"
+        }
+       ]
+      }
+     }
+    ]
+   }
+  }
+ ]
+}

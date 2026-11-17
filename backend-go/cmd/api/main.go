@@ -20,6 +20,7 @@ import (
 	"github.com/Automaat/ohara/backend-go/internal/collection"
 	"github.com/Automaat/ohara/backend-go/internal/db"
 	"github.com/Automaat/ohara/backend-go/internal/lookup"
+	"github.com/Automaat/ohara/backend-go/internal/lookup/books"
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
 	"github.com/Automaat/ohara/backend-go/internal/server"
 	"github.com/Automaat/ohara/backend-go/internal/web"
@@ -163,10 +164,28 @@ func openDB(ctx context.Context, dsn string, logger *slog.Logger) (*pgxpool.Pool
 	return pool, nil
 }
 
-// newLookup registers the barcode metadata providers. Real providers come
-// with the book and movie lookup chains; the stub stands in until then.
+// bookCacheTTL bounds how long a book answer, a miss included, is reused;
+// a week lets a new release reach the catalogs without rescanning daily.
+const bookCacheTTL = 7 * 24 * time.Hour
+
+// newLookup registers the barcode metadata providers. Registration order is
+// the field priority when book answers are merged: the national library
+// first, then Open Library, then Google Books when a key is set.
 func newLookup(pool *pgxpool.Pool, logger *slog.Logger) (*lookup.Handler, error) {
 	registry := &lookup.Registry{}
+	client := &http.Client{}
+	providers := []lookup.Provider{
+		books.BN{Client: client},
+		books.OpenLibrary{Client: client},
+	}
+	if key := os.Getenv("OHARA_GOOGLE_BOOKS_API_KEY"); key != "" {
+		providers = append(providers, books.GoogleBooks{APIKey: key, Client: client})
+	}
+	for _, p := range providers {
+		if err := registry.Register(p, bookCacheTTL); err != nil {
+			return nil, err
+		}
+	}
 	if envOr("OHARA_LOOKUP_STUB", "false") == "true" {
 		if err := registry.Register(lookup.Stub{}, 0); err != nil {
 			return nil, err

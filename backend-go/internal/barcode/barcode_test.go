@@ -63,3 +63,28 @@ func TestIsBook(t *testing.T) {
 		}
 	}
 }
+
+func TestISBN10(t *testing.T) {
+	tests := []struct {
+		code, want string
+		ok         bool
+	}{
+		{"9780306406157", "0306406152", true},
+		{"9780804429573", "080442957X", true},
+		{"9788308025345", "830802534X", true},
+		{"9791234567896", "", false},
+		{"5901234123457", "", false},
+		{"96385074", "", false},
+	}
+	for _, tt := range tests {
+		got, ok := barcode.ISBN10(tt.code)
+		if got != tt.want || ok != tt.ok {
+			t.Errorf("ISBN10(%q) = %q, %v, want %q, %v", tt.code, got, ok, tt.want, tt.ok)
+		}
+		if ok {
+			if back, err := barcode.Normalize(got); err != nil || back != tt.code {
+				t.Errorf("Normalize(%q) = %q, %v, want %q", got, back, err, tt.code)
+			}
+		}
+	}
+}

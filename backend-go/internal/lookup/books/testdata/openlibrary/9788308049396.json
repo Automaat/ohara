@@ -1,0 +1,71 @@
+{
+ "ISBN:9788308049396": {
+  "bib_key": "ISBN:9788308049396",
+  "info_url": "http://openlibrary.org/books/OL27523191M/Księgi_Jakubowe",
+  "preview": "borrow",
+  "preview_url": "https://archive.org/details/ksiegijakuboweal0000toka",
+  "thumbnail_url": "https://covers.openlibrary.org/b/id/8979140-S.jpg",
+  "details": {
+   "publishers": [
+    "Wydawnictwo Literackie"
+   ],
+   "subtitle": "albo Wielka podróż przez siedem granic, pięć języków i trzy duże religie, nie licząc tych małych : opowiadana przez zmarłych, a przez autorkę dopełniona metodą koniektury, z wielu rozmaitych ksiąg zaczerpnięta, a także wspomożona imaginacją, która to jest największym naturalnym darem człowieka",
+   "source_records": [
+    "amazon:8308049397",
+    "ia:ksiegijakuboweal0000toka",
+    "promise:bwb_daily_pallets_2022-03-17",
+    "marc:harvard_bibliographic_metadata/ab.bib.14.20150123.full.mrc:319122391:1120"
+   ],
+   "title": "Księgi Jakubowe",
+   "number_of_pages": 1002,
+   "covers": [
+    8979140
+   ],
+   "languages": [
+    {
+     "key": "/languages/pol"
+    }
+   ],
+   "publish_date": "2014",
+   "key": "/books/OL27523191M",
+   "publish_places": [
+    "Kraków, Polska"
+   ],
+   "works": [
+    {
+     "key": "/works/OL20317821W"
+    }
+   ],
+   "type": {
+    "key": "/type/edition"
+   },
+   "local_id": [
+    "urn:bwbsku:W7-CJT-579"
+   ],
+   "identifiers": {},
+   "ocaid": "ksiegijakuboweal0000toka",
+   "isbn_13": [
+    "9788308049396"
+   ],
+   "lccn": [
+    "2014490988"
+   ],
+   "oclc_numbers": [
+    "898158997"
+   ],
+   "lc_classifications": [
+    "PG7179.O37 K75 2014"
+   ],
+   "latest_revision": 9,
+   "revision": 9,
+   "created": {
+    "type": "/type/datetime",
+    "value": "2019-10-21T09:22:39.637167"
+   },
+   "last_modified": {
+    "type": "/type/datetime",
+    "value": "2025-04-10T21:31:18.641289"
+   }
+  }
+ }
+}

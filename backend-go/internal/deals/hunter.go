@@ -307,7 +307,7 @@ func (r *run) ask(ctx context.Context, src Source, query string) ([]Listing, boo
 	if err != nil && ctx.Err() != nil {
 		return nil, false, ctx.Err()
 	}
-	metrics.ObserveSource(src.Name(), sourceStatus(err))
+	ObserveSearch(src, err)
 	if err != nil {
 		r.h.logger.Warn("deal source failed", "source", src.Name(), "query", query, "err", err)
 		r.fail(err.Error())

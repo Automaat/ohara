@@ -81,6 +81,12 @@ func sourceStatus(err error) string {
 	return metrics.SourceError
 }
 
+// ObserveSearch counts the outcome of one Search on src in the source
+// health metrics. Callers skip it when their own context was canceled.
+func ObserveSearch(src Source, err error) {
+	metrics.ObserveSource(src.Name(), sourceStatus(err))
+}
+
 // get fetches url and returns the body of a 200 response.
 func get(ctx context.Context, client *http.Client, url, accept string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)

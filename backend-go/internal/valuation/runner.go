@@ -279,10 +279,11 @@ func (x *run) search(ctx context.Context, src deals.Source, queries []string) er
 			return err
 		}
 		listings, err := src.Search(ctx, q)
+		if err != nil && ctx.Err() != nil {
+			return ctx.Err()
+		}
+		deals.ObserveSearch(src, err)
 		if err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
 			x.fail(src.Name(), err)
 			continue
 		}

@@ -34,8 +34,8 @@ var (
 	uhdRe   = regexp.MustCompile(`(?i)(?:^|[^\p{L}\p{N}])(?:4k|uhd|ultra\s?hd)(?:[^\p{L}\p{N}]|$)`)
 	bluRe   = regexp.MustCompile(`(?i)(?:^|[^\p{L}])(?:\d*x?\s?blu[- ]?ray|bd)(?:[^\p{L}\p{N}]|$)`)
 	dvdRe   = regexp.MustCompile(`(?i)(?:^|[^\p{L}])\d*x?\s?dvd(?:[^\p{L}\p{N}]|$)`)
-	voiceRe = regexp.MustCompile(`(?i)(?:^|[^\p{L}])(?:lektor|dubbing)(?:[^\p{L}]|$)`)
-	subsRe  = regexp.MustCompile(`(?i)(?:^|[^\p{L}])napisy(?:[^\p{L}]|$)`)
+	voiceRe = regexp.MustCompile(`(?i)(?:^|[^\p{L}])(bez\s+)?(?:lektor(?:a|em)?|dubbing(?:u|iem)?)((?:[\s:,/-]+[\p{L}]+){0,4})`)
+	subsRe  = regexp.MustCompile(`(?i)(?:^|[^\p{L}])(bez\s+)?napis(?:y|ów|ami)((?:[\s:,/-]+[\p{L}]+){0,4})`)
 	packRes = []struct {
 		re   *regexp.Regexp
 		name string
@@ -65,12 +65,8 @@ func ParseName(name string) Hints {
 	if format != "" {
 		h.Format = &format
 	}
-	if voiceRe.MatchString(name) {
-		h.PLVoiceover = "yes"
-	}
-	if subsRe.MatchString(name) {
-		h.PLSubtitles = "yes"
-	}
+	h.PLVoiceover = polishTrack(voiceRe, name)
+	h.PLSubtitles = polishTrack(subsRe, name)
 	for _, p := range packRes {
 		if p.re.MatchString(name) {
 			h.Packaging = append(h.Packaging, p.name)
@@ -101,6 +97,56 @@ func ParseName(name string) Hints {
 		h.Title, h.AltTitle = h.AltTitle, ""
 	}
 	return h
+}
+
+// Words that qualify a lektor/dubbing/napisy mention. A bare mention in a
+// Polish shop's name means a Polish track; another language alone says
+// nothing about Polish.
+var (
+	negations = map[string]bool{"brak": true, "nie": true, "none": true, "no": true}
+	polish    = map[string]bool{"pl": true, "polski": true, "polskie": true, "polska": true, "polskim": true, "polskimi": true, "polish": true}
+	languages = map[string]bool{
+		"angielski": true, "angielskie": true, "angielskim": true, "english": true, "eng": true, "en": true,
+		"niemiecki": true, "niemieckie": true, "francuski": true, "francuskie": true, "hiszpański": true,
+		"hiszpańskie": true, "włoski": true, "włoskie": true, "rosyjski": true, "rosyjskie": true,
+		"czeski": true, "czeskie": true, "węgierski": true, "węgierskie": true, "oryginalny": true, "oryginalne": true, "i": true,
+	}
+)
+
+// polishTrack reads the first decisive lektor/napisy mention: "yes" for a
+// Polish or unqualified track, "no" for an explicit absence ("bez lektora",
+// "napisy: brak"), "unknown" when only other languages are named or the
+// name does not say.
+func polishTrack(re *regexp.Regexp, name string) string {
+	for _, m := range re.FindAllStringSubmatch(name, -1) {
+		if m[1] != "" {
+			return "no"
+		}
+		other := false
+		decided := ""
+	words:
+		for w := range strings.FieldsFuncSeq(strings.ToLower(m[2]), func(r rune) bool { return !unicode.IsLetter(r) }) {
+			switch {
+			case negations[w]:
+				decided = "no"
+				break words
+			case polish[w]:
+				decided = "yes"
+				break words
+			case languages[w]:
+				other = true
+			default:
+				break words
+			}
+		}
+		switch {
+		case decided != "":
+			return decided
+		case !other:
+			return "yes"
+		}
+	}
+	return "unknown"
 }
 
 func hasLetter(s string) bool {

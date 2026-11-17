@@ -508,3 +508,35 @@ func TestScore(t *testing.T) {
 		t.Errorf("main-title-only score %v", c)
 	}
 }
+
+func TestYearKeptOnFallbackSearch(t *testing.T) {
+	s := &fakeSearcher{results: map[string][]TMDBMovie{
+		"King Kong": {{ID: 244, Title: "King Kong", OriginalTitle: "King Kong", ReleaseDate: "1933-03-15"}},
+	}}
+	p := &Provider{Sources: []NameSource{fakeSource{name: "a", products: []Product{{Name: "King Kong (2005) DVD"}}}}, TMDB: s}
+	raw, err := p.Fetch(context.Background(), "5900000000001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(s.calls, "|"); got != "King Kong@5|King Kong" {
+		t.Fatalf("searches = %s", got)
+	}
+	cands, err := p.Parse("5900000000001", raw)
+	if err != nil || len(cands) != 1 {
+		t.Fatalf("cands = %+v, %v", cands, err)
+	}
+	if cands[0].Confidence >= 0.8 {
+		t.Fatalf("1933 film for a 2005 product scored %v", cands[0].Confidence)
+	}
+}
+
+func TestEditionHintsMerge(t *testing.T) {
+	e := editionHints("1", []Product{{Name: "Psy DVD lektor: brak"}, {Name: "Psy DVD"}, {Name: "Psy DVD napisy PL"}})
+	if e.PLVoiceover != "no" || e.PLSubtitles != "yes" {
+		t.Fatalf("edition = %+v", e)
+	}
+	e = editionHints("1", []Product{{Name: "Psy DVD lektor: brak"}, {Name: "Psy Lektor PL"}})
+	if e.PLVoiceover != "yes" {
+		t.Fatalf("edition = %+v", e)
+	}
+}

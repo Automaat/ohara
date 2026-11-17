@@ -29,6 +29,11 @@ func TestParseName(t *testing.T) {
 		{name: "bracket first", in: "[DVD] Psy", title: "Psy", format: new("dvd"), subs: "unknown", lekt: "unknown"},
 		{name: "title only in parens", in: "DVD (Psy)", title: "Psy", format: new("dvd"), subs: "unknown", lekt: "unknown"},
 		{name: "dubbing", in: "Kraina Lodu DVD dubbing", title: "Kraina Lodu", format: new("dvd"), subs: "unknown", lekt: "yes"},
+		{name: "english subtitles only", in: "Incepcja Blu-ray napisy angielskie", title: "Incepcja", format: new("bluray"), subs: "unknown", lekt: "unknown"},
+		{name: "explicit absence", in: "Psy DVD lektor: brak, napisy: brak", title: "Psy", format: new("dvd"), subs: "no", lekt: "no"},
+		{name: "bez lektora", in: "Psy DVD bez lektora, napisy angielskie i polskie", title: "Psy", format: new("dvd"), subs: "yes", lekt: "no"},
+		{name: "polish qualifier", in: "Psy DVD Lektor PL Napisy PL", title: "Psy", format: new("dvd"), subs: "yes", lekt: "yes"},
+		{name: "bez napisów", in: "Psy DVD dubbing polski, bez napisów", title: "Psy", format: new("dvd"), subs: "no", lekt: "yes"},
 		{name: "word containing bd", in: "Abdykacja DVD", title: "Abdykacja", format: new("dvd"), subs: "unknown", lekt: "unknown"},
 	}
 	for _, tc := range tests {

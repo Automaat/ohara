@@ -35,7 +35,9 @@ type Raw struct {
 	Searches []Search  `json:"searches"`
 }
 
-// Search is one TMDB query and its results.
+// Search is one TMDB query and its results. Year is the year the product
+// name gives, kept when a fallback search ran without it, so a result from
+// another year is still scored down.
 type Search struct {
 	Query   string      `json:"query"`
 	Year    *int        `json:"year,omitempty"`
@@ -102,7 +104,7 @@ func (p *Provider) search(ctx context.Context, q query) (Search, error) {
 		if err != nil {
 			return Search{}, err
 		}
-		last = Search{Query: a.title, Year: a.year, Results: res}
+		last = Search{Query: a.title, Year: q.year, Results: res}
 		if len(res) > 0 {
 			break
 		}
@@ -256,8 +258,8 @@ func titleFields(m TMDBMovie) lookup.TitleFields {
 }
 
 // editionHints merges what the product names say about the edition. The
-// first source that names a format wins; a language or packaging mention in
-// any name counts.
+// first source that names a format wins; a Polish track or packaging named
+// in any product counts, and an explicit absence beats silence.
 func editionHints(code string, products []Product) lookup.EditionFields {
 	e := lookup.EditionFields{Barcode: code, PLSubtitles: "unknown", PLVoiceover: "unknown"}
 	seen := map[string]bool{}
@@ -266,12 +268,8 @@ func editionHints(code string, products []Product) lookup.EditionFields {
 		if e.Format == nil {
 			e.Format = h.Format
 		}
-		if h.PLSubtitles == "yes" {
-			e.PLSubtitles = "yes"
-		}
-		if h.PLVoiceover == "yes" {
-			e.PLVoiceover = "yes"
-		}
+		e.PLSubtitles = mergeTri(e.PLSubtitles, h.PLSubtitles)
+		e.PLVoiceover = mergeTri(e.PLVoiceover, h.PLVoiceover)
 		for _, pk := range h.Packaging {
 			if !seen[pk] {
 				seen[pk] = true
@@ -280,4 +278,14 @@ func editionHints(code string, products []Product) lookup.EditionFields {
 		}
 	}
 	return e
+}
+
+func mergeTri(cur, next string) string {
+	switch {
+	case cur == "yes" || next == "yes":
+		return "yes"
+	case cur == "no" || next == "no":
+		return "no"
+	}
+	return "unknown"
 }

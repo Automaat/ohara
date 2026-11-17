@@ -577,3 +577,34 @@ func TestSelectionWithoutCache(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+type partialProvider struct {
+	fakeProvider
+}
+
+func (p *partialProvider) Fetch(ctx context.Context, code string) (json.RawMessage, error) {
+	raw, err := p.fakeProvider.Fetch(ctx, code)
+	if err != nil {
+		return nil, err
+	}
+	return nil, &lookup.PartialError{Raw: raw, Err: errors.New("allegro refused catalog access")}
+}
+
+func TestPartialAnswerIsReportedAndNotCached(t *testing.T) {
+	p := &partialProvider{fakeProvider{name: "movie", confidence: 0.9}}
+	r := &lookup.Registry{}
+	if err := r.Register(p, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	cache := &memCache{}
+	svc := lookup.NewService(r, cache, discard())
+	for range 2 {
+		res := svc.Lookup(context.Background(), "5901234123457")
+		if len(res.Candidates) != 1 || len(res.Errors) != 1 || !strings.Contains(res.Errors[0].Error, "allegro refused") {
+			t.Fatalf("result = %+v", res)
+		}
+	}
+	if p.fetchCount() != 2 || len(cache.entries) != 0 {
+		t.Fatalf("fetches %d, cache %v", p.fetchCount(), cache.entries)
+	}
+}

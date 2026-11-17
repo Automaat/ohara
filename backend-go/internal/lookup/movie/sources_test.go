@@ -12,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/Automaat/ohara/backend-go/internal/lookup"
 )
 
 func serve(t *testing.T, h http.HandlerFunc) *httptest.Server {
@@ -429,9 +431,11 @@ func TestFetchErrorPolicy(t *testing.T) {
 		sources []NameSource
 		tmdbErr error
 		wantErr bool
+		partial bool
 		names   int
 	}{
-		{name: "one source down, another found it", sources: []NameSource{fakeSource{name: "a", err: down}, fakeSource{name: "b", products: kursk}}, names: 1},
+		{name: "one source down, another found it", sources: []NameSource{fakeSource{name: "a", err: down}, fakeSource{name: "b", products: kursk}}, partial: true, names: 1},
+		{name: "allegro refused, another found it", sources: []NameSource{fakeSource{name: "allegro", err: ErrAllegroRefused}, fakeSource{name: "b", products: kursk}}, partial: true, names: 1},
 		{name: "nothing found and a source down", sources: []NameSource{fakeSource{name: "a", err: down}, fakeSource{name: "b"}}, wantErr: true},
 		{name: "nothing found anywhere is a cacheable no match", sources: []NameSource{fakeSource{name: "a"}, fakeSource{name: "b"}}},
 		{name: "tmdb down", sources: []NameSource{fakeSource{name: "b", products: kursk}}, tmdbErr: down, wantErr: true},
@@ -440,6 +444,13 @@ func TestFetchErrorPolicy(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			p := &Provider{Sources: tc.sources, TMDB: &fakeSearcher{err: tc.tmdbErr}}
 			raw, err := p.Fetch(context.Background(), "5906190326195")
+			if tc.partial {
+				partial, ok := errors.AsType[*lookup.PartialError](err)
+				if !ok || !errors.Is(err, tc.sources[0].(fakeSource).err) {
+					t.Fatalf("err = %v, want a partial answer", err)
+				}
+				raw, err = partial.Raw, nil
+			}
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("want error, raw %s", raw)

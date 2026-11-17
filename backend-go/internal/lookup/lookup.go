@@ -82,6 +82,19 @@ type Cache interface {
 	Put(ctx context.Context, provider, barcode string, raw json.RawMessage) error
 }
 
+// PartialError is a Fetch answer built while some of the provider's own
+// sources failed. The lookup reports Err next to the candidates parsed from
+// Raw and does not cache Raw, so the failure shows on every scan until the
+// source recovers or is switched off.
+type PartialError struct {
+	Raw json.RawMessage
+	Err error
+}
+
+func (e *PartialError) Error() string { return e.Err.Error() }
+
+func (e *PartialError) Unwrap() error { return e.Err }
+
 // ErrDuplicateProvider reports a second registration under one name.
 var ErrDuplicateProvider = errors.New("provider already registered")
 
@@ -208,7 +221,6 @@ func (s *Service) Lookup(ctx context.Context, code string) Result {
 		if o.err != nil {
 			s.logger.Warn("lookup provider failed", "provider", name, "barcode", code, "err", o.err)
 			res.Errors = append(res.Errors, ProviderError{Provider: name, Error: o.err.Error()})
-			continue
 		}
 		for j := range o.candidates {
 			c := o.candidates[j]
@@ -291,6 +303,14 @@ func (s *Service) query(ctx context.Context, e entry, code string) ([]Candidate,
 	defer cancel()
 	metrics.ObserveLookupRequest(p.Name())
 	raw, err := p.Fetch(fetchCtx, code)
+	if partial, ok := errors.AsType[*PartialError](err); ok {
+		metrics.ObserveLookupError(p.Name())
+		cands, perr := p.Parse(code, partial.Raw)
+		if perr != nil {
+			return nil, fmt.Errorf("parse: %w", perr)
+		}
+		return cands, fmt.Errorf("partial: %w", partial.Err)
+	}
 	if err != nil {
 		metrics.ObserveLookupError(p.Name())
 		return nil, fmt.Errorf("fetch: %w", err)

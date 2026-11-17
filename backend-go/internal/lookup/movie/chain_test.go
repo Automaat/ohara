@@ -51,6 +51,10 @@ var (
 	}
 )
 
+// refusedEAN is a barcode the fake Allegro refuses while UPCitemdb knows
+// the product.
+const refusedEAN = "5900058301379"
+
 type upstream struct {
 	t      *testing.T
 	mu     sync.Mutex
@@ -64,6 +68,10 @@ func newUpstream(t *testing.T) *upstream {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /sale/products", func(w http.ResponseWriter, r *http.Request) {
 		u.hit("allegro")
+		if r.URL.Query().Get("phrase") == refusedEAN {
+			http.Error(w, `{"errors":[{"code":"AccessDenied"}]}`, http.StatusForbidden)
+			return
+		}
 		if r.Header.Get("Authorization") != "Bearer access-1" || r.URL.Query().Get("mode") != "GTIN" {
 			http.Error(w, `{"errors":[{"code":"Unauthorized"}]}`, http.StatusUnauthorized)
 			return
@@ -90,6 +98,10 @@ func newUpstream(t *testing.T) *upstream {
 	})
 	mux.HandleFunc("GET /prod/trial/lookup", func(w http.ResponseWriter, r *http.Request) {
 		u.hit("upcitemdb")
+		if r.URL.Query().Get("upc") == refusedEAN {
+			writeJSON(w, map[string]any{"code": "OK", "items": []map[string]string{{"title": "Wkręceni 2 [Blu-ray]"}}})
+			return
+		}
 		if r.URL.Query().Get("upc") == "5902600069706" {
 			serveFile(t, w, "testdata/upcitemdb-5902600069706.json")
 			return
@@ -225,6 +237,22 @@ func TestPolishEANsResolveToTMDB(t *testing.T) {
 		res := svc.Lookup(context.Background(), "5902600069706")
 		if len(res.Errors) != 0 || len(res.Candidates) != 0 || !res.NeedsConfirmation {
 			t.Fatalf("result = %+v", res)
+		}
+	})
+
+	t.Run("an Allegro refusal is reported and not cached", func(t *testing.T) {
+		for range 2 {
+			before := u.count("allegro")
+			res := svc.Lookup(context.Background(), refusedEAN)
+			if len(res.Candidates) == 0 || *res.Candidates[0].Title.TMDBID != 340389 {
+				t.Fatalf("candidates = %+v", res.Candidates)
+			}
+			if len(res.Errors) != 1 || res.Errors[0].Provider != "movie" || !strings.Contains(res.Errors[0].Error, "allegro refused catalog access") {
+				t.Fatalf("errors = %+v", res.Errors)
+			}
+			if u.count("allegro") != before+1 {
+				t.Fatal("refused answer served from the cache")
+			}
 		}
 	})
 

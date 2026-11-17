@@ -51,9 +51,11 @@ func (*Provider) Name() string { return "movie" }
 func (*Provider) Accepts(code string) bool { return !barcode.IsBook(code) }
 
 // Fetch asks every name source concurrently, then searches TMDB for the
-// distinct titles. A failed source does not fail the chain while another
-// found the product; with no product found, a failed source fails the fetch
-// so a "no match" built on an outage is not cached.
+// distinct titles. With no product found, a failed source fails the fetch so
+// a "no match" built on an outage is not cached. When another source found
+// the product, the answer comes back as a *lookup.PartialError naming the
+// failed sources (an Allegro refusal included), so the lookup reports them
+// and does not cache the answer.
 func (p *Provider) Fetch(ctx context.Context, code string) (json.RawMessage, error) {
 	raw := Raw{Products: []Product{}, Searches: []Search{}}
 	found := make([][]Product, len(p.Sources))
@@ -85,7 +87,14 @@ func (p *Provider) Fetch(ctx context.Context, code string) (json.RawMessage, err
 	if len(raw.Searches) == 0 && len(searchErrs) > 0 {
 		return nil, errors.Join(searchErrs...)
 	}
-	return json.Marshal(raw)
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("encode movie response: %w", err)
+	}
+	if failed := errors.Join(append(errs, searchErrs...)...); failed != nil {
+		return nil, &lookup.PartialError{Raw: data, Err: failed}
+	}
+	return data, nil
 }
 
 // search narrows by year first, then drops the year, then falls back to

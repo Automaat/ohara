@@ -63,6 +63,9 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   A provider that calls several sources (the movie chain) also counts each
   request in `ohara_source_requests_total{source,status}` and failures in
   `ohara_source_errors_total{source}` (`metrics.ObserveSource`).
+  When some of its sources fail but others answered, it returns a
+  `*lookup.PartialError`: the lookup reports the failure next to the
+  candidates and does not cache the answer.
 - A lookup result sets `needs_confirmation` unless exactly one candidate
   reaches `lookup.ConfirmThreshold` (0.8); clients never auto-pick otherwise.
   `PUT /api/lookup/{barcode}/selection` stores the picked candidate, which

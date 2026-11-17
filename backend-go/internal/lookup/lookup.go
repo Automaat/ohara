@@ -82,6 +82,19 @@ type Cache interface {
 	Put(ctx context.Context, provider, barcode string, raw json.RawMessage) error
 }
 
+// PartialError is a Fetch answer built while some of the provider's own
+// sources failed. The lookup reports Err next to the candidates parsed from
+// Raw and does not cache Raw, so the failure shows on every scan until the
+// source recovers or is switched off.
+type PartialError struct {
+	Raw json.RawMessage
+	Err error
+}
+
+func (e *PartialError) Error() string { return e.Err.Error() }
+
+func (e *PartialError) Unwrap() error { return e.Err }
+
 // ErrDuplicateProvider reports a second registration under one name.
 var ErrDuplicateProvider = errors.New("provider already registered")
 
@@ -126,11 +139,37 @@ type ProviderError struct {
 // Result is the GET /api/lookup/{barcode} body. Candidates are sorted by
 // confidence, then by provider registration order. Book candidates for the
 // looked-up ISBN from several providers are merged into one (see
-// mergeBooks).
+// mergeBooks). When NeedsConfirmation is false, Candidates[0] is the only
+// candidate at or above ConfirmThreshold and a client may take it without
+// asking; otherwise the user picks (or enters the item by hand when there
+// are no candidates).
 type Result struct {
-	Barcode    string          `json:"barcode"`
-	Candidates []Candidate     `json:"candidates"`
-	Errors     []ProviderError `json:"errors"`
+	Barcode           string          `json:"barcode"`
+	Candidates        []Candidate     `json:"candidates"`
+	NeedsConfirmation bool            `json:"needs_confirmation"`
+	Errors            []ProviderError `json:"errors"`
+}
+
+// ConfirmThreshold is the confidence a lone best candidate needs to be taken
+// without a confirm step.
+const ConfirmThreshold = 0.8
+
+// SelectionProvider names a candidate the user picked for a barcode. A
+// stored selection answers later lookups of that barcode with confidence 1
+// and no provider requests.
+const SelectionProvider = "selection"
+
+// selectionTTL keeps a selection until the user replaces it.
+const selectionTTL = 100 * 365 * 24 * time.Hour
+
+func needsConfirmation(cands []Candidate) bool {
+	switch {
+	case len(cands) == 0, cands[0].Confidence < ConfirmThreshold:
+		return true
+	case len(cands) > 1 && cands[1].Confidence >= ConfirmThreshold:
+		return true
+	}
+	return false
 }
 
 // Service runs a lookup across every registered provider.
@@ -156,7 +195,11 @@ type outcome struct {
 
 // Lookup queries every provider concurrently for a normalized barcode. A
 // failing provider is reported in Result.Errors and does not fail the lookup.
+// A stored selection short-circuits the providers.
 func (s *Service) Lookup(ctx context.Context, code string) Result {
+	if sel, ok := s.selection(ctx, code); ok {
+		return Result{Barcode: code, Candidates: []Candidate{sel}, Errors: []ProviderError{}}
+	}
 	outcomes := make([]outcome, len(s.registry.entries))
 	var wg sync.WaitGroup
 	for i, e := range s.registry.entries {
@@ -178,7 +221,6 @@ func (s *Service) Lookup(ctx context.Context, code string) Result {
 		if o.err != nil {
 			s.logger.Warn("lookup provider failed", "provider", name, "barcode", code, "err", o.err)
 			res.Errors = append(res.Errors, ProviderError{Provider: name, Error: o.err.Error()})
-			continue
 		}
 		for j := range o.candidates {
 			c := o.candidates[j]
@@ -196,7 +238,49 @@ func (s *Service) Lookup(ctx context.Context, code string) Result {
 		}
 		return cmp.Compare(order[a.Provider], order[b.Provider])
 	})
+	res.NeedsConfirmation = needsConfirmation(res.Candidates)
 	return res
+}
+
+// ErrNoCache reports a selection without a cache to keep it in.
+var ErrNoCache = errors.New("lookup cache disabled")
+
+// Select stores the candidate the user picked for a normalized barcode.
+func (s *Service) Select(ctx context.Context, code string, c Candidate) (Candidate, error) {
+	if s.cache == nil {
+		return Candidate{}, ErrNoCache
+	}
+	c.Provider = SelectionProvider
+	c.Confidence = 1
+	c.Edition.Barcode = code
+	raw, err := json.Marshal(c)
+	if err != nil {
+		return Candidate{}, fmt.Errorf("encode selection: %w", err)
+	}
+	if err := s.cache.Put(ctx, SelectionProvider, code, raw); err != nil {
+		return Candidate{}, err
+	}
+	return c, nil
+}
+
+func (s *Service) selection(ctx context.Context, code string) (Candidate, bool) {
+	if s.cache == nil {
+		return Candidate{}, false
+	}
+	raw, ok, err := s.cache.Get(ctx, SelectionProvider, code, selectionTTL)
+	if err != nil {
+		s.logger.Warn("lookup selection read failed", "barcode", code, "err", err)
+		return Candidate{}, false
+	}
+	if !ok {
+		return Candidate{}, false
+	}
+	var c Candidate
+	if err := json.Unmarshal(raw, &c); err != nil {
+		s.logger.Warn("stored lookup selection unreadable", "barcode", code, "err", err)
+		return Candidate{}, false
+	}
+	return c, true
 }
 
 func (s *Service) query(ctx context.Context, e entry, code string) ([]Candidate, error) {
@@ -219,6 +303,14 @@ func (s *Service) query(ctx context.Context, e entry, code string) ([]Candidate,
 	defer cancel()
 	metrics.ObserveLookupRequest(p.Name())
 	raw, err := p.Fetch(fetchCtx, code)
+	if partial, ok := errors.AsType[*PartialError](err); ok {
+		metrics.ObserveLookupError(p.Name())
+		cands, perr := p.Parse(code, partial.Raw)
+		if perr != nil {
+			return nil, fmt.Errorf("parse: %w", perr)
+		}
+		return cands, fmt.Errorf("partial: %w", partial.Err)
+	}
 	if err != nil {
 		metrics.ObserveLookupError(p.Name())
 		return nil, fmt.Errorf("fetch: %w", err)

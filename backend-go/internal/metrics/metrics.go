@@ -32,6 +32,16 @@ var (
 		Help: "Always 1; the version label names the running build.",
 	}, []string{"version"})
 
+	sourceRequests = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "ohara_source_requests_total",
+		Help: "Requests to external sources behind a lookup provider, by source and outcome (ok, http_<code>, error, parse_error, oauth_error).",
+	}, []string{"source", "status"})
+
+	sourceErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "ohara_source_errors_total",
+		Help: "Failed requests to external sources: any outcome other than ok.",
+	}, []string{"source"})
+
 	lookupRequests = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "ohara_lookup_provider_requests_total",
 		Help: "Barcode lookups sent to a metadata provider (cache misses).",
@@ -56,6 +66,8 @@ func init() {
 		lookupRequests,
 		lookupErrors,
 		lookupCacheHits,
+		sourceRequests,
+		sourceErrors,
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)
@@ -174,3 +186,17 @@ func ObserveLookupError(provider string) {
 func ObserveLookupCacheHit(provider string) {
 	lookupCacheHits.WithLabelValues(provider).Inc()
 }
+
+// ObserveSource counts one request to an external source. status is "ok" for
+// a usable answer (a valid "no match" included), "http_<code>" for an
+// unexpected status, "error" for a transport failure and "parse_error" for a
+// response that could not be read. Anything but "ok" also counts as an error.
+func ObserveSource(source, status string) {
+	sourceRequests.WithLabelValues(source, status).Inc()
+	if status != SourceOK {
+		sourceErrors.WithLabelValues(source).Inc()
+	}
+}
+
+// SourceOK is the ObserveSource status of a successful request.
+const SourceOK = "ok"

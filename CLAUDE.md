@@ -22,6 +22,7 @@ Same layout and tooling as `../baratie`. `package.json` and
     /collection/       # titles, editions, copies, collection view
     /lookup/           # GET /api/lookup/{barcode}: provider registry + lookup_cache
       /books/          # BN, Open Library, Google Books providers (fixtures in testdata/)
+      /movie/          # movie chain: Allegro catalog, Ceneo, UPCitemdb → product name → TMDB search
     /scanqueue/        # /api/scan-queue: barcodes the scanner could not resolve
     /deals/            # wishlist deal hunter: OLX, Pepper, Ceneo sources, matcher, Telegram alerts
     /server/           # router: /health, /metrics, /api/*, SPA fallback
@@ -62,6 +63,16 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   from several providers merge into one; registration order is the field
   priority. Every provider gets `ohara_lookup_provider_requests_total`,
   `ohara_lookup_provider_errors_total` and `ohara_lookup_cache_hits_total`.
+  A provider that calls several sources (the movie chain) also counts each
+  request in `ohara_source_requests_total{source,status}` and failures in
+  `ohara_source_errors_total{source}` (`metrics.ObserveSource`).
+  When some of its sources fail but others answered, it returns a
+  `*lookup.PartialError`: the lookup reports the failure next to the
+  candidates and does not cache the answer.
+- A lookup result sets `needs_confirmation` unless exactly one candidate
+  reaches `lookup.ConfirmThreshold` (0.8); clients never auto-pick otherwise.
+  `PUT /api/lookup/{barcode}/selection` stores the picked candidate, which
+  answers later scans of that barcode without provider requests.
 - DB tests call `dbtest.Migrated(t)`; each gets its own schema.
 - Deal sources implement `deals.Source`. A run matches listing titles to
   wishlist copies (all title words, the edition's format for movies, the
@@ -107,6 +118,10 @@ the container port beyond the LAN.
 | `OHARA_DEALS_DELAY`                                        | `5s`                            | Pause between two source requests, jittered ±50%                                                        |
 | `OHARA_TELEGRAM_BOT_TOKEN`, `OHARA_TELEGRAM_CHAT_ID`       | unset (no alerts)               | Telegram bot for deal alerts; set both or neither                                                       |
 | `OHARA_DEALS_{OLX,PEPPER,CENEO}_URL`, `OHARA_TELEGRAM_URL` | public endpoints                | Point the sources and Telegram at test doubles                                                          |
+| `OHARA_TMDB_API_KEY`                                       | unset                           | TMDB v3 key or v4 read token; enables the movie lookup chain                                            |
+| `OHARA_ALLEGRO_CLIENT_ID`, `OHARA_ALLEGRO_CLIENT_SECRET`   | unset                           | Allegro device-flow app; adds the Allegro catalog to the movie chain after `api allegro-login`          |
+| `OHARA_CENEO`                                              | `true`                          | Ceneo search-page source in the movie chain                                                             |
+| `OHARA_UPCITEMDB`                                          | `true`                          | UPCitemdb free-tier source (100 requests a day) in the movie chain                                      |
 
 ## Commands
 
@@ -122,6 +137,11 @@ cd backend-go && go test ./...       # set OHARA_TEST_DATABASE_URL for DB tests
 cd backend-go && golangci-lint run ./...
 ./scripts/run-nilaway.sh backend-go github.com/Automaat/ohara/backend-go
 ```
+
+Allegro authorization is one-time: with the client credentials set, run
+`docker exec -it ohara api allegro-login`, open the printed link and
+confirm the code. The refresh token is stored in `oauth_token` and rotated on
+each refresh.
 
 ## Deployment
 

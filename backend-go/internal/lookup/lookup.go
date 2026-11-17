@@ -185,6 +185,7 @@ func (s *Service) Lookup(ctx context.Context, code string) Result {
 			c.Provider = name
 			c.Sources = []string{name}
 			c.Confidence = min(max(c.Confidence, 0), 1)
+			fit(&c)
 			res.Candidates = append(res.Candidates, c)
 		}
 	}

@@ -157,7 +157,7 @@ func bnCandidate(code, isbn10 string, bib bnBib) (lookup.Candidate, bool) {
 		case "100":
 			authors = append(authors, personName(f.first("a")))
 		case "700":
-			if len(f.sub("t")) == 0 && isAuthorRole(f.sub("e")) {
+			if len(f.sub("t")) == 0 && isAuthorRole(f.sub("e"), f.sub("4")) {
 				authors = append(authors, personName(f.first("a")))
 			}
 		case "250":
@@ -238,15 +238,20 @@ func leadingISBN(s string) string {
 	return strings.ToUpper(b.String())
 }
 
-// isAuthorRole reports whether a 700 relator ($e) names an author; an
-// entry without one is an added author heading.
-func isAuthorRole(roles []string) bool {
-	if len(roles) == 0 {
+// isAuthorRole reports whether a 700 entry's relator terms ($e) or codes
+// ($4) name an author; an entry with neither is an added author heading.
+func isAuthorRole(terms, codes []string) bool {
+	if len(terms) == 0 && len(codes) == 0 {
 		return true
 	}
-	for _, r := range roles {
+	for _, r := range terms {
 		switch strings.ToLower(clean(r)) {
 		case "autor", "współautor":
+			return true
+		}
+	}
+	for _, c := range codes {
+		if strings.EqualFold(strings.TrimSpace(c), "aut") {
 			return true
 		}
 	}

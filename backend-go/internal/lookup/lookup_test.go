@@ -8,10 +8,13 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
+	"github.com/Automaat/ohara/backend-go/internal/collection"
 	"github.com/Automaat/ohara/backend-go/internal/dbtest"
 	"github.com/Automaat/ohara/backend-go/internal/lookup"
 	"github.com/Automaat/ohara/backend-go/internal/server"
@@ -417,5 +420,58 @@ func TestLookupSkipsOutOfScopeProviders(t *testing.T) {
 	svc.Lookup(context.Background(), "9780140449136")
 	if booksOnly.fetches != 1 {
 		t.Fatalf("in-scope fetches = %d", booksOnly.fetches)
+	}
+}
+
+func TestLookupFitsCandidatesToCollectionLimits(t *testing.T) {
+	const code = "9788375780635"
+	long := strings.Repeat("ż", 300)
+	c := book(code, long, 0.9)
+	c.Title.OriginalTitle = new(long)
+	c.Title.Year = new(1500)
+	for range 25 {
+		c.Title.Authors = append(c.Title.Authors, long)
+	}
+	c.Edition.Publisher = long
+	c.Edition.Label = long
+	c.Edition.Year = new(2500)
+	r := &lookup.Registry{}
+	if err := r.Register(&fixedProvider{name: "verbose", cands: []lookup.Candidate{c}}, 0); err != nil {
+		t.Fatal(err)
+	}
+	res := lookup.NewService(r, nil, discard()).Lookup(context.Background(), code)
+	if len(res.Candidates) != 1 {
+		t.Fatalf("result = %+v", res)
+	}
+	got := res.Candidates[0]
+	if !utf8.ValidString(got.Title.Name) || got.Title.Name == "" || !strings.HasPrefix(long, got.Title.Name) {
+		t.Fatalf("name cut badly: %q", got.Title.Name)
+	}
+
+	var title collection.TitleInput
+	var edition collection.EditionInput
+	roundTrip(t, got.Title, &title)
+	roundTrip(t, got.Edition, &edition)
+	title.Kind = got.Type
+	edition.TitleID = 1
+	if e := title.Normalize(); e != nil {
+		t.Fatalf("POST /api/titles would reject the candidate: %s %s", e.Field, e.Msg)
+	}
+	if e := edition.Normalize(); e != nil {
+		t.Fatalf("POST /api/editions would reject the candidate: %s %s", e.Field, e.Msg)
+	}
+	if e := edition.CheckKind(got.Type); e != nil {
+		t.Fatalf("edition kind check: %s %s", e.Field, e.Msg)
+	}
+}
+
+func roundTrip(t *testing.T, in, out any) {
+	t.Helper()
+	b, err := json.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(b, out); err != nil {
+		t.Fatal(err)
 	}
 }

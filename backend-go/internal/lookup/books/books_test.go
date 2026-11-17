@@ -395,3 +395,25 @@ func scrape(t *testing.T) map[string]float64 {
 	}
 	return out
 }
+
+func TestBNAuthorsFollowRelatorCodes(t *testing.T) {
+	raw := json.RawMessage(`{"bibs":[{"id":7,"publicationYear":"2003","marc":{"fields":[
+		{"001":"b7"},
+		{"020":{"ind1":" ","ind2":" ","subfields":[{"a":"9780140449136"}]}},
+		{"100":{"ind1":"1","ind2":" ","subfields":[{"a":"Dostoyevsky, Fyodor"}]}},
+		{"245":{"ind1":"1","ind2":"0","subfields":[{"a":"Crime and punishment /"}]}},
+		{"700":{"ind1":"1","ind2":" ","subfields":[{"a":"McDuff, David,"},{"4":"trl"}]}},
+		{"700":{"ind1":"1","ind2":" ","subfields":[{"a":"Smith, Jane"},{"4":"aut"}]}},
+		{"700":{"ind1":"1","ind2":" ","subfields":[{"a":"Nowak, Anna"},{"e":"Autor"}]}},
+		{"700":{"ind1":"1","ind2":" ","subfields":[{"a":"Kowalski, Jan"},{"e":"Tłumaczenie"}]}},
+		{"700":{"ind1":"1","ind2":" ","subfields":[{"a":"Lee, Kim"}]}}
+	]}}]}`)
+	cands, err := books.BN{}.Parse("9780140449136", raw)
+	if err != nil || len(cands) != 1 {
+		t.Fatalf("parse = %+v, %v", cands, err)
+	}
+	want := []string{"Fyodor Dostoyevsky", "Jane Smith", "Anna Nowak", "Kim Lee"}
+	if got := cands[0].Title.Authors; !slices.Equal(got, want) {
+		t.Fatalf("authors = %q, want %q", got, want)
+	}
+}

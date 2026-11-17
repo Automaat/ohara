@@ -53,7 +53,7 @@ func (c Ceneo) Products(ctx context.Context, code string) ([]Product, error) {
 	if err != nil {
 		return nil, parseFailed(c.Name(), err)
 	}
-	succeeded(c.Name())
+	found(c.Name(), len(products))
 	return products, nil
 }
 

@@ -60,6 +60,13 @@ func scan(row pgx.Row) (Entry, error) {
 	return e, err
 }
 
+// Count returns how many barcodes wait in the queue.
+func (s *Store) Count(ctx context.Context) (int64, error) {
+	var n int64
+	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM scan_queue`).Scan(&n)
+	return n, err
+}
+
 // List returns the queue, most recently scanned first.
 func (s *Store) List(ctx context.Context) ([]Entry, error) {
 	rows, err := s.pool.Query(ctx, `SELECT `+columns+` FROM scan_queue

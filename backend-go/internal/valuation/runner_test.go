@@ -235,6 +235,27 @@ func TestRunKeepsGoingOnSourceErrors(t *testing.T) {
 	}
 }
 
+func TestRunCountsSourceHealth(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	seed(t, pool)
+	failing := &fakeSource{name: "valuation-failing", err: errors.New("boom")}
+	working := &fakeSource{name: "valuation-working"}
+	if _, err := newTestRunner(pool, failing, working, &fakeBuyBack{quotes: map[string]Quote{}}).Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	body := scrape(t)
+	for _, want := range []string{
+		`ohara_source_requests_total{source="valuation-failing",status="error"}`,
+		`ohara_source_errors_total{source="valuation-failing"}`,
+		`ohara_source_requests_total{source="valuation-working",status="ok"}`,
+		`ohara_source_last_success_timestamp_seconds{source="valuation-working"}`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("metrics missing %s", want)
+		}
+	}
+}
+
 func TestPricesWindowAndOwnership(t *testing.T) {
 	pool := dbtest.Migrated(t)
 	seed(t, pool)

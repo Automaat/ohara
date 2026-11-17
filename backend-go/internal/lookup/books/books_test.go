@@ -371,6 +371,57 @@ func TestProvidersRejectBadResponses(t *testing.T) {
 	}
 }
 
+func TestProvidersCountSourceOutcomes(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/institutions/bibs.json":
+			http.Error(w, "slow down", http.StatusTooManyRequests)
+		case "/api/books":
+			_, _ = w.Write([]byte("<html>busy</html>"))
+		default:
+			_, _ = w.Write([]byte(`{"kind":"books#volumes","items":"changed"}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	ctx := context.Background()
+	before := scrape(t)
+	_, _ = (books.BN{BaseURL: srv.URL}).Fetch(ctx, "9788375780635")
+	_, _ = (books.OpenLibrary{BaseURL: srv.URL}).Fetch(ctx, "9788375780635")
+	if _, err := (books.GoogleBooks{APIKey: "k", BaseURL: srv.URL}).Fetch(ctx, "9788375780635"); err == nil {
+		t.Fatal("google books accepted a changed response shape")
+	}
+	after := scrape(t)
+	for series, want := range map[string]float64{
+		`ohara_source_requests_total{source="bn",status="http_429"}`:             1,
+		`ohara_source_errors_total{source="bn"}`:                                 1,
+		`ohara_source_requests_total{source="openlibrary",status="parse_error"}`: 1,
+		`ohara_source_parse_errors_total{source="openlibrary"}`:                  1,
+		`ohara_source_requests_total{source="google_books",status="ok"}`:         0,
+		`ohara_source_parse_errors_total{source="google_books"}`:                 1,
+	} {
+		if d := after[series] - before[series]; d != want {
+			t.Errorf("%s grew by %v, want %v", series, d, want)
+		}
+	}
+}
+
+func TestLookupRecordsSourceResults(t *testing.T) {
+	_, srv := newCatalog(t)
+	res := chain(t, srv, nil).Lookup(context.Background(), "9788375780635")
+	if len(res.Candidates) == 0 {
+		t.Fatalf("lookup = %+v", res)
+	}
+	got := scrape(t)
+	for _, source := range []string{"bn", "openlibrary", "google_books"} {
+		if v, ok := got[`ohara_source_results{source="`+source+`"}`]; !ok || v != 1 {
+			t.Errorf("%s results = %v (exported %v), want 1", source, v, ok)
+		}
+		if _, ok := got[`ohara_source_last_success_timestamp_seconds{source="`+source+`"}`]; !ok {
+			t.Errorf("%s last success not exported", source)
+		}
+	}
+}
+
 // scrape reads the lookup counters from /metrics as "name{labels}" → value.
 func scrape(t *testing.T) map[string]float64 {
 	t.Helper()
@@ -380,7 +431,7 @@ func scrape(t *testing.T) map[string]float64 {
 	sc := bufio.NewScanner(rec.Body)
 	for sc.Scan() {
 		line := sc.Text()
-		if !strings.HasPrefix(line, "ohara_lookup_") {
+		if !strings.HasPrefix(line, "ohara_lookup_") && !strings.HasPrefix(line, "ohara_source_") {
 			continue
 		}
 		key, val, ok := strings.Cut(line, " ")

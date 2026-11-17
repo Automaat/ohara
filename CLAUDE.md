@@ -64,9 +64,14 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   from several providers merge into one; registration order is the field
   priority. Every provider gets `ohara_lookup_provider_requests_total`,
   `ohara_lookup_provider_errors_total` and `ohara_lookup_cache_hits_total`.
-  A provider that calls several sources (the movie chain) also counts each
-  request in `ohara_source_requests_total{source,status}` and failures in
-  `ohara_source_errors_total{source}` (`metrics.ObserveSource`).
+  Every external request (book providers, the movie chain's sources, deal
+  sources) also counts in the source health metrics through
+  `metrics.ObserveSource`: `ohara_source_requests_total{source,status}`,
+  `ohara_source_errors_total{source}`, `ohara_source_parse_errors_total`
+  and `ohara_source_last_success_timestamp_seconds`. A request counts as
+  ok only once its response parses; it then sets `ohara_source_results` to
+  the products or candidates found. Register each source with
+  `metrics.InitSource` so its counters exist before the first failure.
   When some of its sources fail but others answered, it returns a
   `*lookup.PartialError`: the lookup reports the failure next to the
   candidates and does not cache the answer.
@@ -82,6 +87,9 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   queues one `deal_alert` per listing at or below the copy's
   `max_price_cents`; a listing seen again keeps its row, takes the new
   price and `last_seen_at`, and alerts if it has no alert yet. Alerts are retried up to 5 times within a week.
+  Every run also asks each query source the canary query, wishlist or not,
+  and sets `ohara_source_canary_ok` (a feed's one request is its canary)
+  and `ohara_source_results`. A canary without listings is a broken source.
 - Valuation reuses the deal matcher, store and the OLX and Ceneo sources
   for owned editions, and quotes owned books (ISBN barcodes) at SkupSzop.
   A copy's range comes from prices last seen within the window: floor =
@@ -94,7 +102,8 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   app flow) and Rivendo (manual form with photos) have no automatic
   quote, so discs have no floor.
 - A barcode no provider resolves goes to `scan_queue`; a trigger on `edition`
-  removes it once an edition carries that barcode.
+  removes it once an edition carries that barcode. `ohara_scan_queue_size`
+  counts it on each scrape.
 
 ### Frontend
 
@@ -129,6 +138,7 @@ the container port beyond the LAN.
 | `OHARA_GOOGLE_BOOKS_API_KEY`                               | unset                           | Enable the Google Books provider (keyless clients get no quota)                                           |
 | `OHARA_DEALS_INTERVAL`                                     | `0s` (off)                      | Deal search schedule, at least `10m` (e.g. `2h`), jittered ±10%; `POST /api/deals/run` works either way   |
 | `OHARA_DEALS_DELAY`                                        | `5s`                            | Pause between two source requests, jittered ±50%                                                          |
+| `OHARA_DEALS_CANARY_QUERY`                                 | `dvd`                           | Query asked of OLX and Ceneo every run that should always find listings (`ohara_source_canary_ok`)        |
 | `OHARA_TELEGRAM_BOT_TOKEN`, `OHARA_TELEGRAM_CHAT_ID`       | unset (no alerts)               | Telegram bot for deal alerts; set both or neither                                                         |
 | `OHARA_DEALS_{OLX,PEPPER,CENEO}_URL`, `OHARA_TELEGRAM_URL` | public endpoints                | Point the sources and Telegram at test doubles                                                            |
 | `OHARA_VALUATION_INTERVAL`                                 | `0s` (off)                      | Valuation schedule, at least `1h` (e.g. `24h`), jittered ±10%; `POST /api/valuation/run` works either way |

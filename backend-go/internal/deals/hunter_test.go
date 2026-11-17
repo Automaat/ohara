@@ -4,14 +4,20 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/Automaat/ohara/backend-go/internal/dbtest"
+	"github.com/Automaat/ohara/backend-go/internal/metrics"
 )
 
 type fakeSource struct {
@@ -381,5 +387,143 @@ func TestRunAlertsOnListingsStoredBefore(t *testing.T) {
 	}
 	if got := len(notifier.messages()); got != 1 {
 		t.Fatalf("sent %d messages, want 1", got)
+	}
+}
+
+// metric reads one series from /metrics, such as
+// `ohara_source_canary_ok{source="olx"}`; the bool is false when it is
+// absent.
+func metric(t *testing.T, series string) (float64, bool) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	metrics.Handler().ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/metrics", http.NoBody))
+	for line := range strings.Lines(rec.Body.String()) {
+		key, val, ok := strings.Cut(strings.TrimSpace(line), " ")
+		if !ok || key != series {
+			continue
+		}
+		v, err := strconv.ParseFloat(val, 64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v, true
+	}
+	return 0, false
+}
+
+func mustMetric(t *testing.T, series string) float64 {
+	t.Helper()
+	v, ok := metric(t, series)
+	if !ok {
+		t.Fatalf("%s not exported", series)
+	}
+	return v
+}
+
+func newCanaryHunter(pool *pgxpool.Pool, sources ...Source) *Hunter {
+	h := NewHunter(NewStore(pool), sources, nil, Config{CanaryQuery: "dvd"}, slog.New(slog.DiscardHandler))
+	h.sleep = func(ctx context.Context, _ time.Duration) error { return ctx.Err() }
+	return h
+}
+
+// TestBrokenOLXParserFailsCanary is the issue's acceptance check: an OLX
+// response the parser cannot read turns the canary off and counts a parse
+// error in the first run, before any wishlist exists.
+func TestBrokenOLXParserFailsCanary(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	var broken atomic.Bool
+	broken.Store(true)
+	var gotQuery atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery.Store(r.URL.Query().Get("query"))
+		if broken.Load() {
+			_, _ = w.Write([]byte(`{"offers":[]}`))
+			return
+		}
+		_, _ = w.Write(fixture(t, "olx.json"))
+	}))
+	t.Cleanup(srv.Close)
+	h := newCanaryHunter(pool, OLX{Client: srv.Client(), BaseURL: srv.URL + "/"})
+
+	parseBefore := mustMetric(t, `ohara_source_parse_errors_total{source="olx"}`)
+	res := mustRun(t, h)
+	if gotQuery.Load() != "dvd" || len(res.Errors) != 1 || !strings.Contains(res.Errors[0], "olx") {
+		t.Fatalf("broken run = %+v, query %v", res, gotQuery.Load())
+	}
+	if v := mustMetric(t, `ohara_source_canary_ok{source="olx"}`); v != 0 {
+		t.Fatalf("canary with broken parser = %v", v)
+	}
+	if d := mustMetric(t, `ohara_source_parse_errors_total{source="olx"}`) - parseBefore; d != 1 {
+		t.Fatalf("parse errors grew by %v", d)
+	}
+	if v := mustMetric(t, `ohara_source_results{source="olx"}`); v != 0 {
+		t.Fatalf("results with broken parser = %v", v)
+	}
+
+	broken.Store(false)
+	res = mustRun(t, h)
+	if len(res.Errors) != 0 || res.Listings != 0 {
+		t.Fatalf("fixed run = %+v", res)
+	}
+	if v := mustMetric(t, `ohara_source_canary_ok{source="olx"}`); v != 1 {
+		t.Fatalf("canary after fix = %v", v)
+	}
+	if v := mustMetric(t, `ohara_source_results{source="olx"}`); v != 8 {
+		t.Fatalf("results after fix = %v", v)
+	}
+	if v := mustMetric(t, `ohara_source_last_success_timestamp_seconds{source="olx"}`); v < float64(time.Now().Add(-time.Minute).Unix()) {
+		t.Fatalf("last success = %v", v)
+	}
+}
+
+// TestCanaryRunsBesideWishlistQueries checks that canary listings count in
+// the results gauge but not in the run's listings, and that an empty feed
+// fails its canary.
+func TestCanaryRunsBesideWishlistQueries(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	wishlist(t, pool, wantBluray(nil))
+	query := &fakeSource{name: "canary-query", perQuery: true, listings: []Listing{
+		{Source: "canary-query", ExternalID: "1", Title: "Something else DVD", PriceCents: 100},
+	}}
+	feed := &fakeSource{name: "canary-feed"}
+	res := mustRun(t, newCanaryHunter(pool, query, feed))
+
+	if len(query.queries) != 1+res.Queries || query.queries[0] != "dvd" {
+		t.Fatalf("query source asked %q for %d wishlist queries", query.queries, res.Queries)
+	}
+	if len(feed.queries) != 1 || feed.queries[0] != "" {
+		t.Fatalf("feed asked %q, want its feed once", feed.queries)
+	}
+	if res.Listings != res.Queries {
+		t.Fatalf("run = %+v", res)
+	}
+	if v := mustMetric(t, `ohara_source_results{source="canary-query"}`); v != float64(1+res.Queries) {
+		t.Fatalf("query results = %v", v)
+	}
+	if v := mustMetric(t, `ohara_source_canary_ok{source="canary-query"}`); v != 1 {
+		t.Fatalf("query canary = %v", v)
+	}
+	if v := mustMetric(t, `ohara_source_canary_ok{source="canary-feed"}`); v != 0 {
+		t.Fatalf("empty feed canary = %v", v)
+	}
+	if !slices.Contains(res.Errors, "canary-feed: canary query found no listings") {
+		t.Fatalf("errors = %q", res.Errors)
+	}
+}
+
+func TestSourceStatusCountsBlocking(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	t.Cleanup(srv.Close)
+	series := `ohara_source_requests_total{source="pepper",status="http_429"}`
+	before, _ := metric(t, series)
+	mustRun(t, newCanaryHunter(pool, Pepper{Client: srv.Client(), BaseURL: srv.URL}))
+	if d := mustMetric(t, series) - before; d != 1 {
+		t.Fatalf("http_429 grew by %v", d)
+	}
+	if v := mustMetric(t, `ohara_source_canary_ok{source="pepper"}`); v != 0 {
+		t.Fatalf("blocked canary = %v", v)
 	}
 }

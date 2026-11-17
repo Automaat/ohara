@@ -84,10 +84,10 @@ func (t TMDB) Search(ctx context.Context, query string, year *int) ([]TMDBMovie,
 	if r.Results == nil {
 		return nil, parseFailed("tmdb", fmt.Errorf("no results field"))
 	}
-	succeeded("tmdb")
 	res := *r.Results
 	if len(res) > tmdbMaxResults {
 		res = res[:tmdbMaxResults]
 	}
+	found("tmdb", len(res))
 	return res, nil
 }

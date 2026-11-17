@@ -3,6 +3,7 @@ package deals
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -69,10 +70,10 @@ type olxState struct {
 func parseOLX(body []byte) ([]Listing, error) {
 	var resp olxResponse
 	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, fmt.Errorf("olx: decode: %w", err)
+		return nil, parseError{fmt.Errorf("olx: decode: %w", err)}
 	}
 	if resp.Data == nil {
-		return nil, fmt.Errorf("olx: response has no data")
+		return nil, parseError{errors.New("olx: response has no data")}
 	}
 	out := make([]Listing, 0, len(resp.Data))
 	for _, raw := range resp.Data {

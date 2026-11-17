@@ -17,6 +17,9 @@ import (
 	"strings"
 
 	"golang.org/x/text/unicode/norm"
+
+	"github.com/Automaat/ohara/backend-go/internal/lookup"
+	"github.com/Automaat/ohara/backend-go/internal/metrics"
 )
 
 const (
@@ -26,36 +29,57 @@ const (
 
 var errTooLarge = errors.New("response too large")
 
-// getJSON fetches rawURL and returns its body, which must be JSON.
-func getJSON(ctx context.Context, client *http.Client, rawURL string) (json.RawMessage, error) {
+// getJSON fetches rawURL and returns its body, which must be JSON that
+// parse reads. The outcome counts under source in the source health
+// metrics, so a changed response shape is a parse error even with a 200;
+// an ok also records how many candidates parse found.
+func getJSON(ctx context.Context, client *http.Client, source, rawURL string, parse func(json.RawMessage) ([]lookup.Candidate, error)) (json.RawMessage, error) {
+	body, status, err := fetchJSON(ctx, client, rawURL)
+	if err != nil {
+		metrics.ObserveSource(source, status)
+		return nil, err
+	}
+	cands, err := parse(body)
+	if err != nil {
+		metrics.ObserveSource(source, metrics.SourceParseError)
+		return nil, fmt.Errorf("parse: %w", err)
+	}
+	metrics.SetSourceResults(source, len(cands))
+	metrics.ObserveSource(source, metrics.SourceOK)
+	return body, nil
+}
+
+// fetchJSON is getJSON without the metrics; status is its ObserveSource
+// outcome.
+func fetchJSON(ctx context.Context, client *http.Client, rawURL string) (json.RawMessage, string, error) {
 	if client == nil {
 		client = http.DefaultClient
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, http.NoBody)
 	if err != nil {
-		return nil, errors.New("build request: invalid URL")
+		return nil, metrics.SourceError, errors.New("build request: invalid URL")
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", userAgent)
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("request: %w", withoutURL(err))
+		return nil, metrics.SourceError, fmt.Errorf("request: %w", withoutURL(err))
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
 	if err != nil {
-		return nil, fmt.Errorf("read response: %w", withoutURL(err))
+		return nil, metrics.SourceError, fmt.Errorf("read response: %w", withoutURL(err))
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("status %d", resp.StatusCode)
+		return nil, "http_" + strconv.Itoa(resp.StatusCode), fmt.Errorf("status %d", resp.StatusCode)
 	}
 	if len(body) > maxBody {
-		return nil, errTooLarge
+		return nil, metrics.SourceError, errTooLarge
 	}
 	if !json.Valid(body) {
-		return nil, errors.New("response is not JSON")
+		return nil, metrics.SourceParseError, errors.New("response is not JSON")
 	}
-	return body, nil
+	return body, metrics.SourceOK, nil
 }
 
 // withoutURL drops the request URL from a client error: it can carry an API

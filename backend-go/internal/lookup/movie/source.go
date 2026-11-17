@@ -45,7 +45,7 @@ func (e statusError) Error() string { return "unexpected status " + strconv.Itoa
 func get(client *http.Client, source string, req *http.Request, ok ...int) (int, []byte, error) {
 	resp, err := client.Do(req)
 	if err != nil {
-		metrics.ObserveSource(source, "error")
+		metrics.ObserveSource(source, metrics.SourceError)
 		var ue *url.Error
 		if errors.As(err, &ue) {
 			err = ue.Err
@@ -55,7 +55,7 @@ func get(client *http.Client, source string, req *http.Request, ok ...int) (int,
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
 	if err != nil {
-		metrics.ObserveSource(source, "error")
+		metrics.ObserveSource(source, metrics.SourceError)
 		return 0, nil, fmt.Errorf("%s: read body: %w", source, err)
 	}
 	if slices.Contains(ok, resp.StatusCode) {
@@ -68,9 +68,15 @@ func get(client *http.Client, source string, req *http.Request, ok ...int) (int,
 // succeeded counts a usable answer, a valid "no match" included.
 func succeeded(source string) { metrics.ObserveSource(source, metrics.SourceOK) }
 
+// found counts a usable answer carrying n results.
+func found(source string, n int) {
+	metrics.SetSourceResults(source, n)
+	succeeded(source)
+}
+
 // parseFailed counts a response that could not be read.
 func parseFailed(source string, err error) error {
-	metrics.ObserveSource(source, "parse_error")
+	metrics.ObserveSource(source, metrics.SourceParseError)
 	return fmt.Errorf("%s: parse: %w", source, err)
 }
 

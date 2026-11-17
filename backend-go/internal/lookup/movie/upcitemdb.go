@@ -62,7 +62,7 @@ func (u UPCitemdb) Products(ctx context.Context, code string) ([]Product, error)
 		if r.Code != "INVALID_UPC" && r.Code != "NOT_FOUND" {
 			return nil, parseFailed(u.Name(), fmt.Errorf("status %d code %q", status, r.Code))
 		}
-		succeeded(u.Name())
+		found(u.Name(), 0)
 		return []Product{}, nil
 	}
 	products := []Product{}
@@ -71,6 +71,6 @@ func (u UPCitemdb) Products(ctx context.Context, code string) ([]Product, error)
 			products = append(products, Product{Source: "upcitemdb", Name: t, Category: it.Category})
 		}
 	}
-	succeeded(u.Name())
+	found(u.Name(), len(products))
 	return products, nil
 }

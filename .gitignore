@@ -1,0 +1,13 @@
+node_modules
+.svelte-kit
+build
+coverage
+.env
+.env.*
+!.env.example
+.DS_Store
+*.log
+.vscode
+.idea
+.claude/
+/backend-go/api

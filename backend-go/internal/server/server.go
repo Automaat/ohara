@@ -1,0 +1,147 @@
+// Package server wires the HTTP router and middleware.
+package server
+
+import (
+	"context"
+	"encoding/json"
+	"io/fs"
+	"log/slog"
+	"net/http"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
+
+	"github.com/Automaat/ohara/backend-go/internal/metrics"
+	"github.com/Automaat/ohara/backend-go/internal/web"
+)
+
+const requestTimeout = 30 * time.Second
+
+// Pinger is the part of *pgxpool.Pool the health probe needs.
+type Pinger interface {
+	Ping(ctx context.Context) error
+}
+
+// Config holds the resolved runtime settings; cmd/api owns env loading.
+// Version names the running build in /api/status. AccessLog adds one log line
+// per request; metrics are recorded either way.
+type Config struct {
+	Version   string
+	AccessLog bool
+}
+
+// Deps are the runtime dependencies. A nil DB reports the database as
+// unconfigured; a nil Web serves no frontend.
+type Deps struct {
+	DB  Pinger
+	Web fs.FS
+}
+
+// New returns the router: probes, metrics, the JSON API and the frontend.
+func New(cfg Config, logger *slog.Logger, deps Deps) http.Handler {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	r := chi.NewRouter()
+	r.Use(middleware.RequestID)
+	r.Use(requestObserver(logger, cfg.AccessLog))
+	r.Use(middleware.Recoverer)
+	r.Use(middleware.Timeout(requestTimeout))
+
+	r.Get("/health", healthHandler(logger, deps.DB))
+	r.Handle("/metrics", metrics.Handler())
+
+	r.Route("/api", func(r chi.Router) {
+		r.Get("/status", statusHandler(logger, cfg.Version, deps.DB))
+		r.NotFound(func(w http.ResponseWriter, _ *http.Request) {
+			writeJSON(w, logger, http.StatusNotFound, map[string]string{"error": "not found"})
+		})
+	})
+
+	if deps.Web != nil {
+		r.Handle("/*", web.Handler(deps.Web))
+	}
+	return r
+}
+
+func requestObserver(logger *slog.Logger, accessLog bool) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			start := time.Now()
+			ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+			next.ServeHTTP(ww, r)
+			dur := time.Since(start)
+			route := chi.RouteContext(r.Context()).RoutePattern()
+			status := ww.Status()
+			if status == 0 {
+				status = http.StatusOK
+			}
+			metrics.ObserveRequest(r.Method, route, status, dur)
+			if !accessLog {
+				return
+			}
+			logger.Info("request",
+				"request_id", middleware.GetReqID(r.Context()),
+				"method", r.Method,
+				"path", r.URL.Path,
+				"route", route,
+				"status", status,
+				"bytes", ww.BytesWritten(),
+				"latency_ms", float64(dur.Microseconds())/1000.0,
+			)
+		})
+	}
+}
+
+// dbState is "ok", "unavailable" or "unconfigured".
+func dbState(ctx context.Context, logger *slog.Logger, db Pinger) string {
+	if db == nil {
+		return "unconfigured"
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if err := db.Ping(ctx); err != nil {
+		logger.Error("database ping failed", "err", err)
+		return "unavailable"
+	}
+	return "ok"
+}
+
+func healthHandler(logger *slog.Logger, db Pinger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if dbState(r.Context(), logger, db) == "unavailable" {
+			writeJSON(w, logger, http.StatusServiceUnavailable, map[string]string{"status": "unavailable"})
+			return
+		}
+		writeJSON(w, logger, http.StatusOK, map[string]string{"status": "ok"})
+	}
+}
+
+// Status is the /api/status body the frontend shows on its home page.
+type Status struct {
+	Status   string `json:"status"`
+	Version  string `json:"version"`
+	Database string `json:"database"`
+}
+
+func statusHandler(logger *slog.Logger, version string, db Pinger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		st := Status{Status: "ok", Version: version, Database: dbState(r.Context(), logger, db)}
+		code := http.StatusOK
+		if st.Database == "unavailable" {
+			st.Status = "degraded"
+			code = http.StatusServiceUnavailable
+		}
+		writeJSON(w, logger, code, st)
+	}
+}
+
+func writeJSON(w http.ResponseWriter, logger *slog.Logger, code int, body any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(code)
+	if err := json.NewEncoder(w).Encode(body); err != nil {
+		logger.Error("encode response", "err", err)
+	}
+}

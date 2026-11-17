@@ -1,0 +1,23 @@
+[tools]
+node = "24"
+go = "1.27.4"
+"go:github.com/golangci/golangci-lint/v2/cmd/golangci-lint" = "2.12.2"
+# nilaway has no tagged releases. It's installed via `go install` in CI and
+# the scripts/run-nilaway.sh helper using a pinned pseudo-version (see the
+# renovate.json customManager entry that bumps it).
+
+[tasks.dev]
+description = "Start Postgres and the app from local source"
+run = "docker compose up --build"
+
+[tasks.down]
+description = "Stop the local stack"
+run = "docker compose down"
+
+[tasks.backend]
+description = "Start the API only (needs DATABASE_URL or PG* variables)"
+run = "cd backend-go && go run ./cmd/api"
+
+[tasks.frontend]
+description = "Start the Vite dev server; /api proxies to :8000"
+run = "npm run dev"

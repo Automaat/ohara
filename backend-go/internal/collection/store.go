@@ -118,14 +118,22 @@ func collect[T any](rows pgx.Rows, scan func(pgx.Row) (T, error), op string) ([]
 	return out, nil
 }
 
-// ListTitles returns titles of kind (any when empty) whose names or authors
-// contain q (any when empty), by name.
-func (s *Store) ListTitles(ctx context.Context, kind, q string) ([]Title, error) {
+// TitleFilter narrows ListTitles; zero fields match every title.
+type TitleFilter struct {
+	Kind   string
+	Query  string
+	TMDBID int64
+}
+
+// ListTitles returns titles of f.Kind whose names or authors contain f.Query
+// and, when set, with TMDB ID f.TMDBID, by name.
+func (s *Store) ListTitles(ctx context.Context, f TitleFilter) ([]Title, error) {
 	rows, err := s.pool.Query(ctx, `SELECT `+titleColumns+` FROM title t
 		WHERE ($1 = '' OR t.kind = $1)
 		  AND ($2 = '' OR strpos(lower(concat_ws(' ', t.name, t.original_title, t.polish_title,
 		       array_to_string(t.authors, ' '))), lower($2)) > 0)
-		ORDER BY lower(t.name), t.id`, kind, strings.TrimSpace(q))
+		  AND ($3 = 0 OR t.tmdb_id = $3)
+		ORDER BY lower(t.name), t.id`, f.Kind, strings.TrimSpace(f.Query), f.TMDBID)
 	if err != nil {
 		return nil, fmt.Errorf("list titles: %w", err)
 	}
@@ -337,21 +345,32 @@ func purchasedOn(in *CopyInput) *time.Time {
 }
 
 // CreateCopy inserts a normalized copy; ErrEditionNotFound when its edition
-// does not exist.
-func (s *Store) CreateCopy(ctx context.Context, in *CopyInput) (Copy, error) {
+// does not exist. With a request key already used, it returns that key's copy
+// and false instead of inserting another.
+func (s *Store) CreateCopy(ctx context.Context, in *CopyInput) (Copy, bool, error) {
 	var id int64
 	err := s.pool.QueryRow(ctx, `INSERT INTO copy (edition_id, status, price_cents, purchased_on,
-		shop, acquired_as, condition, notes, max_price_cents)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+		shop, acquired_as, condition, notes, max_price_cents, request_key)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		ON CONFLICT (request_key) DO NOTHING RETURNING id`,
 		in.EditionID, in.Status, in.PriceCents, purchasedOn(in), in.Shop, in.AcquiredAs,
-		in.Condition, in.Notes, in.MaxPriceCents).Scan(&id)
+		in.Condition, in.Notes, in.MaxPriceCents, in.RequestKey).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) && in.RequestKey != nil {
+		err = s.pool.QueryRow(ctx, `SELECT id FROM copy WHERE request_key = $1`, *in.RequestKey).Scan(&id)
+		if err != nil {
+			return Copy{}, false, mapErr(err, ErrNotFound, "replay copy")
+		}
+		c, err := s.GetCopy(ctx, id)
+		return c, false, err
+	}
 	if err != nil {
 		if isFKViolation(err, "copy_edition_id_fkey") {
-			return Copy{}, ErrEditionNotFound
+			return Copy{}, false, ErrEditionNotFound
 		}
-		return Copy{}, mapErr(err, ErrNotFound, "create copy")
+		return Copy{}, false, mapErr(err, ErrNotFound, "create copy")
 	}
-	return s.GetCopy(ctx, id)
+	c, err := s.GetCopy(ctx, id)
+	return c, true, err
 }
 
 // UpdateCopy replaces a copy.

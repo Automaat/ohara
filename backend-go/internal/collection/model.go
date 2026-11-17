@@ -134,7 +134,13 @@ type CopyInput struct {
 	Condition     *string `json:"condition"`
 	Notes         string  `json:"notes"`
 	MaxPriceCents *int64  `json:"max_price_cents"`
+	// RequestKey makes a create safe to retry: a second create with the
+	// same key returns the first copy. Updates ignore it.
+	RequestKey *string `json:"request_key,omitempty"`
 }
+
+// maxRequestKey caps CopyInput.RequestKey, in bytes.
+const maxRequestKey = 100
 
 // Copy is one physical item, owned or wanted.
 type Copy struct {
@@ -331,6 +337,10 @@ func (in *CopyInput) Normalize() *httpx.FieldError {
 	in.Notes = strings.TrimSpace(in.Notes)
 	in.AcquiredAs = trimOpt(in.AcquiredAs)
 	in.Condition = trimOpt(in.Condition)
+	in.RequestKey = trimOpt(in.RequestKey)
+	if in.RequestKey != nil && len(*in.RequestKey) > maxRequestKey {
+		return fieldErr("request_key", "is too long")
+	}
 	if in.EditionID <= 0 {
 		return fieldErr("edition_id", "is required")
 	}

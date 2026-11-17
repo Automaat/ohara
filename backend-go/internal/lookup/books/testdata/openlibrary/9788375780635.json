@@ -1,0 +1,39 @@
+{
+ "ISBN:9788375780635": {
+  "bib_key": "ISBN:9788375780635",
+  "info_url": "http://openlibrary.org/books/OL51172594M/Ostatnie_życzenie",
+  "preview": "noview",
+  "preview_url": "http://openlibrary.org/books/OL51172594M/Ostatnie_życzenie",
+  "details": {
+   "works": [
+    {
+     "key": "/works/OL2577485W"
+    }
+   ],
+   "title": "Ostatnie życzenie",
+   "publishers": [
+    "SuperNOWA"
+   ],
+   "publish_date": "2014",
+   "key": "/books/OL51172594M",
+   "type": {
+    "key": "/type/edition"
+   },
+   "identifiers": {},
+   "isbn_13": [
+    "9788375780635"
+   ],
+   "classifications": {},
+   "latest_revision": 2,
+   "revision": 2,
+   "created": {
+    "type": "/type/datetime",
+    "value": "2024-03-05T06:18:54.120508"
+   },
+   "last_modified": {
+    "type": "/type/datetime",
+    "value": "2024-03-05T06:19:31.881216"
+   }
+  }
+ }
+}

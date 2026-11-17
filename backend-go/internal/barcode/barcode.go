@@ -62,6 +62,23 @@ func IsBook(code string) bool {
 	return len(code) == 13 && (strings.HasPrefix(code, "978") || strings.HasPrefix(code, "979"))
 }
 
+// ISBN10 returns the ISBN-10 spelling of a normalized 978 ISBN-13; 979
+// ISBNs have none. Older catalog records carry only the ISBN-10.
+func ISBN10(code string) (string, bool) {
+	if len(code) != 13 || !strings.HasPrefix(code, "978") || !allDigits(code) {
+		return "", false
+	}
+	sum := 0
+	for i := range 9 {
+		sum += int(code[3+i]-'0') * (10 - i)
+	}
+	check := (11 - sum%11) % 11
+	if check == 10 {
+		return code[3:12] + "X", true
+	}
+	return code[3:12] + string(byte('0'+check)), true
+}
+
 func isbn10To13(code string) (string, error) {
 	if !allDigits(code[:9]) || (!allDigits(code[9:]) && code[9] != 'X') {
 		return "", ErrFormat

@@ -249,7 +249,20 @@ func TestEditionKindRules(t *testing.T) {
 
 	edition := a.edition(obj{"title_id": movie, "format": "dvd"})
 	a.fails(http.MethodPut, fmt.Sprintf("/api/editions/%d", edition), obj{"title_id": book, "format": "dvd"}, http.StatusUnprocessableEntity, "format")
+	a.copyOf(obj{"edition_id": edition, "status": "owned"})
+	a.fails(http.MethodPut, fmt.Sprintf("/api/editions/%d", edition), obj{"title_id": book, "binding": "paperback"}, http.StatusUnprocessableEntity, "title_id")
+	var view collection.CollectionView
+	a.mustDo(http.MethodGet, "/api/collection?kind=book", nil, &view, http.StatusOK)
+	if len(view.Items) != 0 {
+		t.Fatalf("copy moved into books: %+v", view.Items)
+	}
 	a.fails(http.MethodPut, fmt.Sprintf("/api/titles/%d", movie), obj{"kind": "book", "name": "Miś"}, http.StatusConflict, "kind")
+	otherMovie := a.title("movie", "Miś 2")
+	var moved collection.Edition
+	a.mustDo(http.MethodPut, fmt.Sprintf("/api/editions/%d", edition), obj{"title_id": otherMovie, "format": "dvd"}, &moved, http.StatusOK)
+	if moved.TitleID != otherMovie {
+		t.Fatalf("same-kind move = %+v", moved)
+	}
 
 	empty := a.title("movie", "Wrong kind")
 	var changed collection.Title

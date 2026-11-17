@@ -228,17 +228,17 @@ func (s *Store) GetEdition(ctx context.Context, id int64) (Edition, error) {
 }
 
 // lockTitleKind share-locks the title so its kind cannot change until the
-// transaction ends, then checks the edition against it.
-func lockTitleKind(ctx context.Context, tx pgx.Tx, in *EditionInput) error {
+// transaction ends, checks the edition against it and returns the kind.
+func lockTitleKind(ctx context.Context, tx pgx.Tx, in *EditionInput) (string, error) {
 	var kind string
 	err := tx.QueryRow(ctx, `SELECT kind FROM title WHERE id = $1 FOR SHARE`, in.TitleID).Scan(&kind)
 	if err != nil {
-		return mapErr(err, ErrTitleNotFound, "lock title")
+		return "", mapErr(err, ErrTitleNotFound, "lock title")
 	}
 	if fe := in.CheckKind(kind); fe != nil {
-		return fe
+		return "", fe
 	}
-	return nil
+	return kind, nil
 }
 
 // CreateEdition inserts a normalized edition. Errors: ErrTitleNotFound,
@@ -246,7 +246,7 @@ func lockTitleKind(ctx context.Context, tx pgx.Tx, in *EditionInput) error {
 func (s *Store) CreateEdition(ctx context.Context, in *EditionInput) (Edition, error) {
 	var id int64
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
-		if err := lockTitleKind(ctx, tx, in); err != nil {
+		if _, err := lockTitleKind(ctx, tx, in); err != nil {
 			return err
 		}
 		err := tx.QueryRow(ctx, `INSERT INTO edition (title_id, barcode, label, publisher, year,
@@ -263,11 +263,21 @@ func (s *Store) CreateEdition(ctx context.Context, in *EditionInput) (Edition, e
 }
 
 // UpdateEdition replaces an edition, which may move to another title of the
-// same kind.
+// same kind only: its copies would otherwise change kind with it.
 func (s *Store) UpdateEdition(ctx context.Context, id int64, in *EditionInput) (Edition, error) {
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
-		if err := lockTitleKind(ctx, tx, in); err != nil {
+		var current string
+		err := tx.QueryRow(ctx, `SELECT t.kind FROM edition e JOIN title t ON t.id = e.title_id
+			WHERE e.id = $1 FOR SHARE`, id).Scan(&current)
+		if err != nil {
+			return mapErr(err, ErrEditionNotFound, "lock edition")
+		}
+		target, err := lockTitleKind(ctx, tx, in)
+		if err != nil {
 			return err
+		}
+		if target != current {
+			return fieldErr("title_id", "must be a title of the same kind")
 		}
 		tag, err := tx.Exec(ctx, `UPDATE edition SET title_id = $2, barcode = $3, label = $4,
 			publisher = $5, year = $6, format = $7, pl_subtitles = $8, pl_voiceover = $9,

@@ -91,7 +91,7 @@ func (p *Provider) Fetch(ctx context.Context, code string) (json.RawMessage, err
 	if err != nil {
 		return nil, fmt.Errorf("encode movie response: %w", err)
 	}
-	if failed := errors.Join(append(errs, searchErrs...)...); failed != nil {
+	if failed := errors.Join(errors.Join(errs...), errors.Join(searchErrs...)); failed != nil {
 		return nil, &lookup.PartialError{Raw: data, Err: failed}
 	}
 	return data, nil

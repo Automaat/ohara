@@ -22,9 +22,10 @@ const (
 	SourceSkupSzop = "skupszop"
 )
 
-var valuationSources = []string{
-	SourceOLX, SourceCeneo, SourceSkupSzop, SourceDiscogsLowest, SourceDiscogsVGPlus, SourceDiscogsMint,
-}
+var (
+	discogsSources   = []string{SourceDiscogsLowest, SourceDiscogsVGPlus, SourceDiscogsMint}
+	valuationSources = append([]string{SourceOLX, SourceCeneo, SourceSkupSzop}, discogsSources...)
+)
 
 // MinObservations is the fewest OLX prices a middle value needs before it
 // is trusted; a copy with fewer is low confidence.

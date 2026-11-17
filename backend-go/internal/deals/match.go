@@ -232,6 +232,24 @@ func listingFormat(text []string) string {
 	return ""
 }
 
+// withoutOwnWords drops from text the words of w's names and artists, so
+// "MC Hammer" or an album called "Vinyl" names no medium.
+func (w *Want) withoutOwnWords(text []string) []string {
+	own := map[string]bool{}
+	for _, n := range append(w.titleNames(), w.Authors...) {
+		for _, word := range words(n) {
+			own[word] = true
+		}
+	}
+	out := make([]string, 0, len(text))
+	for _, t := range text {
+		if !own[t] {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
 // albumFormat is the medium an album listing names: vinyl ("winyl", "LP"),
 // cassette ("kaseta", "MC") or CD, else "".
 func albumFormat(text []string) string {
@@ -328,7 +346,7 @@ func (w *Want) Matches(title string) bool {
 		return false
 	}
 	if w.Kind == "music" {
-		if w.Format != nil && !albumFormatMatches(*w.Format, text) {
+		if w.Format != nil && !albumFormatMatches(*w.Format, w.withoutOwnWords(text)) {
 			return false
 		}
 		if a := w.artist(); a != "" && !containsAll(text, required(a)) {

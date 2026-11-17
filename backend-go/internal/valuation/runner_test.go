@@ -557,3 +557,43 @@ func TestRunPricesAlbumsOnDiscogs(t *testing.T) {
 		}
 	}
 }
+
+func TestChangedReleaseDropsItsDiscogsPrices(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	exec(t, pool, `INSERT INTO title (id, kind, name, authors) OVERRIDING SYSTEM VALUE
+		VALUES (8, 'music', 'Nevermind', '{"Nirvana"}')`)
+	exec(t, pool, `INSERT INTO edition (id, title_id, format, discogs_release_id) OVERRIDING SYSTEM VALUE
+		VALUES (80, 8, 'cd', 100)`)
+	exec(t, pool, `INSERT INTO copy (edition_id, status) VALUES (80, 'owned')`)
+	vgPlus := int64(50000)
+	pricer := &fakePricer{prices: map[int64]ReleasePrice{100: {VGPlusCents: &vgPlus}}}
+	r := NewRunner(NewStore(pool), nil, nil, pricer, Config{Window: 90 * 24 * time.Hour}, slog.New(slog.DiscardHandler))
+	r.sleep = func(ctx context.Context, _ time.Duration) error { return ctx.Err() }
+	ctx := context.Background()
+	mid := func() *Estimate {
+		t.Helper()
+		if _, err := r.Run(ctx); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		copies, _, err := r.store.Valued(ctx, r.Window())
+		if err != nil || len(copies) != 1 {
+			t.Fatalf("Valued = %+v, %v", copies, err)
+		}
+		return copies[0].Mid
+	}
+	if m := mid(); m == nil || m.Cents != vgPlus {
+		t.Fatalf("release 100 mid = %+v", m)
+	}
+	exec(t, pool, `UPDATE edition SET discogs_release_id = 200 WHERE id = 80`)
+	if m := mid(); m != nil {
+		t.Fatalf("release 200 without prices still valued at %+v from release 100", m)
+	}
+	exec(t, pool, `UPDATE edition SET discogs_release_id = NULL WHERE id = 80`)
+	if m := mid(); m != nil {
+		t.Fatalf("cleared release still valued at %+v", m)
+	}
+	exec(t, pool, `UPDATE edition SET discogs_release_id = 100 WHERE id = 80`)
+	if m := mid(); m == nil || m.Cents != vgPlus {
+		t.Fatalf("release 100 named again: mid = %+v", m)
+	}
+}

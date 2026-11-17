@@ -51,6 +51,10 @@ func TestAlbumMatches(t *testing.T) {
 		{"vinyl want needs a vinyl listing", album("The Wall", "Pink Floyd", "vinyl"), "Pink Floyd The Wall LP 1979", true},
 		{"vinyl want skips an unnamed medium", album("The Wall", "Pink Floyd", "vinyl"), "Pink Floyd The Wall", false},
 		{"artist stop words dropped", album("Abbey Road", "The Beatles", "cd"), "Beatles Abbey Road CD remaster", true},
+		{"artist word is no medium", album("Please Hammer Don't Hurt 'Em", "MC Hammer", "cd"), "MC Hammer Please Hammer Don't Hurt 'Em CD", true},
+		{"artist word is no cassette", album("Please Hammer Don't Hurt 'Em", "MC Hammer", "cassette"), "MC Hammer Please Hammer Don't Hurt 'Em CD", false},
+		{"cassette named past the artist", album("Please Hammer Don't Hurt 'Em", "MC Hammer", "cassette"), "MC Hammer Please Hammer Don't Hurt 'Em kaseta", true},
+		{"album title is no medium", album("Vinyl", "Dark Star", "cd"), "Dark Star Vinyl CD", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

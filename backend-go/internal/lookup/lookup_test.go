@@ -146,7 +146,7 @@ func TestLookupWithoutProviders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	if string(b) != `{"barcode":"96385074","candidates":[],"errors":[]}` {
+	if string(b) != `{"barcode":"96385074","candidates":[],"needs_confirmation":true,"errors":[]}` {
 		t.Fatalf("body = %s", b)
 	}
 }
@@ -473,5 +473,138 @@ func roundTrip(t *testing.T, in, out any) {
 	}
 	if err := json.Unmarshal(b, out); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestNeedsConfirmation(t *testing.T) {
+	tests := []struct {
+		name        string
+		confidences []float64
+		want        bool
+	}{
+		{name: "no candidates", want: true},
+		{name: "lone confident candidate", confidences: []float64{0.9, 0.5}, want: false},
+		{name: "best below threshold", confidences: []float64{0.79}, want: true},
+		{name: "two confident candidates", confidences: []float64{0.9, 0.85}, want: true},
+		{name: "exactly at threshold", confidences: []float64{0.8}, want: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &lookup.Registry{}
+			for i, c := range tc.confidences {
+				if err := r.Register(&fakeProvider{name: string(rune('a' + i)), confidence: c}, 0); err != nil {
+					t.Fatal(err)
+				}
+			}
+			res := lookup.NewService(r, nil, discard()).Lookup(context.Background(), "5901234123457")
+			if res.NeedsConfirmation != tc.want {
+				t.Fatalf("needs_confirmation = %v, want %v", res.NeedsConfirmation, tc.want)
+			}
+		})
+	}
+}
+
+func send(t *testing.T, method, url, body string) (int, string) {
+	t.Helper()
+	req, err := http.NewRequestWithContext(context.Background(), method, url, strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp.StatusCode, string(b)
+}
+
+func TestSelection(t *testing.T) {
+	p := &fakeProvider{name: "movie", confidence: 0.5}
+	r := &lookup.Registry{}
+	if err := r.Register(p, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	h := lookup.NewHandler(lookup.NewService(r, &memCache{}, discard()), discard())
+	srv := httptest.NewServer(server.New(server.Config{}, discard(), server.Deps{API: []server.Mounter{h}}))
+	t.Cleanup(srv.Close)
+
+	if code, body := get(t, srv.URL+"/api/lookup/5901234123457"); code != http.StatusOK || !strings.Contains(body, `"needs_confirmation":true`) {
+		t.Fatalf("first lookup = %d %s", code, body)
+	}
+	bad := map[string]string{
+		`{"type":"music","title":{"name":"X"}}`:                                  "type",
+		`{"type":"movie","title":{"name":"  "}}`:                                 "title.name",
+		`{"type":"movie","title":{"name":"X"},"edition":{"barcode":"96385074"}}`: "edition.barcode",
+		`{"type":"movie","title":{"name":"X"},"extra":1}{}`:                      "body",
+	}
+	for in, field := range bad {
+		code, body := send(t, http.MethodPut, srv.URL+"/api/lookup/5901234123457/selection", in)
+		if code != http.StatusUnprocessableEntity || !strings.Contains(body, `"field":"`+field+`"`) {
+			t.Fatalf("PUT %s = %d %s, want 422 on %s", in, code, body, field)
+		}
+	}
+	if code, _ := send(t, http.MethodPut, srv.URL+"/api/lookup/123/selection", `{}`); code != http.StatusUnprocessableEntity {
+		t.Fatalf("bad path barcode = %d", code)
+	}
+
+	code, body := send(t, http.MethodPut, srv.URL+"/api/lookup/5901234123457/selection",
+		`{"type":"movie","title":{"name":" Kursk ","tmdb_id":401200},"edition":{"barcode":"5901234123457","format":"bluray"},"provider":"x","confidence":0.2}`)
+	if code != http.StatusOK {
+		t.Fatalf("select = %d %s", code, body)
+	}
+	fetches := p.fetchCount()
+	code, body = get(t, srv.URL+"/api/lookup/5901234123457")
+	var res lookup.Result
+	if err := json.Unmarshal([]byte(body), &res); err != nil || code != http.StatusOK {
+		t.Fatalf("lookup = %d %s", code, body)
+	}
+	if res.NeedsConfirmation || len(res.Candidates) != 1 || p.fetchCount() != fetches {
+		t.Fatalf("result = %+v, fetches %d -> %d", res, fetches, p.fetchCount())
+	}
+	c := res.Candidates[0]
+	if c.Provider != lookup.SelectionProvider || c.Confidence != 1 || c.Title.Name != "Kursk" || *c.Title.TMDBID != 401200 || c.Edition.Barcode != "5901234123457" {
+		t.Fatalf("selection = %+v", c)
+	}
+}
+
+func TestSelectionWithoutCache(t *testing.T) {
+	svc := lookup.NewService(&lookup.Registry{}, nil, discard())
+	if _, err := svc.Select(context.Background(), "5901234123457", lookup.Candidate{Type: "movie"}); !errors.Is(err, lookup.ErrNoCache) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+type partialProvider struct {
+	fakeProvider
+}
+
+func (p *partialProvider) Fetch(ctx context.Context, code string) (json.RawMessage, error) {
+	raw, err := p.fakeProvider.Fetch(ctx, code)
+	if err != nil {
+		return nil, err
+	}
+	return nil, &lookup.PartialError{Raw: raw, Err: errors.New("allegro refused catalog access")}
+}
+
+func TestPartialAnswerIsReportedAndNotCached(t *testing.T) {
+	p := &partialProvider{fakeProvider{name: "movie", confidence: 0.9}}
+	r := &lookup.Registry{}
+	if err := r.Register(p, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	cache := &memCache{}
+	svc := lookup.NewService(r, cache, discard())
+	for range 2 {
+		res := svc.Lookup(context.Background(), "5901234123457")
+		if len(res.Candidates) != 1 || len(res.Errors) != 1 || !strings.Contains(res.Errors[0].Error, "allegro refused") {
+			t.Fatalf("result = %+v", res)
+		}
+	}
+	if p.fetchCount() != 2 || len(cache.entries) != 0 {
+		t.Fatalf("fetches %d, cache %v", p.fetchCount(), cache.entries)
 	}
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/Automaat/ohara/backend-go/internal/db"
 	"github.com/Automaat/ohara/backend-go/internal/lookup"
 	"github.com/Automaat/ohara/backend-go/internal/lookup/books"
+	"github.com/Automaat/ohara/backend-go/internal/lookup/movie"
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
 	"github.com/Automaat/ohara/backend-go/internal/server"
 	"github.com/Automaat/ohara/backend-go/internal/web"
@@ -32,6 +33,9 @@ var version = "dev"
 func main() {
 	if len(os.Args) >= 2 && os.Args[1] == "healthcheck" {
 		os.Exit(healthcheck())
+	}
+	if len(os.Args) >= 2 && os.Args[1] == "allegro-login" {
+		os.Exit(allegroLogin())
 	}
 	os.Exit(run())
 }
@@ -168,6 +172,10 @@ func openDB(ctx context.Context, dsn string, logger *slog.Logger) (*pgxpool.Pool
 // a week lets a new release reach the catalogs without rescanning daily.
 const bookCacheTTL = 7 * 24 * time.Hour
 
+// movieCacheTTL keeps a movie chain answer, "no match" included, for a week:
+// catalogs add new releases, but a rescan should not cost requests.
+const movieCacheTTL = 7 * 24 * time.Hour
+
 // newLookup registers the barcode metadata providers. Registration order is
 // the field priority when book answers are merged: the national library
 // first, then Open Library, then Google Books when a key is set.
@@ -186,6 +194,11 @@ func newLookup(pool *pgxpool.Pool, logger *slog.Logger) (*lookup.Handler, error)
 			return nil, err
 		}
 	}
+	if p := newMovieProvider(pool, logger); p != nil {
+		if err := registry.Register(p, movieCacheTTL); err != nil {
+			return nil, err
+		}
+	}
 	if envOr("OHARA_LOOKUP_STUB", "false") == "true" {
 		if err := registry.Register(lookup.Stub{}, 0); err != nil {
 			return nil, err
@@ -194,6 +207,69 @@ func newLookup(pool *pgxpool.Pool, logger *slog.Logger) (*lookup.Handler, error)
 	logger.Info("lookup providers", "providers", strings.Join(registry.Names(), ","))
 	service := lookup.NewService(registry, lookup.NewPGCache(pool), logger)
 	return lookup.NewHandler(service, logger), nil
+}
+
+// sourceClient is shared by the external sources; the lookup service bounds
+// each provider call too.
+var sourceClient = &http.Client{Timeout: 8 * time.Second}
+
+// newMovieProvider builds the movie chain, or nil without a TMDB key: the
+// chain ends in a TMDB search. Allegro joins when its app credentials are
+// set; Ceneo and UPCitemdb can be switched off.
+func newMovieProvider(pool *pgxpool.Pool, logger *slog.Logger) *movie.Provider {
+	key := os.Getenv("OHARA_TMDB_API_KEY")
+	if key == "" {
+		logger.Info("movie lookup disabled: OHARA_TMDB_API_KEY not set")
+		return nil
+	}
+	p := &movie.Provider{TMDB: movie.TMDB{Client: sourceClient, Key: key}}
+	if a := newAllegro(pool); a != nil {
+		p.Sources = append(p.Sources, a)
+	}
+	if envOr("OHARA_CENEO", "true") == "true" {
+		p.Sources = append(p.Sources, movie.Ceneo{Client: sourceClient})
+	}
+	if envOr("OHARA_UPCITEMDB", "true") == "true" {
+		p.Sources = append(p.Sources, movie.UPCitemdb{Client: sourceClient})
+	}
+	names := make([]string, 0, len(p.Sources))
+	for _, s := range p.Sources {
+		names = append(names, s.Name())
+	}
+	logger.Info("movie lookup sources", "sources", strings.Join(names, ","))
+	return p
+}
+
+func newAllegro(pool *pgxpool.Pool) *movie.Allegro {
+	id, secret := os.Getenv("OHARA_ALLEGRO_CLIENT_ID"), os.Getenv("OHARA_ALLEGRO_CLIENT_SECRET")
+	if id == "" || secret == "" {
+		return nil
+	}
+	return &movie.Allegro{ClientID: id, ClientSecret: secret, Store: movie.PGTokenStore{Pool: pool}, Client: sourceClient}
+}
+
+// allegroLogin runs the one-time Allegro device flow and stores the token
+// pair, for example `docker exec -it ohara api allegro-login`.
+func allegroLogin() int {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	pool, err := openDB(ctx, os.Getenv("DATABASE_URL"), logger)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "allegro-login: database:", err)
+		return 2
+	}
+	defer pool.Close()
+	a := newAllegro(pool)
+	if a == nil {
+		fmt.Fprintln(os.Stderr, "allegro-login: set OHARA_ALLEGRO_CLIENT_ID and OHARA_ALLEGRO_CLIENT_SECRET")
+		return 2
+	}
+	if err := a.Login(ctx, os.Stdout); err != nil {
+		fmt.Fprintln(os.Stderr, "allegro-login:", err)
+		return 1
+	}
+	return 0
 }
 
 func registerPoolMetrics(pool *pgxpool.Pool) {

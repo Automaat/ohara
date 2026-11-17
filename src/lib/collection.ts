@@ -139,6 +139,9 @@ export function options<K extends string>(
 	return (Object.keys(labels) as K[]).map((value) => ({ value, label: labels[value] }));
 }
 
+/** The API's price cap: 1 000 000 zł. */
+export const maxPriceCents = 100_000_000;
+
 const pln = new Intl.NumberFormat('pl-PL', { style: 'currency', currency: 'PLN' });
 
 /** Grosze as "49,99 zł"; null as an empty string. */
@@ -159,7 +162,8 @@ export function parsePLN(input: string): number | null | undefined {
 	const cleaned = input.replace(/zł/i, '').replace(/[\s ]/g, '').replace(',', '.');
 	if (cleaned === '') return null;
 	if (!/^\d+(\.\d{1,2})?$/.test(cleaned)) return undefined;
-	return Math.round(Number(cleaned) * 100);
+	const cents = Math.round(Number(cleaned) * 100);
+	return cents > maxPriceCents ? undefined : cents;
 }
 
 /** The work's name, with the other title in brackets when it differs. */
@@ -372,7 +376,10 @@ export function copyPayload(f: CopyForm, editionID: number): Parsed<CopyPayload>
 	const owned = f.status === 'owned';
 	const price = owned ? parsePLN(f.price) : null;
 	if (price === undefined) {
-		return { ok: false, issue: { field: 'price_cents', message: 'Cena to kwota, np. 49,99.' } };
+		return {
+			ok: false,
+			issue: { field: 'price_cents', message: 'Cena to kwota do 1 000 000 zł, np. 49,99.' }
+		};
 	}
 	const date = owned ? f.purchased_on.trim() : '';
 	if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {

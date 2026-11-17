@@ -229,6 +229,7 @@ func TestCopyBelongsToEdition(t *testing.T) {
 	a.fails(http.MethodPost, "/api/copies", obj{"edition_id": 999999, "status": "owned"}, http.StatusUnprocessableEntity, "edition_id")
 	a.fails(http.MethodPut, fmt.Sprintf("/api/copies/%d", copyID), obj{"edition_id": 999999, "status": "owned"}, http.StatusUnprocessableEntity, "edition_id")
 	a.fails(http.MethodPost, "/api/copies", obj{"edition_id": edition, "status": "wishlist", "price_cents": 100}, http.StatusUnprocessableEntity, "price_cents")
+	a.fails(http.MethodPost, "/api/copies", obj{"edition_id": edition, "status": "owned", "price_cents": int64(9223372036854775807)}, http.StatusUnprocessableEntity, "price_cents")
 
 	other := a.edition(obj{"title_id": movie, "format": "uhd"})
 	var moved collection.Copy

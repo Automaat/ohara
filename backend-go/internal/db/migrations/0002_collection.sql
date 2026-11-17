@@ -1,6 +1,7 @@
 -- Collection model: a title (the work) has editions (concrete releases keyed
 -- by barcode), and each edition has copies (owned or wanted). Money is stored
--- in grosze so totals stay exact.
+-- in grosze so totals stay exact, capped at 1 000 000 zł so sums cannot
+-- overflow.
 
 CREATE TABLE title (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -46,7 +47,7 @@ CREATE TABLE copy (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     edition_id bigint NOT NULL REFERENCES edition (id) ON DELETE RESTRICT,
     status text NOT NULL CHECK (status IN ('owned', 'wishlist')),
-    price_cents bigint CHECK (price_cents >= 0),
+    price_cents bigint CHECK (price_cents BETWEEN 0 AND 100000000),
     purchased_on date,
     shop text NOT NULL DEFAULT '',
     acquired_as text CHECK (acquired_as IN ('new', 'used')),
@@ -78,7 +79,7 @@ CREATE TABLE price_observation (
     source text NOT NULL,
     external_id text,
     observed_at timestamptz NOT NULL DEFAULT now(),
-    price_cents bigint NOT NULL CHECK (price_cents >= 0),
+    price_cents bigint NOT NULL CHECK (price_cents BETWEEN 0 AND 100000000),
     acquired_as text CHECK (acquired_as IN ('new', 'used')),
     url text NOT NULL DEFAULT '',
     edition_id bigint REFERENCES edition (id) ON DELETE SET NULL,

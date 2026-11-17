@@ -29,7 +29,9 @@ describe('money', () => {
 		['  ', null],
 		['abc', undefined],
 		['1,234', undefined],
-		['-5', undefined]
+		['-5', undefined],
+		['1000000', 100000000],
+		['1000000,01', undefined]
 	])('parsePLN(%j) = %j', (input, cents) => {
 		expect(parsePLN(input)).toBe(cents);
 	});

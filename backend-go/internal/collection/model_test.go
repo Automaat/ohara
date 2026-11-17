@@ -118,6 +118,8 @@ func TestCopyInputNormalize(t *testing.T) {
 		{"missing edition", collection.CopyInput{Status: "owned"}, "edition_id"},
 		{"unknown status", collection.CopyInput{EditionID: 1, Status: "lent"}, "status"},
 		{"negative price", collection.CopyInput{EditionID: 1, Status: "owned", PriceCents: new(int64(-1))}, "price_cents"},
+		{"price at the cap", collection.CopyInput{EditionID: 1, Status: "owned", PriceCents: new(int64(collection.MaxPriceCents))}, ""},
+		{"price over the cap", collection.CopyInput{EditionID: 1, Status: "owned", PriceCents: new(int64(collection.MaxPriceCents + 1))}, "price_cents"},
 		{"wishlist with price", collection.CopyInput{EditionID: 1, Status: "wishlist", PriceCents: new(int64(100))}, "price_cents"},
 		{"wishlist with purchase date", collection.CopyInput{EditionID: 1, Status: "wishlist", PurchasedOn: day}, "purchased_on"},
 		{"unknown acquisition", collection.CopyInput{EditionID: 1, Status: "owned", AcquiredAs: new("gift")}, "acquired_as"},

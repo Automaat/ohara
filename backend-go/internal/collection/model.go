@@ -22,6 +22,8 @@ const (
 	maxText    = 500
 	maxNotes   = 10000
 	maxAuthors = 20
+	// MaxPriceCents (1 000 000 zł) keeps collection totals far from int64 overflow.
+	MaxPriceCents = 100_000_000
 )
 
 var (
@@ -334,6 +336,9 @@ func (in *CopyInput) Normalize() *httpx.FieldError {
 	}
 	if in.PriceCents != nil && *in.PriceCents < 0 {
 		return fieldErr("price_cents", "cannot be negative")
+	}
+	if in.PriceCents != nil && *in.PriceCents > MaxPriceCents {
+		return fieldErr("price_cents", "cannot exceed 1000000 PLN")
 	}
 	if in.Status == StatusWishlist {
 		if in.PriceCents != nil {

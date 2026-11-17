@@ -40,36 +40,64 @@ func TestTrimmedMedian(t *testing.T) {
 func TestRanges(t *testing.T) {
 	now := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
 	used, fresh := "used", "new"
+	bluray, dvd := "bluray", "dvd"
 	prices := []Price{
-		{EditionID: 1, Source: SourceOLX, Cents: 2000, AcquiredAs: &used, SeenAt: now},
-		{EditionID: 1, Source: SourceOLX, Cents: 3000, SeenAt: now},
-		{EditionID: 1, Source: SourceOLX, Cents: 9900, AcquiredAs: &fresh, SeenAt: now},
-		{EditionID: 1, Source: SourceOLX, Cents: 2500, AcquiredAs: &used, SeenAt: now},
-		{EditionID: 1, Source: SourceCeneo, Cents: 5000, AcquiredAs: &fresh, SeenAt: now},
-		{EditionID: 1, Source: SourceCeneo, Cents: 6000, AcquiredAs: &fresh, SeenAt: now},
-		{EditionID: 1, Source: SourceSkupSzop, Cents: 400, SeenAt: now.Add(-time.Hour)},
-		{EditionID: 1, Source: SourceSkupSzop, Cents: 732, SeenAt: now},
-		{EditionID: 2, Source: SourceSkupSzop, Cents: 0, SeenAt: now},
-		{EditionID: 3, Source: "pepper", Cents: 100, SeenAt: now},
+		{EditionID: 1, TitleID: 100, Source: SourceOLX, Cents: 2000, AcquiredAs: &used, SeenAt: now},
+		{EditionID: 1, TitleID: 100, Source: SourceOLX, Cents: 3000, SeenAt: now},
+		{EditionID: 1, TitleID: 100, Source: SourceOLX, Cents: 9900, AcquiredAs: &fresh, SeenAt: now},
+		{EditionID: 2, TitleID: 100, Source: SourceOLX, Cents: 2500, AcquiredAs: &used, SeenAt: now},
+		{EditionID: 1, TitleID: 100, Source: SourceCeneo, Cents: 5000, AcquiredAs: &fresh, SeenAt: now},
+		{EditionID: 2, TitleID: 100, Source: SourceCeneo, Cents: 6000, AcquiredAs: &fresh, SeenAt: now},
+		{EditionID: 1, TitleID: 100, Source: SourceSkupSzop, Cents: 400, SeenAt: now.Add(-time.Hour)},
+		{EditionID: 1, TitleID: 100, Source: SourceSkupSzop, Cents: 732, SeenAt: now},
+		{EditionID: 2, TitleID: 100, Source: SourceSkupSzop, Cents: 0, SeenAt: now},
+		{EditionID: 3, TitleID: 200, Format: &bluray, Source: SourceOLX, Cents: 4000, AcquiredAs: &used, SeenAt: now},
+		{EditionID: 5, TitleID: 300, Source: "pepper", Cents: 100, SeenAt: now},
 	}
-	got := Ranges(prices)
-	want := map[int64]Range{
-		1: {
-			Floor:   &Estimate{Cents: 732, Source: SourceSkupSzop, Count: 1},
-			Mid:     &Estimate{Cents: 2500, Source: SourceOLX, Count: 3},
-			Ceiling: &Estimate{Cents: 5500, Source: SourceCeneo, Count: 2},
+	r := NewRanges(prices)
+	tests := []struct {
+		name    string
+		edition int64
+		title   int64
+		format  *string
+		want    Range
+	}{
+		{
+			name: "own floor, pooled middle and ceiling", edition: 1, title: 100,
+			want: Range{
+				Floor:   &Estimate{Cents: 732, Source: SourceSkupSzop, Count: 1},
+				Mid:     &Estimate{Cents: 2500, Source: SourceOLX, Count: 3},
+				Ceiling: &Estimate{Cents: 5500, Source: SourceCeneo, Count: 2},
+			},
 		},
-		2: {Floor: &Estimate{Cents: 0, Source: SourceSkupSzop, Count: 1}},
-		3: {},
+		{
+			name: "second printing shares the title's prices", edition: 2, title: 100,
+			want: Range{
+				Floor:   &Estimate{Cents: 0, Source: SourceSkupSzop, Count: 1},
+				Mid:     &Estimate{Cents: 2500, Source: SourceOLX, Count: 3},
+				Ceiling: &Estimate{Cents: 5500, Source: SourceCeneo, Count: 2},
+			},
+		},
+		{
+			name: "edition without its own prices", edition: 9, title: 100,
+			want: Range{
+				Mid:     &Estimate{Cents: 2500, Source: SourceOLX, Count: 3},
+				Ceiling: &Estimate{Cents: 5500, Source: SourceCeneo, Count: 2},
+			},
+		},
+		{
+			name: "same format pools", edition: 4, title: 200, format: &bluray,
+			want: Range{Mid: &Estimate{Cents: 4000, Source: SourceOLX, Count: 1}},
+		},
+		{name: "other format does not", edition: 6, title: 200, format: &dvd, want: Range{}},
+		{name: "other sources are ignored", edition: 5, title: 300, want: Range{}},
 	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("Ranges = %+v, want %+v", got, want)
-	}
-	if got[1].LowConfidence() {
-		t.Error("three used prices should be confident")
-	}
-	if !got[2].LowConfidence() {
-		t.Error("no used prices should be low confidence")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := r.For(tt.edition, tt.title, tt.format); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("For(%d) = %+v, want %+v", tt.edition, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -95,18 +123,17 @@ func TestLowConfidence(t *testing.T) {
 func TestValueAndSummarize(t *testing.T) {
 	paid := int64(4000)
 	copies := []CopyValue{
-		{CopyID: 1, EditionID: 1, PriceCents: &paid},
-		{CopyID: 2, EditionID: 1},
-		{CopyID: 3, EditionID: 2, PriceCents: &paid},
+		{CopyID: 1, EditionID: 1, TitleID: 1, PriceCents: &paid},
+		{CopyID: 2, EditionID: 1, TitleID: 1},
+		{CopyID: 3, EditionID: 2, TitleID: 2, PriceCents: &paid},
 	}
-	ranges := map[int64]Range{
-		1: {
-			Floor:   &Estimate{Cents: 700, Source: SourceSkupSzop, Count: 1},
-			Mid:     &Estimate{Cents: 2500, Source: SourceOLX, Count: 4},
-			Ceiling: &Estimate{Cents: 6000, Source: SourceCeneo, Count: 1},
-		},
+	used := "used"
+	prices := []Price{{EditionID: 1, TitleID: 1, Source: SourceSkupSzop, Cents: 700}}
+	for _, c := range []int64{2400, 2500, 2500, 2600} {
+		prices = append(prices, Price{EditionID: 1, TitleID: 1, Source: SourceOLX, Cents: c, AcquiredAs: &used})
 	}
-	Value(copies, ranges)
+	prices = append(prices, Price{EditionID: 1, TitleID: 1, Source: SourceCeneo, Cents: 6000})
+	Value(copies, NewRanges(prices))
 	if copies[0].Mid == nil || copies[1].Ceiling == nil || copies[2].Mid != nil {
 		t.Fatalf("Value left ranges %+v", copies)
 	}

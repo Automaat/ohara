@@ -47,56 +47,88 @@ func (r Range) LowConfidence() bool {
 	return r.Mid == nil || r.Mid.Count < MinObservations
 }
 
-// Price is one observation the valuation window holds.
+// Price is one observation the valuation window holds, with the title and
+// format of the edition it was recorded for.
 type Price struct {
 	EditionID  int64
+	TitleID    int64
+	Format     *string
 	Source     string
 	Cents      int64
 	AcquiredAs *string
 	SeenAt     time.Time
 }
 
-// Ranges values every edition in prices. The floor is the latest SkupSzop
-// offer; the middle is the trimmed median of OLX prices that are not for
-// new copies; the ceiling is the trimmed median of Ceneo's lowest new
-// prices.
-func Ranges(prices []Price) map[int64]Range {
-	type bucket struct {
-		used, fresh []int64
-		floor       *Price
+// group is the set of editions whose listings price each other: one title
+// in one format. Listings rarely tell a book's printings apart, and a
+// matched listing is stored against only one of them.
+type group struct {
+	titleID int64
+	format  string
+}
+
+func groupOf(titleID int64, format *string) group {
+	g := group{titleID: titleID}
+	if format != nil {
+		g.format = *format
 	}
-	buckets := map[int64]*bucket{}
+	return g
+}
+
+// Ranges values editions from the prices in the window. The floor is the
+// edition's own latest SkupSzop offer, as a buy-back quotes one ISBN. The
+// middle is the trimmed median of OLX prices that are not for new copies
+// and the ceiling the trimmed median of Ceneo's lowest new prices, both
+// pooled over every edition of the same title and format.
+type Ranges struct {
+	floors map[int64]*Estimate
+	mids   map[group]*Estimate
+	ceils  map[group]*Estimate
+}
+
+// NewRanges sorts prices into floors per edition and middles and ceilings
+// per title and format.
+func NewRanges(prices []Price) Ranges {
+	latest := map[int64]*Price{}
+	used := map[group][]int64{}
+	fresh := map[group][]int64{}
 	for i := range prices {
 		p := &prices[i]
-		b := buckets[p.EditionID]
-		if b == nil {
-			b = &bucket{}
-			buckets[p.EditionID] = b
-		}
+		g := groupOf(p.TitleID, p.Format)
 		switch p.Source {
 		case SourceOLX:
 			if p.AcquiredAs == nil || *p.AcquiredAs != "new" {
-				b.used = append(b.used, p.Cents)
+				used[g] = append(used[g], p.Cents)
 			}
 		case SourceCeneo:
-			b.fresh = append(b.fresh, p.Cents)
+			fresh[g] = append(fresh[g], p.Cents)
 		case SourceSkupSzop:
-			if b.floor == nil || p.SeenAt.After(b.floor.SeenAt) {
-				b.floor = p
+			if f := latest[p.EditionID]; f == nil || p.SeenAt.After(f.SeenAt) {
+				latest[p.EditionID] = p
 			}
 		}
 	}
-	out := make(map[int64]Range, len(buckets))
-	for id, b := range buckets {
-		var r Range
-		if b.floor != nil {
-			r.Floor = &Estimate{Cents: b.floor.Cents, Source: SourceSkupSzop, Count: 1}
-		}
-		r.Mid = trimmedMedian(b.used, SourceOLX)
-		r.Ceiling = trimmedMedian(b.fresh, SourceCeneo)
-		out[id] = r
+	r := Ranges{
+		floors: make(map[int64]*Estimate, len(latest)),
+		mids:   make(map[group]*Estimate, len(used)),
+		ceils:  make(map[group]*Estimate, len(fresh)),
 	}
-	return out
+	for id, p := range latest {
+		r.floors[id] = &Estimate{Cents: p.Cents, Source: SourceSkupSzop, Count: 1}
+	}
+	for g, v := range used {
+		r.mids[g] = trimmedMedian(v, SourceOLX)
+	}
+	for g, v := range fresh {
+		r.ceils[g] = trimmedMedian(v, SourceCeneo)
+	}
+	return r
+}
+
+// For is the range of one edition of titleID in format.
+func (r Ranges) For(editionID, titleID int64, format *string) Range {
+	g := groupOf(titleID, format)
+	return Range{Floor: r.floors[editionID], Mid: r.mids[g], Ceiling: r.ceils[g]}
 }
 
 // trimmedMedian is the median of values once outliers are dropped: with
@@ -171,10 +203,10 @@ type Summary struct {
 }
 
 // Value fills each copy's range from ranges.
-func Value(copies []CopyValue, ranges map[int64]Range) {
+func Value(copies []CopyValue, ranges Ranges) {
 	for i := range copies {
 		c := &copies[i]
-		r := ranges[c.EditionID]
+		r := ranges.For(c.EditionID, c.TitleID, c.Format)
 		c.Floor, c.Mid, c.Ceiling = r.Floor, r.Mid, r.Ceiling
 		c.LowConfidence = r.LowConfidence()
 	}

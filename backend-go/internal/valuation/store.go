@@ -2,7 +2,6 @@ package valuation
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -15,12 +14,13 @@ import (
 
 // Store is the Postgres access layer for valuation.
 type Store struct {
-	pool *pgxpool.Pool
+	pool  *pgxpool.Pool
+	deals *deals.Store
 }
 
 // NewStore wraps pool.
 func NewStore(pool *pgxpool.Pool) *Store {
-	return &Store{pool: pool}
+	return &Store{pool: pool, deals: deals.NewStore(pool)}
 }
 
 // Holding is an edition with at least one owned copy, in the shape the
@@ -51,48 +51,23 @@ func (s *Store) Holdings(ctx context.Context) ([]Holding, error) {
 
 // Rules returns the deal matcher's editable phrases.
 func (s *Store) Rules(ctx context.Context) (deals.Rules, error) {
-	return deals.NewStore(s.pool).Rules(ctx)
+	return s.deals.Rules(ctx)
 }
 
-type observationRaw struct {
-	Title string          `json:"title"`
-	Data  json.RawMessage `json:"data,omitempty"`
-}
-
-// Record stores l as a price of h's edition. A listing the source already
-// reported keeps its row, edition and first observation time; its price
-// and last_seen_at move to now. It reports whether the listing was new.
+// Record stores l as a price of h's edition, through the deal hunter's
+// store so both keep one row per listing. It reports whether the listing
+// was new.
 func (s *Store) Record(ctx context.Context, l *deals.Listing, h *Holding) (bool, error) {
-	raw, err := json.Marshal(observationRaw{Title: l.Title, Data: l.Raw})
-	if err != nil {
-		return false, fmt.Errorf("record: encode raw: %w", err)
-	}
-	var inserted bool
-	err = s.pool.QueryRow(ctx, `INSERT INTO price_observation
-			(source, external_id, price_cents, acquired_as, url, edition_id, title_id, raw)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		ON CONFLICT (source, external_id) WHERE external_id IS NOT NULL DO UPDATE SET
-			price_cents = EXCLUDED.price_cents,
-			last_seen_at = now(),
-			url = EXCLUDED.url,
-			acquired_as = coalesce(EXCLUDED.acquired_as, price_observation.acquired_as),
-			edition_id = coalesce(price_observation.edition_id, EXCLUDED.edition_id),
-			title_id = coalesce(price_observation.title_id, EXCLUDED.title_id)
-		RETURNING xmax = 0`,
-		l.Source, l.ExternalID, l.PriceCents, l.AcquiredAs, l.URL, h.Want.EditionID, h.Want.TitleID, raw,
-	).Scan(&inserted)
-	if err != nil {
-		return false, fmt.Errorf("record observation: %w", err)
-	}
-	return inserted, nil
+	isNew, _, err := s.deals.Record(ctx, l, &h.Want, false)
+	return isNew, err
 }
 
 // Prices returns the valuation sources' observations of owned editions
 // last seen within window.
 func (s *Store) Prices(ctx context.Context, window time.Duration) ([]Price, error) {
-	rows, err := s.pool.Query(ctx, `SELECT o.edition_id, o.source, o.price_cents, o.acquired_as,
-			o.last_seen_at
-		FROM price_observation o
+	rows, err := s.pool.Query(ctx, `SELECT o.edition_id, e.title_id, e.format, o.source,
+			o.price_cents, o.acquired_as, o.last_seen_at
+		FROM price_observation o JOIN edition e ON e.id = o.edition_id
 		WHERE o.source = ANY ($1)
 			AND o.last_seen_at > now() - make_interval(secs => $2)
 			AND o.edition_id IN (SELECT edition_id FROM copy WHERE status = 'owned')`,
@@ -132,7 +107,7 @@ func (s *Store) Valued(ctx context.Context, window time.Duration) ([]CopyValue, 
 	if err != nil {
 		return nil, Summary{}, err
 	}
-	Value(copies, Ranges(prices))
+	Value(copies, NewRanges(prices))
 	return copies, Summarize(copies), nil
 }
 

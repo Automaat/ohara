@@ -70,6 +70,9 @@ func TestWantMatches(t *testing.T) {
 		{"part number", dune, "Dune Part 2 Blu-ray", false},
 		{"the first film", dune, "Diuna, Blu-ray - Denis Villeneuve", true},
 		{"part one is the first film", dune, "Dune: Part One Blu-ray", true},
+		{"part 1 is the first film", dune, "Dune Part 1 Blu-ray", true},
+		{"część 1 is the first film", dune, "Diuna część 1 Blu-ray", true},
+		{"part I is the first film", dune, "Dune Part I Blu-ray", true},
 		{"ordinal without part is a word", Want{Kind: "movie", Name: "Dzień", Format: new("dvd")}, "Dzień drugi DVD", true},
 		{"sequel wanted by its part", Want{Kind: "movie", Name: "Diuna: Część druga", Format: new("bluray")}, "Diuna. Część Druga, Blu-ray", true},
 	}

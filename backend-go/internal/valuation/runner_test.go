@@ -411,3 +411,45 @@ func post(t *testing.T, url string) int {
 	_ = resp.Body.Close()
 	return resp.StatusCode
 }
+
+func TestRunValuesEveryOwnedPrinting(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	seed(t, pool)
+	exec(t, pool, `INSERT INTO edition (id, title_id, barcode, binding) OVERRIDING SYSTEM VALUE
+		VALUES (11, 1, '9788308049396', 'hardcover')`)
+	exec(t, pool, `INSERT INTO copy (edition_id, status, price_cents) VALUES (11, 'owned', 6000)`)
+	olx := &fakeSource{name: "olx", listings: []deals.Listing{
+		listing("olx", "1", "Katedra Jacek Dukaj", 2000, used()),
+		listing("olx", "2", "Katedra Dukaj twarda oprawa", 3000, used()),
+		listing("olx", "3", "Katedra Dukaj", 4000, used()),
+	}}
+	ceneo := &fakeSource{name: "ceneo"}
+	bb := &fakeBuyBack{quotes: map[string]Quote{
+		"9788308073209": {Offered: true, Cents: 537},
+		"9788308049396": {Offered: true, Cents: 900},
+	}}
+	r := newTestRunner(pool, olx, ceneo, bb)
+	if _, err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	copies, _, err := r.store.Valued(context.Background(), r.Window())
+	if err != nil {
+		t.Fatalf("Valued: %v", err)
+	}
+	floors := map[int64]int64{}
+	for _, c := range copies {
+		if c.TitleID != 1 {
+			continue
+		}
+		if c.Mid == nil || c.Mid.Cents != 3000 || c.Mid.Count != 3 {
+			t.Fatalf("edition %d mid = %+v, want the title's 3 used prices", c.EditionID, c.Mid)
+		}
+		if c.Floor == nil {
+			t.Fatalf("edition %d has no floor", c.EditionID)
+		}
+		floors[c.EditionID] = c.Floor.Cents
+	}
+	if floors[10] != 537 || floors[11] != 900 {
+		t.Fatalf("floors = %v, want each printing's own buy-back offer", floors)
+	}
+}

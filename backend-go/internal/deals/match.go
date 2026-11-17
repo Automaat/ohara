@@ -215,7 +215,7 @@ var partWords = map[string]bool{"part": true, "czesc": true, "cz": true, "chapte
 // sequelAfter reports whether text names a sequel of name: right after
 // name's last word, past a "Part" or "Część", comes a number or numeral
 // that name lacks and that is no release year, as in "Blade Runner 2049",
-// "Rocky II" or "Dune: Part Two" for "Dune".
+// "Rocky II" or "Dune: Part Two" for "Dune". "Part 1" is the first film.
 func sequelAfter(text []string, name string) bool {
 	nameWords := words(name)
 	if len(nameWords) == 0 {
@@ -240,7 +240,7 @@ func sequelAfter(text []string, name string) bool {
 		if romanParts[next] || (part && ordinalParts[next]) {
 			return true
 		}
-		if n, err := strconv.Atoi(next); err == nil && (n < 1900 || n > time.Now().Year()+1) {
+		if n, err := strconv.Atoi(next); err == nil && (!part || n != 1) && (n < 1900 || n > time.Now().Year()+1) {
 			return true
 		}
 	}

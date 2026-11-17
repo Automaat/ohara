@@ -344,3 +344,42 @@ func TestRunMatchesBooksOnPepper(t *testing.T) {
 		t.Fatalf("messages = %q", msgs)
 	}
 }
+
+func TestRunAlertsOnListingsStoredBefore(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	copyID := wishlist(t, pool, wantBluray(new(int64(5000))))
+	var editionID int64
+	if err := pool.QueryRow(context.Background(), `SELECT edition_id FROM copy WHERE id = $1`, copyID).Scan(&editionID); err != nil {
+		t.Fatal(err)
+	}
+	listing := Listing{
+		Source: "olx", ExternalID: "777", Title: "Blade Runner Blu-ray", URL: "https://www.olx.pl/d/oferta/z-ID777.html",
+		PriceCents: 6000,
+	}
+	if _, err := pool.Exec(context.Background(), `INSERT INTO price_observation
+			(source, external_id, price_cents, url, edition_id) VALUES ('olx', '777', 4000, $1, $2)`,
+		listing.URL, editionID); err != nil {
+		t.Fatal(err)
+	}
+	olx := &fakeSource{name: "olx", perQuery: true, listings: []Listing{listing}}
+	notifier := &fakeNotifier{}
+	h := newTestHunter(pool, notifier, olx)
+
+	if res := mustRun(t, h); res.New != 0 || res.Alerts != 0 || res.Sent != 0 {
+		t.Fatalf("listing above the limit = %+v, want no alert", res)
+	}
+	if n := count(t, pool, `SELECT price_cents FROM price_observation WHERE external_id = '777'`); n != 6000 {
+		t.Fatalf("stored price %d, want the price seen now", n)
+	}
+
+	olx.listings[0].PriceCents = 4500
+	if res := mustRun(t, h); res.New != 0 || res.Alerts != 1 || res.Sent != 1 {
+		t.Fatalf("listing stored earlier, now under the limit = %+v, want one alert", res)
+	}
+	if res := mustRun(t, h); res.Alerts != 0 || res.Sent != 0 {
+		t.Fatalf("repeat run = %+v, want no second alert", res)
+	}
+	if got := len(notifier.messages()); got != 1 {
+		t.Fatalf("sent %d messages, want 1", got)
+	}
+}

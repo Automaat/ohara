@@ -39,6 +39,7 @@ func TestPickSkipsOtherSequel(t *testing.T) {
 }
 
 func TestWantMatches(t *testing.T) {
+	dune := Want{Kind: "movie", Name: "Diuna", OriginalTitle: new("Dune"), Format: new("bluray")}
 	tests := []struct {
 		name  string
 		want  Want
@@ -64,6 +65,16 @@ func TestWantMatches(t *testing.T) {
 		{"release year after the title", bladeRunner("bluray"), "Blade Runner 1982 Blu-ray", true},
 		{"sequel wanted by its number", Want{Kind: "movie", Name: "Blade Runner 2049", Format: new("bluray")}, "Blade Runner 2049 Blu-ray", true},
 		{"number elsewhere in the listing", bladeRunner("dvd"), "Blade Runner DVD 2 płyty", true},
+		{"english part two", dune, "Dune: Part Two (Diuna: Część druga) (Blu-ray)", false},
+		{"polish część druga", dune, "Diuna. Część Druga, Blu-ray. Nowy Produkt", false},
+		{"part number", dune, "Dune Part 2 Blu-ray", false},
+		{"the first film", dune, "Diuna, Blu-ray - Denis Villeneuve", true},
+		{"part one is the first film", dune, "Dune: Part One Blu-ray", true},
+		{"part 1 is the first film", dune, "Dune Part 1 Blu-ray", true},
+		{"część 1 is the first film", dune, "Diuna część 1 Blu-ray", true},
+		{"part I is the first film", dune, "Dune Part I Blu-ray", true},
+		{"ordinal without part is a word", Want{Kind: "movie", Name: "Dzień", Format: new("dvd")}, "Dzień drugi DVD", true},
+		{"sequel wanted by its part", Want{Kind: "movie", Name: "Diuna: Część druga", Format: new("bluray")}, "Diuna. Część Druga, Blu-ray", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

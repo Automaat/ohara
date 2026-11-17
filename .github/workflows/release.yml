@@ -30,7 +30,7 @@ jobs:
           if [ -n "$INPUT" ]; then
             VERSION="$INPUT"
           else
-            LATEST=$(git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+            LATEST=$(git tag --list 'v*' --sort=-v:refname | { grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true; } | head -1)
             if [ -z "$LATEST" ]; then
               VERSION="0.1.0"
             else
@@ -55,7 +55,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          PREV=$(git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed -n '2p')
+          PREV=$(git tag --list 'v*' --sort=-v:refname | { grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true; } | sed -n '2p')
           if [ -n "$PREV" ]; then
             NOTES=$(git log --oneline "$PREV..HEAD")
           else

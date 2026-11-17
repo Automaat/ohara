@@ -21,6 +21,7 @@ Same layout and tooling as `../baratie`. `package.json` and
     /barcode/          # EAN/UPC/ISBN normalization (ISBN-10 → ISBN-13)
     /collection/       # titles, editions, copies, collection view
     /lookup/           # GET /api/lookup/{barcode}: provider registry + lookup_cache
+      /books/          # BN, Open Library, Google Books providers (fixtures in testdata/)
     /scanqueue/        # /api/scan-queue: barcodes the scanner could not resolve
     /server/           # router: /health, /metrics, /api/*, SPA fallback
     /web/              # serves the built SPA, index.html for client routes
@@ -55,7 +56,11 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
 - Lookup providers implement `lookup.Provider` (`Fetch` returns raw JSON,
   `Parse` turns raw JSON into candidates) and register in `cmd/api` with a
   cache TTL. Candidate `title`/`edition` fields match the POST bodies of
-  `/api/titles` and `/api/editions`.
+  `/api/titles` and `/api/editions`. A provider that only knows some
+  barcodes implements `lookup.Scoped`. Book candidates for the scanned ISBN
+  from several providers merge into one; registration order is the field
+  priority. Every provider gets `ohara_lookup_provider_requests_total`,
+  `ohara_lookup_provider_errors_total` and `ohara_lookup_cache_hits_total`.
 - DB tests call `dbtest.Migrated(t)`; each gets its own schema.
 - A barcode no provider resolves goes to `scan_queue`; a trigger on `edition`
   removes it once an edition carries that barcode.
@@ -83,13 +88,14 @@ the container port beyond the LAN.
 
 ## Configuration
 
-| Variable                | Default                         | Purpose                                                                                    |
-| ----------------------- | ------------------------------- | ------------------------------------------------------------------------------------------ |
-| `DATABASE_URL` or `PG*` | —                               | Postgres connection (required). Prefer `PG*` when the password has URL-special characters. |
-| `OHARA_ADDR`            | `:8000`                         | Listen address                                                                             |
-| `OHARA_WEB_DIR`         | unset (`/app/web` in the image) | Built SPA to serve                                                                         |
-| `OHARA_ACCESS_LOG`      | `false`                         | One log line per request                                                                   |
-| `OHARA_LOOKUP_STUB`     | `false`                         | Register the stub lookup provider (placeholder candidate for every barcode)                |
+| Variable                     | Default                         | Purpose                                                                                    |
+| ---------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------ |
+| `DATABASE_URL` or `PG*`      | —                               | Postgres connection (required). Prefer `PG*` when the password has URL-special characters. |
+| `OHARA_ADDR`                 | `:8000`                         | Listen address                                                                             |
+| `OHARA_WEB_DIR`              | unset (`/app/web` in the image) | Built SPA to serve                                                                         |
+| `OHARA_ACCESS_LOG`           | `false`                         | One log line per request                                                                   |
+| `OHARA_LOOKUP_STUB`          | `false`                         | Register the stub lookup provider (placeholder candidate for every barcode)                |
+| `OHARA_GOOGLE_BOOKS_API_KEY` | unset                           | Enable the Google Books provider (keyless clients get no quota)                            |
 
 ## Commands
 

@@ -8,10 +8,13 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
+	"github.com/Automaat/ohara/backend-go/internal/collection"
 	"github.com/Automaat/ohara/backend-go/internal/dbtest"
 	"github.com/Automaat/ohara/backend-go/internal/lookup"
 	"github.com/Automaat/ohara/backend-go/internal/server"
@@ -287,5 +290,188 @@ func TestPGCache(t *testing.T) {
 	}
 	if _, ok, _ := cache.Get(ctx, "openlibrary", "9788373012349", 24*time.Hour); ok {
 		t.Fatal("cache leaked across providers")
+	}
+}
+
+// fixedProvider answers every barcode with the same candidates; scope, when
+// set, limits the barcodes it accepts.
+type fixedProvider struct {
+	name  string
+	cands []lookup.Candidate
+	scope func(string) bool
+
+	mu      sync.Mutex
+	fetches int
+}
+
+func (p *fixedProvider) Name() string { return p.name }
+
+func (p *fixedProvider) Accepts(code string) bool { return p.scope == nil || p.scope(code) }
+
+func (p *fixedProvider) Fetch(context.Context, string) (json.RawMessage, error) {
+	p.mu.Lock()
+	p.fetches++
+	p.mu.Unlock()
+	return json.RawMessage(`{}`), nil
+}
+
+func (p *fixedProvider) Parse(string, json.RawMessage) ([]lookup.Candidate, error) {
+	return p.cands, nil
+}
+
+func book(code, name string, conf float64) lookup.Candidate {
+	return lookup.Candidate{Type: "book", Title: lookup.TitleFields{Name: name}, Edition: lookup.EditionFields{Barcode: code}, Confidence: conf}
+}
+
+func TestLookupMergesBookAnswers(t *testing.T) {
+	const code = "9788375780635"
+	national := book(code, "Ostatnie życzenie", 0.9)
+	national.Title.Authors = []string{"Andrzej Sapkowski"}
+	national.Title.BNID = new("5382027")
+	national.Edition.Publisher = "SuperNowa"
+
+	other := book("9788375780710", "Wiedźmin. T. 1-8", 0.9)
+	library := book(code, "Ostatnie zyczenie", 0.8)
+	library.Title.Authors = []string{"A. Sapkowski"}
+	library.Title.OpenLibraryID = new("OL2577485W")
+	library.Edition.Year = new(2014)
+	library.Edition.Publisher = "SuperNOWA"
+	weaker := book(code, "Ostatnie życzenie (dodruk)", 0.6)
+
+	store := book(code, "Ostatnie życzenie", 0.95)
+	store.CoverURL = "https://example.test/cover.jpg"
+	store.Description = "Geralt z Rivii."
+	store.Edition.Binding = new("paperback")
+
+	placeholder := book(code, "Książka "+code, 0.1)
+	movie := lookup.Candidate{Type: "movie", Title: lookup.TitleFields{Name: "Film"}, Edition: lookup.EditionFields{Barcode: code}, Confidence: 0.3}
+
+	r := &lookup.Registry{}
+	for _, p := range []*fixedProvider{
+		{name: "national", cands: []lookup.Candidate{national, other}},
+		{name: "library", cands: []lookup.Candidate{weaker, library}},
+		{name: "store", cands: []lookup.Candidate{store}},
+		{name: "placeholder", cands: []lookup.Candidate{placeholder, movie}},
+	} {
+		if err := r.Register(p, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res := lookup.NewService(r, nil, discard()).Lookup(context.Background(), code)
+
+	if len(res.Candidates) != 5 {
+		t.Fatalf("want merged book + other ISBN + weaker match + placeholder + movie, got %+v", res.Candidates)
+	}
+	m := res.Candidates[0]
+	if m.Provider != "national" || m.Confidence != 0.95 {
+		t.Fatalf("merged provider/confidence = %s %v", m.Provider, m.Confidence)
+	}
+	if got := m.Sources; len(got) != 3 || got[0] != "national" || got[1] != "library" || got[2] != "store" {
+		t.Fatalf("sources = %v", got)
+	}
+	if m.Title.Name != "Ostatnie życzenie" || m.Title.Authors[0] != "Andrzej Sapkowski" || m.Edition.Publisher != "SuperNowa" {
+		t.Fatalf("earlier provider must win: %+v", m)
+	}
+	if *m.Title.BNID != "5382027" || *m.Title.OpenLibraryID != "OL2577485W" || *m.Edition.Year != 2014 ||
+		*m.Edition.Binding != "paperback" || m.CoverURL == "" || m.Description == "" {
+		t.Fatalf("later providers must fill gaps: %+v", m)
+	}
+	for _, c := range res.Candidates[1:] {
+		if len(c.Sources) != 1 || c.Sources[0] != c.Provider {
+			t.Fatalf("unmerged candidate sources = %v for %s", c.Sources, c.Provider)
+		}
+	}
+	names := map[string]bool{}
+	for _, c := range res.Candidates[1:] {
+		names[c.Title.Name] = true
+	}
+	for _, n := range []string{"Wiedźmin. T. 1-8", "Ostatnie życzenie (dodruk)", "Książka " + code, "Film"} {
+		if !names[n] {
+			t.Errorf("%q dropped by the merge", n)
+		}
+	}
+}
+
+func TestLookupKeepsSingleBookAnswer(t *testing.T) {
+	const code = "9780140449136"
+	r := &lookup.Registry{}
+	if err := r.Register(&fixedProvider{name: "only", cands: []lookup.Candidate{book(code, "Crime and Punishment", 0.8)}}, 0); err != nil {
+		t.Fatal(err)
+	}
+	res := lookup.NewService(r, nil, discard()).Lookup(context.Background(), code)
+	if len(res.Candidates) != 1 || res.Candidates[0].Provider != "only" || res.Candidates[0].Sources[0] != "only" {
+		t.Fatalf("result = %+v", res)
+	}
+}
+
+func TestLookupSkipsOutOfScopeProviders(t *testing.T) {
+	booksOnly := &fixedProvider{name: "books", scope: func(code string) bool { return code[:3] == "978" }}
+	r := &lookup.Registry{}
+	if err := r.Register(booksOnly, 0); err != nil {
+		t.Fatal(err)
+	}
+	svc := lookup.NewService(r, nil, discard())
+	if res := svc.Lookup(context.Background(), "5901234123457"); len(res.Errors) != 0 || len(res.Candidates) != 0 {
+		t.Fatalf("result = %+v", res)
+	}
+	if booksOnly.fetches != 0 {
+		t.Fatalf("out-of-scope provider fetched %d times", booksOnly.fetches)
+	}
+	svc.Lookup(context.Background(), "9780140449136")
+	if booksOnly.fetches != 1 {
+		t.Fatalf("in-scope fetches = %d", booksOnly.fetches)
+	}
+}
+
+func TestLookupFitsCandidatesToCollectionLimits(t *testing.T) {
+	const code = "9788375780635"
+	long := strings.Repeat("ż", 300)
+	c := book(code, long, 0.9)
+	c.Title.OriginalTitle = new(long)
+	c.Title.Year = new(1500)
+	for range 25 {
+		c.Title.Authors = append(c.Title.Authors, long)
+	}
+	c.Edition.Publisher = long
+	c.Edition.Label = long
+	c.Edition.Year = new(2500)
+	r := &lookup.Registry{}
+	if err := r.Register(&fixedProvider{name: "verbose", cands: []lookup.Candidate{c}}, 0); err != nil {
+		t.Fatal(err)
+	}
+	res := lookup.NewService(r, nil, discard()).Lookup(context.Background(), code)
+	if len(res.Candidates) != 1 {
+		t.Fatalf("result = %+v", res)
+	}
+	got := res.Candidates[0]
+	if !utf8.ValidString(got.Title.Name) || got.Title.Name == "" || !strings.HasPrefix(long, got.Title.Name) {
+		t.Fatalf("name cut badly: %q", got.Title.Name)
+	}
+
+	var title collection.TitleInput
+	var edition collection.EditionInput
+	roundTrip(t, got.Title, &title)
+	roundTrip(t, got.Edition, &edition)
+	title.Kind = got.Type
+	edition.TitleID = 1
+	if e := title.Normalize(); e != nil {
+		t.Fatalf("POST /api/titles would reject the candidate: %s %s", e.Field, e.Msg)
+	}
+	if e := edition.Normalize(); e != nil {
+		t.Fatalf("POST /api/editions would reject the candidate: %s %s", e.Field, e.Msg)
+	}
+	if e := edition.CheckKind(got.Type); e != nil {
+		t.Fatalf("edition kind check: %s %s", e.Field, e.Msg)
+	}
+}
+
+func roundTrip(t *testing.T, in, out any) {
+	t.Helper()
+	b, err := json.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(b, out); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -1,0 +1,60 @@
+{
+ "ISBN:9780261103573": {
+  "bib_key": "ISBN:9780261103573",
+  "info_url": "http://openlibrary.org/books/OL32559371M/The_Fellowship_of_the_Ring",
+  "preview": "noview",
+  "preview_url": "http://openlibrary.org/books/OL32559371M/The_Fellowship_of_the_Ring",
+  "thumbnail_url": "https://covers.openlibrary.org/b/id/11204800-S.jpg",
+  "details": {
+   "works": [
+    {
+     "key": "/works/OL27513W"
+    }
+   ],
+   "title": "The Fellowship of the Ring",
+   "publishers": [
+    "HarperCollinsPublishers"
+   ],
+   "publish_date": "2011",
+   "key": "/books/OL32559371M",
+   "type": {
+    "key": "/type/edition"
+   },
+   "identifiers": {},
+   "covers": [
+    11204800
+   ],
+   "classifications": {},
+   "source_records": [
+    "bwb:9780261103573"
+   ],
+   "description": "This edition is based on the reset edition first published 2002 which is a revised version of the reset edition first published 1994.",
+   "number_of_pages": 407,
+   "pagination": "xxiii, 407",
+   "physical_format": "Paperback",
+   "languages": [
+    {
+     "key": "/languages/eng"
+    }
+   ],
+   "copyright_date": "1954",
+   "isbn_13": [
+    "9780261103573"
+   ],
+   "lc_classifications": [
+    "PR6039.O32F4 2011"
+   ],
+   "subtitle": "The Lord of the Rings, Part I",
+   "latest_revision": 9,
+   "revision": 9,
+   "created": {
+    "type": "/type/datetime",
+    "value": "2021-06-02T09:42:32.120011"
+   },
+   "last_modified": {
+    "type": "/type/datetime",
+    "value": "2024-05-20T14:26:00.554315"
+   }
+  }
+ }
+}

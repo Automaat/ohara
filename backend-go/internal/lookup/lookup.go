@@ -13,6 +13,8 @@ import (
 	"slices"
 	"sync"
 	"time"
+
+	"github.com/Automaat/ohara/backend-go/internal/metrics"
 )
 
 // TitleFields mirrors the title body of POST /api/titles, so a client can
@@ -43,13 +45,18 @@ type EditionFields struct {
 }
 
 // Candidate is one possible match for a barcode. Type is "movie" or "book";
-// Confidence is in [0, 1].
+// Confidence is in [0, 1]. Provider is the main source and Sources lists
+// every provider whose fields went into the candidate. CoverURL and
+// Description are for display only; they are not stored.
 type Candidate struct {
-	Type       string        `json:"type"`
-	Title      TitleFields   `json:"title"`
-	Edition    EditionFields `json:"edition"`
-	Provider   string        `json:"provider"`
-	Confidence float64       `json:"confidence"`
+	Type        string        `json:"type"`
+	Title       TitleFields   `json:"title"`
+	Edition     EditionFields `json:"edition"`
+	CoverURL    string        `json:"cover_url,omitempty"`
+	Description string        `json:"description,omitempty"`
+	Provider    string        `json:"provider"`
+	Sources     []string      `json:"sources"`
+	Confidence  float64       `json:"confidence"`
 }
 
 // Provider is one metadata source. Fetch returns the raw response for a
@@ -60,6 +67,13 @@ type Provider interface {
 	Name() string
 	Fetch(ctx context.Context, barcode string) (json.RawMessage, error)
 	Parse(barcode string, raw json.RawMessage) ([]Candidate, error)
+}
+
+// Scoped is implemented by providers that only know some barcodes, such as
+// book catalogs. The service skips a provider whose Accepts returns false:
+// no request, no cache entry and no error.
+type Scoped interface {
+	Accepts(barcode string) bool
 }
 
 // Cache stores raw provider responses keyed by provider and barcode.
@@ -90,6 +104,7 @@ func (r *Registry) Register(p Provider, ttl time.Duration) error {
 		}
 	}
 	r.entries = append(r.entries, entry{provider: p, ttl: ttl})
+	metrics.InitLookupProvider(p.Name())
 	return nil
 }
 
@@ -109,7 +124,9 @@ type ProviderError struct {
 }
 
 // Result is the GET /api/lookup/{barcode} body. Candidates are sorted by
-// confidence, then by provider registration order.
+// confidence, then by provider registration order. Book candidates for the
+// looked-up ISBN from several providers are merged into one (see
+// mergeBooks).
 type Result struct {
 	Barcode    string          `json:"barcode"`
 	Candidates []Candidate     `json:"candidates"`
@@ -143,6 +160,9 @@ func (s *Service) Lookup(ctx context.Context, code string) Result {
 	outcomes := make([]outcome, len(s.registry.entries))
 	var wg sync.WaitGroup
 	for i, e := range s.registry.entries {
+		if scoped, ok := e.provider.(Scoped); ok && !scoped.Accepts(code) {
+			continue
+		}
 		wg.Go(func() {
 			cands, err := s.query(ctx, e, code)
 			outcomes[i] = outcome{candidates: cands, err: err}
@@ -163,10 +183,13 @@ func (s *Service) Lookup(ctx context.Context, code string) Result {
 		for j := range o.candidates {
 			c := o.candidates[j]
 			c.Provider = name
+			c.Sources = []string{name}
 			c.Confidence = min(max(c.Confidence, 0), 1)
+			fit(&c)
 			res.Candidates = append(res.Candidates, c)
 		}
 	}
+	res.Candidates = mergeBooks(code, res.Candidates)
 	slices.SortStableFunc(res.Candidates, func(a, b Candidate) int {
 		if c := cmp.Compare(b.Confidence, a.Confidence); c != 0 {
 			return c
@@ -186,6 +209,7 @@ func (s *Service) query(ctx context.Context, e entry, code string) ([]Candidate,
 		if ok {
 			cands, err := p.Parse(code, raw)
 			if err == nil {
+				metrics.ObserveLookupCacheHit(p.Name())
 				return cands, nil
 			}
 			s.logger.Warn("cached lookup response unreadable, refetching", "provider", p.Name(), "err", err)
@@ -193,12 +217,15 @@ func (s *Service) query(ctx context.Context, e entry, code string) ([]Candidate,
 	}
 	fetchCtx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
+	metrics.ObserveLookupRequest(p.Name())
 	raw, err := p.Fetch(fetchCtx, code)
 	if err != nil {
+		metrics.ObserveLookupError(p.Name())
 		return nil, fmt.Errorf("fetch: %w", err)
 	}
 	cands, err := p.Parse(code, raw)
 	if err != nil {
+		metrics.ObserveLookupError(p.Name())
 		return nil, fmt.Errorf("parse: %w", err)
 	}
 	if s.cache != nil && e.ttl > 0 {

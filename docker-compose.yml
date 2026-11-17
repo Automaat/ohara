@@ -24,6 +24,7 @@ services:
       PGDATABASE: ohara
       PGSSLMODE: disable
       OHARA_ACCESS_LOG: 'true'
+      OHARA_LOOKUP_STUB: 'true'
     ports:
       - '8000:8000'
     depends_on:

@@ -101,6 +101,42 @@ func TestRanges(t *testing.T) {
 	}
 }
 
+func TestDiscogsRanges(t *testing.T) {
+	now := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
+	cd := "cd"
+	r := NewRanges([]Price{
+		{EditionID: 7, TitleID: 700, Format: &cd, Source: SourceOLX, Cents: 2000, SeenAt: now},
+		{EditionID: 8, TitleID: 700, Format: &cd, Source: SourceOLX, Cents: 3000, SeenAt: now},
+		{EditionID: 7, TitleID: 700, Format: &cd, Source: SourceCeneo, Cents: 6000, SeenAt: now},
+		{EditionID: 7, TitleID: 700, Format: &cd, Source: SourceDiscogsLowest, Cents: 1800, SeenAt: now.Add(-time.Hour)},
+		{EditionID: 7, TitleID: 700, Format: &cd, Source: SourceDiscogsLowest, Cents: 1500, SeenAt: now},
+		{EditionID: 7, TitleID: 700, Format: &cd, Source: SourceDiscogsVGPlus, Cents: 2400, SeenAt: now},
+		{EditionID: 7, TitleID: 700, Format: &cd, Source: SourceDiscogsMint, Cents: 4100, SeenAt: now},
+		{EditionID: 8, TitleID: 700, Format: &cd, Source: SourceDiscogsLowest, Cents: 900, SeenAt: now},
+	})
+	pressing := r.For(7, 700, &cd)
+	want := Range{
+		Floor:   &Estimate{Cents: 1500, Source: SourceDiscogs, Count: 1},
+		Mid:     &Estimate{Cents: 2400, Source: SourceDiscogs, Count: 1},
+		Ceiling: &Estimate{Cents: 4100, Source: SourceDiscogs, Count: 1},
+	}
+	if !reflect.DeepEqual(pressing, want) {
+		t.Fatalf("pressing with Discogs prices = %+v, want %+v", pressing, want)
+	}
+	if pressing.LowConfidence() {
+		t.Fatal("a Discogs suggestion is no low-confidence middle")
+	}
+	other := r.For(8, 700, &cd)
+	want = Range{
+		Floor:   &Estimate{Cents: 900, Source: SourceDiscogs, Count: 1},
+		Mid:     &Estimate{Cents: 2500, Source: SourceOLX, Count: 2},
+		Ceiling: &Estimate{Cents: 6000, Source: SourceCeneo, Count: 1},
+	}
+	if !reflect.DeepEqual(other, want) {
+		t.Fatalf("pressing without suggestions = %+v, want %+v", other, want)
+	}
+}
+
 func TestLowConfidence(t *testing.T) {
 	tests := []struct {
 		name string

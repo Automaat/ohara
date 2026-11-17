@@ -1,7 +1,7 @@
 # Ohara
 
-Self-hosted tracker for a physical media collection (movies, books, later
-music): barcode scanning from an iPhone, purchase prices, used-deal hunting and
+Self-hosted tracker for a physical media collection (movies, books, music):
+barcode scanning from an iPhone, purchase prices, used-deal hunting and
 valuation. Roadmap: umbrella issue #11.
 
 **Stack:** Go (chi + pgx) and PostgreSQL 18 behind a SvelteKit 2 + Svelte 5
@@ -23,9 +23,11 @@ Same layout and tooling as `../baratie`. `package.json` and
     /lookup/           # GET /api/lookup/{barcode}: provider registry + lookup_cache
       /books/          # BN, Open Library, Google Books providers (fixtures in testdata/)
       /movie/          # movie chain: Allegro catalog, Ceneo, UPCitemdb → product name → TMDB search
+      /music/          # music chain: Discogs barcode search → MusicBrainz + Cover Art Archive
+    /discogs/          # Discogs API client: barcode search, marketplace stats, price suggestions
     /scanqueue/        # /api/scan-queue: barcodes the scanner could not resolve
     /deals/            # wishlist deal hunter: OLX, Pepper, Ceneo sources, matcher, Telegram alerts
-    /valuation/        # daily value of owned copies: OLX, Ceneo, SkupSzop buy-back; value history
+    /valuation/        # daily value of owned copies: OLX, Ceneo, SkupSzop buy-back, Discogs; value history
     /server/           # router: /health, /metrics, /api/*, SPA fallback
     /web/              # serves the built SPA, index.html for client routes
     /metrics/          # Prometheus collectors on a private registry (ohara_*)
@@ -75,6 +77,14 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   When some of its sources fail but others answered, it returns a
   `*lookup.PartialError`: the lookup reports the failure next to the
   candidates and does not cache the answer.
+- Music is the kind `music`: an album title whose `authors` are its credited
+  artists, editions with a `cd`, `vinyl` or `cassette` format (required, like
+  a movie's `dvd`/`bluray`/`uhd`) and an optional `discogs_release_id`. The
+  `music` provider asks Discogs first (needs `OHARA_DISCOGS_TOKEN`; a 13-digit
+  code with a leading 0 is retried as its 12-digit UPC-A) and MusicBrainz
+  only when Discogs finds nothing or fails, with covers from the Cover Art
+  Archive. Every release becomes a candidate: one barcode often names
+  several pressings, so the user picks the edition.
 - A lookup result sets `needs_confirmation` unless exactly one candidate
   reaches `lookup.ConfirmThreshold` (0.8); clients never auto-pick otherwise.
   `PUT /api/lookup/{barcode}/selection` stores the picked candidate, which
@@ -82,7 +92,10 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
 - DB tests call `dbtest.Migrated(t)`; each gets its own schema.
 - Deal sources implement `deals.Source`. A run matches listing titles to
   wishlist copies (all title words, the edition's format for movies, the
-  author's surname for books, minus the editable reject phrases), stores
+  author's surname for books, the artist's words and a fitting medium for
+  albums, where a listing naming no medium counts as a CD, minus the
+  editable reject phrases a want's own name or artist does not contain),
+  stores
   each listing once in `price_observation` (`source`, `external_id`) and
   queues one `deal_alert` per listing at or below the copy's
   `max_price_cents`; a listing seen again keeps its row, takes the new
@@ -97,10 +110,15 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   mid = median of OLX prices not marked new, outliers beyond 1.5 IQR
   dropped; ceiling = median Ceneo price. Mid and ceiling pool every
   edition of the same title and format. A mid from fewer than 3 prices is
-  low confidence. Each run upserts today's `valuation_history` row and
+  low confidence. An owned album edition with a `discogs_release_id` is
+  priced on Discogs (marketplace stats in EUR, price suggestions in the
+  seller-settings currency, converted to PLN at the NBP table A rate): its
+  floor is the cheapest copy for sale, its mid and ceiling the suggested
+  Very Good Plus and Mint prices, which replace the OLX and Ceneo ones and
+  are never low confidence. Each run upserts today's `valuation_history` row and
   sets the `ohara_collection_*` gauges. Skupksiazek.pl (cart behind an
   app flow) and Rivendo (manual form with photos) have no automatic
-  quote, so discs have no floor.
+  quote, so movie discs have no floor.
 - A barcode no provider resolves goes to `scan_queue`; a trigger on `edition`
   removes it once an edition carries that barcode. `ohara_scan_queue_size`
   counts it on each scrape.
@@ -148,6 +166,11 @@ the container port beyond the LAN.
 | `OHARA_ALLEGRO_CLIENT_ID`, `OHARA_ALLEGRO_CLIENT_SECRET`   | unset                           | Allegro device-flow app; adds the Allegro catalog to the movie chain after `api allegro-login`            |
 | `OHARA_CENEO`                                              | `true`                          | Ceneo search-page source in the movie chain                                                               |
 | `OHARA_UPCITEMDB`                                          | `true`                          | UPCitemdb free-tier source (100 requests a day) in the movie chain                                        |
+| `OHARA_DISCOGS_TOKEN`                                      | unset                           | Discogs personal access token; enables the Discogs music lookup and album valuation                       |
+| `OHARA_DISCOGS_PRICE_SUGGESTIONS`                          | `true`                          | Ask Discogs price suggestions (need the token owner's seller settings) for album mid and ceiling          |
+| `OHARA_MUSICBRAINZ`                                        | `true`                          | MusicBrainz + Cover Art Archive in the music chain                                                        |
+| `OHARA_{DISCOGS,MUSICBRAINZ,COVERART}_URL`                 | public endpoints                | Point the music sources at test doubles                                                                   |
+| `OHARA_VALUATION_NBP_URL`                                  | `https://api.nbp.pl`            | Point the NBP exchange rates at a test double                                                             |
 
 ## Commands
 

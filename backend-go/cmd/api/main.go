@@ -21,9 +21,11 @@ import (
 	"github.com/Automaat/ohara/backend-go/internal/collection"
 	"github.com/Automaat/ohara/backend-go/internal/db"
 	"github.com/Automaat/ohara/backend-go/internal/deals"
+	"github.com/Automaat/ohara/backend-go/internal/discogs"
 	"github.com/Automaat/ohara/backend-go/internal/lookup"
 	"github.com/Automaat/ohara/backend-go/internal/lookup/books"
 	"github.com/Automaat/ohara/backend-go/internal/lookup/movie"
+	"github.com/Automaat/ohara/backend-go/internal/lookup/music"
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
 	"github.com/Automaat/ohara/backend-go/internal/scanqueue"
 	"github.com/Automaat/ohara/backend-go/internal/server"
@@ -201,6 +203,9 @@ const bookCacheTTL = 7 * 24 * time.Hour
 // catalogs add new releases, but a rescan should not cost requests.
 const movieCacheTTL = 7 * 24 * time.Hour
 
+// musicCacheTTL keeps a music answer for a week, like the movie chain's.
+const musicCacheTTL = 7 * 24 * time.Hour
+
 // newLookup registers the barcode metadata providers. Registration order is
 // the field priority when book answers are merged: the national library
 // first, then Open Library, then Google Books when a key is set.
@@ -222,6 +227,11 @@ func newLookup(pool *pgxpool.Pool, logger *slog.Logger) (*lookup.Handler, error)
 	}
 	if p := newMovieProvider(pool, logger); p != nil {
 		if err := registry.Register(p, movieCacheTTL); err != nil {
+			return nil, err
+		}
+	}
+	if p := newMusicProvider(logger); p != nil {
+		if err := registry.Register(p, musicCacheTTL); err != nil {
 			return nil, err
 		}
 	}
@@ -265,6 +275,44 @@ func newMovieProvider(pool *pgxpool.Pool, logger *slog.Logger) *movie.Provider {
 	}
 	metrics.InitSource("tmdb")
 	logger.Info("movie lookup sources", "sources", strings.Join(names, ","))
+	return p
+}
+
+// newDiscogs is the Discogs client, or nil without OHARA_DISCOGS_TOKEN:
+// every Discogs endpoint needs a token.
+func newDiscogs() *discogs.Client {
+	token := os.Getenv("OHARA_DISCOGS_TOKEN")
+	if token == "" {
+		return nil
+	}
+	return &discogs.Client{HTTP: sourceClient, BaseURL: envOr("OHARA_DISCOGS_URL", discogs.BaseURL), Token: token}
+}
+
+// newMusicProvider builds the music chain: Discogs when a token is set,
+// then MusicBrainz with Cover Art Archive covers unless switched off; nil
+// when neither is on.
+func newMusicProvider(logger *slog.Logger) *music.Provider {
+	p := &music.Provider{}
+	var names []string
+	if d := newDiscogs(); d != nil {
+		p.Discogs = d
+		names = append(names, discogs.Source)
+	} else {
+		logger.Info("discogs lookup disabled: OHARA_DISCOGS_TOKEN not set")
+	}
+	if envOr("OHARA_MUSICBRAINZ", "true") == "true" {
+		p.MusicBrainz = music.MusicBrainz{Client: sourceClient, BaseURL: envOr("OHARA_MUSICBRAINZ_URL", music.MusicBrainzURL)}
+		p.Covers = music.CoverArt{Client: sourceClient, BaseURL: envOr("OHARA_COVERART_URL", music.CoverArtURL)}
+		names = append(names, music.SourceMusicBrainz, music.SourceCoverArt)
+	}
+	if len(names) == 0 {
+		logger.Info("music lookup disabled: no Discogs token and MusicBrainz switched off")
+		return nil
+	}
+	for _, n := range names {
+		metrics.InitSource(n)
+	}
+	logger.Info("music lookup sources", "sources", strings.Join(names, ","))
 	return p
 }
 
@@ -357,7 +405,8 @@ func ceneoSource(client *http.Client) deals.Ceneo {
 
 // newValuation configures the valuation runner from the environment. The
 // daily schedule stays off until OHARA_VALUATION_INTERVAL is set; it asks
-// the deal hunter's OLX and Ceneo, with the same pause, and SkupSzop.
+// the deal hunter's OLX and Ceneo, with the same pause, SkupSzop and, with
+// a Discogs token, the Discogs marketplace.
 func newValuation(pool *pgxpool.Pool, logger *slog.Logger) (*valuation.Runner, *valuation.Store, error) {
 	interval, err := time.ParseDuration(envOr("OHARA_VALUATION_INTERVAL", "0s"))
 	if err != nil || interval < 0 {
@@ -380,10 +429,19 @@ func newValuation(pool *pgxpool.Pool, logger *slog.Logger) (*valuation.Runner, *
 		valuation.SkupSzop{Client: client, BaseURL: envOr("OHARA_VALUATION_SKUPSZOP_URL", valuation.SkupSzopURL)},
 	}
 	window := time.Duration(days) * 24 * time.Hour
-	logger.Info("valuation", "interval", interval, "window_days", days)
+	var pricer valuation.ReleasePricer
+	if d := newDiscogs(); d != nil {
+		pricer = valuation.Discogs{
+			Market:      d,
+			Rates:       &valuation.NBP{Client: client, BaseURL: envOr("OHARA_VALUATION_NBP_URL", valuation.NBPURL)},
+			Suggestions: envOr("OHARA_DISCOGS_PRICE_SUGGESTIONS", "true") == "true",
+		}
+		metrics.InitSource(valuation.SourceNBP)
+	}
+	logger.Info("valuation", "interval", interval, "window_days", days, "discogs", pricer != nil)
 	store := valuation.NewStore(pool)
 	cfg := valuation.Config{Interval: interval, Delay: delay, Window: window}
-	return valuation.NewRunner(store, sources, buybacks, cfg, logger), store, nil
+	return valuation.NewRunner(store, sources, buybacks, pricer, cfg, logger), store, nil
 }
 
 func registerPoolMetrics(pool *pgxpool.Pool) {

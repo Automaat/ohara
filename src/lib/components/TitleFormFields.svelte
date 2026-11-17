@@ -1,6 +1,12 @@
 <script lang="ts">
 	import { Button, Field, FormError, SegmentedControl, Textarea } from '@smykla-skalski/sui';
-	import { kindLabels, options, type FormIssue, type TitleForm } from '$lib/collection';
+	import {
+		authorsLabel,
+		kindLabels,
+		options,
+		type FormIssue,
+		type TitleForm
+	} from '$lib/collection';
 
 	let {
 		form = $bindable(),
@@ -77,17 +83,23 @@
 			error={errorFor('tmdb_id')}
 		/>
 	{:else}
-		<Field label="Autorzy" hint="Jeden autor w wierszu." error={errorFor('authors')}>
+		<Field
+			label={authorsLabel(form.kind)}
+			hint={form.kind === 'music' ? 'Jeden wykonawca w wierszu.' : 'Jeden autor w wierszu.'}
+			error={errorFor('authors')}
+		>
 			{#snippet control(c)}
 				<Textarea {...c} rows={2} bind:value={form.authors} />
 			{/snippet}
 		</Field>
-		<Field label="Identyfikator BN" bind:value={form.bn_id} error={errorFor('bn_id')} />
-		<Field
-			label="Identyfikator Open Library"
-			bind:value={form.openlibrary_id}
-			error={errorFor('openlibrary_id')}
-		/>
+		{#if form.kind === 'book'}
+			<Field label="Identyfikator BN" bind:value={form.bn_id} error={errorFor('bn_id')} />
+			<Field
+				label="Identyfikator Open Library"
+				bind:value={form.openlibrary_id}
+				error={errorFor('openlibrary_id')}
+			/>
+		{/if}
 	{/if}
 	<Field label="Notatki" error={errorFor('notes')}>
 		{#snippet control(c)}

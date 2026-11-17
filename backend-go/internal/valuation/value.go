@@ -1,9 +1,12 @@
 // Package valuation estimates what the owned collection is worth. A daily
-// run asks OLX and Ceneo for every owned edition and SkupSzop for every
-// owned book, keeps the prices in price_observation and stores the day's
-// collection total. Each copy gets a range: the buy-back offer as its
-// floor, the median used asking price on OLX as its middle and the new
-// price on Ceneo as its ceiling.
+// run asks OLX and Ceneo for every owned edition, SkupSzop for every owned
+// book and Discogs for every owned album release, keeps the prices in
+// price_observation and stores the day's collection total. Each copy gets
+// a range: the buy-back offer as its floor, the median used asking price
+// on OLX as its middle and the new price on Ceneo as its ceiling. An album
+// edition with Discogs prices takes the cheapest Discogs copy for sale as
+// its floor and the suggested Very Good Plus and Mint prices as its middle
+// and ceiling.
 package valuation
 
 import (
@@ -19,7 +22,10 @@ const (
 	SourceSkupSzop = "skupszop"
 )
 
-var valuationSources = []string{SourceOLX, SourceCeneo, SourceSkupSzop}
+var (
+	discogsSources   = []string{SourceDiscogsLowest, SourceDiscogsVGPlus, SourceDiscogsMint}
+	valuationSources = append([]string{SourceOLX, SourceCeneo, SourceSkupSzop}, discogsSources...)
+)
 
 // MinObservations is the fewest OLX prices a middle value needs before it
 // is trusted; a copy with fewer is low confidence.
@@ -42,9 +48,10 @@ type Range struct {
 }
 
 // LowConfidence reports a middle value missing or resting on fewer than
-// MinObservations prices.
+// MinObservations OLX prices. A Discogs suggestion rests on the release's
+// sale history, so one is enough.
 func (r Range) LowConfidence() bool {
-	return r.Mid == nil || r.Mid.Count < MinObservations
+	return r.Mid == nil || (r.Mid.Source != SourceDiscogs && r.Mid.Count < MinObservations)
 }
 
 // Price is one observation the valuation window holds, with the title and
@@ -76,20 +83,39 @@ func groupOf(titleID int64, format *string) group {
 }
 
 // Ranges values editions from the prices in the window. The floor is the
-// edition's own latest SkupSzop offer, as a buy-back quotes one ISBN. The
-// middle is the trimmed median of OLX prices that are not for new copies
-// and the ceiling the trimmed median of Ceneo's lowest new prices, both
-// pooled over every edition of the same title and format.
+// edition's own latest SkupSzop offer, as a buy-back quotes one ISBN, or
+// its latest cheapest Discogs copy for sale. The middle is the trimmed
+// median of OLX prices that are not for new copies and the ceiling the
+// trimmed median of Ceneo's lowest new prices, both pooled over every
+// edition of the same title and format; the edition's own latest Discogs
+// suggestions replace them, as a Discogs release is one pressing.
 type Ranges struct {
-	floors map[int64]*Estimate
-	mids   map[group]*Estimate
-	ceils  map[group]*Estimate
+	floors       map[int64]*Estimate
+	mids         map[group]*Estimate
+	ceils        map[group]*Estimate
+	discogsMids  map[int64]*Estimate
+	discogsCeils map[int64]*Estimate
 }
 
-// NewRanges sorts prices into floors per edition and middles and ceilings
-// per title and format.
+// editionPrice is the latest price of one source for one edition.
+type editionPrice struct {
+	source    string
+	editionID int64
+}
+
+// estimateSources are the sources whose latest price per edition is a
+// bound as is, and the source that bound names.
+var estimateSources = map[string]string{
+	SourceSkupSzop:      SourceSkupSzop,
+	SourceDiscogsLowest: SourceDiscogs,
+	SourceDiscogsVGPlus: SourceDiscogs,
+	SourceDiscogsMint:   SourceDiscogs,
+}
+
+// NewRanges sorts prices into floors and Discogs bounds per edition and
+// middles and ceilings per title and format.
 func NewRanges(prices []Price) Ranges {
-	latest := map[int64]*Price{}
+	latest := map[editionPrice]*Price{}
 	used := map[group][]int64{}
 	fresh := map[group][]int64{}
 	for i := range prices {
@@ -102,19 +128,33 @@ func NewRanges(prices []Price) Ranges {
 			}
 		case SourceCeneo:
 			fresh[g] = append(fresh[g], p.Cents)
-		case SourceSkupSzop:
-			if f := latest[p.EditionID]; f == nil || p.SeenAt.After(f.SeenAt) {
-				latest[p.EditionID] = p
+		default:
+			if _, ok := estimateSources[p.Source]; !ok {
+				continue
+			}
+			k := editionPrice{source: p.Source, editionID: p.EditionID}
+			if f := latest[k]; f == nil || p.SeenAt.After(f.SeenAt) {
+				latest[k] = p
 			}
 		}
 	}
 	r := Ranges{
-		floors: make(map[int64]*Estimate, len(latest)),
-		mids:   make(map[group]*Estimate, len(used)),
-		ceils:  make(map[group]*Estimate, len(fresh)),
+		floors:       map[int64]*Estimate{},
+		mids:         make(map[group]*Estimate, len(used)),
+		ceils:        make(map[group]*Estimate, len(fresh)),
+		discogsMids:  map[int64]*Estimate{},
+		discogsCeils: map[int64]*Estimate{},
 	}
-	for id, p := range latest {
-		r.floors[id] = &Estimate{Cents: p.Cents, Source: SourceSkupSzop, Count: 1}
+	for k, p := range latest {
+		e := &Estimate{Cents: p.Cents, Source: estimateSources[k.source], Count: 1}
+		switch k.source {
+		case SourceDiscogsVGPlus:
+			r.discogsMids[k.editionID] = e
+		case SourceDiscogsMint:
+			r.discogsCeils[k.editionID] = e
+		default:
+			r.floors[k.editionID] = e
+		}
 	}
 	for g, v := range used {
 		r.mids[g] = trimmedMedian(v, SourceOLX)
@@ -128,7 +168,14 @@ func NewRanges(prices []Price) Ranges {
 // For is the range of one edition of titleID in format.
 func (r Ranges) For(editionID, titleID int64, format *string) Range {
 	g := groupOf(titleID, format)
-	return Range{Floor: r.floors[editionID], Mid: r.mids[g], Ceiling: r.ceils[g]}
+	out := Range{Floor: r.floors[editionID], Mid: r.mids[g], Ceiling: r.ceils[g]}
+	if e := r.discogsMids[editionID]; e != nil {
+		out.Mid = e
+	}
+	if e := r.discogsCeils[editionID]; e != nil {
+		out.Ceiling = e
+	}
+	return out
 }
 
 // trimmedMedian is the median of values once outliers are dropped: with

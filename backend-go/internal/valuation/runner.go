@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -39,6 +40,7 @@ type RunResult struct {
 	Matched  int      `json:"matched"`
 	New      int      `json:"new"`
 	Quotes   int      `json:"quotes"`
+	Releases int      `json:"releases"`
 	Errors   []string `json:"errors"`
 	Failure  string   `json:"failure,omitempty"`
 }
@@ -59,6 +61,7 @@ type Runner struct {
 	store    *Store
 	sources  []deals.Source
 	buybacks []BuyBack
+	pricer   ReleasePricer
 	logger   *slog.Logger
 	cfg      Config
 	sleep    func(ctx context.Context, d time.Duration) error
@@ -72,13 +75,15 @@ type Runner struct {
 }
 
 // NewRunner wires the runner. sources are asked for used and new listings
-// of every owned edition, buybacks for an offer on every owned book.
-func NewRunner(store *Store, sources []deals.Source, buybacks []BuyBack, cfg Config, logger *slog.Logger) *Runner {
+// of every owned edition, buybacks for an offer on every owned book and
+// pricer, when not nil, for the Discogs prices of every owned album edition
+// that names its release.
+func NewRunner(store *Store, sources []deals.Source, buybacks []BuyBack, pricer ReleasePricer, cfg Config, logger *slog.Logger) *Runner {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	r := &Runner{
-		store: store, sources: sources, buybacks: buybacks, logger: logger, cfg: cfg,
+		store: store, sources: sources, buybacks: buybacks, pricer: pricer, logger: logger, cfg: cfg,
 		sleep: sleepCtx, base: context.Background(),
 	}
 	r.status.Scheduled = cfg.Interval > 0
@@ -180,7 +185,7 @@ func (r *Runner) execute(ctx context.Context) {
 	} else {
 		r.logger.Info("valuation finished", "editions", res.Editions, "queries", res.Queries,
 			"listings", res.Listings, "matched", res.Matched, "new", res.New, "quotes", res.Quotes,
-			"errors", len(res.Errors))
+			"releases", res.Releases, "errors", len(res.Errors))
 	}
 	finished := time.Now()
 	r.mu.Lock()
@@ -198,8 +203,9 @@ type run struct {
 	first    bool
 }
 
-// Run asks every source about every owned edition and every buy-back shop
-// about every owned book, records the prices and stores today's value.
+// Run asks every source about every owned edition, every buy-back shop
+// about every owned book and Discogs about every owned album release,
+// records the prices and stores today's value.
 // Source failures are collected in the result; a database failure or
 // cancellation stops the run.
 func (r *Runner) Run(ctx context.Context) (RunResult, error) {
@@ -223,6 +229,11 @@ func (r *Runner) Run(ctx context.Context) (RunResult, error) {
 	}
 	for _, b := range r.buybacks {
 		if err := x.quote(ctx, b); err != nil {
+			return x.res, err
+		}
+	}
+	if r.pricer != nil {
+		if err := x.priceReleases(ctx, r.pricer); err != nil {
 			return x.res, err
 		}
 	}
@@ -309,11 +320,9 @@ func (x *run) search(ctx context.Context, src deals.Source, queries []string) er
 
 // match returns the first holding a listing is a copy of, or nil.
 func match(holdings []Holding, l *deals.Listing, rules deals.Rules) *Holding {
-	if rules.Rejected(l.Title) {
-		return nil
-	}
 	for i := range holdings {
-		if holdings[i].Want.Matches(l.Title) {
+		w := &holdings[i].Want
+		if w.Matches(l.Title) && !rules.RejectedFor(l.Title, w) {
 			return &holdings[i]
 		}
 	}
@@ -363,6 +372,77 @@ func (x *run) quote(ctx context.Context, b BuyBack) error {
 		x.res.Quotes++
 	}
 	return nil
+}
+
+// priceReleases records the Discogs prices of every owned album edition
+// that names its release. A release priced only in part keeps the prices
+// it got; a price it lacks ages out of the window.
+func (x *run) priceReleases(ctx context.Context, p ReleasePricer) error {
+	for i := range x.holdings {
+		h := &x.holdings[i]
+		if h.Want.Kind != "music" || h.DiscogsReleaseID == nil {
+			continue
+		}
+		if err := x.pause(ctx); err != nil {
+			return err
+		}
+		id := *h.DiscogsReleaseID
+		price, err := p.Price(ctx, id)
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			x.fail(p.Name(), err)
+		}
+		recorded, err := x.recordRelease(ctx, h, id, price)
+		if err != nil {
+			return err
+		}
+		if recorded {
+			x.res.Releases++
+		}
+	}
+	return nil
+}
+
+type releaseRaw struct {
+	ReleaseID  int64 `json:"release_id"`
+	NumForSale int   `json:"num_for_sale"`
+}
+
+// recordRelease stores each known price of release id as an observation
+// of h's edition, keyed by release and edition so two editions naming the
+// same release both get it.
+func (x *run) recordRelease(ctx context.Context, h *Holding, id int64, p ReleasePrice) (bool, error) {
+	raw, err := json.Marshal(releaseRaw{ReleaseID: id, NumForSale: p.NumForSale})
+	if err != nil {
+		return false, err
+	}
+	key := strconv.FormatInt(id, 10) + "/" + strconv.FormatInt(h.Want.EditionID, 10)
+	release := "https://www.discogs.com/release/" + strconv.FormatInt(id, 10)
+	prices := []struct {
+		source string
+		cents  *int64
+		url    string
+	}{
+		{SourceDiscogsLowest, p.LowestCents, "https://www.discogs.com/sell/release/" + strconv.FormatInt(id, 10)},
+		{SourceDiscogsVGPlus, p.VGPlusCents, release},
+		{SourceDiscogsMint, p.MintCents, release},
+	}
+	recorded := false
+	for _, pr := range prices {
+		if pr.cents == nil {
+			continue
+		}
+		l := deals.Listing{
+			Source: pr.source, ExternalID: key, Title: h.Want.Name, URL: pr.url, PriceCents: *pr.cents, Raw: raw,
+		}
+		if _, err := x.r.store.Record(ctx, &l, h); err != nil {
+			return false, err
+		}
+		recorded = true
+	}
+	return recorded, nil
 }
 
 // publish exports a stored day as the collection value gauges.

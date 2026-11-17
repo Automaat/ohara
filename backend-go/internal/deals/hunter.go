@@ -343,15 +343,15 @@ func (r *run) record(ctx context.Context, listings []Listing) error {
 		}
 		r.res.Matched++
 		alert := r.h.notifier != nil && w.MaxPriceCents != nil && l.PriceCents <= *w.MaxPriceCents
-		isNew, err := r.h.store.Record(ctx, l, w, alert)
+		isNew, alerted, err := r.h.store.Record(ctx, l, w, alert)
 		if err != nil {
 			return err
 		}
 		if isNew {
 			r.res.New++
-			if alert {
-				r.res.Alerts++
-			}
+		}
+		if alerted {
+			r.res.Alerts++
 		}
 	}
 	return nil

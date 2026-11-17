@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -26,6 +27,7 @@ import (
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
 	"github.com/Automaat/ohara/backend-go/internal/scanqueue"
 	"github.com/Automaat/ohara/backend-go/internal/server"
+	"github.com/Automaat/ohara/backend-go/internal/valuation"
 	"github.com/Automaat/ohara/backend-go/internal/web"
 )
 
@@ -105,8 +107,15 @@ func run() int {
 		logger.Error("deal hunter", "err", err)
 		return 2
 	}
+	valuer, valueStore, err := newValuation(pool, logger)
+	if err != nil {
+		logger.Error("valuation", "err", err)
+		return 2
+	}
 	huntCtx, stopHunt := context.WithCancel(ctx)
 	hunter.Start(huntCtx)
+	valuer.Start(huntCtx)
+	defer valuer.Wait()
 	defer hunter.Wait()
 	defer stopHunt()
 	queue := scanqueue.NewStore(pool)
@@ -116,6 +125,7 @@ func run() int {
 		lookupHandler,
 		scanqueue.NewHandler(queue, logger),
 		deals.NewHandler(dealStore, hunter, logger),
+		valuation.NewHandler(valueStore, valuer, logger),
 	}
 	if dir := os.Getenv("OHARA_WEB_DIR"); dir != "" {
 		webFS := os.DirFS(dir)
@@ -301,15 +311,15 @@ func newHunter(pool *pgxpool.Pool, logger *slog.Logger) (*deals.Hunter, *deals.S
 	if interval > 0 && interval < 10*time.Minute {
 		return nil, nil, errors.New("OHARA_DEALS_INTERVAL: polling more often than every 10m is impolite to the sources")
 	}
-	delay, err := time.ParseDuration(envOr("OHARA_DEALS_DELAY", "5s"))
-	if err != nil || delay < time.Second {
-		return nil, nil, fmt.Errorf("OHARA_DEALS_DELAY: want a duration of at least 1s, got %q", os.Getenv("OHARA_DEALS_DELAY"))
+	delay, err := sourceDelay()
+	if err != nil {
+		return nil, nil, err
 	}
 	client := deals.NewHTTPClient()
 	sources := []deals.Source{
-		deals.OLX{Client: client, BaseURL: envOr("OHARA_DEALS_OLX_URL", deals.OLXURL)},
+		olxSource(client),
 		deals.Pepper{Client: client, BaseURL: envOr("OHARA_DEALS_PEPPER_URL", deals.PepperURL)},
-		deals.Ceneo{Client: client, BaseURL: envOr("OHARA_DEALS_CENEO_URL", deals.CeneoURL)},
+		ceneoSource(client),
 	}
 	var notifier deals.Notifier
 	token, chat := os.Getenv("OHARA_TELEGRAM_BOT_TOKEN"), os.Getenv("OHARA_TELEGRAM_CHAT_ID")
@@ -325,6 +335,55 @@ func newHunter(pool *pgxpool.Pool, logger *slog.Logger) (*deals.Hunter, *deals.S
 	store := deals.NewStore(pool)
 	cfg := deals.Config{Interval: interval, Delay: delay, CanaryQuery: envOr("OHARA_DEALS_CANARY_QUERY", "dvd")}
 	return deals.NewHunter(store, sources, notifier, cfg, logger), store, nil
+}
+
+// sourceDelay is the pause between two requests to the deal and valuation
+// sources.
+func sourceDelay() (time.Duration, error) {
+	delay, err := time.ParseDuration(envOr("OHARA_DEALS_DELAY", "5s"))
+	if err != nil || delay < time.Second {
+		return 0, fmt.Errorf("OHARA_DEALS_DELAY: want a duration of at least 1s, got %q", os.Getenv("OHARA_DEALS_DELAY"))
+	}
+	return delay, nil
+}
+
+func olxSource(client *http.Client) deals.OLX {
+	return deals.OLX{Client: client, BaseURL: envOr("OHARA_DEALS_OLX_URL", deals.OLXURL)}
+}
+
+func ceneoSource(client *http.Client) deals.Ceneo {
+	return deals.Ceneo{Client: client, BaseURL: envOr("OHARA_DEALS_CENEO_URL", deals.CeneoURL)}
+}
+
+// newValuation configures the valuation runner from the environment. The
+// daily schedule stays off until OHARA_VALUATION_INTERVAL is set; it asks
+// the deal hunter's OLX and Ceneo, with the same pause, and SkupSzop.
+func newValuation(pool *pgxpool.Pool, logger *slog.Logger) (*valuation.Runner, *valuation.Store, error) {
+	interval, err := time.ParseDuration(envOr("OHARA_VALUATION_INTERVAL", "0s"))
+	if err != nil || interval < 0 {
+		return nil, nil, fmt.Errorf("OHARA_VALUATION_INTERVAL: want a duration such as 24h, got %q", os.Getenv("OHARA_VALUATION_INTERVAL"))
+	}
+	if interval > 0 && interval < time.Hour {
+		return nil, nil, errors.New("OHARA_VALUATION_INTERVAL: valuing more often than every 1h is impolite to the sources")
+	}
+	days, err := strconv.Atoi(envOr("OHARA_VALUATION_WINDOW_DAYS", "90"))
+	if err != nil || days < 1 || days > 3650 {
+		return nil, nil, fmt.Errorf("OHARA_VALUATION_WINDOW_DAYS: want a number of days from 1 to 3650, got %q", os.Getenv("OHARA_VALUATION_WINDOW_DAYS"))
+	}
+	delay, err := sourceDelay()
+	if err != nil {
+		return nil, nil, err
+	}
+	client := deals.NewHTTPClient()
+	sources := []deals.Source{olxSource(client), ceneoSource(client)}
+	buybacks := []valuation.BuyBack{
+		valuation.SkupSzop{Client: client, BaseURL: envOr("OHARA_VALUATION_SKUPSZOP_URL", valuation.SkupSzopURL)},
+	}
+	window := time.Duration(days) * 24 * time.Hour
+	logger.Info("valuation", "interval", interval, "window_days", days)
+	store := valuation.NewStore(pool)
+	cfg := valuation.Config{Interval: interval, Delay: delay, Window: window}
+	return valuation.NewRunner(store, sources, buybacks, cfg, logger), store, nil
 }
 
 func registerPoolMetrics(pool *pgxpool.Pool) {

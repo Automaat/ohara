@@ -25,6 +25,7 @@ Same layout and tooling as `../baratie`. `package.json` and
       /movie/          # movie chain: Allegro catalog, Ceneo, UPCitemdb → product name → TMDB search
     /scanqueue/        # /api/scan-queue: barcodes the scanner could not resolve
     /deals/            # wishlist deal hunter: OLX, Pepper, Ceneo sources, matcher, Telegram alerts
+    /valuation/        # daily value of owned copies: OLX, Ceneo, SkupSzop buy-back; value history
     /server/           # router: /health, /metrics, /api/*, SPA fallback
     /web/              # serves the built SPA, index.html for client routes
     /metrics/          # Prometheus collectors on a private registry (ohara_*)
@@ -83,11 +84,23 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   wishlist copies (all title words, the edition's format for movies, the
   author's surname for books, minus the editable reject phrases), stores
   each listing once in `price_observation` (`source`, `external_id`) and
-  queues one `deal_alert` per new listing at or below the copy's
-  `max_price_cents`. Alerts are retried up to 5 times within a week.
+  queues one `deal_alert` per listing at or below the copy's
+  `max_price_cents`; a listing seen again keeps its row, takes the new
+  price and `last_seen_at`, and alerts if it has no alert yet. Alerts are retried up to 5 times within a week.
   Every run also asks each query source the canary query, wishlist or not,
   and sets `ohara_source_canary_ok` (a feed's one request is its canary)
   and `ohara_source_results`. A canary without listings is a broken source.
+- Valuation reuses the deal matcher, store and the OLX and Ceneo sources
+  for owned editions, and quotes owned books (ISBN barcodes) at SkupSzop.
+  A copy's range comes from prices last seen within the window: floor =
+  its edition's latest SkupSzop offer (0 when the shop does not buy it);
+  mid = median of OLX prices not marked new, outliers beyond 1.5 IQR
+  dropped; ceiling = median Ceneo price. Mid and ceiling pool every
+  edition of the same title and format. A mid from fewer than 3 prices is
+  low confidence. Each run upserts today's `valuation_history` row and
+  sets the `ohara_collection_*` gauges. Skupksiazek.pl (cart behind an
+  app flow) and Rivendo (manual form with photos) have no automatic
+  quote, so discs have no floor.
 - A barcode no provider resolves goes to `scan_queue`; a trigger on `edition`
   removes it once an edition carries that barcode. `ohara_scan_queue_size`
   counts it on each scrape.
@@ -115,23 +128,26 @@ the container port beyond the LAN.
 
 ## Configuration
 
-| Variable                                                   | Default                         | Purpose                                                                                                 |
-| ---------------------------------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL` or `PG*`                                    | —                               | Postgres connection (required). Prefer `PG*` when the password has URL-special characters.              |
-| `OHARA_ADDR`                                               | `:8000`                         | Listen address                                                                                          |
-| `OHARA_WEB_DIR`                                            | unset (`/app/web` in the image) | Built SPA to serve                                                                                      |
-| `OHARA_ACCESS_LOG`                                         | `false`                         | One log line per request                                                                                |
-| `OHARA_LOOKUP_STUB`                                        | `false`                         | Register the stub lookup provider (placeholder candidate for every barcode)                             |
-| `OHARA_GOOGLE_BOOKS_API_KEY`                               | unset                           | Enable the Google Books provider (keyless clients get no quota)                                         |
-| `OHARA_DEALS_INTERVAL`                                     | `0s` (off)                      | Deal search schedule, at least `10m` (e.g. `2h`), jittered ±10%; `POST /api/deals/run` works either way |
-| `OHARA_DEALS_DELAY`                                        | `5s`                            | Pause between two source requests, jittered ±50%                                                        |
-| `OHARA_DEALS_CANARY_QUERY`                                 | `dvd`                           | Query asked of OLX and Ceneo every run that should always find listings (`ohara_source_canary_ok`)      |
-| `OHARA_TELEGRAM_BOT_TOKEN`, `OHARA_TELEGRAM_CHAT_ID`       | unset (no alerts)               | Telegram bot for deal alerts; set both or neither                                                       |
-| `OHARA_DEALS_{OLX,PEPPER,CENEO}_URL`, `OHARA_TELEGRAM_URL` | public endpoints                | Point the sources and Telegram at test doubles                                                          |
-| `OHARA_TMDB_API_KEY`                                       | unset                           | TMDB v3 key or v4 read token; enables the movie lookup chain                                            |
-| `OHARA_ALLEGRO_CLIENT_ID`, `OHARA_ALLEGRO_CLIENT_SECRET`   | unset                           | Allegro device-flow app; adds the Allegro catalog to the movie chain after `api allegro-login`          |
-| `OHARA_CENEO`                                              | `true`                          | Ceneo search-page source in the movie chain                                                             |
-| `OHARA_UPCITEMDB`                                          | `true`                          | UPCitemdb free-tier source (100 requests a day) in the movie chain                                      |
+| Variable                                                   | Default                         | Purpose                                                                                                   |
+| ---------------------------------------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL` or `PG*`                                    | —                               | Postgres connection (required). Prefer `PG*` when the password has URL-special characters.                |
+| `OHARA_ADDR`                                               | `:8000`                         | Listen address                                                                                            |
+| `OHARA_WEB_DIR`                                            | unset (`/app/web` in the image) | Built SPA to serve                                                                                        |
+| `OHARA_ACCESS_LOG`                                         | `false`                         | One log line per request                                                                                  |
+| `OHARA_LOOKUP_STUB`                                        | `false`                         | Register the stub lookup provider (placeholder candidate for every barcode)                               |
+| `OHARA_GOOGLE_BOOKS_API_KEY`                               | unset                           | Enable the Google Books provider (keyless clients get no quota)                                           |
+| `OHARA_DEALS_INTERVAL`                                     | `0s` (off)                      | Deal search schedule, at least `10m` (e.g. `2h`), jittered ±10%; `POST /api/deals/run` works either way   |
+| `OHARA_DEALS_DELAY`                                        | `5s`                            | Pause between two source requests, jittered ±50%                                                          |
+| `OHARA_DEALS_CANARY_QUERY`                                 | `dvd`                           | Query asked of OLX and Ceneo every run that should always find listings (`ohara_source_canary_ok`)        |
+| `OHARA_TELEGRAM_BOT_TOKEN`, `OHARA_TELEGRAM_CHAT_ID`       | unset (no alerts)               | Telegram bot for deal alerts; set both or neither                                                         |
+| `OHARA_DEALS_{OLX,PEPPER,CENEO}_URL`, `OHARA_TELEGRAM_URL` | public endpoints                | Point the sources and Telegram at test doubles                                                            |
+| `OHARA_VALUATION_INTERVAL`                                 | `0s` (off)                      | Valuation schedule, at least `1h` (e.g. `24h`), jittered ±10%; `POST /api/valuation/run` works either way |
+| `OHARA_VALUATION_WINDOW_DAYS`                              | `90`                            | How many days back a price still counts                                                                   |
+| `OHARA_VALUATION_SKUPSZOP_URL`                             | public site                     | Point the SkupSzop quote at a test double                                                                 |
+| `OHARA_TMDB_API_KEY`                                       | unset                           | TMDB v3 key or v4 read token; enables the movie lookup chain                                              |
+| `OHARA_ALLEGRO_CLIENT_ID`, `OHARA_ALLEGRO_CLIENT_SECRET`   | unset                           | Allegro device-flow app; adds the Allegro catalog to the movie chain after `api allegro-login`            |
+| `OHARA_CENEO`                                              | `true`                          | Ceneo search-page source in the movie chain                                                               |
+| `OHARA_UPCITEMDB`                                          | `true`                          | UPCitemdb free-tier source (100 requests a day) in the movie chain                                        |
 
 ## Commands
 

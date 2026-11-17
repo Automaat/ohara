@@ -122,42 +122,52 @@ type observationRaw struct {
 	Data  json.RawMessage `json:"data,omitempty"`
 }
 
-// Record stores l as an observation of w unless the source already reported
-// that listing, and with alert also queues its Telegram alert in the same
-// transaction. It reports whether the listing was new.
-func (s *Store) Record(ctx context.Context, l *Listing, w *Want, alert bool) (bool, error) {
+// Record stores l as an observation of w and, with alert, queues its
+// Telegram alert in the same transaction. A listing a source already
+// reported keeps its row and first observation time; its price and
+// last_seen_at move to now. The alert is queued when the listing has none
+// yet, so a listing the valuation run stored first, or one whose price
+// dropped under the limit, still alerts once. It reports whether the
+// listing was new and whether an alert was queued.
+func (s *Store) Record(ctx context.Context, l *Listing, w *Want, alert bool) (bool, bool, error) {
 	raw, err := json.Marshal(observationRaw{Title: l.Title, Data: l.Raw})
 	if err != nil {
-		return false, fmt.Errorf("record: encode raw: %w", err)
+		return false, false, fmt.Errorf("record: encode raw: %w", err)
 	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return false, fmt.Errorf("record: begin: %w", err)
+		return false, false, fmt.Errorf("record: begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	var id int64
+	var isNew, alerted bool
 	err = tx.QueryRow(ctx, `INSERT INTO price_observation
 			(source, external_id, price_cents, acquired_as, url, edition_id, title_id, raw)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		ON CONFLICT (source, external_id) WHERE external_id IS NOT NULL DO NOTHING
-		RETURNING id`,
-		l.Source, l.ExternalID, l.PriceCents, l.AcquiredAs, l.URL, w.EditionID, w.TitleID, raw).Scan(&id)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return false, nil
-	}
+		ON CONFLICT (source, external_id) WHERE external_id IS NOT NULL DO UPDATE SET
+			price_cents = EXCLUDED.price_cents,
+			last_seen_at = now(),
+			url = EXCLUDED.url,
+			acquired_as = coalesce(EXCLUDED.acquired_as, price_observation.acquired_as),
+			edition_id = coalesce(price_observation.edition_id, EXCLUDED.edition_id),
+			title_id = coalesce(price_observation.title_id, EXCLUDED.title_id)
+		RETURNING id, xmax = 0`,
+		l.Source, l.ExternalID, l.PriceCents, l.AcquiredAs, l.URL, w.EditionID, w.TitleID, raw).Scan(&id, &isNew)
 	if err != nil {
-		return false, fmt.Errorf("record observation: %w", err)
+		return false, false, fmt.Errorf("record observation: %w", err)
 	}
 	if alert {
-		if _, err := tx.Exec(ctx, `INSERT INTO deal_alert (observation_id, copy_id) VALUES ($1, $2)`,
-			id, w.CopyID); err != nil {
-			return false, fmt.Errorf("record alert: %w", err)
+		tag, err := tx.Exec(ctx, `INSERT INTO deal_alert (observation_id, copy_id) VALUES ($1, $2)
+			ON CONFLICT (observation_id) DO NOTHING`, id, w.CopyID)
+		if err != nil {
+			return false, false, fmt.Errorf("record alert: %w", err)
 		}
+		alerted = tag.RowsAffected() == 1
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return false, fmt.Errorf("record: commit: %w", err)
+		return false, false, fmt.Errorf("record: commit: %w", err)
 	}
-	return true, nil
+	return isNew, alerted, nil
 }
 
 // Alert is a queued Telegram message with what it reports.

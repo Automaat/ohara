@@ -27,6 +27,6 @@
 		"typescript": "6.0.3",
 		"vite": "8.3.8",
 		"vitest": "^4.0.17",
-		"zxing-wasm": "3.1.6"
+		"zxing-wasm": "3.1.7"
 	}
 }

@@ -53,6 +53,11 @@ func TestRanges(t *testing.T) {
 		{EditionID: 2, TitleID: 100, Source: SourceSkupSzop, Cents: 0, SeenAt: now},
 		{EditionID: 3, TitleID: 200, Format: &bluray, Source: SourceOLX, Cents: 4000, AcquiredAs: &used, SeenAt: now},
 		{EditionID: 5, TitleID: 300, Source: "pepper", Cents: 100, SeenAt: now},
+		{EditionID: 7, TitleID: 400, Source: SourceOLX, Cents: 2000, AcquiredAs: &used, SeenAt: now},
+		{EditionID: 7, TitleID: 400, Source: SourceVinted, Cents: 3000, AcquiredAs: &used, SeenAt: now},
+		{EditionID: 7, TitleID: 400, Source: SourceVinted, Cents: 2600, SeenAt: now},
+		{EditionID: 7, TitleID: 400, Source: SourceVinted, Cents: 9000, AcquiredAs: &fresh, SeenAt: now},
+		{EditionID: 8, TitleID: 500, Source: SourceVinted, Cents: 1500, AcquiredAs: &used, SeenAt: now},
 	}
 	r := NewRanges(prices)
 	tests := []struct {
@@ -91,6 +96,14 @@ func TestRanges(t *testing.T) {
 		},
 		{name: "other format does not", edition: 6, title: 200, format: &dvd, want: Range{}},
 		{name: "other sources are ignored", edition: 5, title: 300, want: Range{}},
+		{
+			name: "OLX and Vinted pool used prices", edition: 7, title: 400,
+			want: Range{Mid: &Estimate{Cents: 2600, Source: SourceUsed, Count: 3}},
+		},
+		{
+			name: "Vinted alone", edition: 8, title: 500,
+			want: Range{Mid: &Estimate{Cents: 1500, Source: SourceVinted, Count: 1}},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

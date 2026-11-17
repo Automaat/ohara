@@ -1,6 +1,6 @@
 import type { AcquiredAs, FormIssue, Parsed } from '$lib/collection';
 
-export type DealSource = 'olx' | 'pepper' | 'ceneo';
+export type DealSource = 'olx' | 'vinted' | 'pepper' | 'ceneo';
 export type AlertState = 'none' | 'pending' | 'sent' | 'failed';
 export type KeywordKind = 'reject' | 'accept';
 
@@ -50,6 +50,7 @@ export type KeywordPayload = { kind: KeywordKind; phrase: string };
 
 export const sourceLabels: Record<DealSource, string> = {
 	olx: 'OLX',
+	vinted: 'Vinted',
 	pepper: 'Pepper',
 	ceneo: 'Ceneo'
 };

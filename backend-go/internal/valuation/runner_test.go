@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -264,13 +265,15 @@ func TestPricesWindowAndOwnership(t *testing.T) {
 		VALUES ('olx', 'old', 100, 10, now() - interval '100 days'),
 		       ('olx', 'recent', 200, 10, now() - interval '10 days'),
 		       ('olx', 'wish', 300, 21, now()),
+		       ('vinted', 'v', 250, 10, now()),
 		       ('pepper', 'p', 400, 10, now())`)
 	prices, err := NewStore(pool).Prices(ctx, 90*24*time.Hour)
 	if err != nil {
 		t.Fatalf("Prices: %v", err)
 	}
-	if len(prices) != 1 || prices[0].Cents != 200 {
-		t.Fatalf("Prices = %+v, want only the recent OLX price of an owned edition", prices)
+	slices.SortFunc(prices, func(a, b Price) int { return int(a.Cents - b.Cents) })
+	if len(prices) != 2 || prices[0].Cents != 200 || prices[1].Source != SourceVinted {
+		t.Fatalf("Prices = %+v, want the recent OLX and Vinted prices of an owned edition", prices)
 	}
 }
 

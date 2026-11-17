@@ -152,7 +152,7 @@
 
 <PageHeader
 	title="Okazje"
-	description="Oferty z OLX, Pepper i Ceneo pasujące do pozycji z listy życzeń."
+	description="Oferty z OLX, Vinted, Pepper i Ceneo pasujące do pozycji z listy życzeń."
 >
 	{#snippet actions()}
 		<Button

@@ -53,6 +53,9 @@ describe('estimates', () => {
 		expect(estimateSource('ceiling', { cents: 4999, source: 'ceneo', count: 1, trimmed: 0 })).toBe(
 			'Ceneo · 1 oferta'
 		);
+		expect(estimateSource('mid', { cents: 2600, source: 'olx+vinted', count: 3, trimmed: 0 })).toBe(
+			'OLX i Vinted · 3 oferty'
+		);
 	});
 
 	it('names the Discogs price behind each bound of an album', () => {

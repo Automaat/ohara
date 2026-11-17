@@ -1,12 +1,12 @@
 // Package valuation estimates what the owned collection is worth. A daily
-// run asks OLX and Ceneo for every owned edition, SkupSzop for every owned
-// book and Discogs for every owned album release, keeps the prices in
-// price_observation and stores the day's collection total. Each copy gets
-// a range: the buy-back offer as its floor, the median used asking price
-// on OLX as its middle and the new price on Ceneo as its ceiling. An album
-// edition with Discogs prices takes the cheapest Discogs copy for sale as
-// its floor and the suggested Very Good Plus and Mint prices as its middle
-// and ceiling.
+// run asks OLX, Vinted and Ceneo for every owned edition, SkupSzop for
+// every owned book and Discogs for every owned album release, keeps the
+// prices in price_observation and stores the day's collection total. Each
+// copy gets a range: the buy-back offer as its floor, the median used
+// asking price on OLX and Vinted as its middle and the new price on Ceneo
+// as its ceiling. An album edition with Discogs prices takes the cheapest
+// Discogs copy for sale as its floor and the suggested Very Good Plus and
+// Mint prices as its middle and ceiling.
 package valuation
 
 import (
@@ -18,16 +18,20 @@ import (
 // Sources the valuation reads from price_observation.
 const (
 	SourceOLX      = "olx"
+	SourceVinted   = "vinted"
 	SourceCeneo    = "ceneo"
 	SourceSkupSzop = "skupszop"
 )
 
+// SourceUsed names a middle value pooled from both OLX and Vinted prices.
+const SourceUsed = "olx+vinted"
+
 var (
 	discogsSources   = []string{SourceDiscogsLowest, SourceDiscogsVGPlus, SourceDiscogsMint}
-	valuationSources = append([]string{SourceOLX, SourceCeneo, SourceSkupSzop}, discogsSources...)
+	valuationSources = append([]string{SourceOLX, SourceVinted, SourceCeneo, SourceSkupSzop}, discogsSources...)
 )
 
-// MinObservations is the fewest OLX prices a middle value needs before it
+// MinObservations is the fewest used prices a middle value needs before it
 // is trusted; a copy with fewer is low confidence.
 const MinObservations = 3
 
@@ -85,10 +89,10 @@ func groupOf(titleID int64, format *string) group {
 // Ranges values editions from the prices in the window. The floor is the
 // edition's own latest SkupSzop offer, as a buy-back quotes one ISBN, or
 // its latest cheapest Discogs copy for sale. The middle is the trimmed
-// median of OLX prices that are not for new copies and the ceiling the
-// trimmed median of Ceneo's lowest new prices, both pooled over every
-// edition of the same title and format; the edition's own latest Discogs
-// suggestions replace them, as a Discogs release is one pressing.
+// median of OLX and Vinted prices that are not for new copies and the
+// ceiling the trimmed median of Ceneo's lowest new prices, both pooled over
+// every edition of the same title and format; the edition's own latest
+// Discogs suggestions replace them, as a Discogs release is one pressing.
 type Ranges struct {
 	floors       map[int64]*Estimate
 	mids         map[group]*Estimate
@@ -117,14 +121,16 @@ var estimateSources = map[string]string{
 func NewRanges(prices []Price) Ranges {
 	latest := map[editionPrice]*Price{}
 	used := map[group][]int64{}
+	usedFrom := map[group]string{}
 	fresh := map[group][]int64{}
 	for i := range prices {
 		p := &prices[i]
 		g := groupOf(p.TitleID, p.Format)
 		switch p.Source {
-		case SourceOLX:
+		case SourceOLX, SourceVinted:
 			if p.AcquiredAs == nil || *p.AcquiredAs != "new" {
 				used[g] = append(used[g], p.Cents)
+				usedFrom[g] = pooledSource(usedFrom[g], p.Source)
 			}
 		case SourceCeneo:
 			fresh[g] = append(fresh[g], p.Cents)
@@ -157,12 +163,21 @@ func NewRanges(prices []Price) Ranges {
 		}
 	}
 	for g, v := range used {
-		r.mids[g] = trimmedMedian(v, SourceOLX)
+		r.mids[g] = trimmedMedian(v, usedFrom[g])
 	}
 	for g, v := range fresh {
 		r.ceils[g] = trimmedMedian(v, SourceCeneo)
 	}
 	return r
+}
+
+// pooledSource is the source of a middle value that was from and now also
+// takes a price from src.
+func pooledSource(from, src string) string {
+	if from == "" || from == src {
+		return src
+	}
+	return SourceUsed
 }
 
 // For is the range of one edition of titleID in format.

@@ -118,14 +118,22 @@ func collect[T any](rows pgx.Rows, scan func(pgx.Row) (T, error), op string) ([]
 	return out, nil
 }
 
-// ListTitles returns titles of kind (any when empty) whose names or authors
-// contain q (any when empty), by name.
-func (s *Store) ListTitles(ctx context.Context, kind, q string) ([]Title, error) {
+// TitleFilter narrows ListTitles; zero fields match every title.
+type TitleFilter struct {
+	Kind   string
+	Query  string
+	TMDBID int64
+}
+
+// ListTitles returns titles of f.Kind whose names or authors contain f.Query
+// and, when set, with TMDB ID f.TMDBID, by name.
+func (s *Store) ListTitles(ctx context.Context, f TitleFilter) ([]Title, error) {
 	rows, err := s.pool.Query(ctx, `SELECT `+titleColumns+` FROM title t
 		WHERE ($1 = '' OR t.kind = $1)
 		  AND ($2 = '' OR strpos(lower(concat_ws(' ', t.name, t.original_title, t.polish_title,
 		       array_to_string(t.authors, ' '))), lower($2)) > 0)
-		ORDER BY lower(t.name), t.id`, kind, strings.TrimSpace(q))
+		  AND ($3 = 0 OR t.tmdb_id = $3)
+		ORDER BY lower(t.name), t.id`, f.Kind, strings.TrimSpace(f.Query), f.TMDBID)
 	if err != nil {
 		return nil, fmt.Errorf("list titles: %w", err)
 	}

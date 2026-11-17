@@ -15,6 +15,7 @@ func testFS() fstest.MapFS {
 	return fstest.MapFS{
 		"index.html":                 {Data: []byte("<!doctype html><title>Ohara</title>")},
 		"robots.txt":                 {Data: []byte("User-agent: *")},
+		"manifest.webmanifest":       {Data: []byte(`{"name":"Ohara"}`)},
 		"_app/immutable/entry/a1.js": {Data: []byte("console.log(1)")},
 		"_app/version.json":          {Data: []byte(`{"version":"1"}`)},
 	}
@@ -32,6 +33,7 @@ func TestHandler(t *testing.T) {
 		{"root serves index", http.MethodGet, "/", http.StatusOK, "<title>Ohara</title>", "no-cache"},
 		{"client route falls back to index", http.MethodGet, "/collection/42", http.StatusOK, "<title>Ohara</title>", "no-cache"},
 		{"static file", http.MethodGet, "/robots.txt", http.StatusOK, "User-agent", "no-cache"},
+		{"web app manifest", http.MethodGet, "/manifest.webmanifest", http.StatusOK, `"name"`, "no-cache"},
 		{"immutable asset cached", http.MethodGet, "/_app/immutable/entry/a1.js", http.StatusOK, "console.log", "public, max-age=31536000, immutable"},
 		{"version file revalidates", http.MethodGet, "/_app/version.json", http.StatusOK, `"version"`, "no-cache"},
 		{"directory falls back to index", http.MethodGet, "/_app/", http.StatusOK, "<title>Ohara</title>", "no-cache"},
@@ -54,6 +56,14 @@ func TestHandler(t *testing.T) {
 				t.Fatalf("Cache-Control = %q, want %q", got, tt.cacheCtrl)
 			}
 		})
+	}
+}
+
+func TestManifestContentType(t *testing.T) {
+	rec := httptest.NewRecorder()
+	web.Handler(testFS()).ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/manifest.webmanifest", http.NoBody))
+	if got := rec.Header().Get("Content-Type"); got != "application/manifest+json" {
+		t.Fatalf("Content-Type = %q, want application/manifest+json", got)
 	}
 }
 

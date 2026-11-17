@@ -338,14 +338,17 @@ func TestListTitles(t *testing.T) {
 	a.title("movie", "Rejs")
 	a.title("movie", "Miś")
 	a.title("book", "Lalka")
+	a.mustDo(http.MethodPost, "/api/titles", obj{"kind": "movie", "name": "Seksmisja", "tmdb_id": 11202}, nil, http.StatusCreated)
 
 	tests := []struct {
 		query string
 		want  []string
 	}{
-		{"", []string{"Lalka", "Miś", "Rejs"}},
-		{"?kind=movie", []string{"Miś", "Rejs"}},
+		{"", []string{"Lalka", "Miś", "Rejs", "Seksmisja"}},
+		{"?kind=movie", []string{"Miś", "Rejs", "Seksmisja"}},
 		{"?q=ALK", []string{"Lalka"}},
+		{"?tmdb_id=11202", []string{"Seksmisja"}},
+		{"?tmdb_id=1", []string{}},
 	}
 	for _, tt := range tests {
 		var titles []collection.Title
@@ -359,6 +362,8 @@ func TestListTitles(t *testing.T) {
 		}
 	}
 	a.fails(http.MethodGet, "/api/titles?kind=vinyl", nil, http.StatusUnprocessableEntity, "kind")
+	a.fails(http.MethodGet, "/api/titles?tmdb_id=x", nil, http.StatusUnprocessableEntity, "tmdb_id")
+	a.fails(http.MethodGet, "/api/titles?tmdb_id=0", nil, http.StatusUnprocessableEntity, "tmdb_id")
 }
 
 func TestBarcodeSpellingsShareOneEdition(t *testing.T) {

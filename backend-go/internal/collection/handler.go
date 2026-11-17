@@ -166,7 +166,16 @@ func (h *Handler) listTitles(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteFieldError(w, h.logger, fe)
 		return
 	}
-	titles, err := h.store.ListTitles(r.Context(), kind, r.URL.Query().Get("q"))
+	f := TitleFilter{Kind: kind, Query: r.URL.Query().Get("q")}
+	if raw := r.URL.Query().Get("tmdb_id"); raw != "" {
+		id, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || id <= 0 {
+			httpx.WriteFieldError(w, h.logger, fieldErr("tmdb_id", "must be a positive integer"))
+			return
+		}
+		f.TMDBID = id
+	}
+	titles, err := h.store.ListTitles(r.Context(), f)
 	if err != nil {
 		h.writeErr(w, "list titles", err)
 		return

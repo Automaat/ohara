@@ -316,11 +316,11 @@ func newHunter(pool *pgxpool.Pool, logger *slog.Logger) (*deals.Hunter, *deals.S
 		return nil, nil, err
 	}
 	client := deals.NewHTTPClient()
-	sources := []deals.Source{
-		olxSource(client),
+	sources := usedSources(client)
+	sources = append(sources,
 		deals.Pepper{Client: client, BaseURL: envOr("OHARA_DEALS_PEPPER_URL", deals.PepperURL)},
 		ceneoSource(client),
-	}
+	)
 	var notifier deals.Notifier
 	token, chat := os.Getenv("OHARA_TELEGRAM_BOT_TOKEN"), os.Getenv("OHARA_TELEGRAM_CHAT_ID")
 	switch {
@@ -347,8 +347,14 @@ func sourceDelay() (time.Duration, error) {
 	return delay, nil
 }
 
-func olxSource(client *http.Client) deals.OLX {
-	return deals.OLX{Client: client, BaseURL: envOr("OHARA_DEALS_OLX_URL", deals.OLXURL)}
+// usedSources are the marketplaces of used copies: OLX, and Vinted unless
+// OHARA_VINTED is false.
+func usedSources(client *http.Client) []deals.Source {
+	out := []deals.Source{deals.OLX{Client: client, BaseURL: envOr("OHARA_DEALS_OLX_URL", deals.OLXURL)}}
+	if envOr("OHARA_VINTED", "true") == "true" {
+		out = append(out, deals.Vinted{Client: client, BaseURL: envOr("OHARA_DEALS_VINTED_URL", deals.VintedURL)})
+	}
+	return out
 }
 
 func ceneoSource(client *http.Client) deals.Ceneo {
@@ -357,7 +363,7 @@ func ceneoSource(client *http.Client) deals.Ceneo {
 
 // newValuation configures the valuation runner from the environment. The
 // daily schedule stays off until OHARA_VALUATION_INTERVAL is set; it asks
-// the deal hunter's OLX and Ceneo, with the same pause, and SkupSzop.
+// the deal hunter's OLX, Vinted and Ceneo, with the same pause, and SkupSzop.
 func newValuation(pool *pgxpool.Pool, logger *slog.Logger) (*valuation.Runner, *valuation.Store, error) {
 	interval, err := time.ParseDuration(envOr("OHARA_VALUATION_INTERVAL", "0s"))
 	if err != nil || interval < 0 {
@@ -375,7 +381,7 @@ func newValuation(pool *pgxpool.Pool, logger *slog.Logger) (*valuation.Runner, *
 		return nil, nil, err
 	}
 	client := deals.NewHTTPClient()
-	sources := []deals.Source{olxSource(client), ceneoSource(client)}
+	sources := append(usedSources(client), ceneoSource(client))
 	buybacks := []valuation.BuyBack{
 		valuation.SkupSzop{Client: client, BaseURL: envOr("OHARA_VALUATION_SKUPSZOP_URL", valuation.SkupSzopURL)},
 	}

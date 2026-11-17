@@ -1,7 +1,7 @@
 import type { ChartSeries } from '@smykla-skalski/sui';
 import { formatPLN, type Format, type Kind } from '$lib/collection';
 
-export type ValueSource = 'olx' | 'ceneo' | 'skupszop';
+export type ValueSource = 'olx' | 'vinted' | 'olx+vinted' | 'ceneo' | 'skupszop';
 export type BoundKey = 'floor' | 'mid' | 'ceiling';
 
 export type Estimate = { cents: number; source: ValueSource; count: number; trimmed: number };
@@ -73,12 +73,14 @@ export const boundLabels: Record<BoundKey, string> = {
 
 export const boundHints: Record<BoundKey, string> = {
 	floor: 'Ile od ręki zapłaci skup (SkupSzop, tylko książki).',
-	mid: 'Mediana cen ofertowych używanych egzemplarzy na OLX, bez wartości odstających.',
+	mid: 'Mediana cen ofertowych używanych egzemplarzy na OLX i Vinted, bez wartości odstających.',
 	ceiling: 'Najniższa cena nowego egzemplarza w sklepach z Ceneo (mediana produktów).'
 };
 
 export const sourceLabels: Record<ValueSource, string> = {
 	olx: 'OLX',
+	vinted: 'Vinted',
+	'olx+vinted': 'OLX i Vinted',
 	ceneo: 'Ceneo',
 	skupszop: 'SkupSzop'
 };

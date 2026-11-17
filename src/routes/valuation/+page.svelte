@@ -113,7 +113,7 @@
 
 <PageHeader
 	title="Wartość kolekcji"
-	description="Przedział wartości każdego egzemplarza: skup, ceny używanych na OLX i ceny nowych z Ceneo."
+	description="Przedział wartości każdego egzemplarza: skup, ceny używanych na OLX i Vinted oraz ceny nowych z Ceneo."
 >
 	{#snippet actions()}
 		<Button
@@ -153,8 +153,8 @@
 	{/if}
 
 	<Callout tone="quiet" title="Ceny ofertowe, nie transakcyjne">
-		Ceny z OLX to kwoty, za które sprzedający wystawiają egzemplarze, a nie ceny, za które je
-		sprzedali. Liczą się oferty widziane w ostatnich {view?.window_days ?? 90} dniach; wycena z mniej
+		Ceny z OLX i Vinted to kwoty, za które sprzedający wystawiają egzemplarze, a nie ceny, za które
+		je sprzedali. Liczą się oferty widziane w ostatnich {view?.window_days ?? 90} dniach; wycena z mniej
 		niż {offers(view?.min_observations ?? 3)} ma niską pewność.
 	</Callout>
 

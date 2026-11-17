@@ -68,19 +68,20 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   wishlist copies (all title words, the edition's format for movies, the
   author's surname for books, minus the editable reject phrases), stores
   each listing once in `price_observation` (`source`, `external_id`) and
-  queues one `deal_alert` per new listing at or below the copy's
-  `max_price_cents`. Alerts are retried up to 5 times within a week.
-- Valuation reuses the deal matcher and the OLX and Ceneo sources for
-  owned editions, and quotes owned books (ISBN barcodes) at SkupSzop.
-  A listing seen again keeps its `price_observation` row and moves its
-  price and `last_seen_at`. A copy's range comes from prices last seen
-  within the window: floor = latest SkupSzop offer (0 when the shop does
-  not buy it), mid = median of OLX prices not marked new with outliers
-  beyond 1.5 IQR dropped, ceiling = median Ceneo price. A mid from fewer
-  than 3 prices is low confidence. Each run upserts today's
-  `valuation_history` row and sets the `ohara_collection_*` gauges.
-  Skupksiazek.pl (cart behind an app flow) and Rivendo (manual form with
-  photos) have no automatic quote, so discs have no floor.
+  queues one `deal_alert` per listing at or below the copy's
+  `max_price_cents`; a listing seen again keeps its row, takes the new
+  price and `last_seen_at`, and alerts if it has no alert yet. Alerts are retried up to 5 times within a week.
+- Valuation reuses the deal matcher, store and the OLX and Ceneo sources
+  for owned editions, and quotes owned books (ISBN barcodes) at SkupSzop.
+  A copy's range comes from prices last seen within the window: floor =
+  its edition's latest SkupSzop offer (0 when the shop does not buy it);
+  mid = median of OLX prices not marked new, outliers beyond 1.5 IQR
+  dropped; ceiling = median Ceneo price. Mid and ceiling pool every
+  edition of the same title and format. A mid from fewer than 3 prices is
+  low confidence. Each run upserts today's `valuation_history` row and
+  sets the `ohara_collection_*` gauges. Skupksiazek.pl (cart behind an
+  app flow) and Rivendo (manual form with photos) have no automatic
+  quote, so discs have no floor.
 - A barcode no provider resolves goes to `scan_queue`; a trigger on `edition`
   removes it once an edition carries that barcode.
 

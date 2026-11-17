@@ -24,6 +24,19 @@ func wiedzmin() Want {
 	}
 }
 
+func rocky(part string) Want {
+	return Want{CopyID: 3, Kind: "movie", Name: "Rocky " + part, Format: new("dvd")}
+}
+
+func TestPickSkipsOtherSequel(t *testing.T) {
+	wants := []Want{rocky("2"), rocky("3")}
+	wants[1].CopyID = 4
+	got := pick(wants, &Listing{Title: "Rocky 3 DVD", PriceCents: 1000}, Rules{})
+	if got == nil || got.CopyID != 4 {
+		t.Fatalf("pick(Rocky 3 DVD) = %+v, want the Rocky 3 copy", got)
+	}
+}
+
 func TestWantMatches(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -43,6 +56,8 @@ func TestWantMatches(t *testing.T) {
 		{"book with surname", wiedzmin(), "Ostatnie Życzenie - Sapkowski, twarda", true},
 		{"book without author", wiedzmin(), "Ostatnie życzenie książka", false},
 		{"book title missing", wiedzmin(), "Sapkowski Krew elfów", false},
+		{"sequel number kept", rocky("2"), "Rocky 2 DVD lektor", true},
+		{"other sequel number", rocky("2"), "Rocky 3 DVD", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

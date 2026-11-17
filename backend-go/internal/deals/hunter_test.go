@@ -267,6 +267,55 @@ func TestPendingAlertsSkipCopiesNoLongerWanted(t *testing.T) {
 	}
 }
 
+func TestPendingAlertsSkipListingsAboveLoweredLimit(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	copyID := wishlist(t, pool, wantBluray(new(int64(5000))))
+	notifier := &fakeNotifier{fail: 1}
+	h := newTestHunter(pool, notifier, olxFixture(t))
+	if res := mustRun(t, h); res.Alerts != 1 || res.Sent != 0 {
+		t.Fatalf("failing run = %+v", res)
+	}
+	if _, err := pool.Exec(context.Background(),
+		`UPDATE copy SET max_price_cents = 1000 WHERE id = $1`, copyID); err != nil {
+		t.Fatalf("lower limit: %v", err)
+	}
+	if res := mustRun(t, h); res.Sent != 0 || len(notifier.messages()) != 0 {
+		t.Fatalf("run after lowering the limit = %+v, want no alert above 10 zł", res)
+	}
+}
+
+// cancellingNotifier delivers the message, then cancels the run, as a
+// shutdown arriving mid-send does.
+type cancellingNotifier struct {
+	fakeNotifier
+	cancel context.CancelFunc
+}
+
+func (c *cancellingNotifier) Send(ctx context.Context, text string) error {
+	err := c.fakeNotifier.Send(ctx, text)
+	c.cancel()
+	return err
+}
+
+func TestRunRecordsAlertSentBeforeCancellation(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	wishlist(t, pool, wantBluray(new(int64(5000))))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	notifier := &cancellingNotifier{cancel: cancel}
+	h := newTestHunter(pool, notifier, olxFixture(t))
+	if res, err := h.Run(ctx); err != nil || res.Sent != 1 {
+		t.Fatalf("canceled run = %+v, %v; want the delivered alert recorded", res, err)
+	}
+	if n := count(t, pool, `SELECT count(*) FROM deal_alert WHERE sent_at IS NOT NULL`); n != 1 {
+		t.Fatalf("sent alerts = %d, want 1", n)
+	}
+	notifier.cancel = func() {}
+	if res := mustRun(t, h); res.Sent != 0 || len(notifier.messages()) != 1 {
+		t.Fatalf("next run = %+v, want no resend", res)
+	}
+}
+
 func TestRunWithEmptyWishlistAsksNoSource(t *testing.T) {
 	pool := dbtest.Migrated(t)
 	olx := olxFixture(t)

@@ -174,8 +174,8 @@ type Alert struct {
 }
 
 // PendingAlerts returns undelivered alerts with attempts left, oldest
-// first. Alerts for copies no longer on the wishlist, and alerts older than
-// a week, are skipped.
+// first. Alerts for copies no longer on the wishlist, alerts above the
+// copy's current maximum price and alerts older than a week are skipped.
 func (s *Store) PendingAlerts(ctx context.Context) ([]Alert, error) {
 	rows, err := s.pool.Query(ctx, `SELECT o.id, o.source, o.url, coalesce(o.raw->>'title', ''),
 			o.price_cents, o.acquired_as, t.name, e.format, c.max_price_cents
@@ -185,6 +185,7 @@ func (s *Store) PendingAlerts(ctx context.Context) ([]Alert, error) {
 		JOIN edition e ON e.id = c.edition_id
 		JOIN title t ON t.id = e.title_id
 		WHERE a.sent_at IS NULL AND a.attempts < $1 AND a.created_at > now() - interval '7 days'
+			AND o.price_cents <= c.max_price_cents
 		ORDER BY a.created_at, a.observation_id`, MaxAttempts)
 	if err != nil {
 		return nil, fmt.Errorf("pending alerts: %w", err)

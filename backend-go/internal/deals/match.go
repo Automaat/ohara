@@ -93,11 +93,12 @@ var stopWords = map[string]bool{
 }
 
 // required is the set of words a listing must contain to match name: its
-// words without stop words and single characters.
+// words without stop words and single letters. Numbers stay, even single
+// digits, so "Rocky 2" does not match "Rocky 3".
 func required(name string) []string {
 	var out []string
 	for _, w := range words(name) {
-		if len([]rune(w)) > 1 && !stopWords[w] {
+		if (len([]rune(w)) > 1 || unicode.IsDigit([]rune(w)[0])) && !stopWords[w] {
 			out = append(out, w)
 		}
 	}

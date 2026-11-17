@@ -20,6 +20,10 @@ const maxRunErrors = 20
 // chat.
 const telegramPause = time.Second
 
+// markSentTimeout bounds recording a delivered alert after the run's
+// context is gone.
+const markSentTimeout = 10 * time.Second
+
 // Config tunes the hunter. Interval 0 disables the schedule; a run can still
 // be started by hand. Delay separates two source requests; both are
 // jittered.
@@ -309,7 +313,12 @@ func (r *run) deliver(ctx context.Context) error {
 			}
 			continue
 		}
-		if err := r.h.store.MarkSent(ctx, a.ObservationID); err != nil {
+		// The message is out: record it even when ctx was canceled during
+		// the send, or the next run sends it again.
+		markCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), markSentTimeout)
+		err := r.h.store.MarkSent(markCtx, a.ObservationID)
+		cancel()
+		if err != nil {
 			return err
 		}
 		r.res.Sent++

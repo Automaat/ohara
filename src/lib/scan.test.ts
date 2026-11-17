@@ -5,6 +5,7 @@ import {
 	FormRejected,
 	RepeatGuard,
 	cameraErrorMessage,
+	candidateLabel,
 	cleanBarcode,
 	cropRect,
 	emptySticky,
@@ -58,6 +59,22 @@ const movie: Candidate = {
 		packaging: ['steelbook']
 	},
 	provider: 'filmweb',
+	confidence: 0.9
+};
+
+const album: Candidate = {
+	type: 'music',
+	title: { name: 'The Dark Side Of The Moon', authors: ['Pink Floyd'] },
+	edition: {
+		barcode: '5099902987620',
+		label: 'Reissue, Remastered · Europe',
+		publisher: 'EMI',
+		year: 2011,
+		format: 'cd',
+		discogs_release_id: 1873013
+	},
+	cover_url: 'https://i.discogs.com/dsotm.jpeg',
+	provider: 'music',
 	confidence: 0.9
 };
 
@@ -280,9 +297,38 @@ describe('scan payloads', () => {
 				pl_voiceover: 'no',
 				packaging: ['steelbook'],
 				binding: null,
+				discogs_release_id: null,
 				notes: ''
 			}
 		});
+	});
+
+	it('keeps album fields for an album', () => {
+		const f = form({ kind: 'music', name: 'The Dark Side Of The Moon', format: 'cd' });
+		expect(scanTitlePayload(f, album)).toMatchObject({
+			ok: true,
+			value: { kind: 'music', authors: ['Pink Floyd'], tmdb_id: null, bn_id: null }
+		});
+		expect(scanEditionPayload(f, album, '5099902987620', 7)).toMatchObject({
+			ok: true,
+			value: {
+				format: 'cd',
+				discogs_release_id: 1873013,
+				publisher: 'EMI',
+				label: 'Reissue, Remastered · Europe',
+				binding: null,
+				packaging: []
+			}
+		});
+		const noMedium = scanEditionPayload(form({ kind: 'music', format: 'dvd' }), album, 'x', 7);
+		expect(!noMedium.ok && noMedium.issue.field).toBe('format');
+	});
+
+	it('labels an album candidate with the details that tell pressings apart', () => {
+		expect(candidateLabel(album)).toBe(
+			'Pink Floyd – The Dark Side Of The Moon · CD · 2011 · EMI · Reissue, Remastered · Europe · music · 90%'
+		);
+		expect(candidateLabel(movie)).toBe('Seksmisja · filmweb · 90%');
 	});
 
 	it('keeps book fields for a book', () => {

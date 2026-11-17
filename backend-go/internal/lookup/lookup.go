@@ -42,11 +42,13 @@ type EditionFields struct {
 	PLVoiceover string   `json:"pl_voiceover,omitempty"`
 	Packaging   []string `json:"packaging,omitempty"`
 	Binding     *string  `json:"binding,omitempty"`
+	// DiscogsReleaseID names the Discogs release an album candidate is.
+	DiscogsReleaseID *int64 `json:"discogs_release_id,omitempty"`
 }
 
-// Candidate is one possible match for a barcode. Type is "movie" or "book";
-// Confidence is in [0, 1]. Provider is the main source and Sources lists
-// every provider whose fields went into the candidate. CoverURL and
+// Candidate is one possible match for a barcode. Type is "movie", "book" or
+// "music"; Confidence is in [0, 1]. Provider is the main source and Sources
+// lists every provider whose fields went into the candidate. CoverURL and
 // Description are for display only; they are not stored.
 type Candidate struct {
 	Type        string        `json:"type"`

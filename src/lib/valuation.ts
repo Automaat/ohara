@@ -1,7 +1,7 @@
 import type { ChartSeries } from '@smykla-skalski/sui';
 import { formatPLN, type Format, type Kind } from '$lib/collection';
 
-export type ValueSource = 'olx' | 'vinted' | 'olx+vinted' | 'ceneo' | 'skupszop';
+export type ValueSource = 'olx' | 'vinted' | 'olx+vinted' | 'ceneo' | 'skupszop' | 'discogs';
 export type BoundKey = 'floor' | 'mid' | 'ceiling';
 
 export type Estimate = { cents: number; source: ValueSource; count: number; trimmed: number };
@@ -82,7 +82,8 @@ export const sourceLabels: Record<ValueSource, string> = {
 	vinted: 'Vinted',
 	'olx+vinted': 'OLX i Vinted',
 	ceneo: 'Ceneo',
-	skupszop: 'SkupSzop'
+	skupszop: 'SkupSzop',
+	discogs: 'Discogs'
 };
 
 /** "oferta" with its Polish plural for count. */
@@ -102,6 +103,10 @@ export function estimateValue(e: Estimate | null): string {
 /** Where one bound of a copy comes from, as "OLX · 5 ofert (2 odrzucone)". */
 export function estimateSource(bound: BoundKey, e: Estimate | null): string {
 	if (!e) return 'brak danych';
+	if (e.source === 'discogs') {
+		if (bound === 'floor') return 'Discogs · najtańsza oferta';
+		return bound === 'mid' ? 'Discogs · sugestia VG+' : 'Discogs · sugestia Mint';
+	}
 	if (bound === 'floor') {
 		return e.cents === 0 ? `${sourceLabels[e.source]} nie skupuje` : sourceLabels[e.source];
 	}

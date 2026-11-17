@@ -8,7 +8,9 @@ import {
 	editionPayload,
 	editionSummary,
 	editionToForm,
+	formatFits,
 	formatLabels,
+	formatOptions,
 	formatPLN,
 	options,
 	parsePLN,
@@ -50,8 +52,20 @@ describe('labels', () => {
 		expect(options(formatLabels)).toEqual([
 			{ value: 'dvd', label: 'DVD' },
 			{ value: 'bluray', label: 'Blu-ray' },
-			{ value: 'uhd', label: '4K UHD' }
+			{ value: 'uhd', label: '4K UHD' },
+			{ value: 'cd', label: 'CD' },
+			{ value: 'vinyl', label: 'Winyl' },
+			{ value: 'cassette', label: 'Kaseta' }
 		]);
+	});
+
+	it('offers each kind its own media', () => {
+		expect(formatOptions('movie').map((o) => o.value)).toEqual(['dvd', 'bluray', 'uhd']);
+		expect(formatOptions('music').map((o) => o.value)).toEqual(['cd', 'vinyl', 'cassette']);
+		expect(formatOptions('book')).toEqual([]);
+		expect(formatFits('music', 'vinyl')).toBe(true);
+		expect(formatFits('music', 'dvd')).toBe(false);
+		expect(formatFits('book', '')).toBe(false);
 	});
 
 	it.each([
@@ -173,6 +187,7 @@ const edition: Edition = {
 	pl_voiceover: 'no',
 	packaging: ['steelbook'],
 	binding: null,
+	discogs_release_id: null,
 	notes: '',
 	copy_count: 0,
 	created_at: '',
@@ -211,6 +226,47 @@ describe('edition form', () => {
 		expect(!noFormat.ok && noFormat.issue.field).toBe('format');
 		const badYear = editionPayload({ ...editionToForm(edition), year: 'MMXIX' }, 1, 'movie');
 		expect(!badYear.ok && badYear.issue.field).toBe('year');
+	});
+
+	it("keeps an album edition's medium and Discogs release only", () => {
+		const form = {
+			...editionToForm(edition),
+			format: 'vinyl' as const,
+			discogs_release_id: ' 1873013 ',
+			binding: 'hardcover' as const
+		};
+		expect(editionPayload(form, 4, 'music')).toEqual({
+			ok: true,
+			value: {
+				title_id: 4,
+				barcode: '5901234123457',
+				label: '',
+				publisher: 'Best Film',
+				year: 2019,
+				format: 'vinyl',
+				pl_subtitles: 'unknown',
+				pl_voiceover: 'unknown',
+				packaging: [],
+				binding: null,
+				discogs_release_id: 1873013,
+				notes: ''
+			}
+		});
+		const movie = editionPayload(form, 4, 'movie');
+		expect(!movie.ok && movie.issue.field).toBe('format');
+		const asMovie = editionPayload({ ...form, format: 'dvd' }, 4, 'movie');
+		expect(asMovie.ok && asMovie.value.discogs_release_id).toBeNull();
+	});
+
+	it('requires a music medium and a numeric Discogs release for albums', () => {
+		const disc = editionPayload({ ...editionToForm(edition), format: 'bluray' }, 4, 'music');
+		expect(!disc.ok && disc.issue.field).toBe('format');
+		const badID = editionPayload(
+			{ ...editionToForm(edition), format: 'cd', discogs_release_id: 'r1873013' },
+			4,
+			'music'
+		);
+		expect(!badID.ok && badID.issue.field).toBe('discogs_release_id');
 	});
 
 	it('starts empty', () => {

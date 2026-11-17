@@ -1,5 +1,7 @@
-export type Kind = 'movie' | 'book';
-export type Format = 'dvd' | 'bluray' | 'uhd';
+export type Kind = 'movie' | 'book' | 'music';
+export type MovieFormat = 'dvd' | 'bluray' | 'uhd';
+export type MusicFormat = 'cd' | 'vinyl' | 'cassette';
+export type Format = MovieFormat | MusicFormat;
 export type Binding = 'hardcover' | 'paperback' | 'other';
 export type TriState = 'yes' | 'no' | 'unknown';
 export type Packaging = 'steelbook' | 'slipcover' | 'digipak' | 'mediabook';
@@ -39,6 +41,7 @@ export type EditionPayload = {
 	pl_voiceover: TriState;
 	packaging: Packaging[];
 	binding: Binding | null;
+	discogs_release_id: number | null;
 	notes: string;
 };
 
@@ -98,12 +101,35 @@ export type Totals = {
 
 export type CollectionView = { items: CollectionItem[]; totals: Totals };
 
-export const kindLabels: Record<Kind, string> = { movie: 'Film', book: 'Książka' };
-export const formatLabels: Record<Format, string> = {
+export const kindLabels: Record<Kind, string> = { movie: 'Film', book: 'Książka', music: 'Muzyka' };
+export const movieFormatLabels: Record<MovieFormat, string> = {
 	dvd: 'DVD',
 	bluray: 'Blu-ray',
 	uhd: '4K UHD'
 };
+export const musicFormatLabels: Record<MusicFormat, string> = {
+	cd: 'CD',
+	vinyl: 'Winyl',
+	cassette: 'Kaseta'
+};
+export const formatLabels: Record<Format, string> = { ...movieFormatLabels, ...musicFormatLabels };
+
+/** The formats a title of kind comes in, as select options; books have none. */
+export function formatOptions(kind: Kind): { value: Format; label: string }[] {
+	if (kind === 'movie') return options(movieFormatLabels);
+	if (kind === 'music') return options(musicFormatLabels);
+	return [];
+}
+
+/** Whether a format belongs to a title of kind. */
+export function formatFits(kind: Kind, format: Format | '' | null | undefined): boolean {
+	return formatOptions(kind).some((o) => o.value === format);
+}
+
+/** Who a title of kind is by: a book's authors or an album's artists. */
+export function authorsLabel(kind: Kind): string {
+	return kind === 'music' ? 'Wykonawcy' : 'Autorzy';
+}
 export const bindingLabels: Record<Binding, string> = {
 	hardcover: 'Twarda oprawa',
 	paperback: 'Miękka oprawa',
@@ -264,6 +290,7 @@ export function titlePayload(f: TitleForm): Parsed<TitlePayload> {
 	const year = parseOptInt(f.year, 'year', 'Rok to liczba, np. 1984.');
 	if (!year.ok) return year;
 	const movie = f.kind === 'movie';
+	const book = f.kind === 'book';
 	const tmdb = movie
 		? parseOptInt(f.tmdb_id, 'tmdb_id', 'Identyfikator TMDB to liczba.')
 		: ({ ok: true, value: null } as const);
@@ -283,8 +310,8 @@ export function titlePayload(f: TitleForm): Parsed<TitlePayload> {
 						.split('\n')
 						.map((a) => a.trim())
 						.filter(Boolean),
-			bn_id: movie ? null : optText(f.bn_id),
-			openlibrary_id: movie ? null : optText(f.openlibrary_id),
+			bn_id: book ? optText(f.bn_id) : null,
+			openlibrary_id: book ? optText(f.openlibrary_id) : null,
 			notes: f.notes.trim()
 		}
 	};
@@ -300,6 +327,7 @@ export type EditionForm = {
 	pl_voiceover: TriState;
 	packaging: Packaging[];
 	binding: Binding | '';
+	discogs_release_id: string;
 	notes: string;
 };
 
@@ -315,6 +343,7 @@ export function editionToForm(e: EditionPayload | null): EditionForm {
 		pl_voiceover: e?.pl_voiceover ?? 'unknown',
 		packaging: [...(e?.packaging ?? [])],
 		binding: e?.binding ?? '',
+		discogs_release_id: e?.discogs_release_id?.toString() ?? '',
 		notes: e?.notes ?? ''
 	};
 }
@@ -328,9 +357,14 @@ export function editionPayload(
 	const year = parseOptInt(f.year, 'year', 'Rok to liczba, np. 2019.');
 	if (!year.ok) return year;
 	const movie = kind === 'movie';
-	if (movie && !f.format) {
+	const music = kind === 'music';
+	if ((movie || music) && !formatFits(kind, f.format)) {
 		return { ok: false, issue: { field: 'format', message: 'Wybierz nośnik.' } };
 	}
+	const discogs = music
+		? parseOptInt(f.discogs_release_id, 'discogs_release_id', 'Identyfikator Discogs to liczba.')
+		: ({ ok: true, value: null } as const);
+	if (!discogs.ok) return discogs;
 	return {
 		ok: true,
 		value: {
@@ -339,11 +373,12 @@ export function editionPayload(
 			label: f.label.trim(),
 			publisher: f.publisher.trim(),
 			year: year.value,
-			format: movie && f.format ? f.format : null,
+			format: (movie || music) && f.format ? f.format : null,
 			pl_subtitles: movie ? f.pl_subtitles : 'unknown',
 			pl_voiceover: movie ? f.pl_voiceover : 'unknown',
 			packaging: movie ? f.packaging : [],
-			binding: !movie && f.binding ? f.binding : null,
+			binding: kind === 'book' && f.binding ? f.binding : null,
+			discogs_release_id: discogs.value,
 			notes: f.notes.trim()
 		}
 	};

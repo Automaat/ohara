@@ -29,6 +29,58 @@ func rocky(part string) Want {
 	return Want{CopyID: 3, Kind: "movie", Name: strings.TrimSpace("Rocky " + part), Format: new("dvd")}
 }
 
+func album(name, artist, format string) Want {
+	return Want{CopyID: 5, EditionID: 50, TitleID: 500, Kind: "music", Name: name, Authors: []string{artist}, Format: new(format)}
+}
+
+func TestAlbumMatches(t *testing.T) {
+	wall := album("The Wall", "Pink Floyd", "cd")
+	tests := []struct {
+		name  string
+		want  Want
+		title string
+		match bool
+	}{
+		{"artist, album and medium", wall, "Pink Floyd - The Wall 2CD", true},
+		{"cd listing naming no medium", wall, "PINK FLOYD The Wall stan bdb", true},
+		{"vinyl listing for a cd want", wall, "Pink Floyd The Wall winyl 2LP", false},
+		{"cassette listing for a cd want", wall, "Pink Floyd The Wall kaseta MC", false},
+		{"film disc for a cd want", wall, "Pink Floyd The Wall DVD film Alan Parker", false},
+		{"artist missing", wall, "The Wall CD", false},
+		{"album missing", wall, "Pink Floyd Animals CD", false},
+		{"vinyl want needs a vinyl listing", album("The Wall", "Pink Floyd", "vinyl"), "Pink Floyd The Wall LP 1979", true},
+		{"vinyl want skips an unnamed medium", album("The Wall", "Pink Floyd", "vinyl"), "Pink Floyd The Wall", false},
+		{"artist stop words dropped", album("Abbey Road", "The Beatles", "cd"), "Beatles Abbey Road CD remaster", true},
+		{"artist word is no medium", album("Please Hammer Don't Hurt 'Em", "MC Hammer", "cd"), "MC Hammer Please Hammer Don't Hurt 'Em CD", true},
+		{"artist word is no cassette", album("Please Hammer Don't Hurt 'Em", "MC Hammer", "cassette"), "MC Hammer Please Hammer Don't Hurt 'Em CD", false},
+		{"cassette named past the artist", album("Please Hammer Don't Hurt 'Em", "MC Hammer", "cassette"), "MC Hammer Please Hammer Don't Hurt 'Em kaseta", true},
+		{"album title is no medium", album("Vinyl", "Dark Star", "cd"), "Dark Star Vinyl CD", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.want.Matches(tt.title); got != tt.match {
+				t.Fatalf("Matches(%q) = %v, want %v", tt.title, got, tt.match)
+			}
+		})
+	}
+}
+
+func TestSoundtrackAlbumSurvivesTheRejectPhrase(t *testing.T) {
+	score := album("Interstellar Original Motion Picture Soundtrack", "Hans Zimmer", "cd")
+	film := Want{Kind: "movie", Name: "Interstellar", Format: new("dvd")}
+	l := &Listing{Title: "Hans Zimmer Interstellar Original Motion Picture Soundtrack CD", PriceCents: 2000}
+	if got := pick([]Want{film, score}, l, defaultRules); got == nil || got.Kind != "music" {
+		t.Fatalf("pick = %+v, want the soundtrack album", got)
+	}
+	if got := pick([]Want{film}, &Listing{Title: "Interstellar soundtrack DVD"}, defaultRules); got != nil {
+		t.Fatalf("soundtrack listing matched the film: %+v", got)
+	}
+	kupie := &Listing{Title: "Kupię Hans Zimmer Interstellar Original Motion Picture Soundtrack CD"}
+	if got := pick([]Want{score}, kupie, defaultRules); got != nil {
+		t.Fatalf("other reject phrases still apply: %+v", got)
+	}
+}
+
 func TestPickSkipsOtherSequel(t *testing.T) {
 	wants := []Want{rocky("2"), rocky("3")}
 	wants[1].CopyID = 4
@@ -119,6 +171,9 @@ func TestWantQueries(t *testing.T) {
 		{"book with surname", wiedzmin(), []string{"Ostatnie życzenie sapkowski"}},
 		{"book without authors", Want{Kind: "book", Name: "Lalka"}, []string{"Lalka"}},
 		{"name already has the keyword", Want{Kind: "movie", Name: "Seria DVD", Format: new("dvd")}, []string{"Seria DVD"}},
+		{"album after its artist", album("The Wall", "Pink Floyd", "cd"), []string{"Pink Floyd The Wall"}},
+		{"self-titled album", album("Metallica", "Metallica", "cd"), []string{"Metallica"}},
+		{"album without artist", Want{Kind: "music", Name: "Kind of Blue", Format: new("cd")}, []string{"Kind of Blue"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

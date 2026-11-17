@@ -13,12 +13,18 @@
 		bindingLabels,
 		displayName,
 		editionSummary,
-		formatLabels,
+		formatOptions as formatOptionsFor,
 		kindLabels,
 		options,
 		type FormIssue
 	} from '$lib/collection';
-	import type { Candidate, LookupResult, QuickForm, SaveTarget } from '$lib/scan';
+	import {
+		candidateLabel,
+		type Candidate,
+		type LookupResult,
+		type QuickForm,
+		type SaveTarget
+	} from '$lib/scan';
 
 	let {
 		barcode,
@@ -51,11 +57,10 @@
 	const general = $derived(issue && !ownFields.includes(issue.field) ? issue.message : null);
 
 	const candidateOptions = $derived(
-		candidates.map((c, i) => ({
-			value: String(i),
-			label: `${displayName({ name: c.title.name, polish_title: c.title.polish_title ?? null, original_title: c.title.original_title ?? null })} · ${c.provider} · ${Math.round(c.confidence * 100)}%`
-		}))
+		candidates.map((c, i) => ({ value: String(i), label: candidateLabel(c) }))
 	);
+	const cover = $derived(candidates[picked]?.cover_url ?? '');
+	const formatOptions = $derived(formatOptionsFor(form.kind));
 	const acquiredOptions = [{ value: '', label: 'Nie podano' }, ...options(acquiredLabels)];
 	const bindingOptions = [{ value: '', label: 'Nie podano' }, ...options(bindingLabels)];
 	const sources = $derived(errors.map((e) => e.provider).join(', '));
@@ -81,7 +86,12 @@
 		</p>
 	{:else}
 		{#if candidates.length > 1}
-			<Field label="Propozycja">
+			<Field
+				label={candidates.every((c) => c.type === 'music') ? 'Wydanie' : 'Propozycja'}
+				hint={candidates.every((c) => c.type === 'music')
+					? 'Ten kod ma kilka wydań: wybierz swoje.'
+					: undefined}
+			>
 				{#snippet control(c)}
 					<Select
 						{...c}
@@ -93,13 +103,16 @@
 		{:else if candidates.length === 0}
 			<p>Brak propozycji: uzupełnij pozycję ręcznie.</p>
 		{/if}
+		{#if cover}
+			<img class="cover" src={cover} alt="Okładka" loading="lazy" referrerpolicy="no-referrer" />
+		{/if}
 		{#if sources}
 			<Callout tone="warning">Nie odpowiedziały źródła: {sources}.</Callout>
 		{/if}
 		<SegmentedControl label="Typ" options={options(kindLabels)} bind:value={form.kind} />
 		<Field label="Tytuł" bind:value={form.name} error={errorFor('name')} autocomplete="off" />
-		{#if form.kind === 'movie'}
-			<SegmentedControl label="Nośnik" options={options(formatLabels)} bind:value={form.format} />
+		{#if formatOptions.length > 0}
+			<SegmentedControl label="Nośnik" options={formatOptions} bind:value={form.format} />
 		{:else}
 			<Field label="Oprawa">
 				{#snippet control(c)}
@@ -145,6 +158,11 @@
 		padding: 1rem;
 		border: 1px solid var(--sui-border, currentColor);
 		border-radius: var(--sui-radius-md, 0.5rem);
+	}
+	.cover {
+		width: 8rem;
+		height: auto;
+		border-radius: var(--sui-radius-sm, 0.25rem);
 	}
 	.code {
 		margin: 0;

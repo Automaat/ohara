@@ -80,7 +80,7 @@ var (
 
 	collectionValue = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "ohara_collection_value_pln",
-		Help: "Owned collection value in PLN by bound (floor: buy-back, mid: used asking, ceiling: new), summed over the copies that have the bound.",
+		Help: "Owned collection value in PLN by bound (floor: buy-back or cheapest Discogs copy, mid: used asking or Discogs VG+ suggestion, ceiling: new or Discogs Mint suggestion), summed over the copies that have the bound.",
 	}, []string{"bound"})
 
 	collectionValuedCopies = prometheus.NewGaugeVec(prometheus.GaugeOpts{

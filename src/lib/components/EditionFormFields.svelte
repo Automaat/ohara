@@ -2,7 +2,8 @@
 	import { Button, CheckList, Field, FormError, Select, Textarea } from '@smykla-skalski/sui';
 	import {
 		bindingLabels,
-		formatLabels,
+		movieFormatLabels,
+		musicFormatLabels,
 		options,
 		packagingLabels,
 		triStateLabels,
@@ -41,6 +42,7 @@
 		'pl_subtitles',
 		'pl_voiceover',
 		'packaging',
+		'discogs_release_id',
 		'notes'
 	];
 	const general = $derived(issue && !fieldKeys.includes(issue.field) ? issue.message : null);
@@ -69,7 +71,7 @@
 					{...c}
 					bind:value={form.format}
 					placeholder="Wybierz nośnik"
-					options={options(formatLabels)}
+					options={options(movieFormatLabels)}
 				/>
 			{/snippet}
 		</Field>
@@ -89,6 +91,24 @@
 			value={form.packaging}
 			error={errorFor('packaging')}
 			onchange={(v: string[]) => (form.packaging = v as Packaging[])}
+		/>
+	{:else if kind === 'music'}
+		<Field label="Nośnik" required requiredLabel="Wymagane" error={errorFor('format')}>
+			{#snippet control(c)}
+				<Select
+					{...c}
+					bind:value={form.format}
+					placeholder="Wybierz nośnik"
+					options={options(musicFormatLabels)}
+				/>
+			{/snippet}
+		</Field>
+		<Field
+			label="Wydanie na Discogs"
+			hint="Numer wydania z adresu discogs.com/release/…; wycena czyta jego ceny."
+			inputmode="numeric"
+			bind:value={form.discogs_release_id}
+			error={errorFor('discogs_release_id')}
 		/>
 	{:else}
 		<Field label="Oprawa" error={errorFor('binding')}>

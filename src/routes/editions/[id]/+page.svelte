@@ -178,7 +178,19 @@
 									value: d.packaging.map((p) => packagingLabels[p]).join(', ')
 								}
 							]
-						: [{ label: 'Oprawa', value: d.binding ? bindingLabels[d.binding] : null }]),
+						: d.title.kind === 'music'
+							? [
+									{ label: 'Nośnik', value: d.format ? formatLabels[d.format] : null },
+									{
+										label: 'Discogs',
+										value: d.discogs_release_id?.toString(),
+										mono: true,
+										href: d.discogs_release_id
+											? `https://www.discogs.com/release/${d.discogs_release_id}`
+											: undefined
+									}
+								]
+							: [{ label: 'Oprawa', value: d.binding ? bindingLabels[d.binding] : null }]),
 					{ label: 'Wydawca', value: d.publisher },
 					{ label: 'Rok', value: d.year?.toString(), mono: true }
 				]}

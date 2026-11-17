@@ -131,7 +131,8 @@
 			options: [
 				{ value: '', label: 'Wszystko' },
 				{ value: 'movie', label: 'Filmy' },
-				{ value: 'book', label: 'Książki' }
+				{ value: 'book', label: 'Książki' },
+				{ value: 'music', label: 'Muzyka' }
 			],
 			value: filter.kind,
 			onchange: (v: string) => set('kind', v as CollectionFilter['kind'])
@@ -143,7 +144,10 @@
 					{ value: '', label: 'Każdy' },
 					{ value: 'dvd', label: 'DVD' },
 					{ value: 'bluray', label: 'Blu-ray' },
-					{ value: 'uhd', label: '4K UHD' }
+					{ value: 'uhd', label: '4K UHD' },
+					{ value: 'cd', label: 'CD' },
+					{ value: 'vinyl', label: 'Winyl' },
+					{ value: 'cassette', label: 'Kaseta' }
 				],
 				value: filter.format,
 				onchange: (v: string) => set('format', v as CollectionFilter['format'])

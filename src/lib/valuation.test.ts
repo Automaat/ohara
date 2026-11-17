@@ -58,6 +58,13 @@ describe('estimates', () => {
 		);
 	});
 
+	it('names the Discogs price behind each bound of an album', () => {
+		const e = { cents: 5313, source: 'discogs' as const, count: 1, trimmed: 0 };
+		expect(estimateSource('floor', e)).toBe('Discogs · najtańsza oferta');
+		expect(estimateSource('mid', e)).toBe('Discogs · sugestia VG+');
+		expect(estimateSource('ceiling', e)).toBe('Discogs · sugestia Mint');
+	});
+
 	it('says when the buy-back shop does not buy the book', () => {
 		expect(estimateSource('floor', { cents: 0, source: 'skupszop', count: 1, trimmed: 0 })).toBe(
 			'SkupSzop nie skupuje'

@@ -1,0 +1,366 @@
+// Package collection owns titles, their editions and the copies on the shelf
+// or on the wishlist.
+package collection
+
+import (
+	"errors"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/Automaat/ohara/backend-go/internal/barcode"
+	"github.com/Automaat/ohara/backend-go/internal/httpx"
+)
+
+const (
+	KindMovie = "movie"
+	KindBook  = "book"
+
+	StatusOwned    = "owned"
+	StatusWishlist = "wishlist"
+
+	maxText    = 500
+	maxNotes   = 10000
+	maxAuthors = 20
+)
+
+var (
+	kinds      = []string{KindMovie, KindBook}
+	formats    = []string{"dvd", "bluray", "uhd"}
+	bindings   = []string{"hardcover", "paperback", "other"}
+	triStates  = []string{"yes", "no", "unknown"}
+	packagings = []string{"steelbook", "slipcover", "digipak", "mediabook"}
+	statuses   = []string{StatusOwned, StatusWishlist}
+	acquiredAs = []string{"new", "used"}
+	conditions = []string{"mint", "very_good", "good", "fair", "poor"}
+)
+
+// Sentinel errors the handlers map to HTTP status codes.
+var (
+	ErrNotFound         = errors.New("not found")
+	ErrTitleNotFound    = errors.New("title not found")
+	ErrEditionNotFound  = errors.New("edition not found")
+	ErrDuplicateBarcode = errors.New("an edition with this barcode already exists")
+	ErrDuplicateTMDB    = errors.New("a title with this TMDB id already exists")
+	ErrKindMismatch     = errors.New("edition and title kinds differ")
+	ErrKindLocked       = errors.New("title kind cannot change while it has editions")
+	ErrHasEditions      = errors.New("title still has editions")
+	ErrHasCopies        = errors.New("edition still has copies")
+)
+
+// Date is a calendar day carried as YYYY-MM-DD in JSON.
+type Date struct{ time.Time }
+
+const dateLayout = "2006-01-02"
+
+// MarshalJSON writes YYYY-MM-DD.
+func (d Date) MarshalJSON() ([]byte, error) {
+	return []byte(`"` + d.Format(dateLayout) + `"`), nil
+}
+
+// UnmarshalJSON reads YYYY-MM-DD.
+func (d *Date) UnmarshalJSON(b []byte) error {
+	t, err := time.Parse(`"`+dateLayout+`"`, string(b))
+	if err != nil {
+		return errors.New("date must be YYYY-MM-DD")
+	}
+	d.Time = t
+	return nil
+}
+
+// TitleInput is the body of POST and PUT /api/titles. Movie-only fields:
+// tmdb_id. Book-only fields: authors, bn_id, openlibrary_id.
+type TitleInput struct {
+	Kind          string   `json:"kind"`
+	Name          string   `json:"name"`
+	OriginalTitle *string  `json:"original_title"`
+	PolishTitle   *string  `json:"polish_title"`
+	Year          *int     `json:"year"`
+	TMDBID        *int64   `json:"tmdb_id"`
+	Authors       []string `json:"authors"`
+	BNID          *string  `json:"bn_id"`
+	OpenLibraryID *string  `json:"openlibrary_id"`
+	Notes         string   `json:"notes"`
+}
+
+// Title is a work: a film or a book.
+type Title struct {
+	ID int64 `json:"id"`
+	TitleInput
+	EditionCount int       `json:"edition_count"`
+	CopyCount    int       `json:"copy_count"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// EditionInput is the body of POST and PUT /api/editions. Movie-only fields:
+// format (required), pl_subtitles, pl_voiceover, packaging. Book-only: binding.
+type EditionInput struct {
+	TitleID     int64    `json:"title_id"`
+	Barcode     *string  `json:"barcode"`
+	Label       string   `json:"label"`
+	Publisher   string   `json:"publisher"`
+	Year        *int     `json:"year"`
+	Format      *string  `json:"format"`
+	PLSubtitles string   `json:"pl_subtitles"`
+	PLVoiceover string   `json:"pl_voiceover"`
+	Packaging   []string `json:"packaging"`
+	Binding     *string  `json:"binding"`
+	Notes       string   `json:"notes"`
+}
+
+// Edition is a concrete release of a title.
+type Edition struct {
+	ID int64 `json:"id"`
+	EditionInput
+	CopyCount int       `json:"copy_count"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// CopyInput is the body of POST and PUT /api/copies. Price and purchase date
+// apply only to owned copies.
+type CopyInput struct {
+	EditionID   int64   `json:"edition_id"`
+	Status      string  `json:"status"`
+	PriceCents  *int64  `json:"price_cents"`
+	PurchasedOn *Date   `json:"purchased_on"`
+	Shop        string  `json:"shop"`
+	AcquiredAs  *string `json:"acquired_as"`
+	Condition   *string `json:"condition"`
+	Notes       string  `json:"notes"`
+}
+
+// Copy is one physical item, owned or wanted.
+type Copy struct {
+	ID int64 `json:"id"`
+	CopyInput
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func fieldErr(field, msg string) *httpx.FieldError {
+	return &httpx.FieldError{Field: field, Msg: msg}
+}
+
+// trimOpt trims an optional string and turns blank into nil.
+func trimOpt(s *string) *string {
+	if s == nil {
+		return nil
+	}
+	t := strings.TrimSpace(*s)
+	if t == "" {
+		return nil
+	}
+	return &t
+}
+
+func checkLen(field, value string, limit int) *httpx.FieldError {
+	if len(value) > limit {
+		return fieldErr(field, "is too long")
+	}
+	return nil
+}
+
+func checkEnum(field string, value *string, allowed []string) *httpx.FieldError {
+	if value != nil && !slices.Contains(allowed, *value) {
+		return fieldErr(field, "must be one of: "+strings.Join(allowed, ", "))
+	}
+	return nil
+}
+
+func checkYear(field string, year *int) *httpx.FieldError {
+	if year != nil && (*year < 1800 || *year > 2200) {
+		return fieldErr(field, "must be between 1800 and 2200")
+	}
+	return nil
+}
+
+func firstErr(errs ...*httpx.FieldError) *httpx.FieldError {
+	for _, e := range errs {
+		if e != nil {
+			return e
+		}
+	}
+	return nil
+}
+
+// Normalize trims the input in place and checks it.
+func (in *TitleInput) Normalize() *httpx.FieldError {
+	in.Kind = strings.TrimSpace(in.Kind)
+	in.Name = strings.TrimSpace(in.Name)
+	in.Notes = strings.TrimSpace(in.Notes)
+	in.OriginalTitle = trimOpt(in.OriginalTitle)
+	in.PolishTitle = trimOpt(in.PolishTitle)
+	in.BNID = trimOpt(in.BNID)
+	in.OpenLibraryID = trimOpt(in.OpenLibraryID)
+	authors := make([]string, 0, len(in.Authors))
+	for _, a := range in.Authors {
+		if a = strings.TrimSpace(a); a != "" {
+			authors = append(authors, a)
+		}
+	}
+	in.Authors = authors
+
+	if !slices.Contains(kinds, in.Kind) {
+		return fieldErr("kind", "must be one of: "+strings.Join(kinds, ", "))
+	}
+	if in.Name == "" {
+		return fieldErr("name", "cannot be empty")
+	}
+	if e := firstErr(
+		checkLen("name", in.Name, maxText),
+		checkLen("original_title", deref(in.OriginalTitle), maxText),
+		checkLen("polish_title", deref(in.PolishTitle), maxText),
+		checkLen("bn_id", deref(in.BNID), maxText),
+		checkLen("openlibrary_id", deref(in.OpenLibraryID), maxText),
+		checkLen("notes", in.Notes, maxNotes),
+		checkYear("year", in.Year),
+	); e != nil {
+		return e
+	}
+	if in.TMDBID != nil && *in.TMDBID <= 0 {
+		return fieldErr("tmdb_id", "must be positive")
+	}
+	if len(in.Authors) > maxAuthors {
+		return fieldErr("authors", "too many authors")
+	}
+	for _, a := range in.Authors {
+		if e := checkLen("authors", a, maxText); e != nil {
+			return e
+		}
+	}
+	return in.checkKindFields()
+}
+
+func (in *TitleInput) checkKindFields() *httpx.FieldError {
+	if in.Kind == KindBook && in.TMDBID != nil {
+		return fieldErr("tmdb_id", "applies only to movies")
+	}
+	if in.Kind == KindMovie {
+		switch {
+		case len(in.Authors) > 0:
+			return fieldErr("authors", "applies only to books")
+		case in.BNID != nil:
+			return fieldErr("bn_id", "applies only to books")
+		case in.OpenLibraryID != nil:
+			return fieldErr("openlibrary_id", "applies only to books")
+		}
+	}
+	return nil
+}
+
+// Normalize trims the input in place and checks the fields that do not depend
+// on the title's kind; CheckKind covers the rest.
+func (in *EditionInput) Normalize() *httpx.FieldError {
+	in.Label = strings.TrimSpace(in.Label)
+	in.Publisher = strings.TrimSpace(in.Publisher)
+	in.Notes = strings.TrimSpace(in.Notes)
+	in.Format = trimOpt(in.Format)
+	in.Binding = trimOpt(in.Binding)
+	in.PLSubtitles = defaultTri(in.PLSubtitles)
+	in.PLVoiceover = defaultTri(in.PLVoiceover)
+	if in.TitleID <= 0 {
+		return fieldErr("title_id", "is required")
+	}
+	if code := trimOpt(in.Barcode); code != nil {
+		normalized, err := barcode.Normalize(*code)
+		if err != nil {
+			return fieldErr("barcode", err.Error())
+		}
+		in.Barcode = &normalized
+	} else {
+		in.Barcode = nil
+	}
+	packaging := make([]string, 0, len(in.Packaging))
+	for _, p := range in.Packaging {
+		p = strings.TrimSpace(p)
+		if e := checkEnum("packaging", &p, packagings); e != nil {
+			return e
+		}
+		if !slices.Contains(packaging, p) {
+			packaging = append(packaging, p)
+		}
+	}
+	in.Packaging = packaging
+	return firstErr(
+		checkLen("label", in.Label, maxText),
+		checkLen("publisher", in.Publisher, maxText),
+		checkLen("notes", in.Notes, maxNotes),
+		checkYear("year", in.Year),
+		checkEnum("format", in.Format, formats),
+		checkEnum("binding", in.Binding, bindings),
+		checkEnum("pl_subtitles", &in.PLSubtitles, triStates),
+		checkEnum("pl_voiceover", &in.PLVoiceover, triStates),
+	)
+}
+
+// CheckKind enforces the fields that depend on the title's kind.
+func (in *EditionInput) CheckKind(kind string) *httpx.FieldError {
+	if kind == KindMovie {
+		if in.Format == nil {
+			return fieldErr("format", "is required for movies")
+		}
+		if in.Binding != nil {
+			return fieldErr("binding", "applies only to books")
+		}
+		return nil
+	}
+	switch {
+	case in.Format != nil:
+		return fieldErr("format", "applies only to movies")
+	case in.PLSubtitles != "unknown":
+		return fieldErr("pl_subtitles", "applies only to movies")
+	case in.PLVoiceover != "unknown":
+		return fieldErr("pl_voiceover", "applies only to movies")
+	case len(in.Packaging) > 0:
+		return fieldErr("packaging", "applies only to movies")
+	}
+	return nil
+}
+
+// Normalize trims the input in place and checks it.
+func (in *CopyInput) Normalize() *httpx.FieldError {
+	in.Status = strings.TrimSpace(in.Status)
+	in.Shop = strings.TrimSpace(in.Shop)
+	in.Notes = strings.TrimSpace(in.Notes)
+	in.AcquiredAs = trimOpt(in.AcquiredAs)
+	in.Condition = trimOpt(in.Condition)
+	if in.EditionID <= 0 {
+		return fieldErr("edition_id", "is required")
+	}
+	if e := checkEnum("status", &in.Status, statuses); e != nil {
+		return e
+	}
+	if in.PriceCents != nil && *in.PriceCents < 0 {
+		return fieldErr("price_cents", "cannot be negative")
+	}
+	if in.Status == StatusWishlist {
+		if in.PriceCents != nil {
+			return fieldErr("price_cents", "applies only to owned copies")
+		}
+		if in.PurchasedOn != nil {
+			return fieldErr("purchased_on", "applies only to owned copies")
+		}
+	}
+	return firstErr(
+		checkLen("shop", in.Shop, maxText),
+		checkLen("notes", in.Notes, maxNotes),
+		checkEnum("acquired_as", in.AcquiredAs, acquiredAs),
+		checkEnum("condition", in.Condition, conditions),
+	)
+}
+
+func defaultTri(v string) string {
+	if v = strings.TrimSpace(v); v == "" {
+		return "unknown"
+	}
+	return v
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}

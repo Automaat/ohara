@@ -17,7 +17,9 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/Automaat/ohara/backend-go/internal/collection"
 	"github.com/Automaat/ohara/backend-go/internal/db"
+	"github.com/Automaat/ohara/backend-go/internal/lookup"
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
 	"github.com/Automaat/ohara/backend-go/internal/server"
 	"github.com/Automaat/ohara/backend-go/internal/web"
@@ -86,6 +88,15 @@ func run() int {
 	registerPoolMetrics(pool)
 
 	deps := server.Deps{DB: pool}
+	lookupHandler, err := newLookup(pool, logger)
+	if err != nil {
+		logger.Error("lookup providers", "err", err)
+		return 2
+	}
+	deps.API = []server.Mounter{
+		collection.NewHandler(collection.NewStore(pool), logger),
+		lookupHandler,
+	}
 	if dir := os.Getenv("OHARA_WEB_DIR"); dir != "" {
 		webFS := os.DirFS(dir)
 		if err := web.Check(webFS); err != nil {
@@ -150,6 +161,20 @@ func openDB(ctx context.Context, dsn string, logger *slog.Logger) (*pgxpool.Pool
 		logger.Info("applied migrations", "versions", strings.Join(applied, ","))
 	}
 	return pool, nil
+}
+
+// newLookup registers the barcode metadata providers. Real providers come
+// with the book and movie lookup chains; the stub stands in until then.
+func newLookup(pool *pgxpool.Pool, logger *slog.Logger) (*lookup.Handler, error) {
+	registry := &lookup.Registry{}
+	if envOr("OHARA_LOOKUP_STUB", "false") == "true" {
+		if err := registry.Register(lookup.Stub{}, 0); err != nil {
+			return nil, err
+		}
+	}
+	logger.Info("lookup providers", "providers", strings.Join(registry.Names(), ","))
+	service := lookup.NewService(registry, lookup.NewPGCache(pool), logger)
+	return lookup.NewHandler(service, logger), nil
 }
 
 func registerPoolMetrics(pool *pgxpool.Pool) {

@@ -1,0 +1,208 @@
+package deals
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Automaat/ohara/backend-go/internal/dbtest"
+	"github.com/Automaat/ohara/backend-go/internal/server"
+)
+
+type blockingSource struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (blockingSource) Name() string   { return "olx" }
+func (blockingSource) PerQuery() bool { return false }
+
+func (b blockingSource) Search(ctx context.Context, _ string) ([]Listing, error) {
+	b.started <- struct{}{}
+	select {
+	case <-b.release:
+	case <-ctx.Done():
+	}
+	return nil, nil
+}
+
+func call(t *testing.T, method, url string, body, out any) int {
+	t.Helper()
+	var r io.Reader = http.NoBody
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		r = bytes.NewReader(b)
+	}
+	req, err := http.NewRequestWithContext(context.Background(), method, url, r)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, url, err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if out != nil && len(raw) > 0 {
+		if err := json.Unmarshal(raw, out); err != nil {
+			t.Fatalf("decode %q: %v", raw, err)
+		}
+	}
+	return resp.StatusCode
+}
+
+func TestKeywordsAPI(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	logger := slog.New(slog.DiscardHandler)
+	store := NewStore(pool)
+	h := NewHandler(store, NewHunter(store, nil, nil, Config{}, logger), logger)
+	srv := httptest.NewServer(server.New(server.Config{}, logger, server.Deps{DB: pool, API: []server.Mounter{h}}))
+	t.Cleanup(srv.Close)
+	base := srv.URL + "/api/deals/keywords"
+
+	var seeded []Keyword
+	if code := call(t, http.MethodGet, base, nil, &seeded); code != http.StatusOK || len(seeded) != 10 {
+		t.Fatalf("GET keywords = %d, %d seeded", code, len(seeded))
+	}
+
+	var added Keyword
+	if code := call(t, http.MethodPost, base, KeywordInput{Kind: "reject", Phrase: "  sama   płyta "}, &added); code != http.StatusCreated ||
+		added.Phrase != "sama płyta" || added.Kind != "reject" {
+		t.Fatalf("POST keyword = %d, %+v", code, added)
+	}
+	var errBody struct{ Error, Field string }
+	for _, tt := range []struct {
+		in    KeywordInput
+		code  int
+		field string
+	}{
+		{KeywordInput{Kind: "reject", Phrase: "PUDEŁKO"}, http.StatusConflict, "phrase"},
+		{KeywordInput{Kind: "maybe", Phrase: "x"}, http.StatusUnprocessableEntity, "kind"},
+		{KeywordInput{Kind: "accept", Phrase: " -- "}, http.StatusUnprocessableEntity, "phrase"},
+		{KeywordInput{Kind: "accept", Phrase: strings.Repeat("a", maxPhrase+1)}, http.StatusUnprocessableEntity, "phrase"},
+	} {
+		if code := call(t, http.MethodPost, base, tt.in, &errBody); code != tt.code || errBody.Field != tt.field {
+			t.Errorf("POST %+v = %d %+v, want %d on %s", tt.in, code, errBody, tt.code, tt.field)
+		}
+	}
+
+	rules, err := store.Rules(context.Background())
+	if err != nil {
+		t.Fatalf("rules: %v", err)
+	}
+	if !rules.Rejected("Blade Runner DVD sama płyta") {
+		t.Fatal("an added reject phrase does not reject")
+	}
+
+	path := base + "/" + strconv.FormatInt(added.ID, 10)
+	if code := call(t, http.MethodDelete, path, nil, nil); code != http.StatusNoContent {
+		t.Fatalf("DELETE = %d", code)
+	}
+	if code := call(t, http.MethodDelete, path, nil, nil); code != http.StatusNotFound {
+		t.Fatalf("second DELETE = %d", code)
+	}
+}
+
+func TestDealsViewAndManualRun(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	logger := slog.New(slog.DiscardHandler)
+	store := NewStore(pool)
+	wishlist(t, pool, wantBluray(new(int64(5000))))
+
+	src := blockingSource{started: make(chan struct{}, 1), release: make(chan struct{})}
+	hunter := NewHunter(store, []Source{src, olxFixture(t)}, &fakeNotifier{}, Config{Interval: 2 * time.Hour}, logger)
+	hunter.sleep = func(ctx context.Context, _ time.Duration) error { return ctx.Err() }
+	srv := httptest.NewServer(server.New(server.Config{}, logger, server.Deps{
+		DB: pool, API: []server.Mounter{NewHandler(store, hunter, logger)},
+	}))
+	t.Cleanup(srv.Close)
+
+	var st Status
+	if code := call(t, http.MethodPost, srv.URL+"/api/deals/run", nil, &st); code != http.StatusAccepted || !st.Running {
+		t.Fatalf("POST run = %d, %+v", code, st)
+	}
+	<-src.started
+	if code := call(t, http.MethodPost, srv.URL+"/api/deals/run", nil, nil); code != http.StatusConflict {
+		t.Fatalf("POST run while running = %d, want 409", code)
+	}
+	close(src.release)
+	hunter.Wait()
+
+	var view View
+	if code := call(t, http.MethodGet, srv.URL+"/api/deals", nil, &view); code != http.StatusOK {
+		t.Fatalf("GET deals = %d", code)
+	}
+	if view.Status.Running || !view.Status.Scheduled || view.Status.IntervalSeconds != 7200 || !view.Status.Telegram ||
+		view.Status.LastResult == nil || view.Status.LastResult.Sent != 1 {
+		t.Fatalf("status = %+v", view.Status)
+	}
+	if len(view.Observations) != 2 {
+		t.Fatalf("observations = %+v", view.Observations)
+	}
+	sent := 0
+	for _, o := range view.Observations {
+		if o.TitleName == nil || *o.TitleName != "Blade Runner" || o.ListingTitle == "" || o.Source != "olx" {
+			t.Fatalf("observation = %+v", o)
+		}
+		if o.Alert == AlertSent {
+			sent++
+		}
+	}
+	if sent != 1 {
+		t.Fatalf("sent alerts = %d, want 1", sent)
+	}
+	if code := call(t, http.MethodGet, srv.URL+"/api/deals?limit=1", nil, &view); code != http.StatusOK || len(view.Observations) != 1 {
+		t.Fatalf("GET deals?limit=1 = %d, %d", code, len(view.Observations))
+	}
+	for _, bad := range []string{"0", "501", "x"} {
+		if code := call(t, http.MethodGet, srv.URL+"/api/deals?limit="+bad, nil, nil); code != http.StatusUnprocessableEntity {
+			t.Errorf("GET deals?limit=%s = %d, want 422", bad, code)
+		}
+	}
+}
+
+func TestTelegramSend(t *testing.T) {
+	var gotPath, gotChat, gotText string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = r.ParseForm()
+		gotChat, gotText = r.PostForm.Get("chat_id"), r.PostForm.Get("text")
+		if gotChat == "bad" {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, `{"ok":false,"description":"Bad Request: chat not found"}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	}))
+	t.Cleanup(srv.Close)
+	tg := &Telegram{Client: srv.Client(), BaseURL: srv.URL, Token: "123:SECRET", ChatID: "42"}
+	if err := tg.Send(context.Background(), "🎯 Okazja"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if gotPath != "/bot123:SECRET/sendMessage" || gotChat != "42" || gotText != "🎯 Okazja" {
+		t.Fatalf("request path %q chat %q text %q", gotPath, gotChat, gotText)
+	}
+	tg.ChatID = "bad"
+	if err := tg.Send(context.Background(), "x"); err == nil || !strings.Contains(err.Error(), "chat not found") {
+		t.Fatalf("rejected send err = %v", err)
+	}
+	down := &Telegram{Client: srv.Client(), BaseURL: "http://127.0.0.1:1", Token: "123:SECRET", ChatID: "42"}
+	err := down.Send(context.Background(), "x")
+	if err == nil || strings.Contains(err.Error(), "SECRET") {
+		t.Fatalf("transport err = %v, want an error without the token", err)
+	}
+}

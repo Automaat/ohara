@@ -124,6 +124,10 @@ func TestCopyInputNormalize(t *testing.T) {
 		{"wishlist with purchase date", collection.CopyInput{EditionID: 1, Status: "wishlist", PurchasedOn: day}, "purchased_on"},
 		{"unknown acquisition", collection.CopyInput{EditionID: 1, Status: "owned", AcquiredAs: new("gift")}, "acquired_as"},
 		{"unknown condition", collection.CopyInput{EditionID: 1, Status: "owned", Condition: new("broken")}, "condition"},
+		{"wishlist with max price", collection.CopyInput{EditionID: 1, Status: "wishlist", MaxPriceCents: new(int64(6000))}, ""},
+		{"owned with max price", collection.CopyInput{EditionID: 1, Status: "owned", MaxPriceCents: new(int64(6000))}, "max_price_cents"},
+		{"negative max price", collection.CopyInput{EditionID: 1, Status: "wishlist", MaxPriceCents: new(int64(-1))}, "max_price_cents"},
+		{"max price over the cap", collection.CopyInput{EditionID: 1, Status: "wishlist", MaxPriceCents: new(int64(collection.MaxPriceCents + 1))}, "max_price_cents"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

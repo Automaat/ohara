@@ -239,6 +239,28 @@ func TestCopyBelongsToEdition(t *testing.T) {
 	}
 }
 
+func TestWishlistMaxPrice(t *testing.T) {
+	a := newAPI(t)
+	movie := a.title("movie", "Rejs")
+	edition := a.edition(obj{"title_id": movie, "format": "dvd"})
+
+	var c collection.Copy
+	a.mustDo(http.MethodPost, "/api/copies", obj{"edition_id": edition, "status": "wishlist", "max_price_cents": 2500}, &c, http.StatusCreated)
+	if c.MaxPriceCents == nil || *c.MaxPriceCents != 2500 {
+		t.Fatalf("created copy = %+v", c)
+	}
+	path := fmt.Sprintf("/api/copies/%d", c.ID)
+	a.mustDo(http.MethodPut, path, obj{"edition_id": edition, "status": "wishlist", "max_price_cents": 3000}, &c, http.StatusOK)
+	if *c.MaxPriceCents != 3000 {
+		t.Fatalf("updated max price = %d", *c.MaxPriceCents)
+	}
+	a.fails(http.MethodPut, path, obj{"edition_id": edition, "status": "owned", "max_price_cents": 3000}, http.StatusUnprocessableEntity, "max_price_cents")
+	a.mustDo(http.MethodPut, path, obj{"edition_id": edition, "status": "owned", "price_cents": 2000}, &c, http.StatusOK)
+	if c.MaxPriceCents != nil {
+		t.Fatalf("bought copy kept max price %d", *c.MaxPriceCents)
+	}
+}
+
 func TestEditionKindRules(t *testing.T) {
 	a := newAPI(t)
 	movie := a.title("movie", "Miś")

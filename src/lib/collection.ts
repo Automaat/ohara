@@ -58,6 +58,7 @@ export type CopyPayload = {
 	acquired_as: AcquiredAs | null;
 	condition: Condition | null;
 	notes: string;
+	max_price_cents: number | null;
 };
 
 export type Copy = CopyPayload & { id: number; created_at: string; updated_at: string };
@@ -356,6 +357,7 @@ export type CopyForm = {
 	acquired_as: AcquiredAs | '';
 	condition: Condition | '';
 	notes: string;
+	max_price: string;
 };
 
 /** The editable form of a copy, or an empty owned one. */
@@ -367,11 +369,15 @@ export function copyToForm(c: CopyPayload | null): CopyForm {
 		shop: c?.shop ?? '',
 		acquired_as: c?.acquired_as ?? '',
 		condition: c?.condition ?? '',
-		notes: c?.notes ?? ''
+		notes: c?.notes ?? '',
+		max_price: centsToInput(c?.max_price_cents ?? null)
 	};
 }
 
-/** The request body for a copy; a wishlist copy carries no price or purchase date. */
+/**
+ * The request body for a copy. A wishlist copy carries no price or purchase date, and an owned
+ * copy no maximum price.
+ */
 export function copyPayload(f: CopyForm, editionID: number): Parsed<CopyPayload> {
 	const owned = f.status === 'owned';
 	const price = owned ? parsePLN(f.price) : null;
@@ -379,6 +385,16 @@ export function copyPayload(f: CopyForm, editionID: number): Parsed<CopyPayload>
 		return {
 			ok: false,
 			issue: { field: 'price_cents', message: 'Cena to kwota do 1 000 000 zł, np. 49,99.' }
+		};
+	}
+	const maxPrice = owned ? null : parsePLN(f.max_price);
+	if (maxPrice === undefined) {
+		return {
+			ok: false,
+			issue: {
+				field: 'max_price_cents',
+				message: 'Cena maksymalna to kwota do 1 000 000 zł, np. 60.'
+			}
 		};
 	}
 	const date = owned ? f.purchased_on.trim() : '';
@@ -395,7 +411,8 @@ export function copyPayload(f: CopyForm, editionID: number): Parsed<CopyPayload>
 			shop: f.shop.trim(),
 			acquired_as: f.acquired_as || null,
 			condition: f.condition || null,
-			notes: f.notes.trim()
+			notes: f.notes.trim(),
+			max_price_cents: maxPrice
 		}
 	};
 }

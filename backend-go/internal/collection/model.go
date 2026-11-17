@@ -15,6 +15,7 @@ import (
 const (
 	KindMovie = "movie"
 	KindBook  = "book"
+	KindMusic = "music"
 
 	StatusOwned    = "owned"
 	StatusWishlist = "wishlist"
@@ -27,14 +28,16 @@ const (
 )
 
 var (
-	kinds      = []string{KindMovie, KindBook}
-	formats    = []string{"dvd", "bluray", "uhd"}
-	bindings   = []string{"hardcover", "paperback", "other"}
-	triStates  = []string{"yes", "no", "unknown"}
-	packagings = []string{"steelbook", "slipcover", "digipak", "mediabook"}
-	statuses   = []string{StatusOwned, StatusWishlist}
-	acquiredAs = []string{"new", "used"}
-	conditions = []string{"mint", "very_good", "good", "fair", "poor"}
+	kinds        = []string{KindMovie, KindBook, KindMusic}
+	movieFormats = []string{"dvd", "bluray", "uhd"}
+	musicFormats = []string{"cd", "vinyl", "cassette"}
+	formats      = slices.Concat(movieFormats, musicFormats)
+	bindings     = []string{"hardcover", "paperback", "other"}
+	triStates    = []string{"yes", "no", "unknown"}
+	packagings   = []string{"steelbook", "slipcover", "digipak", "mediabook"}
+	statuses     = []string{StatusOwned, StatusWishlist}
+	acquiredAs   = []string{"new", "used"}
+	conditions   = []string{"mint", "very_good", "good", "fair", "poor"}
 )
 
 // Sentinel errors the handlers map to HTTP status codes.
@@ -71,7 +74,8 @@ func (d *Date) UnmarshalJSON(b []byte) error {
 }
 
 // TitleInput is the body of POST and PUT /api/titles. Movie-only fields:
-// tmdb_id. Book-only fields: authors, bn_id, openlibrary_id.
+// tmdb_id. Book-only fields: bn_id, openlibrary_id. Authors are a book's
+// authors or an album's artists; movies have none.
 type TitleInput struct {
 	Kind          string   `json:"kind"`
 	Name          string   `json:"name"`
@@ -85,7 +89,7 @@ type TitleInput struct {
 	Notes         string   `json:"notes"`
 }
 
-// Title is a work: a film or a book.
+// Title is a work: a film, a book or an album.
 type Title struct {
 	ID int64 `json:"id"`
 	TitleInput
@@ -96,7 +100,9 @@ type Title struct {
 }
 
 // EditionInput is the body of POST and PUT /api/editions. Movie-only fields:
-// format (required), pl_subtitles, pl_voiceover, packaging. Book-only: binding.
+// pl_subtitles, pl_voiceover, packaging. Book-only: binding. Music-only:
+// discogs_release_id. Format is required for movies (dvd, bluray, uhd) and
+// music (cd, vinyl, cassette) and absent for books.
 type EditionInput struct {
 	TitleID     int64    `json:"title_id"`
 	Barcode     *string  `json:"barcode"`
@@ -108,7 +114,10 @@ type EditionInput struct {
 	PLVoiceover string   `json:"pl_voiceover"`
 	Packaging   []string `json:"packaging"`
 	Binding     *string  `json:"binding"`
-	Notes       string   `json:"notes"`
+	// DiscogsReleaseID is the Discogs release an album edition is; the
+	// valuation prices it on the Discogs marketplace.
+	DiscogsReleaseID *int64 `json:"discogs_release_id"`
+	Notes            string `json:"notes"`
 }
 
 // Edition is a concrete release of a title.
@@ -245,18 +254,15 @@ func (in *TitleInput) Normalize() *httpx.FieldError {
 }
 
 func (in *TitleInput) checkKindFields() *httpx.FieldError {
-	if in.Kind == KindBook && in.TMDBID != nil {
+	switch {
+	case in.Kind != KindMovie && in.TMDBID != nil:
 		return fieldErr("tmdb_id", "applies only to movies")
-	}
-	if in.Kind == KindMovie {
-		switch {
-		case len(in.Authors) > 0:
-			return fieldErr("authors", "applies only to books")
-		case in.BNID != nil:
-			return fieldErr("bn_id", "applies only to books")
-		case in.OpenLibraryID != nil:
-			return fieldErr("openlibrary_id", "applies only to books")
-		}
+	case in.Kind == KindMovie && len(in.Authors) > 0:
+		return fieldErr("authors", "applies only to books and music")
+	case in.Kind != KindBook && in.BNID != nil:
+		return fieldErr("bn_id", "applies only to books")
+	case in.Kind != KindBook && in.OpenLibraryID != nil:
+		return fieldErr("openlibrary_id", "applies only to books")
 	}
 	return nil
 }
@@ -294,6 +300,9 @@ func (in *EditionInput) Normalize() *httpx.FieldError {
 		}
 	}
 	in.Packaging = packaging
+	if in.DiscogsReleaseID != nil && *in.DiscogsReleaseID <= 0 {
+		return fieldErr("discogs_release_id", "must be positive")
+	}
 	return firstErr(
 		checkLen("label", in.Label, maxText),
 		checkLen("publisher", in.Publisher, maxText),
@@ -308,24 +317,46 @@ func (in *EditionInput) Normalize() *httpx.FieldError {
 
 // CheckKind enforces the fields that depend on the title's kind.
 func (in *EditionInput) CheckKind(kind string) *httpx.FieldError {
+	if kind != KindMusic && in.DiscogsReleaseID != nil {
+		return fieldErr("discogs_release_id", "applies only to music")
+	}
 	if kind == KindMovie {
-		if in.Format == nil {
-			return fieldErr("format", "is required for movies")
+		if e := checkFormat(in.Format, movieFormats, "movies"); e != nil {
+			return e
 		}
 		if in.Binding != nil {
 			return fieldErr("binding", "applies only to books")
 		}
 		return nil
 	}
+	if kind == KindMusic {
+		if e := checkFormat(in.Format, musicFormats, "music"); e != nil {
+			return e
+		}
+		if in.Binding != nil {
+			return fieldErr("binding", "applies only to books")
+		}
+	} else if in.Format != nil {
+		return fieldErr("format", "applies only to movies and music")
+	}
 	switch {
-	case in.Format != nil:
-		return fieldErr("format", "applies only to movies")
 	case in.PLSubtitles != "unknown":
 		return fieldErr("pl_subtitles", "applies only to movies")
 	case in.PLVoiceover != "unknown":
 		return fieldErr("pl_voiceover", "applies only to movies")
 	case len(in.Packaging) > 0:
 		return fieldErr("packaging", "applies only to movies")
+	}
+	return nil
+}
+
+// checkFormat requires a format from allowed, the formats of kind.
+func checkFormat(format *string, allowed []string, kind string) *httpx.FieldError {
+	if format == nil {
+		return fieldErr("format", "is required for "+kind)
+	}
+	if !slices.Contains(allowed, *format) {
+		return fieldErr("format", "must be one of: "+strings.Join(allowed, ", ")+" for "+kind)
 	}
 	return nil
 }

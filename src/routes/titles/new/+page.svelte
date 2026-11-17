@@ -6,8 +6,9 @@
 	import { titlePayload, titleToForm, type FormIssue, type Title } from '$lib/collection';
 	import TitleFormFields from '$lib/components/TitleFormFields.svelte';
 
+	const requested = page.url.searchParams.get('kind');
 	let form = $state(
-		titleToForm(null, page.url.searchParams.get('kind') === 'book' ? 'book' : 'movie')
+		titleToForm(null, requested === 'book' || requested === 'music' ? requested : 'movie')
 	);
 	let issue = $state<FormIssue | null>(null);
 	let saving = $state(false);

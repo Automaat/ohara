@@ -78,6 +78,7 @@ func fillCandidate(dst, src *Candidate) {
 	fill(&dst.Edition.PLVoiceover, src.Edition.PLVoiceover)
 	fillSlice(&dst.Edition.Packaging, src.Edition.Packaging)
 	fillPtr(&dst.Edition.Binding, src.Edition.Binding)
+	fillPtr(&dst.Edition.DiscogsReleaseID, src.Edition.DiscogsReleaseID)
 
 	fill(&dst.CoverURL, src.CoverURL)
 	fill(&dst.Description, src.Description)

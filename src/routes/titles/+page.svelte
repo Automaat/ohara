@@ -80,7 +80,8 @@
 			options: [
 				{ value: '', label: 'Wszystko' },
 				{ value: 'movie', label: 'Filmy' },
-				{ value: 'book', label: 'Książki' }
+				{ value: 'book', label: 'Książki' },
+				{ value: 'music', label: 'Muzyka' }
 			],
 			value: kind,
 			onchange: (v: string) => {

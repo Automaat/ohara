@@ -91,7 +91,7 @@ func listing(source, id, title string, cents int64, state *string) deals.Listing
 
 func newTestRunner(pool *pgxpool.Pool, olx, ceneo *fakeSource, bb *fakeBuyBack) *Runner {
 	logger := slog.New(slog.DiscardHandler)
-	r := NewRunner(NewStore(pool), []deals.Source{olx, ceneo}, []BuyBack{bb},
+	r := NewRunner(NewStore(pool), []deals.Source{olx, ceneo}, []BuyBack{bb}, nil,
 		Config{Window: 90 * 24 * time.Hour}, logger)
 	r.sleep = func(ctx context.Context, _ time.Duration) error { return ctx.Err() }
 	return r
@@ -305,7 +305,7 @@ func TestStartSchedulesAfterTheLastValue(t *testing.T) {
 			mid_cents, mid_copies, ceiling_cents, ceiling_copies, low_confidence, computed_at)
 		VALUES (current_date, 1, 0, 0, 0, 0, 0, 0, 0, 1, now() - interval '2 hours')`)
 	logger := slog.New(slog.DiscardHandler)
-	r := NewRunner(NewStore(pool), nil, nil, Config{Interval: 24 * time.Hour, Window: time.Hour}, logger)
+	r := NewRunner(NewStore(pool), nil, nil, nil, Config{Interval: 24 * time.Hour, Window: time.Hour}, logger)
 	waits := make(chan time.Duration, 1)
 	r.sleep = func(_ context.Context, d time.Duration) error {
 		waits <- d
@@ -322,7 +322,7 @@ func TestStartSchedulesAfterTheLastValue(t *testing.T) {
 func TestStartWithoutHistoryWaitsFiveMinutes(t *testing.T) {
 	pool := dbtest.Migrated(t)
 	logger := slog.New(slog.DiscardHandler)
-	r := NewRunner(NewStore(pool), nil, nil, Config{Interval: 24 * time.Hour}, logger)
+	r := NewRunner(NewStore(pool), nil, nil, nil, Config{Interval: 24 * time.Hour}, logger)
 	waits := make(chan time.Duration, 1)
 	r.sleep = func(_ context.Context, d time.Duration) error {
 		waits <- d
@@ -358,7 +358,7 @@ func TestValuationAPI(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
 	src := blockingSource{started: make(chan struct{}, 1), release: make(chan struct{})}
 	store := NewStore(pool)
-	runner := NewRunner(store, []deals.Source{src}, nil, Config{Window: 90 * 24 * time.Hour}, logger)
+	runner := NewRunner(store, []deals.Source{src}, nil, nil, Config{Window: 90 * 24 * time.Hour}, logger)
 	runner.sleep = func(ctx context.Context, _ time.Duration) error { return ctx.Err() }
 	h := NewHandler(store, runner, logger)
 	srv := httptest.NewServer(server.New(server.Config{}, logger, server.Deps{DB: pool, API: []server.Mounter{h}}))
@@ -472,5 +472,88 @@ func TestRunValuesEveryOwnedPrinting(t *testing.T) {
 	}
 	if floors[10] != 537 || floors[11] != 900 {
 		t.Fatalf("floors = %v, want each printing's own buy-back offer", floors)
+	}
+}
+
+type fakePricer struct {
+	prices map[int64]ReleasePrice
+	err    error
+	asked  []int64
+}
+
+func (*fakePricer) Name() string { return SourceDiscogs }
+
+func (f *fakePricer) Price(_ context.Context, id int64) (ReleasePrice, error) {
+	f.asked = append(f.asked, id)
+	return f.prices[id], f.err
+}
+
+func TestRunPricesAlbumsOnDiscogs(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	exec(t, pool, `INSERT INTO title (id, kind, name, authors) OVERRIDING SYSTEM VALUE
+		VALUES (7, 'music', 'The Dark Side Of The Moon', '{"Pink Floyd"}')`)
+	exec(t, pool, `INSERT INTO edition (id, title_id, barcode, format, discogs_release_id) OVERRIDING SYSTEM VALUE
+		VALUES (70, 7, '5099902987620', 'cd', 1873013), (71, 7, NULL, 'vinyl', NULL),
+		       (72, 7, '0602537869336', 'cd', 1873013)`)
+	exec(t, pool, `INSERT INTO copy (edition_id, status, price_cents) VALUES
+		(70, 'owned', 3500), (71, 'owned', 9000), (72, 'wishlist', NULL)`)
+	olx := &fakeSource{name: "olx", listings: []deals.Listing{
+		listing("olx", "1", "Pink Floyd The Dark Side Of The Moon CD", 2000, used()),
+		listing("olx", "2", "Pink Floyd Dark Side of the Moon winyl LP", 8000, used()),
+	}}
+	lowest, vgPlus, mint := int64(5313), int64(7098), int64(11700)
+	pricer := &fakePricer{prices: map[int64]ReleasePrice{
+		1873013: {LowestCents: &lowest, NumForSale: 34, VGPlusCents: &vgPlus, MintCents: &mint},
+	}}
+	r := NewRunner(NewStore(pool), []deals.Source{olx}, nil, pricer,
+		Config{Window: 90 * 24 * time.Hour}, slog.New(slog.DiscardHandler))
+	r.sleep = func(ctx context.Context, _ time.Duration) error { return ctx.Err() }
+	ctx := context.Background()
+
+	res, err := r.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Releases != 1 || len(pricer.asked) != 1 || pricer.asked[0] != 1873013 {
+		t.Fatalf("Run = %+v, asked %v: want the one owned edition naming a release", res, pricer.asked)
+	}
+	if res.Matched != 2 || len(olx.queries) != 1 || olx.queries[0] != "Pink Floyd The Dark Side Of The Moon" {
+		t.Fatalf("Run = %+v, queries %q", res, olx.queries)
+	}
+	copies, sum, err := r.store.Valued(ctx, r.Window())
+	if err != nil {
+		t.Fatalf("Valued: %v", err)
+	}
+	byEdition := map[int64]CopyValue{}
+	for _, c := range copies {
+		byEdition[c.EditionID] = c
+	}
+	cd := byEdition[70]
+	if cd.Floor == nil || cd.Floor.Cents != lowest || cd.Floor.Source != SourceDiscogs ||
+		cd.Mid == nil || cd.Mid.Cents != vgPlus || cd.Ceiling == nil || cd.Ceiling.Cents != mint || cd.LowConfidence {
+		t.Fatalf("CD value = %+v", cd)
+	}
+	vinyl := byEdition[71]
+	if vinyl.Floor != nil || vinyl.Mid == nil || vinyl.Mid.Cents != 8000 || vinyl.Mid.Source != SourceOLX || !vinyl.LowConfidence {
+		t.Fatalf("vinyl without a release = %+v", vinyl)
+	}
+	if sum.Copies != 2 || sum.Floor.Cents != lowest || sum.Mid.Cents != vgPlus+8000 {
+		t.Fatalf("summary = %+v", sum)
+	}
+
+	pricer.err = errors.New("discogs: unexpected status 429")
+	pricer.prices = map[int64]ReleasePrice{}
+	res, err = r.Run(ctx)
+	if err != nil || res.Releases != 0 || len(res.Errors) != 1 || !strings.Contains(res.Errors[0], "429") {
+		t.Fatalf("Run with Discogs down = %+v, %v", res, err)
+	}
+	copies, _, err = r.store.Valued(ctx, r.Window())
+	if err != nil {
+		t.Fatalf("Valued: %v", err)
+	}
+	for _, c := range copies {
+		if c.EditionID == 70 && (c.Mid == nil || c.Mid.Cents != vgPlus) {
+			t.Fatalf("a failed run dropped the last Discogs prices: %+v", c)
+		}
 	}
 }

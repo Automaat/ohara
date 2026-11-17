@@ -536,7 +536,7 @@ func TestSelection(t *testing.T) {
 		t.Fatalf("first lookup = %d %s", code, body)
 	}
 	bad := map[string]string{
-		`{"type":"music","title":{"name":"X"}}`:                                  "type",
+		`{"type":"game","title":{"name":"X"}}`:                                   "type",
 		`{"type":"movie","title":{"name":"  "}}`:                                 "title.name",
 		`{"type":"movie","title":{"name":"X"},"edition":{"barcode":"96385074"}}`: "edition.barcode",
 		`{"type":"movie","title":{"name":"X"},"extra":1}{}`:                      "body",

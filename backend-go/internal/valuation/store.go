@@ -24,16 +24,17 @@ func NewStore(pool *pgxpool.Pool) *Store {
 }
 
 // Holding is an edition with at least one owned copy, in the shape the
-// deal matcher reads.
+// deal matcher reads, with the Discogs release of an album edition.
 type Holding struct {
-	Want    deals.Want
-	Barcode *string
+	Want             deals.Want
+	Barcode          *string
+	DiscogsReleaseID *int64
 }
 
 // Holdings returns every edition the collection owns, oldest first.
 func (s *Store) Holdings(ctx context.Context) ([]Holding, error) {
 	rows, err := s.pool.Query(ctx, `SELECT e.id, t.id, t.kind, t.name, t.original_title,
-			t.polish_title, t.authors, e.format, e.barcode
+			t.polish_title, t.authors, e.format, e.barcode, e.discogs_release_id
 		FROM edition e JOIN title t ON t.id = e.title_id
 		WHERE EXISTS (SELECT 1 FROM copy c WHERE c.edition_id = e.id AND c.status = 'owned')
 		ORDER BY e.id`)
@@ -44,7 +45,7 @@ func (s *Store) Holdings(ctx context.Context) ([]Holding, error) {
 		var h Holding
 		w := &h.Want
 		err := row.Scan(&w.EditionID, &w.TitleID, &w.Kind, &w.Name, &w.OriginalTitle,
-			&w.PolishTitle, &w.Authors, &w.Format, &h.Barcode)
+			&w.PolishTitle, &w.Authors, &w.Format, &h.Barcode, &h.DiscogsReleaseID)
 		return h, err
 	})
 }

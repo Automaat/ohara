@@ -295,6 +295,30 @@ func TestEditionKindRules(t *testing.T) {
 	}
 }
 
+func TestMusicEdition(t *testing.T) {
+	a := newAPI(t)
+	album := a.title("music", "Kind of Blue")
+	a.fails(http.MethodPost, "/api/editions", obj{"title_id": album}, http.StatusUnprocessableEntity, "format")
+	a.fails(http.MethodPost, "/api/editions", obj{"title_id": album, "format": "dvd"}, http.StatusUnprocessableEntity, "format")
+	var e collection.Edition
+	a.mustDo(http.MethodPost, "/api/editions", obj{
+		"title_id": album, "barcode": "5099902987620", "format": "cd", "discogs_release_id": 1873013,
+	}, &e, http.StatusCreated)
+	if e.DiscogsReleaseID == nil || *e.DiscogsReleaseID != 1873013 || *e.Format != "cd" {
+		t.Fatalf("album edition = %+v", e)
+	}
+	a.mustDo(http.MethodPut, fmt.Sprintf("/api/editions/%d", e.ID), obj{"title_id": album, "format": "vinyl"}, &e, http.StatusOK)
+	if e.DiscogsReleaseID != nil || *e.Format != "vinyl" {
+		t.Fatalf("updated album edition = %+v", e)
+	}
+	a.copyOf(obj{"edition_id": e.ID, "status": "owned"})
+	var view collection.CollectionView
+	a.mustDo(http.MethodGet, "/api/collection?kind=music&format=vinyl", nil, &view, http.StatusOK)
+	if len(view.Items) != 1 || view.Items[0].Kind != "music" {
+		t.Fatalf("music view = %+v", view.Items)
+	}
+}
+
 func TestDuplicateTMDBAndBadBodies(t *testing.T) {
 	a := newAPI(t)
 	a.mustDo(http.MethodPost, "/api/titles", obj{"kind": "movie", "name": "A", "tmdb_id": 5}, nil, http.StatusCreated)

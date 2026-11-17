@@ -77,14 +77,14 @@ func scanTitle(row pgx.Row) (Title, error) {
 }
 
 const editionColumns = `e.id, e.title_id, e.barcode, e.label, e.publisher, e.year, e.format,
-	e.pl_subtitles, e.pl_voiceover, e.packaging, e.binding, e.notes, e.created_at, e.updated_at,
-	(SELECT count(*) FROM copy c WHERE c.edition_id = e.id)`
+	e.pl_subtitles, e.pl_voiceover, e.packaging, e.binding, e.discogs_release_id, e.notes,
+	e.created_at, e.updated_at, (SELECT count(*) FROM copy c WHERE c.edition_id = e.id)`
 
 func scanEdition(row pgx.Row) (Edition, error) {
 	var e Edition
 	err := row.Scan(&e.ID, &e.TitleID, &e.Barcode, &e.Label, &e.Publisher, &e.Year, &e.Format,
-		&e.PLSubtitles, &e.PLVoiceover, &e.Packaging, &e.Binding, &e.Notes, &e.CreatedAt, &e.UpdatedAt,
-		&e.CopyCount)
+		&e.PLSubtitles, &e.PLVoiceover, &e.Packaging, &e.Binding, &e.DiscogsReleaseID, &e.Notes,
+		&e.CreatedAt, &e.UpdatedAt, &e.CopyCount)
 	return e, err
 }
 
@@ -258,10 +258,10 @@ func (s *Store) CreateEdition(ctx context.Context, in *EditionInput) (Edition, e
 			return err
 		}
 		err := tx.QueryRow(ctx, `INSERT INTO edition (title_id, barcode, label, publisher, year,
-			format, pl_subtitles, pl_voiceover, packaging, binding, notes)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
+			format, pl_subtitles, pl_voiceover, packaging, binding, discogs_release_id, notes)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id`,
 			in.TitleID, in.Barcode, in.Label, in.Publisher, in.Year, in.Format, in.PLSubtitles,
-			in.PLVoiceover, in.Packaging, in.Binding, in.Notes).Scan(&id)
+			in.PLVoiceover, in.Packaging, in.Binding, in.DiscogsReleaseID, in.Notes).Scan(&id)
 		return mapErr(err, ErrEditionNotFound, "create edition")
 	})
 	if err != nil {
@@ -289,9 +289,10 @@ func (s *Store) UpdateEdition(ctx context.Context, id int64, in *EditionInput) (
 		}
 		tag, err := tx.Exec(ctx, `UPDATE edition SET title_id = $2, barcode = $3, label = $4,
 			publisher = $5, year = $6, format = $7, pl_subtitles = $8, pl_voiceover = $9,
-			packaging = $10, binding = $11, notes = $12, updated_at = now() WHERE id = $1`,
+			packaging = $10, binding = $11, discogs_release_id = $12, notes = $13,
+			updated_at = now() WHERE id = $1`,
 			id, in.TitleID, in.Barcode, in.Label, in.Publisher, in.Year, in.Format, in.PLSubtitles,
-			in.PLVoiceover, in.Packaging, in.Binding, in.Notes)
+			in.PLVoiceover, in.Packaging, in.Binding, in.DiscogsReleaseID, in.Notes)
 		if err != nil {
 			return mapErr(err, ErrEditionNotFound, "update edition")
 		}

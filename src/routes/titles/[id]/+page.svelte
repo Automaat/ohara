@@ -161,7 +161,9 @@
 								{ label: 'BN', value: t.bn_id, mono: true },
 								{ label: 'Open Library', value: t.openlibrary_id, mono: true }
 							]
-						: [{ label: 'TMDB', value: t.tmdb_id?.toString(), mono: true }]),
+						: t.kind === 'music'
+							? [{ label: 'Wykonawcy', value: authorsLine(t) }]
+							: [{ label: 'TMDB', value: t.tmdb_id?.toString(), mono: true }]),
 					{ label: 'Egzemplarze', value: String(t.copy_count), mono: true }
 				]}
 			/>

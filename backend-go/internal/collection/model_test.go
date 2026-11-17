@@ -23,6 +23,9 @@ func TestTitleInputNormalize(t *testing.T) {
 		{"authors on a movie", collection.TitleInput{Kind: "movie", Name: "x", Authors: []string{"a"}}, "authors"},
 		{"bn id on a movie", collection.TitleInput{Kind: "movie", Name: "x", BNID: new("b1")}, "bn_id"},
 		{"open library id on a movie", collection.TitleInput{Kind: "movie", Name: "x", OpenLibraryID: new("OL1M")}, "openlibrary_id"},
+		{"album", collection.TitleInput{Kind: "music", Name: "Kind of Blue", Authors: []string{"Miles Davis"}}, ""},
+		{"tmdb id on an album", collection.TitleInput{Kind: "music", Name: "x", TMDBID: new(int64(1))}, "tmdb_id"},
+		{"bn id on an album", collection.TitleInput{Kind: "music", Name: "x", BNID: new("b1")}, "bn_id"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -72,6 +75,16 @@ func TestEditionInputNormalize(t *testing.T) {
 		{"subtitles on a book", collection.EditionInput{TitleID: 1, PLSubtitles: "yes"}, "book", "pl_subtitles"},
 		{"voice-over on a book", collection.EditionInput{TitleID: 1, PLVoiceover: "no"}, "book", "pl_voiceover"},
 		{"packaging on a book", collection.EditionInput{TitleID: 1, Packaging: []string{"slipcover"}}, "book", "packaging"},
+		{"album edition", collection.EditionInput{TitleID: 1, Barcode: new("5099902987620"), Format: new("cd"), DiscogsReleaseID: new(int64(1873013))}, "music", ""},
+		{"vinyl edition", collection.EditionInput{TitleID: 1, Format: new("vinyl")}, "music", ""},
+		{"album without format", collection.EditionInput{TitleID: 1}, "music", "format"},
+		{"disc format on an album", collection.EditionInput{TitleID: 1, Format: new("bluray")}, "music", "format"},
+		{"music format on a movie", collection.EditionInput{TitleID: 1, Format: new("cd")}, "movie", "format"},
+		{"format on a book", collection.EditionInput{TitleID: 1, Format: new("cd")}, "book", "format"},
+		{"binding on an album", collection.EditionInput{TitleID: 1, Format: new("cd"), Binding: new("other")}, "music", "binding"},
+		{"subtitles on an album", collection.EditionInput{TitleID: 1, Format: new("cd"), PLSubtitles: "yes"}, "music", "pl_subtitles"},
+		{"discogs release on a movie", collection.EditionInput{TitleID: 1, Format: new("dvd"), DiscogsReleaseID: new(int64(1))}, "movie", "discogs_release_id"},
+		{"non-positive discogs release", collection.EditionInput{TitleID: 1, Format: new("cd"), DiscogsReleaseID: new(int64(0))}, "music", "discogs_release_id"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

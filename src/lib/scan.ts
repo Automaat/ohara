@@ -1,6 +1,9 @@
 import { ApiError, errorMessage, request } from './api';
 import {
 	copyPayload,
+	displayName,
+	formatFits,
+	formatLabels,
 	type AcquiredAs,
 	type Binding,
 	type Copy,
@@ -39,15 +42,44 @@ export type CandidateEdition = {
 	pl_voiceover?: TriState;
 	packaging?: Packaging[];
 	binding?: Binding | null;
+	discogs_release_id?: number | null;
 };
 
 export type Candidate = {
 	type: Kind;
 	title: CandidateTitle;
 	edition: CandidateEdition;
+	cover_url?: string;
 	provider: string;
 	confidence: number;
 };
+
+/**
+ * How the quick confirm lists a candidate: its name, for an album after the artist and followed
+ * by the details pressings are told apart by, then the source and its confidence.
+ */
+export function candidateLabel(c: Candidate): string {
+	const t = c.title;
+	let name = displayName({
+		name: t.name,
+		polish_title: t.polish_title ?? null,
+		original_title: t.original_title ?? null
+	});
+	const parts: string[] = [];
+	if (c.type === 'music') {
+		if (t.authors?.length) name = `${t.authors.join(', ')} – ${name}`;
+		const e = c.edition;
+		for (const part of [
+			e.format ? formatLabels[e.format] : '',
+			e.year?.toString() ?? '',
+			e.publisher ?? '',
+			e.label ?? ''
+		]) {
+			if (part) parts.push(part);
+		}
+	}
+	return [name, ...parts, c.provider, `${Math.round(c.confidence * 100)}%`].join(' · ');
+}
 
 export type LookupResult = {
 	barcode: string;
@@ -192,6 +224,7 @@ export function scanTitlePayload(f: QuickForm, candidate: Candidate | null): Par
 	if (!name) return { ok: false, issue: { field: 'name', message: 'Podaj tytuł.' } };
 	const t = candidate?.type === f.kind ? candidate.title : null;
 	const movie = f.kind === 'movie';
+	const book = f.kind === 'book';
 	return {
 		ok: true,
 		value: {
@@ -202,8 +235,8 @@ export function scanTitlePayload(f: QuickForm, candidate: Candidate | null): Par
 			year: opt(t?.year),
 			tmdb_id: movie ? opt(t?.tmdb_id) : null,
 			authors: movie ? [] : (t?.authors ?? []),
-			bn_id: movie ? null : opt(t?.bn_id),
-			openlibrary_id: movie ? null : opt(t?.openlibrary_id),
+			bn_id: book ? opt(t?.bn_id) : null,
+			openlibrary_id: book ? opt(t?.openlibrary_id) : null,
 			notes: ''
 		}
 	};
@@ -217,7 +250,8 @@ export function scanEditionPayload(
 	titleID: number
 ): Parsed<EditionPayload> {
 	const movie = f.kind === 'movie';
-	if (movie && !f.format) {
+	const music = f.kind === 'music';
+	if ((movie || music) && !formatFits(f.kind, f.format)) {
 		return { ok: false, issue: { field: 'format', message: 'Wybierz nośnik.' } };
 	}
 	const e = candidate?.type === f.kind ? candidate.edition : null;
@@ -229,11 +263,12 @@ export function scanEditionPayload(
 			label: e?.label ?? '',
 			publisher: e?.publisher ?? '',
 			year: opt(e?.year),
-			format: movie && f.format ? f.format : null,
+			format: (movie || music) && f.format ? f.format : null,
 			pl_subtitles: movie ? (e?.pl_subtitles ?? 'unknown') : 'unknown',
 			pl_voiceover: movie ? (e?.pl_voiceover ?? 'unknown') : 'unknown',
 			packaging: movie ? (e?.packaging ?? []) : [],
-			binding: !movie && f.binding ? f.binding : null,
+			binding: f.kind === 'book' && f.binding ? f.binding : null,
+			discogs_release_id: music ? opt(e?.discogs_release_id) : null,
 			notes: ''
 		}
 	};

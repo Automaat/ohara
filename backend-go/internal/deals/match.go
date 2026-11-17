@@ -68,6 +68,17 @@ func findPhrase(text, phrase []string) int {
 // Rejected reports whether title contains a reject phrase once every accept
 // phrase is cut from it.
 func (r Rules) Rejected(title string) bool {
+	return r.rejected(title, nil)
+}
+
+// RejectedFor is Rejected for a listing of w: a reject phrase that w's own
+// names or artist contain does not count, so "soundtrack", which keeps
+// soundtrack CDs away from films, still finds a wanted soundtrack album.
+func (r Rules) RejectedFor(title string, w *Want) bool {
+	return r.rejected(title, w)
+}
+
+func (r Rules) rejected(title string, w *Want) bool {
 	text := words(title)
 	for _, a := range r.Accept {
 		phrase := words(a)
@@ -80,7 +91,18 @@ func (r Rules) Rejected(title string) bool {
 		}
 	}
 	for _, reject := range r.Reject {
-		if findPhrase(text, words(reject)) >= 0 {
+		phrase := words(reject)
+		if findPhrase(text, phrase) >= 0 && (w == nil || !w.mentions(phrase)) {
+			return true
+		}
+	}
+	return false
+}
+
+// mentions reports whether one of w's names or authors contains phrase.
+func (w *Want) mentions(phrase []string) bool {
+	for _, n := range append(w.titleNames(), w.Authors...) {
+		if findPhrase(words(n), phrase) >= 0 {
 			return true
 		}
 	}
@@ -107,9 +129,9 @@ func required(name string) []string {
 	return out
 }
 
-// names are the titles a want is sold under: Polish, original and the name
-// it was entered with, without duplicates.
-func (w *Want) names() []string {
+// titleNames are the titles a want is sold under: Polish, original and the
+// name it was entered with, without duplicates.
+func (w *Want) titleNames() []string {
 	var out []string
 	seen := map[string]bool{}
 	for _, n := range []*string{w.PolishTitle, w.OriginalTitle, &w.Name} {
@@ -139,11 +161,21 @@ func (w *Want) surname() string {
 	return parts[len(parts)-1]
 }
 
+// artist is the first credited artist of an album.
+func (w *Want) artist() string {
+	if w.Kind != "music" || len(w.Authors) == 0 {
+		return ""
+	}
+	return w.Authors[0]
+}
+
 // formatKeyword is the format word added to a movie search query.
 var formatKeyword = map[string]string{"dvd": "dvd", "bluray": "blu-ray", "uhd": "4k"}
 
 // Queries are the search phrases for w: each name with the format keyword
-// for a movie, or with the author's surname for a book.
+// for a movie, with the author's surname for a book, or after the artist
+// for an album ("Pink Floyd The Wall"), as album titles alone are often
+// generic. An album query names no medium: CD listings often do not.
 func (w *Want) Queries() []string {
 	suffix := ""
 	switch {
@@ -152,11 +184,15 @@ func (w *Want) Queries() []string {
 	case w.Kind == "book":
 		suffix = w.surname()
 	}
+	artist := strings.TrimSpace(w.artist())
 	var out []string
-	for _, n := range w.names() {
+	for _, n := range w.titleNames() {
 		q := strings.TrimSpace(n)
 		if suffix != "" && !slices.Contains(words(q), suffix) {
 			q += " " + suffix
+		}
+		if artist != "" && !containsAll(words(q), required(artist)) {
+			q = artist + " " + q
 		}
 		out = append(out, q)
 	}
@@ -194,6 +230,37 @@ func listingFormat(text []string) string {
 		return "dvd"
 	}
 	return ""
+}
+
+// albumFormat is the medium an album listing names: vinyl ("winyl", "LP"),
+// cassette ("kaseta", "MC") or CD, else "".
+func albumFormat(text []string) string {
+	for _, t := range text {
+		switch t {
+		case "winyl", "winyle", "winylowa", "winylowy", "vinyl", "vinyls", "lp", "2lp", "3lp", "gramofonowa":
+			return "vinyl"
+		case "kaseta", "kasety", "kasecie", "kasetowa", "cassette", "mc":
+			return "cassette"
+		}
+	}
+	for _, t := range text {
+		if t == "cd" || t == "2cd" || t == "3cd" || t == "cdr" || t == "sacd" {
+			return "cd"
+		}
+	}
+	return ""
+}
+
+// albumFormatMatches reports whether a listing can be the wanted album
+// format: a vinyl or cassette listing names its medium, a CD listing often
+// does not, so a listing naming no medium counts as a CD unless it names a
+// film disc (a concert DVD or the film of the album).
+func albumFormatMatches(want string, text []string) bool {
+	got := albumFormat(text)
+	if want == "cd" && got == "" {
+		return listingFormat(text) == ""
+	}
+	return got == want
 }
 
 // romanParts are the sequel numerals a movie title can carry.
@@ -248,9 +315,10 @@ func sequelAfter(text []string, name string) bool {
 }
 
 // Matches reports whether a listing title is w: it contains every required
-// word of one of w's names, the edition's format for a movie, and the
-// author's surname for a book. A movie listing naming a sequel of that name
-// does not match.
+// word of one of w's names, the edition's format for a movie, the author's
+// surname for a book, and the artist's words and a medium that fits the
+// edition's for an album. A movie listing naming a sequel of that name does
+// not match.
 func (w *Want) Matches(title string) bool {
 	text := words(title)
 	if w.Kind == "movie" && w.Format != nil && listingFormat(text) != *w.Format {
@@ -259,7 +327,15 @@ func (w *Want) Matches(title string) bool {
 	if s := w.surname(); w.Kind == "book" && s != "" && !slices.Contains(text, s) {
 		return false
 	}
-	for _, n := range w.names() {
+	if w.Kind == "music" {
+		if w.Format != nil && !albumFormatMatches(*w.Format, text) {
+			return false
+		}
+		if a := w.artist(); a != "" && !containsAll(text, required(a)) {
+			return false
+		}
+	}
+	for _, n := range w.titleNames() {
 		if req := required(n); len(req) > 0 && containsAll(text, req) &&
 			(w.Kind != "movie" || !sequelAfter(text, n)) {
 			return true
@@ -272,13 +348,10 @@ func (w *Want) Matches(title string) bool {
 // it prefers one whose maximum price the listing meets, so a cheap listing
 // alerts even when an earlier want for the same title has a lower limit.
 func pick(wants []Want, l *Listing, rules Rules) *Want {
-	if rules.Rejected(l.Title) {
-		return nil
-	}
 	var first *Want
 	for i := range wants {
 		w := &wants[i]
-		if !w.Matches(l.Title) {
+		if !w.Matches(l.Title) || rules.RejectedFor(l.Title, w) {
 			continue
 		}
 		if w.MaxPriceCents != nil && l.PriceCents <= *w.MaxPriceCents {

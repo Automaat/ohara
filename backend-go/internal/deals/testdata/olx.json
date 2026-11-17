@@ -1,0 +1,373 @@
+{
+ "data": [
+  {
+   "id": 1112718649,
+   "url": "https://www.olx.pl/d/oferta/blade-runner-the-final-cut-bluray-CID751-ID1diQVZ.html",
+   "title": "Blade Runner The Final Cut BluRay",
+   "params": [
+    {
+     "key": "price",
+     "name": "Cena",
+     "type": "price",
+     "value": {
+      "value": 45,
+      "type": "price",
+      "arranged": false,
+      "budget": false,
+      "currency": "PLN",
+      "negotiable": false,
+      "converted_value": null,
+      "previous_value": null,
+      "converted_previous_value": null,
+      "converted_currency": null,
+      "label": "45 zł",
+      "previous_label": null
+     }
+    },
+    {
+     "key": "state",
+     "name": "Stan",
+     "type": "select",
+     "value": {
+      "key": "used",
+      "label": "Używane"
+     }
+    }
+   ],
+   "created_time": "2026-11-17T10:37:40+01:00",
+   "category": {
+    "id": 1671,
+    "type": "goods"
+   },
+   "status": "active",
+   "business": false
+  },
+  {
+   "id": 1109199513,
+   "url": "https://www.olx.pl/d/oferta/lowca-androidow-blade-runner-the-final-cut-4k-uhd-blu-ray-polski-lektor-i-napisy-stan-idealny-CID751-ID1d45sJ.html",
+   "title": "Łowca Androidów (Blade Runner: The Final Cut) 4K UHD + Blu-ray | Polski lektor i napisy | Stan idealny",
+   "params": [
+    {
+     "key": "price",
+     "name": "Cena",
+     "type": "price",
+     "value": {
+      "value": 95,
+      "type": "price",
+      "arranged": false,
+      "budget": false,
+      "currency": "PLN",
+      "negotiable": false,
+      "converted_value": null,
+      "previous_value": null,
+      "converted_previous_value": null,
+      "converted_currency": null,
+      "label": "95 zł",
+      "previous_label": null
+     }
+    },
+    {
+     "key": "state",
+     "name": "Stan",
+     "type": "select",
+     "value": {
+      "key": "used",
+      "label": "Używane"
+     }
+    }
+   ],
+   "created_time": "2026-11-01T18:16:10+01:00",
+   "category": {
+    "id": 1671,
+    "type": "goods"
+   },
+   "status": "active",
+   "business": false
+  },
+  {
+   "id": 1105171494,
+   "url": "https://www.olx.pl/d/oferta/lowca-androidow-blu-ray-blade-runner-1982-lektor-i-napisy-pl-CID751-ID1cNbAG.html",
+   "title": "Łowca androidów [Blu-ray] Blade Runner [1982] [lektor i napisy PL]",
+   "params": [
+    {
+     "key": "price",
+     "name": "Cena",
+     "type": "price",
+     "value": {
+      "value": 52,
+      "type": "price",
+      "arranged": false,
+      "budget": false,
+      "currency": "PLN",
+      "negotiable": false,
+      "converted_value": null,
+      "previous_value": null,
+      "converted_previous_value": null,
+      "converted_currency": null,
+      "label": "52 zł",
+      "previous_label": null
+     }
+    },
+    {
+     "key": "state",
+     "name": "Stan",
+     "type": "select",
+     "value": {
+      "key": "used",
+      "label": "Używane"
+     }
+    }
+   ],
+   "created_time": "2026-10-15T18:58:49+02:00",
+   "category": {
+    "id": 1671,
+    "type": "goods"
+   },
+   "status": "active",
+   "business": false
+  },
+  {
+   "id": 1065088061,
+   "url": "https://www.olx.pl/d/oferta/blade-runner-dvd-sama-plyta-CID751-ID1a503H.html",
+   "title": "Blade Runner DVD sama płyta",
+   "params": [
+    {
+     "key": "price",
+     "name": "Cena",
+     "type": "price",
+     "value": {
+      "value": 5,
+      "type": "price",
+      "arranged": false,
+      "budget": false,
+      "currency": "PLN",
+      "negotiable": false,
+      "converted_value": null,
+      "previous_value": null,
+      "converted_previous_value": null,
+      "converted_currency": null,
+      "label": "5 zł",
+      "previous_label": null
+     }
+    },
+    {
+     "key": "state",
+     "name": "Stan",
+     "type": "select",
+     "value": {
+      "key": "used",
+      "label": "Używane"
+     }
+    }
+   ],
+   "created_time": "2026-04-04T18:01:17+02:00",
+   "category": {
+    "id": 1672,
+    "type": "goods"
+   },
+   "status": "active",
+   "business": false
+  },
+  {
+   "id": 1086480117,
+   "url": "https://www.olx.pl/d/oferta/blade-runner-2049-samo-metalowe-pudelko-steelbook-gratis-dvd-z-pl-CID751-ID1bvL6R.html",
+   "title": "Blade Runner 2049 samo metalowe pudełko steelbook + gratis DVD z PL",
+   "params": [
+    {
+     "key": "price",
+     "name": "Cena",
+     "type": "price",
+     "value": {
+      "value": 179,
+      "type": "price",
+      "arranged": false,
+      "budget": false,
+      "currency": "PLN",
+      "negotiable": false,
+      "converted_value": null,
+      "previous_value": null,
+      "converted_previous_value": null,
+      "converted_currency": null,
+      "label": "179 zł",
+      "previous_label": null
+     }
+    },
+    {
+     "key": "state",
+     "name": "Stan",
+     "type": "select",
+     "value": {
+      "key": "used",
+      "label": "Używane"
+     }
+    }
+   ],
+   "created_time": "2026-07-20T19:43:36+02:00",
+   "category": {
+    "id": 1672,
+    "type": "goods"
+   },
+   "status": "active",
+   "business": false
+  },
+  {
+   "id": 1107357262,
+   "url": "https://www.olx.pl/d/oferta/blade-runner-philip-k-dick-CID751-ID1cVmd0.html",
+   "title": "Blade Runner - Philip K. Dick",
+   "params": [
+    {
+     "key": "covertype",
+     "name": "Okładka",
+     "type": "select",
+     "value": {
+      "key": "soft",
+      "label": "Miękka"
+     }
+    },
+    {
+     "key": "price",
+     "name": "Cena",
+     "type": "price",
+     "value": {
+      "value": 25,
+      "type": "price",
+      "arranged": false,
+      "budget": false,
+      "currency": "PLN",
+      "negotiable": false,
+      "converted_value": null,
+      "previous_value": null,
+      "converted_previous_value": null,
+      "converted_currency": null,
+      "label": "25 zł",
+      "previous_label": null
+     }
+    },
+    {
+     "key": "state",
+     "name": "Stan",
+     "type": "select",
+     "value": {
+      "key": "used",
+      "label": "Używane"
+     }
+    }
+   ],
+   "created_time": "2026-10-24T14:37:20+02:00",
+   "category": {
+    "id": 5615,
+    "type": "goods"
+   },
+   "status": "active",
+   "business": false
+  },
+  {
+   "id": 1088939492,
+   "url": "https://www.olx.pl/d/oferta/plakat-filmowy-oryginalny-blade-runner-2049-CID4042-ID1bH4Uc.html",
+   "title": "Plakat filmowy oryginalny - Blade Runner 2049",
+   "params": [
+    {
+     "key": "price",
+     "name": "Cena",
+     "type": "price",
+     "value": {
+      "value": 130,
+      "type": "price",
+      "arranged": false,
+      "budget": false,
+      "currency": "PLN",
+      "negotiable": false,
+      "converted_value": null,
+      "previous_value": null,
+      "converted_previous_value": null,
+      "converted_currency": null,
+      "label": "130 zł",
+      "previous_label": null
+     }
+    }
+   ],
+   "created_time": "2026-08-02T17:07:17+02:00",
+   "category": {
+    "id": 4053,
+    "type": "goods"
+   },
+   "status": "active",
+   "business": false
+  },
+  {
+   "id": 1045624035,
+   "url": "https://www.olx.pl/d/oferta/film-dvd-blade-runner-2049-ryan-gosling-2017-polski-lektor-CID751-ID18LkzN.html",
+   "title": "Film DVD Blade Runner 2049 Ryan Gosling 2017 Polski Lektor",
+   "params": [
+    {
+     "key": "price",
+     "name": "Cena",
+     "type": "price",
+     "value": {
+      "value": 29.99,
+      "type": "price",
+      "arranged": false,
+      "budget": false,
+      "currency": "PLN",
+      "negotiable": false,
+      "converted_value": null,
+      "previous_value": null,
+      "converted_previous_value": null,
+      "converted_currency": null,
+      "label": "29,99 zł",
+      "previous_label": null
+     }
+    },
+    {
+     "key": "state",
+     "name": "Stan",
+     "type": "select",
+     "value": {
+      "key": "used",
+      "label": "Używane"
+     }
+    }
+   ],
+   "created_time": "2025-12-20T22:51:56+01:00",
+   "category": {
+    "id": 1672,
+    "type": "goods"
+   },
+   "status": "active",
+   "business": false
+  },
+  {
+   "id": 1,
+   "url": "https://www.olx.pl/d/oferta/x-ID1.html",
+   "title": "Blade Runner Final Cut Blu-ray zamiana",
+   "params": [
+    {
+     "key": "state",
+     "value": {
+      "key": "used",
+      "label": "Używane"
+     }
+    }
+   ],
+   "status": "active"
+  },
+  {
+   "id": 2,
+   "url": "https://www.olx.pl/d/oferta/y-ID2.html",
+   "title": "Blade Runner Blu-ray",
+   "params": [
+    {
+     "key": "price",
+     "value": {
+      "value": 10,
+      "currency": "EUR"
+     }
+    }
+   ],
+   "status": "active"
+  }
+ ],
+ "metadata": {
+  "total_elements": 10
+ }
+}

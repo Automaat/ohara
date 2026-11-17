@@ -19,10 +19,12 @@ import (
 
 	"github.com/Automaat/ohara/backend-go/internal/collection"
 	"github.com/Automaat/ohara/backend-go/internal/db"
+	"github.com/Automaat/ohara/backend-go/internal/deals"
 	"github.com/Automaat/ohara/backend-go/internal/lookup"
 	"github.com/Automaat/ohara/backend-go/internal/lookup/books"
 	"github.com/Automaat/ohara/backend-go/internal/lookup/movie"
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
+	"github.com/Automaat/ohara/backend-go/internal/scanqueue"
 	"github.com/Automaat/ohara/backend-go/internal/server"
 	"github.com/Automaat/ohara/backend-go/internal/web"
 )
@@ -98,9 +100,20 @@ func run() int {
 		logger.Error("lookup providers", "err", err)
 		return 2
 	}
+	hunter, dealStore, err := newHunter(pool, logger)
+	if err != nil {
+		logger.Error("deal hunter", "err", err)
+		return 2
+	}
+	huntCtx, stopHunt := context.WithCancel(ctx)
+	hunter.Start(huntCtx)
+	defer hunter.Wait()
+	defer stopHunt()
 	deps.API = []server.Mounter{
 		collection.NewHandler(collection.NewStore(pool), logger),
 		lookupHandler,
+		scanqueue.NewHandler(scanqueue.NewStore(pool), logger),
+		deals.NewHandler(dealStore, hunter, logger),
 	}
 	if dir := os.Getenv("OHARA_WEB_DIR"); dir != "" {
 		webFS := os.DirFS(dir)
@@ -270,6 +283,42 @@ func allegroLogin() int {
 		return 1
 	}
 	return 0
+}
+
+// newHunter configures the deal hunter from the environment. Polling stays
+// off until OHARA_DEALS_INTERVAL is set; alerts need both Telegram
+// variables. The *_URL variables point the sources at test doubles.
+func newHunter(pool *pgxpool.Pool, logger *slog.Logger) (*deals.Hunter, *deals.Store, error) {
+	interval, err := time.ParseDuration(envOr("OHARA_DEALS_INTERVAL", "0s"))
+	if err != nil || interval < 0 {
+		return nil, nil, fmt.Errorf("OHARA_DEALS_INTERVAL: want a duration such as 2h, got %q", os.Getenv("OHARA_DEALS_INTERVAL"))
+	}
+	if interval > 0 && interval < 10*time.Minute {
+		return nil, nil, errors.New("OHARA_DEALS_INTERVAL: polling more often than every 10m is impolite to the sources")
+	}
+	delay, err := time.ParseDuration(envOr("OHARA_DEALS_DELAY", "5s"))
+	if err != nil || delay < time.Second {
+		return nil, nil, fmt.Errorf("OHARA_DEALS_DELAY: want a duration of at least 1s, got %q", os.Getenv("OHARA_DEALS_DELAY"))
+	}
+	client := deals.NewHTTPClient()
+	sources := []deals.Source{
+		deals.OLX{Client: client, BaseURL: envOr("OHARA_DEALS_OLX_URL", deals.OLXURL)},
+		deals.Pepper{Client: client, BaseURL: envOr("OHARA_DEALS_PEPPER_URL", deals.PepperURL)},
+		deals.Ceneo{Client: client, BaseURL: envOr("OHARA_DEALS_CENEO_URL", deals.CeneoURL)},
+	}
+	var notifier deals.Notifier
+	token, chat := os.Getenv("OHARA_TELEGRAM_BOT_TOKEN"), os.Getenv("OHARA_TELEGRAM_CHAT_ID")
+	switch {
+	case token != "" && chat != "":
+		notifier = &deals.Telegram{
+			Client: client, BaseURL: envOr("OHARA_TELEGRAM_URL", deals.TelegramURL), Token: token, ChatID: chat,
+		}
+	case token != "" || chat != "":
+		return nil, nil, errors.New("set both OHARA_TELEGRAM_BOT_TOKEN and OHARA_TELEGRAM_CHAT_ID, or neither")
+	}
+	logger.Info("deal hunter", "interval", interval, "delay", delay, "telegram", notifier != nil)
+	store := deals.NewStore(pool)
+	return deals.NewHunter(store, sources, notifier, deals.Config{Interval: interval, Delay: delay}, logger), store, nil
 }
 
 func registerPoolMetrics(pool *pgxpool.Pool) {

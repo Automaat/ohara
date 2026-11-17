@@ -166,7 +166,16 @@ func (h *Handler) listTitles(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteFieldError(w, h.logger, fe)
 		return
 	}
-	titles, err := h.store.ListTitles(r.Context(), kind, r.URL.Query().Get("q"))
+	f := TitleFilter{Kind: kind, Query: r.URL.Query().Get("q")}
+	if raw := r.URL.Query().Get("tmdb_id"); raw != "" {
+		id, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || id <= 0 {
+			httpx.WriteFieldError(w, h.logger, fieldErr("tmdb_id", "must be a positive integer"))
+			return
+		}
+		f.TMDBID = id
+	}
+	titles, err := h.store.ListTitles(r.Context(), f)
 	if err != nil {
 		h.writeErr(w, "list titles", err)
 		return
@@ -433,12 +442,16 @@ func (h *Handler) createCopy(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	c, err := h.store.CreateCopy(r.Context(), in)
+	c, created, err := h.store.CreateCopy(r.Context(), in)
 	if err != nil {
 		h.writeErr(w, "create copy", parentErr(err, ErrEditionNotFound, "edition_id"))
 		return
 	}
-	httpx.WriteJSON(w, h.logger, http.StatusCreated, c)
+	status := http.StatusOK
+	if created {
+		status = http.StatusCreated
+	}
+	httpx.WriteJSON(w, h.logger, status, c)
 }
 
 func (h *Handler) updateCopy(w http.ResponseWriter, r *http.Request) {

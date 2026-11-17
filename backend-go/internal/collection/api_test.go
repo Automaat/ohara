@@ -239,6 +239,28 @@ func TestCopyBelongsToEdition(t *testing.T) {
 	}
 }
 
+func TestWishlistMaxPrice(t *testing.T) {
+	a := newAPI(t)
+	movie := a.title("movie", "Rejs")
+	edition := a.edition(obj{"title_id": movie, "format": "dvd"})
+
+	var c collection.Copy
+	a.mustDo(http.MethodPost, "/api/copies", obj{"edition_id": edition, "status": "wishlist", "max_price_cents": 2500}, &c, http.StatusCreated)
+	if c.MaxPriceCents == nil || *c.MaxPriceCents != 2500 {
+		t.Fatalf("created copy = %+v", c)
+	}
+	path := fmt.Sprintf("/api/copies/%d", c.ID)
+	a.mustDo(http.MethodPut, path, obj{"edition_id": edition, "status": "wishlist", "max_price_cents": 3000}, &c, http.StatusOK)
+	if *c.MaxPriceCents != 3000 {
+		t.Fatalf("updated max price = %d", *c.MaxPriceCents)
+	}
+	a.fails(http.MethodPut, path, obj{"edition_id": edition, "status": "owned", "max_price_cents": 3000}, http.StatusUnprocessableEntity, "max_price_cents")
+	a.mustDo(http.MethodPut, path, obj{"edition_id": edition, "status": "owned", "price_cents": 2000}, &c, http.StatusOK)
+	if c.MaxPriceCents != nil {
+		t.Fatalf("bought copy kept max price %d", *c.MaxPriceCents)
+	}
+}
+
 func TestEditionKindRules(t *testing.T) {
 	a := newAPI(t)
 	movie := a.title("movie", "Miś")
@@ -338,14 +360,17 @@ func TestListTitles(t *testing.T) {
 	a.title("movie", "Rejs")
 	a.title("movie", "Miś")
 	a.title("book", "Lalka")
+	a.mustDo(http.MethodPost, "/api/titles", obj{"kind": "movie", "name": "Seksmisja", "tmdb_id": 11202}, nil, http.StatusCreated)
 
 	tests := []struct {
 		query string
 		want  []string
 	}{
-		{"", []string{"Lalka", "Miś", "Rejs"}},
-		{"?kind=movie", []string{"Miś", "Rejs"}},
+		{"", []string{"Lalka", "Miś", "Rejs", "Seksmisja"}},
+		{"?kind=movie", []string{"Miś", "Rejs", "Seksmisja"}},
 		{"?q=ALK", []string{"Lalka"}},
+		{"?tmdb_id=11202", []string{"Seksmisja"}},
+		{"?tmdb_id=1", []string{}},
 	}
 	for _, tt := range tests {
 		var titles []collection.Title
@@ -359,6 +384,8 @@ func TestListTitles(t *testing.T) {
 		}
 	}
 	a.fails(http.MethodGet, "/api/titles?kind=vinyl", nil, http.StatusUnprocessableEntity, "kind")
+	a.fails(http.MethodGet, "/api/titles?tmdb_id=x", nil, http.StatusUnprocessableEntity, "tmdb_id")
+	a.fails(http.MethodGet, "/api/titles?tmdb_id=0", nil, http.StatusUnprocessableEntity, "tmdb_id")
 }
 
 func TestBarcodeSpellingsShareOneEdition(t *testing.T) {
@@ -441,4 +468,29 @@ func TestKindChangeWaitsForConcurrentEdition(t *testing.T) {
 	if err != nil || got.Kind != "movie" {
 		t.Fatalf("title after race = %+v, %v; want movie", got, err)
 	}
+}
+
+func TestCopyRequestKeyMakesCreateRetrySafe(t *testing.T) {
+	a := newAPI(t)
+	movie := a.title("movie", "Rejs")
+	edition := a.edition(obj{"title_id": movie, "format": "dvd"})
+	body := obj{"edition_id": edition, "status": "owned", "price_cents": 4999, "request_key": " scan-1 "}
+
+	var first, retry collection.Copy
+	a.mustDo(http.MethodPost, "/api/copies", body, &first, http.StatusCreated)
+	a.mustDo(http.MethodPost, "/api/copies", body, &retry, http.StatusOK)
+	if retry.ID != first.ID || retry.PriceCents == nil || *retry.PriceCents != 4999 {
+		t.Fatalf("retry = %+v, first %+v", retry, first)
+	}
+
+	a.mustDo(http.MethodPost, "/api/copies", obj{"edition_id": edition, "status": "owned", "request_key": "scan-2"}, nil, http.StatusCreated)
+	a.mustDo(http.MethodPost, "/api/copies", obj{"edition_id": edition, "status": "owned"}, nil, http.StatusCreated)
+	a.mustDo(http.MethodPost, "/api/copies", obj{"edition_id": edition, "status": "owned", "request_key": "  "}, nil, http.StatusCreated)
+	var view collection.CollectionView
+	a.mustDo(http.MethodGet, "/api/collection", nil, &view, http.StatusOK)
+	if view.Totals.Copies != 4 {
+		t.Fatalf("copies = %d, want 4 (one per distinct or absent key)", view.Totals.Copies)
+	}
+
+	a.fails(http.MethodPost, "/api/copies", obj{"edition_id": edition, "status": "owned", "request_key": strings.Repeat("k", 101)}, http.StatusUnprocessableEntity, "request_key")
 }

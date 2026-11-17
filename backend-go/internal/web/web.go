@@ -11,6 +11,10 @@ import (
 
 const indexFile = "index.html"
 
+// manifestType is the web app manifest's media type, which Go's MIME table
+// lacks; without it the manifest would go out as text/plain.
+const manifestType = "application/manifest+json"
+
 // Handler serves files from fsys and answers every other GET or HEAD with
 // index.html, so client-side routes survive a reload. Hashed build assets
 // under _app/immutable/ are cached for a year; everything else revalidates,
@@ -28,6 +32,9 @@ func Handler(fsys fs.FS) http.Handler {
 			w.Header().Set("Cache-Control", "no-cache")
 			http.ServeFileFS(w, r, fsys, indexFile)
 			return
+		}
+		if path.Ext(name) == ".webmanifest" {
+			w.Header().Set("Content-Type", manifestType)
 		}
 		if strings.HasPrefix(name, "_app/immutable/") {
 			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")

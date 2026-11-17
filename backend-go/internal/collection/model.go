@@ -121,17 +121,26 @@ type Edition struct {
 }
 
 // CopyInput is the body of POST and PUT /api/copies. Price and purchase date
-// apply only to owned copies.
+// apply only to owned copies. MaxPriceCents, the most a wishlist copy may
+// cost, applies only to wishlist copies: the deal hunter alerts on listings
+// at or below it.
 type CopyInput struct {
-	EditionID   int64   `json:"edition_id"`
-	Status      string  `json:"status"`
-	PriceCents  *int64  `json:"price_cents"`
-	PurchasedOn *Date   `json:"purchased_on"`
-	Shop        string  `json:"shop"`
-	AcquiredAs  *string `json:"acquired_as"`
-	Condition   *string `json:"condition"`
-	Notes       string  `json:"notes"`
+	EditionID     int64   `json:"edition_id"`
+	Status        string  `json:"status"`
+	PriceCents    *int64  `json:"price_cents"`
+	PurchasedOn   *Date   `json:"purchased_on"`
+	Shop          string  `json:"shop"`
+	AcquiredAs    *string `json:"acquired_as"`
+	Condition     *string `json:"condition"`
+	Notes         string  `json:"notes"`
+	MaxPriceCents *int64  `json:"max_price_cents"`
+	// RequestKey makes a create safe to retry: a second create with the
+	// same key returns the first copy. Updates ignore it.
+	RequestKey *string `json:"request_key,omitempty"`
 }
+
+// maxRequestKey caps CopyInput.RequestKey, in bytes.
+const maxRequestKey = 100
 
 // Copy is one physical item, owned or wanted.
 type Copy struct {
@@ -328,17 +337,24 @@ func (in *CopyInput) Normalize() *httpx.FieldError {
 	in.Notes = strings.TrimSpace(in.Notes)
 	in.AcquiredAs = trimOpt(in.AcquiredAs)
 	in.Condition = trimOpt(in.Condition)
+	in.RequestKey = trimOpt(in.RequestKey)
+	if in.RequestKey != nil && len(*in.RequestKey) > maxRequestKey {
+		return fieldErr("request_key", "is too long")
+	}
 	if in.EditionID <= 0 {
 		return fieldErr("edition_id", "is required")
 	}
 	if e := checkEnum("status", &in.Status, statuses); e != nil {
 		return e
 	}
-	if in.PriceCents != nil && *in.PriceCents < 0 {
-		return fieldErr("price_cents", "cannot be negative")
+	if e := checkPrice("price_cents", in.PriceCents); e != nil {
+		return e
 	}
-	if in.PriceCents != nil && *in.PriceCents > MaxPriceCents {
-		return fieldErr("price_cents", "cannot exceed 1000000 PLN")
+	if e := checkPrice("max_price_cents", in.MaxPriceCents); e != nil {
+		return e
+	}
+	if in.Status == StatusOwned && in.MaxPriceCents != nil {
+		return fieldErr("max_price_cents", "applies only to wishlist copies")
 	}
 	if in.Status == StatusWishlist {
 		if in.PriceCents != nil {
@@ -354,6 +370,19 @@ func (in *CopyInput) Normalize() *httpx.FieldError {
 		checkEnum("acquired_as", in.AcquiredAs, acquiredAs),
 		checkEnum("condition", in.Condition, conditions),
 	)
+}
+
+func checkPrice(field string, cents *int64) *httpx.FieldError {
+	if cents == nil {
+		return nil
+	}
+	if *cents < 0 {
+		return fieldErr(field, "cannot be negative")
+	}
+	if *cents > MaxPriceCents {
+		return fieldErr(field, "cannot exceed 1000000 PLN")
+	}
+	return nil
 }
 
 func defaultTri(v string) string {

@@ -3,7 +3,6 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -12,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"github.com/Automaat/ohara/backend-go/internal/httpx"
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
 	"github.com/Automaat/ohara/backend-go/internal/web"
 )
@@ -31,11 +31,18 @@ type Config struct {
 	AccessLog bool
 }
 
+// Mounter adds a domain's routes to the /api router.
+type Mounter interface {
+	Mount(r chi.Router)
+}
+
 // Deps are the runtime dependencies. A nil DB reports the database as
-// unconfigured; a nil Web serves no frontend.
+// unconfigured; a nil Web serves no frontend. API holds the domain handlers
+// mounted under /api.
 type Deps struct {
 	DB  Pinger
 	Web fs.FS
+	API []Mounter
 }
 
 // New returns the router: probes, metrics, the JSON API and the frontend.
@@ -54,8 +61,11 @@ func New(cfg Config, logger *slog.Logger, deps Deps) http.Handler {
 
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/status", statusHandler(logger, cfg.Version, deps.DB))
+		for _, m := range deps.API {
+			m.Mount(r)
+		}
 		r.NotFound(func(w http.ResponseWriter, _ *http.Request) {
-			writeJSON(w, logger, http.StatusNotFound, map[string]string{"error": "not found"})
+			httpx.WriteError(w, logger, http.StatusNotFound, "not found")
 		})
 	})
 
@@ -138,10 +148,5 @@ func statusHandler(logger *slog.Logger, version string, db Pinger) http.HandlerF
 }
 
 func writeJSON(w http.ResponseWriter, logger *slog.Logger, code int, body any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(code)
-	if err := json.NewEncoder(w).Encode(body); err != nil {
-		logger.Error("encode response", "err", err)
-	}
+	httpx.WriteJSON(w, logger, code, body)
 }

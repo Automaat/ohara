@@ -1,0 +1,291 @@
+package lookup_test
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/Automaat/ohara/backend-go/internal/dbtest"
+	"github.com/Automaat/ohara/backend-go/internal/lookup"
+	"github.com/Automaat/ohara/backend-go/internal/server"
+)
+
+type fakeProvider struct {
+	name       string
+	confidence float64
+	fetchErr   error
+	parseErr   error
+
+	mu      sync.Mutex
+	fetches int
+}
+
+func (p *fakeProvider) Name() string { return p.name }
+
+func (p *fakeProvider) Fetch(_ context.Context, code string) (json.RawMessage, error) {
+	p.mu.Lock()
+	p.fetches++
+	p.mu.Unlock()
+	if p.fetchErr != nil {
+		return nil, p.fetchErr
+	}
+	return json.Marshal(map[string]string{"name": p.name + " " + code})
+}
+
+func (p *fakeProvider) Parse(code string, raw json.RawMessage) ([]lookup.Candidate, error) {
+	if p.parseErr != nil {
+		return nil, p.parseErr
+	}
+	var body struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return nil, err
+	}
+	return []lookup.Candidate{{
+		Type:       "movie",
+		Title:      lookup.TitleFields{Name: body.Name},
+		Edition:    lookup.EditionFields{Barcode: code},
+		Provider:   "spoofed",
+		Confidence: p.confidence,
+	}}, nil
+}
+
+func (p *fakeProvider) fetchCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.fetches
+}
+
+type memCache struct {
+	mu      sync.Mutex
+	entries map[string]json.RawMessage
+	getErr  error
+}
+
+func (c *memCache) Get(_ context.Context, provider, code string, _ time.Duration) (json.RawMessage, bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.getErr != nil {
+		return nil, false, c.getErr
+	}
+	raw, ok := c.entries[provider+"/"+code]
+	return raw, ok, nil
+}
+
+func (c *memCache) Put(_ context.Context, provider, code string, raw json.RawMessage) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.entries == nil {
+		c.entries = map[string]json.RawMessage{}
+	}
+	c.entries[provider+"/"+code] = raw
+	return nil
+}
+
+func discard() *slog.Logger { return slog.New(slog.DiscardHandler) }
+
+func TestRegistryRejectsDuplicates(t *testing.T) {
+	r := &lookup.Registry{}
+	if err := r.Register(&fakeProvider{name: "a"}, 0); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	if err := r.Register(&fakeProvider{name: "a"}, time.Hour); !errors.Is(err, lookup.ErrDuplicateProvider) {
+		t.Fatalf("duplicate err = %v", err)
+	}
+	if got := r.Names(); len(got) != 1 || got[0] != "a" {
+		t.Fatalf("names = %v", got)
+	}
+}
+
+func TestLookupMergesSortsAndReportsFailures(t *testing.T) {
+	r := &lookup.Registry{}
+	low := &fakeProvider{name: "low", confidence: 0.2}
+	high := &fakeProvider{name: "high", confidence: 1.7}
+	tie := &fakeProvider{name: "tie", confidence: 0.2}
+	broken := &fakeProvider{name: "broken", fetchErr: errors.New("timeout")}
+	garbled := &fakeProvider{name: "garbled", parseErr: errors.New("bad html")}
+	for _, p := range []*fakeProvider{low, high, broken, tie, garbled} {
+		if err := r.Register(p, 0); err != nil {
+			t.Fatalf("register: %v", err)
+		}
+	}
+	res := lookup.NewService(r, nil, discard()).Lookup(context.Background(), "5901234123457")
+
+	if res.Barcode != "5901234123457" {
+		t.Fatalf("barcode = %q", res.Barcode)
+	}
+	var order []string
+	for _, c := range res.Candidates {
+		order = append(order, c.Provider)
+	}
+	if len(order) != 3 || order[0] != "high" || order[1] != "low" || order[2] != "tie" {
+		t.Fatalf("candidate order = %v, want [high low tie]", order)
+	}
+	if res.Candidates[0].Confidence != 1 {
+		t.Fatalf("confidence not clamped: %v", res.Candidates[0].Confidence)
+	}
+	if len(res.Errors) != 2 || res.Errors[0].Provider != "broken" || res.Errors[1].Provider != "garbled" {
+		t.Fatalf("errors = %+v", res.Errors)
+	}
+}
+
+func TestLookupWithoutProviders(t *testing.T) {
+	res := lookup.NewService(&lookup.Registry{}, nil, discard()).Lookup(context.Background(), "96385074")
+	b, err := json.Marshal(res)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if string(b) != `{"barcode":"96385074","candidates":[],"errors":[]}` {
+		t.Fatalf("body = %s", b)
+	}
+}
+
+func TestLookupCache(t *testing.T) {
+	cached := &fakeProvider{name: "cached", confidence: 0.5}
+	uncached := &fakeProvider{name: "uncached", confidence: 0.5}
+	r := &lookup.Registry{}
+	if err := r.Register(cached, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Register(uncached, 0); err != nil {
+		t.Fatal(err)
+	}
+	cache := &memCache{}
+	svc := lookup.NewService(r, cache, discard())
+	for range 3 {
+		if res := svc.Lookup(context.Background(), "96385074"); len(res.Candidates) != 2 {
+			t.Fatalf("candidates = %+v", res.Candidates)
+		}
+	}
+	if cached.fetchCount() != 1 || uncached.fetchCount() != 3 {
+		t.Fatalf("fetches cached=%d uncached=%d, want 1 and 3", cached.fetchCount(), uncached.fetchCount())
+	}
+
+	cache.entries["cached/96385074"] = json.RawMessage(`"unparseable"`)
+	if res := svc.Lookup(context.Background(), "96385074"); len(res.Errors) != 0 || cached.fetchCount() != 2 {
+		t.Fatalf("unreadable cache entry: errors %+v, fetches %d", res.Errors, cached.fetchCount())
+	}
+
+	cache.getErr = errors.New("db down")
+	if res := svc.Lookup(context.Background(), "96385074"); len(res.Candidates) != 2 || len(res.Errors) != 0 {
+		t.Fatalf("cache failure must not fail the lookup: %+v", res)
+	}
+}
+
+func TestStub(t *testing.T) {
+	tests := []struct {
+		code, kind string
+	}{
+		{"9788373012349", "book"},
+		{"5901234123457", "movie"},
+	}
+	for _, tt := range tests {
+		raw, err := lookup.Stub{}.Fetch(context.Background(), tt.code)
+		if err != nil {
+			t.Fatalf("fetch: %v", err)
+		}
+		cands, err := lookup.Stub{}.Parse(tt.code, raw)
+		if err != nil || len(cands) != 1 {
+			t.Fatalf("parse = %+v, %v", cands, err)
+		}
+		if c := cands[0]; c.Type != tt.kind || c.Edition.Barcode != tt.code || c.Title.Name == "" {
+			t.Fatalf("candidate = %+v", c)
+		}
+	}
+	if _, err := (lookup.Stub{}).Parse("x", json.RawMessage(`[]`)); err == nil {
+		t.Fatal("stub parsed garbage")
+	}
+}
+
+func get(t *testing.T, url string) (int, string) {
+	t.Helper()
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, http.NoBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp.StatusCode, string(body)
+}
+
+func TestLookupEndpoint(t *testing.T) {
+	r := &lookup.Registry{}
+	if err := r.Register(lookup.Stub{}, 0); err != nil {
+		t.Fatal(err)
+	}
+	h := lookup.NewHandler(lookup.NewService(r, nil, discard()), discard())
+	srv := httptest.NewServer(server.New(server.Config{}, discard(), server.Deps{API: []server.Mounter{h}}))
+	t.Cleanup(srv.Close)
+
+	code, body := get(t, srv.URL+"/api/lookup/0-306-40615-2")
+	if code != http.StatusOK {
+		t.Fatalf("lookup = %d %s", code, body)
+	}
+	var res lookup.Result
+	if err := json.Unmarshal([]byte(body), &res); err != nil {
+		t.Fatal(err)
+	}
+	if res.Barcode != "9780306406157" || len(res.Candidates) != 1 {
+		t.Fatalf("result = %+v", res)
+	}
+	c := res.Candidates[0]
+	if c.Type != "book" || c.Provider != "stub" || c.Confidence != 0.1 || c.Edition.Barcode != "9780306406157" {
+		t.Fatalf("candidate = %+v", c)
+	}
+
+	for _, bad := range []string{"123", "5901234123458"} {
+		if code, body := get(t, srv.URL+"/api/lookup/"+bad); code != http.StatusUnprocessableEntity {
+			t.Fatalf("lookup %s = %d %s, want 422", bad, code, body)
+		}
+	}
+}
+
+func TestPGCache(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	cache := lookup.NewPGCache(pool)
+	ctx := context.Background()
+
+	if _, ok, err := cache.Get(ctx, "bn", "9788373012349", time.Hour); ok || err != nil {
+		t.Fatalf("empty cache get = %v, %v", ok, err)
+	}
+	if err := cache.Put(ctx, "bn", "9788373012349", json.RawMessage(`{"v":1}`)); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	if err := cache.Put(ctx, "bn", "9788373012349", json.RawMessage(`{"v":2}`)); err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+	raw, ok, err := cache.Get(ctx, "bn", "9788373012349", time.Hour)
+	if err != nil || !ok {
+		t.Fatalf("get = %v, %v", ok, err)
+	}
+	var v struct {
+		V int `json:"v"`
+	}
+	if err := json.Unmarshal(raw, &v); err != nil || v.V != 2 {
+		t.Fatalf("cached = %s", raw)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE lookup_cache SET fetched_at = now() - interval '2 hours'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := cache.Get(ctx, "bn", "9788373012349", time.Hour); ok || err != nil {
+		t.Fatalf("stale entry served: %v, %v", ok, err)
+	}
+	if _, ok, _ := cache.Get(ctx, "openlibrary", "9788373012349", 24*time.Hour); ok {
+		t.Fatal("cache leaked across providers")
+	}
+}

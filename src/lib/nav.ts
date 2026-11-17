@@ -2,7 +2,10 @@ import type { NavItem, NavSection } from '@smykla-skalski/sui';
 
 export const sections: NavSection[] = [
 	{
-		items: [{ href: '/', label: 'Kolekcja', icon: 'book' }]
+		items: [
+			{ href: '/', label: 'Kolekcja', icon: 'book' },
+			{ href: '/titles', label: 'Tytuły', icon: 'repositories' }
+		]
 	}
 ];
 

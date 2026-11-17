@@ -3,12 +3,12 @@ package db_test
 import (
 	"context"
 	"errors"
-	"os"
 	"slices"
 	"testing"
 	"testing/fstest"
 
 	"github.com/Automaat/ohara/backend-go/internal/db"
+	"github.com/Automaat/ohara/backend-go/internal/dbtest"
 )
 
 func TestLoadMigrations(t *testing.T) {
@@ -92,19 +92,8 @@ func TestEmbeddedMigrationsLoad(t *testing.T) {
 // TestMigrateAgainstPostgres runs only when OHARA_TEST_DATABASE_URL points at
 // a disposable database (CI provides one).
 func TestMigrateAgainstPostgres(t *testing.T) {
-	dsn := os.Getenv("OHARA_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("OHARA_TEST_DATABASE_URL not set")
-	}
+	pool := dbtest.Pool(t)
 	ctx := context.Background()
-	pool, err := db.New(ctx, dsn)
-	if err != nil {
-		t.Fatalf("open pool: %v", err)
-	}
-	t.Cleanup(pool.Close)
-	if _, err := pool.Exec(ctx, `DROP TABLE IF EXISTS schema_migrations, migrate_probe`); err != nil {
-		t.Fatalf("reset: %v", err)
-	}
 
 	first := []db.Migration{
 		{Version: "0001", Name: "0001_probe.sql", SQL: "CREATE TABLE migrate_probe (id int); INSERT INTO migrate_probe VALUES (1);"},

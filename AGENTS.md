@@ -16,12 +16,18 @@ Same layout and tooling as `../baratie`. `package.json` and
   /cmd/api/            # main: env, migrations, HTTP server, `healthcheck` subcommand
   /internal/
     /db/               # pgx pool + forward-only migrations (migrations/NNNN_name.sql)
+    /dbtest/           # per-test Postgres schema for DB tests
+    /httpx/            # JSON request/response and error helpers
+    /barcode/          # EAN/UPC/ISBN normalization (ISBN-10 → ISBN-13)
+    /collection/       # titles, editions, copies, collection view
+    /lookup/           # GET /api/lookup/{barcode}: provider registry + lookup_cache
     /server/           # router: /health, /metrics, /api/*, SPA fallback
     /web/              # serves the built SPA, index.html for client routes
     /metrics/          # Prometheus collectors on a private registry (ohara_*)
 /src/                  # SvelteKit SPA (adapter-static, ssr off)
   /routes/             # pages
-  /lib/                # nav table, API helpers (pure TS, unit tested)
+  /lib/                # nav table, API client, collection types and form helpers (pure TS, unit tested)
+  /lib/components/     # forms shared by create and edit pages
 /static/               # icons, robots.txt
 ```
 
@@ -39,6 +45,16 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   lock. Never edit an applied migration.
 - Linters: `golangci-lint` (`.golangci.yml`) and `nilaway`. Never add
   suppression directives; fix the root cause.
+- Errors are `{"error": "...", "field": "..."}`: 422 for validation (field
+  names the input), 409 for conflicts, 404 for a missing path resource.
+- Money is integer grosze (`price_cents`). Barcodes are stored normalized
+  (`barcode.Normalize`: EAN-8, EAN-13 or GTIN-14; a UPC-A becomes its
+  EAN-13 with a leading 0, ISBN-10 becomes ISBN-13), one edition per barcode.
+- Lookup providers implement `lookup.Provider` (`Fetch` returns raw JSON,
+  `Parse` turns raw JSON into candidates) and register in `cmd/api` with a
+  cache TTL. Candidate `title`/`edition` fields match the POST bodies of
+  `/api/titles` and `/api/editions`.
+- DB tests call `dbtest.Migrated(t)`; each gets its own schema.
 
 ### Frontend
 
@@ -62,6 +78,7 @@ the container port beyond the LAN.
 | `OHARA_ADDR`            | `:8000`                         | Listen address                                                                             |
 | `OHARA_WEB_DIR`         | unset (`/app/web` in the image) | Built SPA to serve                                                                         |
 | `OHARA_ACCESS_LOG`      | `false`                         | One log line per request                                                                   |
+| `OHARA_LOOKUP_STUB`     | `false`                         | Register the stub lookup provider (placeholder candidate for every barcode)                |
 
 ## Commands
 

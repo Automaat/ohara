@@ -75,7 +75,7 @@ func TestKeywordsAPI(t *testing.T) {
 	base := srv.URL + "/api/deals/keywords"
 
 	var seeded []Keyword
-	if code := call(t, http.MethodGet, base, nil, &seeded); code != http.StatusOK || len(seeded) != 10 {
+	if code := call(t, http.MethodGet, base, nil, &seeded); code != http.StatusOK || len(seeded) != 12 {
 		t.Fatalf("GET keywords = %d, %d seeded", code, len(seeded))
 	}
 

@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="csrf-token" content="test-csrf-token">
+<title>Sprzedaj książki | SkupSzop</title>
+</head>
+<body>
+<div class="sell-container">
+    <div class="selling-box">
+        <div class="add-item-form">
+            <form action="https://skupszop.pl/sprzedaj" method="post" id="add-item-form">
+                <div class="selling-item">
+                    <span class="selling-text">Podaj ISBN i wyceń książkę</span>
+                    <div class="input-with-scanner">
+                        <div class="static-icon">
+                            <img src="https://skupszop.pl/static/store/img/svg/ic-small-isbn.svg" alt="Kamera" width="24" height="24">
+                        </div>
+
+                        <input type="text" title="wpisz numer ISBN" inputmode="numeric" name="isbn" aria-label="Wpisz lub skanuj kod ISBN"
+                               class="isbn isbnInput with-scanner desktop" min="1" placeholder="wpisz kod ISBN (13 znaków)"
+                               data-mobile-placeholder="wpisz kod ISBN">
+
+                        <div class="mobile-static-icon scanner-icon">
+                            <img src="https://skupszop.pl/static/store/img/svg/ic-scanner.svg" alt="Kamera">
+                        </div>
+                    </div>
+
+                    <button type="button" class="selling-button">
+                        <span class="button-text">
+                            <span class="desktop-text">Dodaj do wyceny <i class="fas fa-plus"></i></span>
+                            <span class="mobile-text">Wyceń</span>
+                        </span>
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+
+<div id="product-list-section">
+</div>
+</body>
+</html>

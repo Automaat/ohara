@@ -201,21 +201,43 @@ var romanParts = map[string]bool{
 	"ii": true, "iii": true, "iv": true, "v": true, "vi": true, "vii": true, "viii": true, "ix": true, "x": true,
 }
 
+// ordinalParts are the sequel words that follow "Part" or "Część", as in
+// "Dune: Part Two" or "Diuna: Część druga".
+var ordinalParts = map[string]bool{
+	"two": true, "three": true, "four": true, "five": true, "second": true, "third": true,
+	"druga": true, "trzecia": true, "czwarta": true, "piata": true,
+	"drugi": true, "trzeci": true, "czwarty": true, "piaty": true,
+}
+
+// partWords introduce a sequel number and are skipped before it.
+var partWords = map[string]bool{"part": true, "czesc": true, "cz": true, "chapter": true, "rozdzial": true}
+
 // sequelAfter reports whether text names a sequel of name: right after
-// name's last word comes a number or numeral that name lacks and that is no
-// release year, as in "Blade Runner 2049" or "Rocky II" for "Rocky".
+// name's last word, past a "Part" or "Część", comes a number or numeral
+// that name lacks and that is no release year, as in "Blade Runner 2049",
+// "Rocky II" or "Dune: Part Two" for "Dune".
 func sequelAfter(text []string, name string) bool {
 	nameWords := words(name)
 	if len(nameWords) == 0 {
 		return false
 	}
 	last := nameWords[len(nameWords)-1]
-	for i, t := range text[:max(len(text)-1, 0)] {
-		next := text[i+1]
-		if t != last || slices.Contains(nameWords, next) {
+	for i, t := range text {
+		if t != last {
 			continue
 		}
-		if romanParts[next] {
+		j, part := i+1, false
+		for j < len(text) && partWords[text[j]] && !slices.Contains(nameWords, text[j]) {
+			j, part = j+1, true
+		}
+		if j >= len(text) {
+			continue
+		}
+		next := text[j]
+		if slices.Contains(nameWords, next) {
+			continue
+		}
+		if romanParts[next] || (part && ordinalParts[next]) {
 			return true
 		}
 		if n, err := strconv.Atoi(next); err == nil && (n < 1900 || n > time.Now().Year()+1) {

@@ -1,0 +1,381 @@
+package valuation
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/binary"
+	"encoding/json"
+	"log/slog"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/Automaat/ohara/backend-go/internal/deals"
+	"github.com/Automaat/ohara/backend-go/internal/metrics"
+)
+
+// maxRunErrors bounds the source errors a run keeps for the status view.
+const maxRunErrors = 20
+
+// firstRunDelay keeps a restart loop from hammering the sources.
+const firstRunDelay = 5 * time.Minute
+
+// Config tunes the runner. Interval 0 disables the schedule; a run can
+// still be started by hand. Delay separates two source requests, jittered.
+// Window is how far back a price still counts.
+type Config struct {
+	Interval time.Duration
+	Delay    time.Duration
+	Window   time.Duration
+}
+
+// RunResult counts what one run did. Errors holds source failures, which
+// do not stop the run.
+type RunResult struct {
+	Editions int      `json:"editions"`
+	Queries  int      `json:"queries"`
+	Listings int      `json:"listings"`
+	Matched  int      `json:"matched"`
+	New      int      `json:"new"`
+	Quotes   int      `json:"quotes"`
+	Errors   []string `json:"errors"`
+	Failure  string   `json:"failure,omitempty"`
+}
+
+// Status is the runner state the valuation view shows.
+type Status struct {
+	Running         bool       `json:"running"`
+	Scheduled       bool       `json:"scheduled"`
+	IntervalSeconds int64      `json:"interval_seconds"`
+	LastStartedAt   *time.Time `json:"last_started_at"`
+	LastFinishedAt  *time.Time `json:"last_finished_at"`
+	LastResult      *RunResult `json:"last_result"`
+}
+
+// Runner prices the owned collection on a schedule or on demand, one run
+// at a time.
+type Runner struct {
+	store    *Store
+	sources  []deals.Source
+	buybacks []BuyBack
+	logger   *slog.Logger
+	cfg      Config
+	sleep    func(ctx context.Context, d time.Duration) error
+
+	running atomic.Bool
+	wg      sync.WaitGroup
+	base    context.Context
+
+	mu     sync.Mutex
+	status Status
+}
+
+// NewRunner wires the runner. sources are asked for used and new listings
+// of every owned edition, buybacks for an offer on every owned book.
+func NewRunner(store *Store, sources []deals.Source, buybacks []BuyBack, cfg Config, logger *slog.Logger) *Runner {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	r := &Runner{
+		store: store, sources: sources, buybacks: buybacks, logger: logger, cfg: cfg,
+		sleep: sleepCtx, base: context.Background(),
+	}
+	r.status.Scheduled = cfg.Interval > 0
+	r.status.IntervalSeconds = int64(cfg.Interval.Seconds())
+	return r
+}
+
+// Window is how far back a price still counts.
+func (r *Runner) Window() time.Duration { return r.cfg.Window }
+
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
+// jitter spreads d uniformly over d*(1-spread) to d*(1+spread).
+func jitter(d time.Duration, spread float64) time.Duration {
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	u := float64(binary.LittleEndian.Uint64(b[:])>>11) / (1 << 53)
+	return time.Duration(float64(d) * (1 - spread + 2*spread*u))
+}
+
+// Start publishes the last stored value and runs the schedule until ctx
+// ends; manual runs also stop with ctx. The first scheduled run comes one
+// interval after the last stored one, and no sooner than five minutes
+// after start, so a restart neither reruns a fresh valuation nor skips a
+// due one.
+func (r *Runner) Start(ctx context.Context) {
+	r.base = ctx
+	latest, ok, err := r.store.Latest(ctx)
+	if err != nil {
+		r.logger.Warn("valuation: read last value", "err", err)
+	}
+	if ok {
+		publish(latest)
+	}
+	if r.cfg.Interval <= 0 {
+		return
+	}
+	wait := firstRunDelay
+	if ok {
+		wait = max(time.Until(latest.ComputedAt.Add(r.cfg.Interval)), firstRunDelay)
+	}
+	r.wg.Go(func() {
+		wait = jitter(wait, 0.1)
+		for {
+			if r.sleep(ctx, wait) != nil {
+				return
+			}
+			if r.running.CompareAndSwap(false, true) {
+				r.execute(ctx)
+			}
+			wait = jitter(r.cfg.Interval, 0.1)
+		}
+	})
+}
+
+// Wait blocks until the schedule and any manual run have stopped.
+func (r *Runner) Wait() { r.wg.Wait() }
+
+// Trigger starts a run in the background and reports false when one is
+// already running.
+func (r *Runner) Trigger() bool {
+	if !r.running.CompareAndSwap(false, true) {
+		return false
+	}
+	r.wg.Go(func() { r.execute(r.base) })
+	return true
+}
+
+// Status returns a copy of the current state.
+func (r *Runner) Status() Status {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s := r.status
+	s.Running = r.running.Load()
+	return s
+}
+
+// execute runs once and records the outcome; the caller holds running.
+func (r *Runner) execute(ctx context.Context) {
+	defer r.running.Store(false)
+	started := time.Now()
+	r.mu.Lock()
+	r.status.LastStartedAt = &started
+	r.mu.Unlock()
+
+	res, err := r.Run(ctx)
+	if err != nil {
+		res.Failure = err.Error()
+		r.logger.Error("valuation failed", "err", err)
+	} else {
+		r.logger.Info("valuation finished", "editions", res.Editions, "queries", res.Queries,
+			"listings", res.Listings, "matched", res.Matched, "new", res.New, "quotes", res.Quotes,
+			"errors", len(res.Errors))
+	}
+	finished := time.Now()
+	r.mu.Lock()
+	r.status.LastFinishedAt = &finished
+	r.status.LastResult = &res
+	r.mu.Unlock()
+}
+
+// run is one valuation: its counters and pacing between requests.
+type run struct {
+	r        *Runner
+	holdings []Holding
+	rules    deals.Rules
+	res      RunResult
+	first    bool
+}
+
+// Run asks every source about every owned edition and every buy-back shop
+// about every owned book, records the prices and stores today's value.
+// Source failures are collected in the result; a database failure or
+// cancellation stops the run.
+func (r *Runner) Run(ctx context.Context) (RunResult, error) {
+	holdings, err := r.store.Holdings(ctx)
+	if err != nil {
+		return RunResult{}, err
+	}
+	rules, err := r.store.Rules(ctx)
+	if err != nil {
+		return RunResult{}, err
+	}
+	x := &run{r: r, holdings: holdings, rules: rules, first: true}
+	x.res.Editions = len(holdings)
+	x.res.Errors = []string{}
+	queries := searchQueries(holdings)
+	x.res.Queries = len(queries)
+	for _, src := range r.sources {
+		if err := x.search(ctx, src, queries); err != nil {
+			return x.res, err
+		}
+	}
+	for _, b := range r.buybacks {
+		if err := x.quote(ctx, b); err != nil {
+			return x.res, err
+		}
+	}
+	_, sum, err := r.store.Valued(ctx, r.cfg.Window)
+	if err != nil {
+		return x.res, err
+	}
+	point, err := r.store.SaveDay(ctx, &sum)
+	if err != nil {
+		return x.res, err
+	}
+	publish(point)
+	return x.res, nil
+}
+
+// searchQueries are the distinct queries of every holding, in holding
+// order.
+func searchQueries(holdings []Holding) []string {
+	var out []string
+	seen := map[string]bool{}
+	for i := range holdings {
+		for _, q := range holdings[i].Want.Queries() {
+			key := strings.Join(strings.Fields(strings.ToLower(q)), " ")
+			if !seen[key] {
+				seen[key] = true
+				out = append(out, q)
+			}
+		}
+	}
+	return out
+}
+
+func (x *run) pause(ctx context.Context) error {
+	if x.first {
+		x.first = false
+		return ctx.Err()
+	}
+	return x.r.sleep(ctx, jitter(x.r.cfg.Delay, 0.5))
+}
+
+func (x *run) fail(source string, err error) {
+	x.r.logger.Warn("valuation source failed", "source", source, "err", err)
+	if len(x.res.Errors) < maxRunErrors {
+		x.res.Errors = append(x.res.Errors, err.Error())
+	}
+}
+
+func (x *run) search(ctx context.Context, src deals.Source, queries []string) error {
+	if !src.PerQuery() {
+		queries = []string{""}
+	}
+	for _, q := range queries {
+		if err := x.pause(ctx); err != nil {
+			return err
+		}
+		listings, err := src.Search(ctx, q)
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			x.fail(src.Name(), err)
+			continue
+		}
+		x.res.Listings += len(listings)
+		for i := range listings {
+			l := &listings[i]
+			h := match(x.holdings, l, x.rules)
+			if h == nil {
+				continue
+			}
+			x.res.Matched++
+			isNew, err := x.r.store.Record(ctx, l, h)
+			if err != nil {
+				return err
+			}
+			if isNew {
+				x.res.New++
+			}
+		}
+	}
+	return nil
+}
+
+// match returns the first holding a listing is a copy of, or nil.
+func match(holdings []Holding, l *deals.Listing, rules deals.Rules) *Holding {
+	if rules.Rejected(l.Title) {
+		return nil
+	}
+	for i := range holdings {
+		if holdings[i].Want.Matches(l.Title) {
+			return &holdings[i]
+		}
+	}
+	return nil
+}
+
+// isISBN reports a 13-digit barcode in the Bookland ranges.
+func isISBN(barcode *string) bool {
+	if barcode == nil || len(*barcode) != 13 {
+		return false
+	}
+	return strings.HasPrefix(*barcode, "978") || strings.HasPrefix(*barcode, "979")
+}
+
+type quoteRaw struct {
+	Offered bool `json:"offered"`
+}
+
+func (x *run) quote(ctx context.Context, b BuyBack) error {
+	for i := range x.holdings {
+		h := &x.holdings[i]
+		if h.Want.Kind != "book" || !isISBN(h.Barcode) {
+			continue
+		}
+		if err := x.pause(ctx); err != nil {
+			return err
+		}
+		isbn := *h.Barcode
+		q, err := b.Quote(ctx, isbn)
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			x.fail(b.Name(), err)
+			continue
+		}
+		raw, err := json.Marshal(quoteRaw{Offered: q.Offered})
+		if err != nil {
+			return err
+		}
+		l := deals.Listing{
+			Source: b.Name(), ExternalID: isbn, Title: q.Title, URL: q.URL, PriceCents: q.Cents, Raw: raw,
+		}
+		if _, err := x.r.store.Record(ctx, &l, h); err != nil {
+			return err
+		}
+		x.res.Quotes++
+	}
+	return nil
+}
+
+// publish exports a stored day as the collection value gauges.
+func publish(p HistoryPoint) {
+	metrics.SetCollectionValue(metrics.CollectionValue{
+		Copies:        p.Copies,
+		SpentCents:    p.SpentCents,
+		FloorCents:    p.Floor.Cents,
+		FloorCopies:   p.Floor.Copies,
+		MidCents:      p.Mid.Cents,
+		MidCopies:     p.Mid.Copies,
+		CeilingCents:  p.Ceiling.Cents,
+		CeilingCopies: p.Ceiling.Copies,
+		LowConfidence: p.LowConfidence,
+		ComputedAt:    p.ComputedAt,
+	})
+}

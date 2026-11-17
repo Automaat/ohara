@@ -46,6 +46,36 @@ var (
 		Name: "ohara_lookup_cache_hits_total",
 		Help: "Barcode lookups answered from lookup_cache.",
 	}, []string{"provider"})
+
+	collectionValue = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "ohara_collection_value_pln",
+		Help: "Owned collection value in PLN by bound (floor: buy-back, mid: used asking, ceiling: new), summed over the copies that have the bound.",
+	}, []string{"bound"})
+
+	collectionValuedCopies = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "ohara_collection_valued_copies",
+		Help: "Owned copies that have a value for the bound.",
+	}, []string{"bound"})
+
+	collectionCopies = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "ohara_collection_copies",
+		Help: "Owned copies at the last valuation.",
+	})
+
+	collectionSpent = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "ohara_collection_spent_pln",
+		Help: "What the owned copies cost in PLN, at the last valuation.",
+	})
+
+	collectionLowConfidence = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "ohara_collection_low_confidence_copies",
+		Help: "Owned copies whose used-price estimate rests on too few observations.",
+	})
+
+	valuationLastRun = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "ohara_valuation_last_run_timestamp_seconds",
+		Help: "When the stored collection value was last computed; 0 before the first valuation.",
+	})
 )
 
 func init() {
@@ -56,6 +86,12 @@ func init() {
 		lookupRequests,
 		lookupErrors,
 		lookupCacheHits,
+		collectionValue,
+		collectionValuedCopies,
+		collectionCopies,
+		collectionSpent,
+		collectionLowConfidence,
+		valuationLastRun,
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)
@@ -173,4 +209,38 @@ func ObserveLookupError(provider string) {
 // ObserveLookupCacheHit counts one lookup served from the cache.
 func ObserveLookupCacheHit(provider string) {
 	lookupCacheHits.WithLabelValues(provider).Inc()
+}
+
+// CollectionValue is one stored valuation of the owned collection.
+type CollectionValue struct {
+	Copies        int
+	SpentCents    int64
+	FloorCents    int64
+	FloorCopies   int
+	MidCents      int64
+	MidCopies     int
+	CeilingCents  int64
+	CeilingCopies int
+	LowConfidence int
+	ComputedAt    time.Time
+}
+
+// SetCollectionValue publishes v as the collection value gauges.
+func SetCollectionValue(v CollectionValue) {
+	for _, b := range []struct {
+		bound  string
+		cents  int64
+		copies int
+	}{
+		{"floor", v.FloorCents, v.FloorCopies},
+		{"mid", v.MidCents, v.MidCopies},
+		{"ceiling", v.CeilingCents, v.CeilingCopies},
+	} {
+		collectionValue.WithLabelValues(b.bound).Set(float64(b.cents) / 100)
+		collectionValuedCopies.WithLabelValues(b.bound).Set(float64(b.copies))
+	}
+	collectionCopies.Set(float64(v.Copies))
+	collectionSpent.Set(float64(v.SpentCents) / 100)
+	collectionLowConfidence.Set(float64(v.LowConfidence))
+	valuationLastRun.Set(float64(v.ComputedAt.Unix()))
 }

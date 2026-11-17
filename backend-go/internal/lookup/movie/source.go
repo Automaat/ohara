@@ -68,6 +68,12 @@ func get(client *http.Client, source string, req *http.Request, ok ...int) (int,
 // succeeded counts a usable answer, a valid "no match" included.
 func succeeded(source string) { metrics.ObserveSource(source, metrics.SourceOK) }
 
+// found counts a usable answer carrying n results.
+func found(source string, n int) {
+	metrics.SetSourceResults(source, n)
+	succeeded(source)
+}
+
 // parseFailed counts a response that could not be read.
 func parseFailed(source string, err error) error {
 	metrics.ObserveSource(source, metrics.SourceParseError)

@@ -44,7 +44,9 @@ func (p GoogleBooks) Fetch(ctx context.Context, code string) (json.RawMessage, e
 		base = GoogleBooksBaseURL
 	}
 	q := url.Values{"q": {"isbn:" + code}, "key": {p.APIKey}}
-	return getJSON(ctx, p.Client, p.Name(), base+"/books/v1/volumes?"+q.Encode())
+	return getJSON(ctx, p.Client, p.Name(), base+"/books/v1/volumes?"+q.Encode(), func(raw json.RawMessage) ([]lookup.Candidate, error) {
+		return p.Parse(code, raw)
+	})
 }
 
 type googleResponse struct {

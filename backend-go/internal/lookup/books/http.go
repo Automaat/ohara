@@ -18,6 +18,7 @@ import (
 
 	"golang.org/x/text/unicode/norm"
 
+	"github.com/Automaat/ohara/backend-go/internal/lookup"
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
 )
 
@@ -28,12 +29,24 @@ const (
 
 var errTooLarge = errors.New("response too large")
 
-// getJSON fetches rawURL and returns its body, which must be JSON. The
-// outcome counts under source in the source health metrics.
-func getJSON(ctx context.Context, client *http.Client, source, rawURL string) (json.RawMessage, error) {
+// getJSON fetches rawURL and returns its body, which must be JSON that
+// parse reads. The outcome counts under source in the source health
+// metrics, so a changed response shape is a parse error even with a 200;
+// an ok also records how many candidates parse found.
+func getJSON(ctx context.Context, client *http.Client, source, rawURL string, parse func(json.RawMessage) ([]lookup.Candidate, error)) (json.RawMessage, error) {
 	body, status, err := fetchJSON(ctx, client, rawURL)
-	metrics.ObserveSource(source, status)
-	return body, err
+	if err != nil {
+		metrics.ObserveSource(source, status)
+		return nil, err
+	}
+	cands, err := parse(body)
+	if err != nil {
+		metrics.ObserveSource(source, metrics.SourceParseError)
+		return nil, fmt.Errorf("parse: %w", err)
+	}
+	metrics.SetSourceResults(source, len(cands))
+	metrics.ObserveSource(source, metrics.SourceOK)
+	return body, nil
 }
 
 // fetchJSON is getJSON without the metrics; status is its ObserveSource

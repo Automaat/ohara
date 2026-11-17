@@ -55,7 +55,7 @@ var (
 
 	sourceResults = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "ohara_source_results",
-		Help: "Listings a deal source returned in the last deal search run, canary included.",
+		Help: "Results of a source's last answer: listings across the last deal search run (canary included) for a deal source, products or candidates of the last ok request for a lookup source.",
 	}, []string{"source"})
 
 	sourceCanary = prometheus.NewGaugeVec(prometheus.GaugeOpts{
@@ -247,7 +247,8 @@ func ObserveSource(source, status string) {
 	sourceErrors.WithLabelValues(source).Inc()
 }
 
-// SetSourceResults records how many listings source returned in a run.
+// SetSourceResults records how many results source returned: listings in a
+// deal run, or products or candidates in one lookup request.
 func SetSourceResults(source string, n int) {
 	sourceResults.WithLabelValues(source).Set(float64(n))
 }

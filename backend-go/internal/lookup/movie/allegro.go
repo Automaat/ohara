@@ -101,7 +101,7 @@ func (a *Allegro) Products(ctx context.Context, code string) ([]Product, error) 
 				products = append(products, Product{Source: "allegro", Name: n, Category: p.Category.ID})
 			}
 		}
-		succeeded(a.Name())
+		found(a.Name(), len(products))
 		return products, nil
 	}
 }

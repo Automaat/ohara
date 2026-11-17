@@ -34,7 +34,7 @@ func (BN) Accepts(code string) bool { return barcode.IsBook(code) }
 // Fetch searches by ISBN-13 and, when nothing carries it, by the ISBN-10
 // that older records store instead.
 func (p BN) Fetch(ctx context.Context, code string) (json.RawMessage, error) {
-	raw, err := p.search(ctx, code)
+	raw, err := p.search(ctx, code, code)
 	if err != nil {
 		return nil, err
 	}
@@ -49,15 +49,18 @@ func (p BN) Fetch(ctx context.Context, code string) (json.RawMessage, error) {
 	if len(cands) > 0 {
 		return raw, nil
 	}
-	return p.search(ctx, isbn10)
+	return p.search(ctx, code, isbn10)
 }
 
-func (p BN) search(ctx context.Context, isbn string) (json.RawMessage, error) {
+// search asks BN for records carrying isbn and checks they parse as
+// candidates for the scanned code.
+func (p BN) search(ctx context.Context, code, isbn string) (json.RawMessage, error) {
 	base := p.BaseURL
 	if base == "" {
 		base = BNBaseURL
 	}
-	return getJSON(ctx, p.Client, p.Name(), base+"/api/institutions/bibs.json?limit=10&isbnIssn="+url.QueryEscape(isbn))
+	return getJSON(ctx, p.Client, p.Name(), base+"/api/institutions/bibs.json?limit=10&isbnIssn="+url.QueryEscape(isbn),
+		func(raw json.RawMessage) ([]lookup.Candidate, error) { return p.Parse(code, raw) })
 }
 
 type bnResponse struct {

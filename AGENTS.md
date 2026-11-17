@@ -67,8 +67,10 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   sources) also counts in the source health metrics through
   `metrics.ObserveSource`: `ohara_source_requests_total{source,status}`,
   `ohara_source_errors_total{source}`, `ohara_source_parse_errors_total`
-  and `ohara_source_last_success_timestamp_seconds`. Register each source
-  with `metrics.InitSource` so its counters exist before the first failure.
+  and `ohara_source_last_success_timestamp_seconds`. A request counts as
+  ok only once its response parses; it then sets `ohara_source_results` to
+  the products or candidates found. Register each source with
+  `metrics.InitSource` so its counters exist before the first failure.
   When some of its sources fail but others answered, it returns a
   `*lookup.PartialError`: the lookup reports the failure next to the
   candidates and does not cache the answer.

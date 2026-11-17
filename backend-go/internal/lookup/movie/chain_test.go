@@ -282,6 +282,9 @@ func TestPolishEANsResolveToTMDB(t *testing.T) {
 			`ohara_source_requests_total{source="ceneo",status="ok"}`,
 			`ohara_source_requests_total{source="upcitemdb",status="ok"}`,
 			`ohara_source_requests_total{source="tmdb",status="ok"}`,
+			`ohara_source_last_success_timestamp_seconds{source="tmdb"}`,
+			`ohara_source_results{source="tmdb"}`,
+			`ohara_source_results{source="ceneo"}`,
 		} {
 			if !strings.Contains(body, want) {
 				t.Errorf("metrics missing %s", want)

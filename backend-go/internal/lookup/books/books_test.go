@@ -379,7 +379,7 @@ func TestProvidersCountSourceOutcomes(t *testing.T) {
 		case "/api/books":
 			_, _ = w.Write([]byte("<html>busy</html>"))
 		default:
-			_, _ = w.Write([]byte(`{"kind":"books#volumes","totalItems":0}`))
+			_, _ = w.Write([]byte(`{"kind":"books#volumes","items":"changed"}`))
 		}
 	}))
 	t.Cleanup(srv.Close)
@@ -387,8 +387,8 @@ func TestProvidersCountSourceOutcomes(t *testing.T) {
 	before := scrape(t)
 	_, _ = (books.BN{BaseURL: srv.URL}).Fetch(ctx, "9788375780635")
 	_, _ = (books.OpenLibrary{BaseURL: srv.URL}).Fetch(ctx, "9788375780635")
-	if _, err := (books.GoogleBooks{APIKey: "k", BaseURL: srv.URL}).Fetch(ctx, "9788375780635"); err != nil {
-		t.Fatal(err)
+	if _, err := (books.GoogleBooks{APIKey: "k", BaseURL: srv.URL}).Fetch(ctx, "9788375780635"); err == nil {
+		t.Fatal("google books accepted a changed response shape")
 	}
 	after := scrape(t)
 	for series, want := range map[string]float64{
@@ -396,15 +396,29 @@ func TestProvidersCountSourceOutcomes(t *testing.T) {
 		`ohara_source_errors_total{source="bn"}`:                                 1,
 		`ohara_source_requests_total{source="openlibrary",status="parse_error"}`: 1,
 		`ohara_source_parse_errors_total{source="openlibrary"}`:                  1,
-		`ohara_source_requests_total{source="google_books",status="ok"}`:         1,
-		`ohara_source_errors_total{source="google_books"}`:                       0,
+		`ohara_source_requests_total{source="google_books",status="ok"}`:         0,
+		`ohara_source_parse_errors_total{source="google_books"}`:                 1,
 	} {
 		if d := after[series] - before[series]; d != want {
 			t.Errorf("%s grew by %v, want %v", series, d, want)
 		}
 	}
-	if _, ok := after[`ohara_source_last_success_timestamp_seconds{source="google_books"}`]; !ok {
-		t.Error("google_books last success not exported")
+}
+
+func TestLookupRecordsSourceResults(t *testing.T) {
+	_, srv := newCatalog(t)
+	res := chain(t, srv, nil).Lookup(context.Background(), "9788375780635")
+	if len(res.Candidates) == 0 {
+		t.Fatalf("lookup = %+v", res)
+	}
+	got := scrape(t)
+	for _, source := range []string{"bn", "openlibrary", "google_books"} {
+		if v, ok := got[`ohara_source_results{source="`+source+`"}`]; !ok || v != 1 {
+			t.Errorf("%s results = %v (exported %v), want 1", source, v, ok)
+		}
+		if _, ok := got[`ohara_source_last_success_timestamp_seconds{source="`+source+`"}`]; !ok {
+			t.Errorf("%s last success not exported", source)
+		}
 	}
 }
 

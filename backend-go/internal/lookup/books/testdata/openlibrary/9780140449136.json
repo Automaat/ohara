@@ -1,0 +1,108 @@
+{
+ "ISBN:9780140449136": {
+  "bib_key": "ISBN:9780140449136",
+  "info_url": "http://openlibrary.org/books/OL23140636M/Crime_and_punishment",
+  "preview": "noview",
+  "preview_url": "http://openlibrary.org/books/OL23140636M/Crime_and_punishment",
+  "thumbnail_url": "https://covers.openlibrary.org/b/id/14935910-S.jpg",
+  "details": {
+   "notes": {
+    "type": "/type/text",
+    "value": "Includes bibliographical references (p. [xxiii]-xxiv)."
+   },
+   "identifiers": {
+    "librarything": [
+     "10072"
+    ],
+    "goodreads": [
+     "181309"
+    ]
+   },
+   "title": "Crime and punishment",
+   "authors": [
+    {
+     "key": "/authors/OL22242A",
+     "name": "Fiódor Dostoievski"
+    }
+   ],
+   "publish_date": "2003",
+   "publishers": [
+    "Penguin"
+   ],
+   "isbn_10": [
+    "0140449132"
+   ],
+   "series": [
+    "Penguin classics"
+   ],
+   "dewey_decimal_class": [
+    "891.73/3"
+   ],
+   "lc_classifications": [
+    "PG3326 .P7 2003",
+    "PG3326.P7 2003"
+   ],
+   "url": [
+    "http://www.loc.gov/catdir/enhancements/fy0716/2003275315-b.html",
+    "http://www.loc.gov/catdir/enhancements/fy0716/2003275315-d.html"
+   ],
+   "publish_places": [
+    "London",
+    "New York"
+   ],
+   "contributions": [
+    "McDuff, David, 1945-"
+   ],
+   "languages": [
+    {
+     "key": "/languages/eng"
+    }
+   ],
+   "pagination": "xxxiv, 671 p. ;",
+   "source_records": [
+    "marc:marc_loc_updates/v35.i20.records.utf8:14056484:1048",
+    "marc:marc_openlibraries_sanfranciscopubliclibrary/sfpl_chq_2018_12_24_run01.mrc:64851737:1934",
+    "bwb:9780140449136",
+    "marc:marc_loc_2016/BooksAll.2016.part30.utf8:227519867:1048",
+    "midcolumbia:1437813"
+   ],
+   "work_titles": [
+    "Prestuplenie i nakazanie."
+   ],
+   "edition_name": "[Rev. ed.].",
+   "lccn": [
+    "2003275315"
+   ],
+   "local_id": [
+    "urn:sfpl:31223087190410",
+    "urn:sfpl:31223095390747"
+   ],
+   "publish_country": "enk",
+   "by_statement": "Fyodor Dostoyevsky ; translated with an introduction and notes by David McDuff.",
+   "type": {
+    "key": "/type/edition"
+   },
+   "lexile": "880",
+   "key": "/books/OL23140636M",
+   "number_of_pages": 671,
+   "works": [
+    {
+     "key": "/works/OL166894W"
+    }
+   ],
+   "covers": [
+    14935910
+   ],
+   "latest_revision": 12,
+   "revision": 12,
+   "created": {
+    "type": "/type/datetime",
+    "value": "2009-04-23T21:58:15.865686"
+   },
+   "last_modified": {
+    "type": "/type/datetime",
+    "value": "2025-04-29T10:32:23.853856"
+   }
+  }
+ }
+}

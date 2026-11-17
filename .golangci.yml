@@ -159,6 +159,9 @@ linters:
 
     misspell:
       locale: US
+      # Polish MARC relator term matched in BN catalog records.
+      ignore-rules:
+        - autor
 
     gomodguard_v2:
       blocked:

@@ -31,6 +31,21 @@ var (
 		Name: "ohara_build_info",
 		Help: "Always 1; the version label names the running build.",
 	}, []string{"version"})
+
+	lookupRequests = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "ohara_lookup_provider_requests_total",
+		Help: "Barcode lookups sent to a metadata provider (cache misses).",
+	}, []string{"provider"})
+
+	lookupErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "ohara_lookup_provider_errors_total",
+		Help: "Provider lookups that failed to fetch or parse.",
+	}, []string{"provider"})
+
+	lookupCacheHits = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "ohara_lookup_cache_hits_total",
+		Help: "Barcode lookups answered from lookup_cache.",
+	}, []string{"provider"})
 )
 
 func init() {
@@ -38,6 +53,9 @@ func init() {
 		httpRequests,
 		httpDuration,
 		buildInfo,
+		lookupRequests,
+		lookupErrors,
+		lookupCacheHits,
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)
@@ -132,4 +150,27 @@ func statusText(status int) string {
 	default:
 		return "1xx"
 	}
+}
+
+// InitLookupProvider exports zeroed lookup counters for provider, so rate
+// and alert queries see the series before its first request.
+func InitLookupProvider(provider string) {
+	lookupRequests.WithLabelValues(provider)
+	lookupErrors.WithLabelValues(provider)
+	lookupCacheHits.WithLabelValues(provider)
+}
+
+// ObserveLookupRequest counts one request sent to provider.
+func ObserveLookupRequest(provider string) {
+	lookupRequests.WithLabelValues(provider).Inc()
+}
+
+// ObserveLookupError counts one failed provider lookup.
+func ObserveLookupError(provider string) {
+	lookupErrors.WithLabelValues(provider).Inc()
+}
+
+// ObserveLookupCacheHit counts one lookup served from the cache.
+func ObserveLookupCacheHit(provider string) {
+	lookupCacheHits.WithLabelValues(provider).Inc()
 }

@@ -1,0 +1,66 @@
+{
+ "ISBN:9788308025345": {
+  "bib_key": "ISBN:9788308025345",
+  "info_url": "http://openlibrary.org/books/OL15314400M/Solaris",
+  "preview": "noview",
+  "preview_url": "http://openlibrary.org/books/OL15314400M/Solaris",
+  "details": {
+   "publishers": [
+    "Wydawnictwo Literackie"
+   ],
+   "source_records": [
+    "marc:talis_openlibrary_contribution/talis-openlibrary-contribution.mrc:787602633:387",
+    "marc:marc_columbia/Columbia-extract-20221130-004.mrc:115495025:875"
+   ],
+   "title": "Solaris",
+   "identifiers": {
+    "librarything": [
+     "18415"
+    ]
+   },
+   "languages": [
+    {
+     "key": "/languages/pol"
+    }
+   ],
+   "publish_date": "1994",
+   "publish_country": "pl ",
+   "key": "/books/OL15314400M",
+   "authors": [
+    {
+     "key": "/authors/OL29655A",
+     "name": "Stanisław Lem"
+    }
+   ],
+   "publish_places": [
+    "Kraków"
+   ],
+   "works": [
+    {
+     "key": "/works/OL109524W"
+    }
+   ],
+   "type": {
+    "key": "/type/edition"
+   },
+   "isbn_10": [
+    "830802534X"
+   ],
+   "classifications": {},
+   "oclc_numbers": [
+    "32140471"
+   ],
+   "number_of_pages": 208,
+   "latest_revision": 7,
+   "revision": 7,
+   "created": {
+    "type": "/type/datetime",
+    "value": "2008-09-19T07:48:27.383937"
+   },
+   "last_modified": {
+    "type": "/type/datetime",
+    "value": "2024-07-16T03:26:20.990255"
+   }
+  }
+ }
+}

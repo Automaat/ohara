@@ -157,14 +157,14 @@ func (s *Store) CreateTitle(ctx context.Context, in *TitleInput) (Title, error) 
 func (s *Store) UpdateTitle(ctx context.Context, id int64, in *TitleInput) (Title, error) {
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
 		var kind string
-		var editions int
-		err := tx.QueryRow(ctx, `SELECT kind, (SELECT count(*) FROM edition WHERE title_id = $1)
-			FROM title WHERE id = $1 FOR UPDATE`, id).Scan(&kind, &editions)
+		err := tx.QueryRow(ctx, `SELECT kind FROM title WHERE id = $1 FOR UPDATE`, id).Scan(&kind)
 		if err != nil {
 			return mapErr(err, ErrTitleNotFound, "lock title")
 		}
-		if kind != in.Kind && editions > 0 {
-			return ErrKindLocked
+		if kind != in.Kind {
+			if err := checkNoEditions(ctx, tx, id); err != nil {
+				return err
+			}
 		}
 		_, err = tx.Exec(ctx, `UPDATE title SET kind = $2, name = $3, original_title = $4,
 			polish_title = $5, year = $6, tmdb_id = $7, authors = $8, bn_id = $9,
@@ -177,6 +177,21 @@ func (s *Store) UpdateTitle(ctx context.Context, id int64, in *TitleInput) (Titl
 		return Title{}, err
 	}
 	return s.GetTitle(ctx, id)
+}
+
+// checkNoEditions runs after the title row is locked, as its own statement:
+// under READ COMMITTED a count taken in the locking statement keeps the
+// snapshot from before the wait and misses an edition committed meanwhile.
+func checkNoEditions(ctx context.Context, tx pgx.Tx, titleID int64) error {
+	var exists bool
+	err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM edition WHERE title_id = $1)`, titleID).Scan(&exists)
+	if err != nil {
+		return fmt.Errorf("count editions: %w", err)
+	}
+	if exists {
+		return ErrKindLocked
+	}
+	return nil
 }
 
 // DeleteTitle removes a title without editions; ErrHasEditions otherwise.

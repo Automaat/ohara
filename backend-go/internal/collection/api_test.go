@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -11,6 +12,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Automaat/ohara/backend-go/internal/collection"
 	"github.com/Automaat/ohara/backend-go/internal/dbtest"
@@ -343,4 +345,86 @@ func TestListTitles(t *testing.T) {
 		}
 	}
 	a.fails(http.MethodGet, "/api/titles?kind=vinyl", nil, http.StatusUnprocessableEntity, "kind")
+}
+
+func TestBarcodeSpellingsShareOneEdition(t *testing.T) {
+	a := newAPI(t)
+	movie := a.title("movie", "UPC disc")
+	var e collection.Edition
+	a.mustDo(http.MethodPost, "/api/editions", obj{"title_id": movie, "barcode": "036000291452", "format": "dvd"}, &e, http.StatusCreated)
+	if *e.Barcode != "0036000291452" {
+		t.Fatalf("stored barcode = %q, want EAN-13 form", *e.Barcode)
+	}
+	for _, spelling := range []string{"0036000291452", "00036000291452"} {
+		a.fails(http.MethodPost, "/api/editions", obj{"title_id": movie, "barcode": spelling, "format": "dvd"}, http.StatusConflict, "barcode")
+		var found []collection.Edition
+		a.mustDo(http.MethodGet, "/api/editions?barcode="+spelling, nil, &found, http.StatusOK)
+		if len(found) != 1 || found[0].ID != e.ID {
+			t.Fatalf("editions?barcode=%s = %+v", spelling, found)
+		}
+	}
+}
+
+// TestKindChangeWaitsForConcurrentEdition holds an edition insert open on the
+// title's share lock, starts a kind change that must wait for it, then
+// commits the insert: the kind change has to see the new edition.
+func TestKindChangeWaitsForConcurrentEdition(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	store := collection.NewStore(pool)
+	ctx := context.Background()
+	in := collection.TitleInput{Kind: "movie", Name: "Race"}
+	if fe := in.Normalize(); fe != nil {
+		t.Fatalf("normalize: %v", fe)
+	}
+	title, err := store.CreateTitle(ctx, &in)
+	if err != nil {
+		t.Fatalf("create title: %v", err)
+	}
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT kind FROM title WHERE id = $1 FOR SHARE`, title.ID); err != nil {
+		t.Fatalf("share lock: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO edition (title_id, format) VALUES ($1, 'dvd')`, title.ID); err != nil {
+		t.Fatalf("insert edition: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		book := collection.TitleInput{Kind: "book", Name: "Race", Authors: []string{}}
+		_, err := store.UpdateTitle(ctx, title.ID, &book)
+		done <- err
+	}()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var waiting bool
+		err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity
+			WHERE wait_event_type = 'Lock' AND query LIKE '%FOR UPDATE%')`).Scan(&waiting)
+		if err != nil {
+			t.Fatalf("poll locks: %v", err)
+		}
+		if waiting {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("kind change never waited on the title lock")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit edition: %v", err)
+	}
+
+	if err := <-done; !errors.Is(err, collection.ErrKindLocked) {
+		t.Fatalf("kind change err = %v, want ErrKindLocked", err)
+	}
+	got, err := store.GetTitle(ctx, title.ID)
+	if err != nil || got.Kind != "movie" {
+		t.Fatalf("title after race = %+v, %v; want movie", got, err)
+	}
 }

@@ -114,7 +114,7 @@ const title: Title = {
 describe('title form', () => {
 	it('round-trips a title', () => {
 		const form = titleToForm(title);
-		expect(form.authors).toBe('Stanisław Lem, Ktoś');
+		expect(form.authors).toBe('Stanisław Lem\nKtoś');
 		expect(form.year).toBe('1961');
 		const parsed = titlePayload(form);
 		expect(parsed.ok && parsed.value).toMatchObject({
@@ -124,6 +124,13 @@ describe('title form', () => {
 			year: 1961,
 			tmdb_id: null
 		});
+	});
+
+	it('keeps commas inside an author name', () => {
+		const parsed = titlePayload(
+			titleToForm({ ...title, authors: ['Asimov, Isaac', 'Lem, Stanisław'] })
+		);
+		expect(parsed.ok && parsed.value.authors).toEqual(['Asimov, Isaac', 'Lem, Stanisław']);
 	});
 
 	it('drops book fields from a movie', () => {

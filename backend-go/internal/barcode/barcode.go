@@ -13,8 +13,9 @@ var (
 )
 
 // Normalize strips spaces and hyphens, verifies the check digit and returns
-// the canonical form. ISBN-10 becomes its ISBN-13, so both spellings of one
-// book map to the same edition.
+// the canonical form: EAN-8, EAN-13 or GTIN-14. A UPC-A comes back as its
+// EAN-13 (strip the leading 0 to get the UPC back) and an ISBN-10 as its
+// ISBN-13, so every spelling of one product maps to the same edition.
 func Normalize(raw string) (string, error) {
 	code := strings.ToUpper(strings.Map(func(r rune) rune {
 		if r == ' ' || r == '-' || r == '\t' {
@@ -37,7 +38,23 @@ func Normalize(raw string) (string, error) {
 	if gtinCheckDigit(code[:len(code)-1]) != code[len(code)-1] {
 		return "", ErrChecksum
 	}
-	return code, nil
+	return canonical(code), nil
+}
+
+// canonical picks one spelling per GTIN, since leading zeros do not change
+// the product: an EAN-8 stays 8 digits, a UPC-A becomes its EAN-13 (leading
+// 0), and a GTIN-14 with indicator 0 drops to 13 digits. The check digit is
+// unchanged by zero padding.
+func canonical(code string) string {
+	padded := strings.Repeat("0", 14-len(code)) + code
+	switch {
+	case strings.HasPrefix(padded, "000000"):
+		return padded[6:]
+	case padded[0] == '0':
+		return padded[1:]
+	default:
+		return padded
+	}
 }
 
 // IsBook reports whether a normalized code is in the Bookland ISBN range.

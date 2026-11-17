@@ -246,7 +246,7 @@ export function titleToForm(t: TitlePayload | null, kind: Kind = 'movie'): Title
 		polish_title: t?.polish_title ?? '',
 		year: t?.year?.toString() ?? '',
 		tmdb_id: t?.tmdb_id?.toString() ?? '',
-		authors: t?.authors.join(', ') ?? '',
+		authors: t?.authors.join('\n') ?? '',
 		bn_id: t?.bn_id ?? '',
 		openlibrary_id: t?.openlibrary_id ?? '',
 		notes: t?.notes ?? ''
@@ -275,7 +275,7 @@ export function titlePayload(f: TitleForm): Parsed<TitlePayload> {
 			authors: movie
 				? []
 				: f.authors
-						.split(/[,;\n]/)
+						.split('\n')
 						.map((a) => a.trim())
 						.filter(Boolean),
 			bn_id: movie ? null : optText(f.bn_id),

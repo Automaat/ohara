@@ -48,7 +48,8 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
 - Errors are `{"error": "...", "field": "..."}`: 422 for validation (field
   names the input), 409 for conflicts, 404 for a missing path resource.
 - Money is integer grosze (`price_cents`). Barcodes are stored normalized
-  (`barcode.Normalize`), one edition per barcode.
+  (`barcode.Normalize`: EAN-8, EAN-13 or GTIN-14; a UPC-A becomes its
+  EAN-13 with a leading 0, ISBN-10 becomes ISBN-13), one edition per barcode.
 - Lookup providers implement `lookup.Provider` (`Fetch` returns raw JSON,
   `Parse` turns raw JSON into candidates) and register in `cmd/api` with a
   cache TTL. Candidate `title`/`edition` fields match the POST bodies of

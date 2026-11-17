@@ -202,3 +202,17 @@ func TestEditionResolvesQueueEntry(t *testing.T) {
 		t.Fatalf("queueing a barcode in the collection = %d %+v, want 409 on barcode", got, conflict)
 	}
 }
+
+func TestStoreCount(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	store := scanqueue.NewStore(pool)
+	ctx := context.Background()
+	for _, code := range []string{"5901234123457", "5901234123457", "9788375780635"} {
+		if _, _, err := store.Add(ctx, code, "not_found", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n, err := store.Count(ctx); err != nil || n != 2 {
+		t.Fatalf("count = %d, %v; want 2 distinct barcodes", n, err)
+	}
+}

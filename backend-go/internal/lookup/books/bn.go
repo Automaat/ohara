@@ -57,7 +57,7 @@ func (p BN) search(ctx context.Context, isbn string) (json.RawMessage, error) {
 	if base == "" {
 		base = BNBaseURL
 	}
-	return getJSON(ctx, p.Client, base+"/api/institutions/bibs.json?limit=10&isbnIssn="+url.QueryEscape(isbn))
+	return getJSON(ctx, p.Client, p.Name(), base+"/api/institutions/bibs.json?limit=10&isbnIssn="+url.QueryEscape(isbn))
 }
 
 type bnResponse struct {

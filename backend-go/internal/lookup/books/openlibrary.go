@@ -37,7 +37,7 @@ func (p OpenLibrary) Fetch(ctx context.Context, code string) (json.RawMessage, e
 	if base == "" {
 		base = OpenLibraryBaseURL
 	}
-	return getJSON(ctx, p.Client, base+"/api/books?format=json&jscmd=details&bibkeys=ISBN:"+url.QueryEscape(code))
+	return getJSON(ctx, p.Client, p.Name(), base+"/api/books?format=json&jscmd=details&bibkeys=ISBN:"+url.QueryEscape(code))
 }
 
 type olEntry struct {

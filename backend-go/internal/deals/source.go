@@ -8,7 +8,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"math"
 	"net/http"
@@ -16,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Automaat/ohara/backend-go/internal/metrics"
 )
 
 // Listing is one offer a source found. AcquiredAs is "new", "used" or nil
@@ -54,6 +55,32 @@ func NewHTTPClient() *http.Client {
 	return &http.Client{Timeout: 30 * time.Second}
 }
 
+// statusError is a response with a status other than 200.
+type statusError struct{ code int }
+
+func (e statusError) Error() string { return "status " + strconv.Itoa(e.code) }
+
+// parseError is a response a source could not read.
+type parseError struct{ err error }
+
+func (e parseError) Error() string { return e.err.Error() }
+
+func (e parseError) Unwrap() error { return e.err }
+
+// sourceStatus is the metrics outcome of a source request that returned err.
+func sourceStatus(err error) string {
+	if err == nil {
+		return metrics.SourceOK
+	}
+	if se, ok := errors.AsType[statusError](err); ok {
+		return "http_" + strconv.Itoa(se.code)
+	}
+	if _, ok := errors.AsType[parseError](err); ok {
+		return metrics.SourceParseError
+	}
+	return metrics.SourceError
+}
+
 // get fetches url and returns the body of a 200 response.
 func get(ctx context.Context, client *http.Client, url, accept string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
@@ -70,7 +97,7 @@ func get(ctx context.Context, client *http.Client, url, accept string) ([]byte, 
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxBody))
-		return nil, fmt.Errorf("status %d", resp.StatusCode)
+		return nil, statusError{resp.StatusCode}
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
 	if err != nil {

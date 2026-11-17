@@ -65,7 +65,7 @@ type pepperRaw struct {
 func parsePepper(body []byte) ([]Listing, error) {
 	var feed pepperFeed
 	if err := xml.Unmarshal(body, &feed); err != nil {
-		return nil, fmt.Errorf("pepper: decode: %w", err)
+		return nil, parseError{fmt.Errorf("pepper: decode: %w", err)}
 	}
 	out := make([]Listing, 0, len(feed.Items))
 	for i := range feed.Items {

@@ -109,10 +109,12 @@ func run() int {
 	hunter.Start(huntCtx)
 	defer hunter.Wait()
 	defer stopHunt()
+	queue := scanqueue.NewStore(pool)
+	metrics.RegisterScanQueueCollector(queue.Count)
 	deps.API = []server.Mounter{
 		collection.NewHandler(collection.NewStore(pool), logger),
 		lookupHandler,
-		scanqueue.NewHandler(scanqueue.NewStore(pool), logger),
+		scanqueue.NewHandler(queue, logger),
 		deals.NewHandler(dealStore, hunter, logger),
 	}
 	if dir := os.Getenv("OHARA_WEB_DIR"); dir != "" {
@@ -206,6 +208,7 @@ func newLookup(pool *pgxpool.Pool, logger *slog.Logger) (*lookup.Handler, error)
 		if err := registry.Register(p, bookCacheTTL); err != nil {
 			return nil, err
 		}
+		metrics.InitSource(p.Name())
 	}
 	if p := newMovieProvider(pool, logger); p != nil {
 		if err := registry.Register(p, movieCacheTTL); err != nil {
@@ -248,7 +251,9 @@ func newMovieProvider(pool *pgxpool.Pool, logger *slog.Logger) *movie.Provider {
 	names := make([]string, 0, len(p.Sources))
 	for _, s := range p.Sources {
 		names = append(names, s.Name())
+		metrics.InitSource(s.Name())
 	}
+	metrics.InitSource("tmdb")
 	logger.Info("movie lookup sources", "sources", strings.Join(names, ","))
 	return p
 }
@@ -318,7 +323,8 @@ func newHunter(pool *pgxpool.Pool, logger *slog.Logger) (*deals.Hunter, *deals.S
 	}
 	logger.Info("deal hunter", "interval", interval, "delay", delay, "telegram", notifier != nil)
 	store := deals.NewStore(pool)
-	return deals.NewHunter(store, sources, notifier, deals.Config{Interval: interval, Delay: delay}, logger), store, nil
+	cfg := deals.Config{Interval: interval, Delay: delay, CanaryQuery: envOr("OHARA_DEALS_CANARY_QUERY", "dvd")}
+	return deals.NewHunter(store, sources, notifier, cfg, logger), store, nil
 }
 
 func registerPoolMetrics(pool *pgxpool.Pool) {

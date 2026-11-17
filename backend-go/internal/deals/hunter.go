@@ -11,6 +11,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/Automaat/ohara/backend-go/internal/metrics"
 )
 
 // maxRunErrors bounds the source errors a run keeps for the status view.
@@ -26,10 +28,13 @@ const markSentTimeout = 10 * time.Second
 
 // Config tunes the hunter. Interval 0 disables the schedule; a run can still
 // be started by hand. Delay separates two source requests; both are
-// jittered.
+// jittered. CanaryQuery, when set, is asked of every query source on every
+// run, wishlist or not: a query that always has listings, so a source that
+// answers with none is broken. A feed source's one request is its canary.
 type Config struct {
-	Interval time.Duration
-	Delay    time.Duration
+	Interval    time.Duration
+	Delay       time.Duration
+	CanaryQuery string
 }
 
 // RunResult counts what one run did. Errors holds source failures, which do
@@ -87,6 +92,9 @@ func NewHunter(store *Store, sources []Source, notifier Notifier, cfg Config, lo
 	h.status.Scheduled = cfg.Interval > 0
 	h.status.IntervalSeconds = int64(cfg.Interval.Seconds())
 	h.status.Telegram = notifier != nil
+	for _, src := range sources {
+		metrics.InitSource(src.Name())
+	}
 	return h
 }
 
@@ -201,9 +209,12 @@ func (h *Hunter) Run(ctx context.Context) (RunResult, error) {
 	r := &run{h: h, wants: wants, rules: rules, first: true}
 	r.res.Wants = len(wants)
 	r.res.Errors = []string{}
+	var queries []string
 	if len(wants) > 0 {
-		queries := searchQueries(wants)
+		queries = searchQueries(wants)
 		r.res.Queries = len(queries)
+	}
+	if len(wants) > 0 || h.cfg.CanaryQuery != "" {
 		for _, src := range h.sources {
 			if err := r.search(ctx, src, queries); err != nil {
 				return r.res, err
@@ -240,30 +251,86 @@ func (r *run) pause(ctx context.Context) error {
 	return r.h.sleep(ctx, jitter(r.h.cfg.Delay, 0.5))
 }
 
+// search asks src for the canary query and every wishlist query, then
+// publishes the listing count and canary outcome. A feed source is asked
+// once: that answer is both its canary and, with a wishlist, its listings.
 func (r *run) search(ctx context.Context, src Source, queries []string) error {
+	canary := r.h.cfg.CanaryQuery
 	if !src.PerQuery() {
-		queries = []string{""}
-	}
-	for _, q := range queries {
-		if err := r.pause(ctx); err != nil {
+		listings, ok, err := r.ask(ctx, src, "")
+		if err != nil {
 			return err
 		}
-		listings, err := src.Search(ctx, q)
+		if canary != "" {
+			r.canary(src, ok, len(listings))
+		}
+		metrics.SetSourceResults(src.Name(), len(listings))
+		if ok && len(r.wants) > 0 {
+			return r.record(ctx, listings)
+		}
+		return nil
+	}
+	results := 0
+	if canary != "" {
+		listings, ok, err := r.ask(ctx, src, canary)
 		if err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			r.h.logger.Warn("deal source failed", "source", src.Name(), "query", q, "err", err)
-			if len(r.res.Errors) < maxRunErrors {
-				r.res.Errors = append(r.res.Errors, err.Error())
-			}
+			return err
+		}
+		r.canary(src, ok, len(listings))
+		results += len(listings)
+	}
+	for _, q := range queries {
+		listings, ok, err := r.ask(ctx, src, q)
+		if err != nil {
+			return err
+		}
+		if !ok {
 			continue
 		}
+		results += len(listings)
 		if err := r.record(ctx, listings); err != nil {
 			return err
 		}
 	}
+	metrics.SetSourceResults(src.Name(), results)
 	return nil
+}
+
+// ask sends one request to src after the pause and counts its outcome. A
+// source failure is logged and kept in the result with ok false; err is
+// only the run's cancellation.
+func (r *run) ask(ctx context.Context, src Source, query string) ([]Listing, bool, error) {
+	if err := r.pause(ctx); err != nil {
+		return nil, false, err
+	}
+	listings, err := src.Search(ctx, query)
+	if err != nil && ctx.Err() != nil {
+		return nil, false, ctx.Err()
+	}
+	metrics.ObserveSource(src.Name(), sourceStatus(err))
+	if err != nil {
+		r.h.logger.Warn("deal source failed", "source", src.Name(), "query", query, "err", err)
+		r.fail(err.Error())
+		return nil, false, nil
+	}
+	return listings, true, nil
+}
+
+// canary publishes the canary outcome of src; an answer without listings
+// is a failure too, since the canary query always has some.
+func (r *run) canary(src Source, ok bool, listings int) {
+	metrics.SetSourceCanary(src.Name(), ok && listings > 0)
+	if ok && listings == 0 {
+		r.h.logger.Warn("deal source canary found no listings", "source", src.Name(), "query", r.h.cfg.CanaryQuery)
+		r.fail(src.Name() + ": canary query found no listings")
+	}
+}
+
+// fail keeps a source failure for the status view.
+func (r *run) fail(msg string) {
+	if len(r.res.Errors) < maxRunErrors {
+		r.res.Errors = append(r.res.Errors, msg)
+	}
 }
 
 func (r *run) record(ctx context.Context, listings []Listing) error {

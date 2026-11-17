@@ -5,6 +5,7 @@
 package metrics
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -42,6 +43,26 @@ var (
 		Help: "Failed requests to external sources: any outcome other than ok.",
 	}, []string{"source"})
 
+	sourceParseErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "ohara_source_parse_errors_total",
+		Help: "Responses from an external source that could not be read (status parse_error).",
+	}, []string{"source"})
+
+	sourceLastSuccess = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "ohara_source_last_success_timestamp_seconds",
+		Help: "Unix time of the last ok request to an external source; absent until one succeeds.",
+	}, []string{"source"})
+
+	sourceResults = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "ohara_source_results",
+		Help: "Listings a deal source returned in the last deal search run, canary included.",
+	}, []string{"source"})
+
+	sourceCanary = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "ohara_source_canary_ok",
+		Help: "1 when the deal source's canary query in the last run returned listings, else 0.",
+	}, []string{"source"})
+
 	lookupRequests = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "ohara_lookup_provider_requests_total",
 		Help: "Barcode lookups sent to a metadata provider (cache misses).",
@@ -68,6 +89,10 @@ func init() {
 		lookupCacheHits,
 		sourceRequests,
 		sourceErrors,
+		sourceParseErrors,
+		sourceLastSuccess,
+		sourceResults,
+		sourceCanary,
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)
@@ -187,16 +212,80 @@ func ObserveLookupCacheHit(provider string) {
 	lookupCacheHits.WithLabelValues(provider).Inc()
 }
 
-// ObserveSource counts one request to an external source. status is "ok" for
-// a usable answer (a valid "no match" included), "http_<code>" for an
-// unexpected status, "error" for a transport failure and "parse_error" for a
-// response that could not be read. Anything but "ok" also counts as an error.
-func ObserveSource(source, status string) {
-	sourceRequests.WithLabelValues(source, status).Inc()
-	if status != SourceOK {
-		sourceErrors.WithLabelValues(source).Inc()
-	}
+// Source request outcomes for ObserveSource.
+const (
+	// SourceOK is a usable answer, a valid "no match" included.
+	SourceOK = "ok"
+	// SourceError is a transport failure.
+	SourceError = "error"
+	// SourceParseError is a response that could not be read.
+	SourceParseError = "parse_error"
+)
+
+// InitSource exports zeroed counters for source, so increase() and alert
+// queries see the first failure after a restart.
+func InitSource(source string) {
+	sourceRequests.WithLabelValues(source, SourceOK)
+	sourceErrors.WithLabelValues(source)
+	sourceParseErrors.WithLabelValues(source)
 }
 
-// SourceOK is the ObserveSource status of a successful request.
-const SourceOK = "ok"
+// ObserveSource counts one request to an external source. status is
+// SourceOK for a usable answer, "http_<code>" for an unexpected status,
+// SourceError for a transport failure and SourceParseError for a response
+// that could not be read. Anything but SourceOK also counts as an error; a
+// SourceOK moves the last-success timestamp.
+func ObserveSource(source, status string) {
+	sourceRequests.WithLabelValues(source, status).Inc()
+	switch status {
+	case SourceOK:
+		sourceLastSuccess.WithLabelValues(source).SetToCurrentTime()
+		return
+	case SourceParseError:
+		sourceParseErrors.WithLabelValues(source).Inc()
+	}
+	sourceErrors.WithLabelValues(source).Inc()
+}
+
+// SetSourceResults records how many listings source returned in a run.
+func SetSourceResults(source string, n int) {
+	sourceResults.WithLabelValues(source).Set(float64(n))
+}
+
+// SetSourceCanary records whether source's canary query returned listings.
+func SetSourceCanary(source string, ok bool) {
+	v := 0.0
+	if ok {
+		v = 1
+	}
+	sourceCanary.WithLabelValues(source).Set(v)
+}
+
+// scanQueueTimeout bounds the queue count a scrape runs.
+const scanQueueTimeout = 2 * time.Second
+
+var scanQueueDesc = prometheus.NewDesc("ohara_scan_queue_size",
+	"Barcodes no lookup provider resolved, waiting in the scan queue.", nil, nil)
+
+// RegisterScanQueueCollector exports the scan queue size, counted on each
+// scrape. A failed count leaves the series out of that scrape instead of
+// failing the whole scrape. Call once at startup.
+func RegisterScanQueueCollector(count func(ctx context.Context) (int64, error)) {
+	registry.MustRegister(&scanQueueCollector{count: count})
+}
+
+type scanQueueCollector struct {
+	count func(ctx context.Context) (int64, error)
+}
+
+func (c *scanQueueCollector) Describe(ch chan<- *prometheus.Desc) { ch <- scanQueueDesc }
+
+func (c *scanQueueCollector) Collect(ch chan<- prometheus.Metric) {
+	ctx, cancel := context.WithTimeout(context.Background(), scanQueueTimeout)
+	defer cancel()
+	n, err := c.count(ctx)
+	if err != nil {
+		return
+	}
+	ch <- prometheus.MustNewConstMetric(scanQueueDesc, prometheus.GaugeValue, float64(n))
+}

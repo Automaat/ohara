@@ -22,14 +22,16 @@ Same layout and tooling as `../baratie`. `package.json` and
     /collection/       # titles, editions, copies, collection view
     /lookup/           # GET /api/lookup/{barcode}: provider registry + lookup_cache
       /books/          # BN, Open Library, Google Books providers (fixtures in testdata/)
+    /scanqueue/        # /api/scan-queue: barcodes the scanner could not resolve
     /server/           # router: /health, /metrics, /api/*, SPA fallback
     /web/              # serves the built SPA, index.html for client routes
     /metrics/          # Prometheus collectors on a private registry (ohara_*)
 /src/                  # SvelteKit SPA (adapter-static, ssr off)
-  /routes/             # pages
-  /lib/                # nav table, API client, collection types and form helpers (pure TS, unit tested)
-  /lib/components/     # forms shared by create and edit pages
-/static/               # icons, robots.txt
+  /routes/             # pages; /scan is the scanner, /scan/queue the unresolved barcodes
+  /lib/                # nav table, API client, collection types, form helpers, scan flow (pure TS, unit tested)
+  /lib/components/     # forms shared by create and edit pages, camera and quick confirm
+  service-worker.ts    # SUI service worker: precache, update only on the reader's consent
+/static/               # icons, web app manifest, robots.txt
 ```
 
 One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
@@ -60,6 +62,8 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   priority. Every provider gets `ohara_lookup_provider_requests_total`,
   `ohara_lookup_provider_errors_total` and `ohara_lookup_cache_hits_total`.
 - DB tests call `dbtest.Migrated(t)`; each gets its own schema.
+- A barcode no provider resolves goes to `scan_queue`; a trigger on `edition`
+  removes it once an edition carries that barcode.
 
 ### Frontend
 
@@ -68,6 +72,13 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   the root layout. `build.cssTarget` in `vite.config.ts` keeps SUI's
   `:dir(rtl)` selectors intact.
 - UI labels are Polish. No `any`. Prettier + oxlint, tabs.
+- The scanner (`/scan`) is the PWA's start page. Camera decoding uses
+  `zxing-wasm` (Safari has no `BarcodeDetector`); its `.wasm` is bundled by
+  Vite, never loaded from a CDN. A keyboard-wedge scanner types into the
+  focused barcode field. The flow lives in `src/lib/scan.ts`: existing
+  edition → add a copy, lookup candidates → quick confirm, nothing → queue.
+- `static/manifest.webmanifest` is linked with `crossorigin="use-credentials"`
+  because Authelia guards every path.
 
 ### Auth
 

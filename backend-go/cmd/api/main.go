@@ -22,6 +22,7 @@ import (
 	"github.com/Automaat/ohara/backend-go/internal/lookup"
 	"github.com/Automaat/ohara/backend-go/internal/lookup/books"
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
+	"github.com/Automaat/ohara/backend-go/internal/scanqueue"
 	"github.com/Automaat/ohara/backend-go/internal/server"
 	"github.com/Automaat/ohara/backend-go/internal/web"
 )
@@ -97,6 +98,7 @@ func run() int {
 	deps.API = []server.Mounter{
 		collection.NewHandler(collection.NewStore(pool), logger),
 		lookupHandler,
+		scanqueue.NewHandler(scanqueue.NewStore(pool), logger),
 	}
 	if dir := os.Getenv("OHARA_WEB_DIR"); dir != "" {
 		webFS := os.DirFS(dir)

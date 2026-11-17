@@ -33,8 +33,18 @@ type telegramReply struct {
 }
 
 // Send implements Notifier. The bot token is part of the request URL, so
-// errors never carry the URL.
+// every error has the token cut out before it is returned.
 func (t *Telegram) Send(ctx context.Context, text string) error {
+	if err := t.send(ctx, text); err != nil {
+		if t.Token == "" {
+			return err
+		}
+		return errors.New(strings.ReplaceAll(err.Error(), t.Token, "<token>"))
+	}
+	return nil
+}
+
+func (t *Telegram) send(ctx context.Context, text string) error {
 	form := url.Values{"chat_id": {t.ChatID}, "text": {text}}
 	endpoint := strings.TrimSuffix(t.BaseURL, "/") + "/bot" + t.Token + "/sendMessage"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
@@ -48,7 +58,7 @@ func (t *Telegram) Send(ctx context.Context, text string) error {
 		if errors.As(err, &uerr) {
 			err = uerr.Err
 		}
-		return fmt.Errorf("telegram: %s", strings.ReplaceAll(err.Error(), t.Token, "<token>"))
+		return fmt.Errorf("telegram: %w", err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<16))

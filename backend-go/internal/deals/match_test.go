@@ -2,6 +2,7 @@ package deals
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -25,7 +26,7 @@ func wiedzmin() Want {
 }
 
 func rocky(part string) Want {
-	return Want{CopyID: 3, Kind: "movie", Name: "Rocky " + part, Format: new("dvd")}
+	return Want{CopyID: 3, Kind: "movie", Name: strings.TrimSpace("Rocky " + part), Format: new("dvd")}
 }
 
 func TestPickSkipsOtherSequel(t *testing.T) {
@@ -58,6 +59,11 @@ func TestWantMatches(t *testing.T) {
 		{"book title missing", wiedzmin(), "Sapkowski Krew elfów", false},
 		{"sequel number kept", rocky("2"), "Rocky 2 DVD lektor", true},
 		{"other sequel number", rocky("2"), "Rocky 3 DVD", false},
+		{"sequel of the original", bladeRunner("bluray"), "Blade Runner 2049 Blu-ray", false},
+		{"roman sequel of the original", rocky(""), "Rocky II DVD", false},
+		{"release year after the title", bladeRunner("bluray"), "Blade Runner 1982 Blu-ray", true},
+		{"sequel wanted by its number", Want{Kind: "movie", Name: "Blade Runner 2049", Format: new("bluray")}, "Blade Runner 2049 Blu-ray", true},
+		{"number elsewhere in the listing", bladeRunner("dvd"), "Blade Runner DVD 2 płyty", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

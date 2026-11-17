@@ -2,7 +2,9 @@ package deals
 
 import (
 	"slices"
+	"strconv"
 	"strings"
+	"time"
 	"unicode"
 )
 
@@ -194,9 +196,39 @@ func listingFormat(text []string) string {
 	return ""
 }
 
+// romanParts are the sequel numerals a movie title can carry.
+var romanParts = map[string]bool{
+	"ii": true, "iii": true, "iv": true, "v": true, "vi": true, "vii": true, "viii": true, "ix": true, "x": true,
+}
+
+// sequelAfter reports whether text names a sequel of name: right after
+// name's last word comes a number or numeral that name lacks and that is no
+// release year, as in "Blade Runner 2049" or "Rocky II" for "Rocky".
+func sequelAfter(text []string, name string) bool {
+	nameWords := words(name)
+	if len(nameWords) == 0 {
+		return false
+	}
+	last := nameWords[len(nameWords)-1]
+	for i, t := range text[:max(len(text)-1, 0)] {
+		next := text[i+1]
+		if t != last || slices.Contains(nameWords, next) {
+			continue
+		}
+		if romanParts[next] {
+			return true
+		}
+		if n, err := strconv.Atoi(next); err == nil && (n < 1900 || n > time.Now().Year()+1) {
+			return true
+		}
+	}
+	return false
+}
+
 // Matches reports whether a listing title is w: it contains every required
 // word of one of w's names, the edition's format for a movie, and the
-// author's surname for a book.
+// author's surname for a book. A movie listing naming a sequel of that name
+// does not match.
 func (w *Want) Matches(title string) bool {
 	text := words(title)
 	if w.Kind == "movie" && w.Format != nil && listingFormat(text) != *w.Format {
@@ -206,7 +238,8 @@ func (w *Want) Matches(title string) bool {
 		return false
 	}
 	for _, n := range w.names() {
-		if req := required(n); len(req) > 0 && containsAll(text, req) {
+		if req := required(n); len(req) > 0 && containsAll(text, req) &&
+			(w.Kind != "movie" || !sequelAfter(text, n)) {
 			return true
 		}
 	}

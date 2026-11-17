@@ -186,6 +186,11 @@ func TestTelegramSend(t *testing.T) {
 			_, _ = io.WriteString(w, `{"ok":false,"description":"Bad Request: chat not found"}`)
 			return
 		}
+		if gotChat == "echo" {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(w, `{"ok":false,"description":"upstream error for bot123:SECRET"}`)
+			return
+		}
 		_, _ = io.WriteString(w, `{"ok":true}`)
 	}))
 	t.Cleanup(srv.Close)
@@ -199,6 +204,11 @@ func TestTelegramSend(t *testing.T) {
 	tg.ChatID = "bad"
 	if err := tg.Send(context.Background(), "x"); err == nil || !strings.Contains(err.Error(), "chat not found") {
 		t.Fatalf("rejected send err = %v", err)
+	}
+	tg.ChatID = "echo"
+	if err := tg.Send(context.Background(), "x"); err == nil || strings.Contains(err.Error(), "SECRET") ||
+		!strings.Contains(err.Error(), "upstream error for bot<token>") {
+		t.Fatalf("echoed token err = %v, want the token cut out", err)
 	}
 	down := &Telegram{Client: srv.Client(), BaseURL: "http://127.0.0.1:1", Token: "123:SECRET", ChatID: "42"}
 	err := down.Send(context.Background(), "x")

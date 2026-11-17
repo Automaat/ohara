@@ -239,8 +239,8 @@ export function scanEditionPayload(
 	};
 }
 
-function scanCopyPayload(f: QuickForm, editionID: number) {
-	return copyPayload(
+function scanCopyPayload(f: QuickForm, editionID: number, requestKey: string) {
+	const parsed = copyPayload(
 		{
 			status: 'owned',
 			price: f.price,
@@ -252,6 +252,16 @@ function scanCopyPayload(f: QuickForm, editionID: number) {
 		},
 		editionID
 	);
+	return parsed.ok ? { ...parsed, value: { ...parsed.value, request_key: requestKey } } : parsed;
+}
+
+/**
+ * A fresh key for one quick confirm. Sent as the copy's request_key, it makes a retried save
+ * return the copy an earlier attempt created instead of adding a second one.
+ */
+export function newRequestKey(): string {
+	const bytes = crypto.getRandomValues(new Uint8Array(16));
+	return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 /** A form value the server would refuse, caught before the first request. */
@@ -303,12 +313,14 @@ async function discardTitle(fetchFn: typeof fetch, id: number) {
  * Saves a quick confirm as an owned copy. A new barcode first gets its title, reusing the one
  * with the candidate's TMDB ID, then its edition; when another save created that edition in the
  * meantime, the copy joins it and a title made here is removed again. Every value is checked
- * before the first request, so a refused form changes nothing.
+ * before the first request, so a refused form changes nothing. Retry a failed save with the
+ * same requestKey: a copy the failed attempt created is returned rather than added again.
  */
 export async function saveScan(
 	fetchFn: typeof fetch,
 	target: SaveTarget,
-	f: QuickForm
+	f: QuickForm,
+	requestKey: string
 ): Promise<Saved> {
 	if (target.kind === 'owned') {
 		const e = target.edition;
@@ -316,14 +328,14 @@ export async function saveScan(
 			fetchFn,
 			'POST',
 			'/api/copies',
-			must(scanCopyPayload(f, e.id))
+			must(scanCopyPayload(f, e.id, requestKey))
 		);
 		return { titleID: e.title.id, titleName: e.title.name, editionID: e.id, copy };
 	}
 
 	const titleBody = must(scanTitlePayload(f, target.candidate));
 	must(scanEditionPayload(f, target.candidate, target.barcode, 0));
-	must(scanCopyPayload(f, 0));
+	must(scanCopyPayload(f, 0, requestKey));
 
 	const reused = await existingTitle(fetchFn, titleBody.tmdb_id);
 	const title = reused ?? (await request<Title>(fetchFn, 'POST', '/api/titles', titleBody));
@@ -351,7 +363,7 @@ export async function saveScan(
 		fetchFn,
 		'POST',
 		'/api/copies',
-		must(scanCopyPayload(f, edition.id))
+		must(scanCopyPayload(f, edition.id, requestKey))
 	);
 	return { titleID, titleName, editionID: edition.id, copy };
 }

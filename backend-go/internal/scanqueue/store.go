@@ -84,9 +84,19 @@ func (s *Store) List(ctx context.Context) ([]Entry, error) {
 
 // Add queues a normalized barcode, or records another scan of one already
 // queued with the latest reason and detail. The bool reports a new entry. A
-// barcode an edition already carries is ErrInCollection.
+// barcode an edition already carries is ErrInCollection. The per-barcode lock
+// it shares with the edition trigger orders it against a concurrent edition
+// insert, so the edition check never misses an uncommitted edition.
 func (s *Store) Add(ctx context.Context, code, reason, detail string) (Entry, bool, error) {
-	row := s.pool.QueryRow(ctx, `INSERT INTO scan_queue AS q (barcode, reason, detail)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Entry{}, false, fmt.Errorf("add to scan queue: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	if _, err := tx.Exec(ctx, `SELECT scan_queue_lock($1)`, code); err != nil {
+		return Entry{}, false, fmt.Errorf("add to scan queue: lock: %w", err)
+	}
+	row := tx.QueryRow(ctx, `INSERT INTO scan_queue AS q (barcode, reason, detail)
 		SELECT $1, $2, $3
 		WHERE NOT EXISTS (SELECT 1 FROM edition WHERE barcode = $1)
 		ON CONFLICT (barcode) DO UPDATE SET
@@ -97,13 +107,16 @@ func (s *Store) Add(ctx context.Context, code, reason, detail string) (Entry, bo
 		RETURNING `+columns+`, (xmax = 0)`, code, reason, detail)
 	var entry Entry
 	var created bool
-	err := row.Scan(&entry.ID, &entry.Barcode, &entry.Reason, &entry.Detail, &entry.Scans,
+	err = row.Scan(&entry.ID, &entry.Barcode, &entry.Reason, &entry.Detail, &entry.Scans,
 		&entry.CreatedAt, &entry.LastScannedAt, &created)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Entry{}, false, ErrInCollection
 	}
 	if err != nil {
 		return Entry{}, false, fmt.Errorf("add to scan queue: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Entry{}, false, fmt.Errorf("add to scan queue: commit: %w", err)
 	}
 	return entry, created, nil
 }

@@ -345,20 +345,32 @@ func purchasedOn(in *CopyInput) *time.Time {
 }
 
 // CreateCopy inserts a normalized copy; ErrEditionNotFound when its edition
-// does not exist.
-func (s *Store) CreateCopy(ctx context.Context, in *CopyInput) (Copy, error) {
+// does not exist. With a request key already used, it returns that key's copy
+// and false instead of inserting another.
+func (s *Store) CreateCopy(ctx context.Context, in *CopyInput) (Copy, bool, error) {
 	var id int64
 	err := s.pool.QueryRow(ctx, `INSERT INTO copy (edition_id, status, price_cents, purchased_on,
-		shop, acquired_as, condition, notes) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+		shop, acquired_as, condition, notes, request_key)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		ON CONFLICT (request_key) DO NOTHING RETURNING id`,
 		in.EditionID, in.Status, in.PriceCents, purchasedOn(in), in.Shop, in.AcquiredAs,
-		in.Condition, in.Notes).Scan(&id)
+		in.Condition, in.Notes, in.RequestKey).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) && in.RequestKey != nil {
+		err = s.pool.QueryRow(ctx, `SELECT id FROM copy WHERE request_key = $1`, *in.RequestKey).Scan(&id)
+		if err != nil {
+			return Copy{}, false, mapErr(err, ErrNotFound, "replay copy")
+		}
+		c, err := s.GetCopy(ctx, id)
+		return c, false, err
+	}
 	if err != nil {
 		if isFKViolation(err, "copy_edition_id_fkey") {
-			return Copy{}, ErrEditionNotFound
+			return Copy{}, false, ErrEditionNotFound
 		}
-		return Copy{}, mapErr(err, ErrNotFound, "create copy")
+		return Copy{}, false, mapErr(err, ErrNotFound, "create copy")
 	}
-	return s.GetCopy(ctx, id)
+	c, err := s.GetCopy(ctx, id)
+	return c, true, err
 }
 
 // UpdateCopy replaces a copy.

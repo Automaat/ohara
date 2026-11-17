@@ -11,6 +11,7 @@ import {
 	isBookBarcode,
 	loadSticky,
 	looksLikeBarcode,
+	newRequestKey,
 	quickForm,
 	resolveScan,
 	saveScan,
@@ -34,8 +35,9 @@ function server(routes: Record<string, Reply | Reply[]>) {
 		const url = String(input);
 		calls.push({ method, url, body: init?.body ? JSON.parse(String(init.body)) : undefined });
 		const route = routes[`${method} ${url}`];
-		const reply =
-			Array.isArray(route) && Array.isArray(route[0]) ? (route as Reply[]).shift() : route;
+		const queued =
+			Array.isArray(route) && (Array.isArray(route[0]) || typeof route[0] === 'function');
+		const reply = queued ? (route as Reply[]).shift() : (route as Reply | undefined);
 		if (reply === undefined) throw new TypeError(`unexpected ${method} ${url}`);
 		const [status, body] = typeof reply === 'function' ? reply() : (reply as [number, unknown]);
 		return new Response(body === null ? null : JSON.stringify(body), { status });
@@ -345,7 +347,8 @@ describe('saveScan', () => {
 		const got = await saveScan(
 			s.fetchFn,
 			{ kind: 'new', barcode: '5901234123457', candidate: movie },
-			form({ price: '49,99', shop: ' Empik ', acquired_as: 'new' })
+			form({ price: '49,99', shop: ' Empik ', acquired_as: 'new' }),
+			'k1'
 		);
 		expect(got).toEqual({ titleID: 9, titleName: 'Seksmisja', editionID: 21, copy });
 		expect(s.calls[2].body).toMatchObject({
@@ -361,7 +364,8 @@ describe('saveScan', () => {
 			shop: 'Empik',
 			acquired_as: 'new',
 			condition: null,
-			notes: ''
+			notes: '',
+			request_key: 'k1'
 		});
 	});
 
@@ -374,7 +378,8 @@ describe('saveScan', () => {
 		const got = await saveScan(
 			s.fetchFn,
 			{ kind: 'new', barcode: '5901234123457', candidate: movie },
-			form()
+			form(),
+			'k1'
 		);
 		expect(got.titleID).toBe(3);
 		expect(s.paths()).not.toContain('POST /api/titles');
@@ -390,7 +395,8 @@ describe('saveScan', () => {
 		await saveScan(
 			s.fetchFn,
 			{ kind: 'new', barcode: '9788324000016', candidate: null },
-			form({ kind: 'book', name: 'Lalka', format: '' })
+			form({ kind: 'book', name: 'Lalka', format: '' }),
+			'k1'
 		);
 		expect(s.paths()).toEqual(['POST /api/titles', 'POST /api/editions', 'POST /api/copies']);
 	});
@@ -400,10 +406,11 @@ describe('saveScan', () => {
 		const got = await saveScan(
 			s.fetchFn,
 			{ kind: 'owned', edition: ownedEdition },
-			form({ price: '10' })
+			form({ price: '10' }),
+			'k1'
 		);
 		expect(got).toEqual({ titleID: 3, titleName: 'Rejs', editionID: 5, copy });
-		expect(s.calls[0].body).toMatchObject({ edition_id: 5, price_cents: 1000 });
+		expect(s.calls[0].body).toMatchObject({ edition_id: 5, price_cents: 1000, request_key: 'k1' });
 	});
 
 	it('joins an edition another save created and removes its own title', async () => {
@@ -419,7 +426,8 @@ describe('saveScan', () => {
 		const got = await saveScan(
 			s.fetchFn,
 			{ kind: 'new', barcode: '5901234123457', candidate: movie },
-			form()
+			form(),
+			'k1'
 		);
 		expect(got).toMatchObject({ titleID: 4, editionID: 7 });
 		expect(s.paths()).toContain('DELETE /api/titles/9');
@@ -434,7 +442,12 @@ describe('saveScan', () => {
 			'GET /api/titles/3': [200, { id: 3, name: 'Seksmisja' }],
 			'POST /api/copies': [201, copy]
 		});
-		await saveScan(s.fetchFn, { kind: 'new', barcode: '5901234123457', candidate: movie }, form());
+		await saveScan(
+			s.fetchFn,
+			{ kind: 'new', barcode: '5901234123457', candidate: movie },
+			form(),
+			'k1'
+		);
 		expect(s.paths().some((p) => p.startsWith('DELETE'))).toBe(false);
 	});
 
@@ -448,7 +461,8 @@ describe('saveScan', () => {
 		const err = await saveScan(
 			s.fetchFn,
 			{ kind: 'new', barcode: '5901234123457', candidate: movie },
-			form()
+			form(),
+			'k1'
 		).catch((e: unknown) => e);
 		expect(err).toBeInstanceOf(ApiError);
 		expect((err as ApiError).field).toBe('year');
@@ -464,7 +478,7 @@ describe('saveScan', () => {
 			'DELETE /api/titles/9': [204, null]
 		});
 		await expect(
-			saveScan(s.fetchFn, { kind: 'new', barcode: '5901234123457', candidate: null }, form())
+			saveScan(s.fetchFn, { kind: 'new', barcode: '5901234123457', candidate: null }, form(), 'k1')
 		).rejects.toBeInstanceOf(ApiError);
 	});
 
@@ -477,19 +491,56 @@ describe('saveScan', () => {
 		const err = await saveScan(
 			s.fetchFn,
 			{ kind: 'new', barcode: '5901234123457', candidate: movie },
-			f
+			f,
+			'k1'
 		).catch((e: unknown) => e);
 		expect(err).toBeInstanceOf(FormRejected);
 		expect((err as FormRejected).field).toBe(field);
 		expect(s.calls).toHaveLength(0);
 	});
 
+	it('sends the same request key when a save is retried after a lost response', async () => {
+		const lost = (): [number, unknown] => {
+			throw new TypeError('network connection was lost');
+		};
+		const s = server({
+			'POST /api/titles': [
+				[201, title],
+				[201, { id: 10, name: 'Seksmisja' }]
+			],
+			'POST /api/editions': [
+				[201, edition],
+				[409, { error: 'dup', field: 'barcode' }]
+			],
+			'POST /api/copies': [lost, [200, copy]],
+			'GET /api/editions?barcode=5901234123457': [200, [edition]],
+			'DELETE /api/titles/10': [204, null],
+			'GET /api/titles/9': [200, title]
+		});
+		const target = { kind: 'new', barcode: '5901234123457', candidate: null } as const;
+		const first = await saveScan(s.fetchFn, target, form(), 'k7').catch((e: unknown) => e);
+		expect(first).toBeInstanceOf(ApiError);
+		const got = await saveScan(s.fetchFn, target, form(), 'k7');
+		expect(got).toMatchObject({ titleID: 9, editionID: 21, copy });
+		const keys = s.calls.filter((c) => c.url === '/api/copies').map((c) => c.body);
+		expect(keys).toMatchObject([{ request_key: 'k7' }, { request_key: 'k7' }]);
+		expect(s.paths()).toContain('DELETE /api/titles/10');
+	});
+
 	it('refuses a bad price for an owned edition before any request', async () => {
 		const s = server({});
 		await expect(
-			saveScan(s.fetchFn, { kind: 'owned', edition: ownedEdition }, form({ price: '-1' }))
+			saveScan(s.fetchFn, { kind: 'owned', edition: ownedEdition }, form({ price: '-1' }), 'k1')
 		).rejects.toBeInstanceOf(FormRejected);
 		expect(s.calls).toHaveLength(0);
+	});
+});
+
+describe('newRequestKey', () => {
+	it('makes distinct 32-character hex keys', () => {
+		const a = newRequestKey();
+		expect(a).toMatch(/^[0-9a-f]{32}$/);
+		expect(newRequestKey()).not.toBe(a);
 	});
 });
 

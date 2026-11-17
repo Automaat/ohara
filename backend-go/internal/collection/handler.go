@@ -442,12 +442,16 @@ func (h *Handler) createCopy(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	c, err := h.store.CreateCopy(r.Context(), in)
+	c, created, err := h.store.CreateCopy(r.Context(), in)
 	if err != nil {
 		h.writeErr(w, "create copy", parentErr(err, ErrEditionNotFound, "edition_id"))
 		return
 	}
-	httpx.WriteJSON(w, h.logger, http.StatusCreated, c)
+	status := http.StatusOK
+	if created {
+		status = http.StatusCreated
+	}
+	httpx.WriteJSON(w, h.logger, status, c)
 }
 
 func (h *Handler) updateCopy(w http.ResponseWriter, r *http.Request) {

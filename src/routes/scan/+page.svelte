@@ -21,6 +21,7 @@
 		cleanBarcode,
 		loadSticky,
 		looksLikeBarcode,
+		newRequestKey,
 		quickForm,
 		resolveScan,
 		saveScan,
@@ -35,6 +36,7 @@
 	} from '$lib/scan';
 
 	type Pending = {
+		key: string;
 		barcode: string;
 		target: SaveTarget;
 		candidates: Candidate[];
@@ -101,6 +103,7 @@
 	function open(r: Exclude<Resolution, { kind: 'queued' }>) {
 		if (r.kind === 'owned') {
 			pending = {
+				key: newRequestKey(),
 				barcode: r.barcode,
 				target: { kind: 'owned', edition: r.edition },
 				candidates: [],
@@ -111,6 +114,7 @@
 		} else {
 			const first = r.candidates[0];
 			pending = {
+				key: newRequestKey(),
 				barcode: r.barcode,
 				target: { kind: 'new', barcode: r.barcode, candidate: first },
 				candidates: r.candidates,
@@ -125,6 +129,7 @@
 
 	function openManual(barcode: string) {
 		pending = {
+			key: newRequestKey(),
 			barcode,
 			target: { kind: 'new', barcode, candidate: null },
 			candidates: [],
@@ -199,7 +204,7 @@
 		saving = true;
 		issue = null;
 		try {
-			const saved = await saveScan(fetch, current.target, form);
+			const saved = await saveScan(fetch, current.target, form, current.key);
 			sticky = { shop: form.shop.trim(), acquired_as: form.acquired_as };
 			saveSticky(storage(), sticky);
 			const price =

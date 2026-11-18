@@ -81,6 +81,41 @@ export function candidateLabel(c: Candidate): string {
 	return [name, ...parts, c.provider, `${Math.round(c.confidence * 100)}%`].join(' · ');
 }
 
+/** What the album search tells the user when Discogs is off or down. */
+const searchFailures: Record<number, string> = {
+	502: 'Discogs nie odpowiada, spróbuj za chwilę.',
+	503: 'Wyszukiwanie w Discogs jest wyłączone: brak tokenu.'
+};
+
+/** Formats the album search can filter Discogs by. */
+const searchFormats: readonly Format[] = ['cd', 'vinyl', 'cassette'];
+
+/**
+ * Albums a Discogs text search finds for an artist and title typed by hand, as candidates for
+ * the barcode being added; a CD, vinyl or cassette format narrows the search.
+ */
+export async function searchAlbums(
+	fetchFn: typeof fetch,
+	query: string,
+	barcode: string,
+	format: Format | ''
+): Promise<Candidate[]> {
+	const params = new URLSearchParams({ q: query.trim() });
+	if (barcode) params.set('barcode', barcode);
+	if (format && searchFormats.includes(format)) params.set('format', format);
+	try {
+		const res = await request<{ candidates: Candidate[] }>(
+			fetchFn,
+			'GET',
+			`/api/music/search?${params.toString()}`
+		);
+		return res.candidates;
+	} catch (err) {
+		const message = err instanceof ApiError ? searchFailures[err.status] : undefined;
+		throw message ? new ApiError(message, (err as ApiError).status) : err;
+	}
+}
+
 export type LookupResult = {
 	barcode: string;
 	candidates: Candidate[];

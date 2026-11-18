@@ -136,6 +136,10 @@ func newUpstream(t *testing.T) *upstream {
 		code := r.URL.Query().Get("barcode")
 		if q := r.URL.Query().Get("q"); q != "" {
 			u.hit("discogs q=" + q + " format=" + r.URL.Query().Get("format"))
+			if q == "down" {
+				http.Error(w, "down", http.StatusInternalServerError)
+				return
+			}
 			if q == "1-800-Oświecenie Taco Hemingway" || q == "Taco Hemingway 1-800-Oświecenie" {
 				writeJSON(w, map[string]any{"results": tacoCD})
 				return

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ApiError } from './api';
-import type { EditionDetail } from './collection';
+import type { EditionDetail, Format } from './collection';
 import {
 	FormRejected,
 	RepeatGuard,
@@ -18,6 +18,7 @@ import {
 	saveScan,
 	saveSticky,
 	scanEditionPayload,
+	searchAlbums,
 	scanTitlePayload,
 	wedgeBarcodeIn,
 	type Candidate,
@@ -691,5 +692,44 @@ describe('sticky settings', () => {
 		};
 		expect(() => saveSticky(refusing, emptySticky)).not.toThrow();
 		expect(loadSticky(refusing)).toEqual(emptySticky);
+	});
+});
+
+describe('searchAlbums', () => {
+	const album: Candidate = {
+		type: 'music',
+		title: { name: '1-800-OŚWIECENIE', authors: ['Taco Hemingway'] },
+		edition: { barcode: '0602458447651', format: 'cd', discogs_release_id: 28352929 },
+		provider: 'discogs',
+		confidence: 0.6
+	};
+	it.each([
+		{
+			name: 'with barcode and a music format',
+			query: '  Taco Hemingway ',
+			barcode: '0602458447651',
+			format: 'cd' as Format,
+			url: '/api/music/search?q=Taco+Hemingway&barcode=0602458447651&format=cd'
+		},
+		{
+			name: 'a non-music format is not sent',
+			query: 'Taco',
+			barcode: '',
+			format: 'dvd' as Format,
+			url: '/api/music/search?q=Taco'
+		}
+	])('$name', async ({ query, barcode, format, url }) => {
+		const s = server({ [`GET ${url}`]: [200, { candidates: [album] }] });
+		await expect(searchAlbums(s.fetchFn, query, barcode, format)).resolves.toEqual([album]);
+		expect(s.paths()).toEqual([`GET ${url}`]);
+	});
+
+	it.each([
+		{ status: 502, want: 'Discogs nie odpowiada, spróbuj za chwilę.' },
+		{ status: 503, want: 'Wyszukiwanie w Discogs jest wyłączone: brak tokenu.' },
+		{ status: 500, want: 'Serwer zwrócił błąd 500.' }
+	])('explains a $status', async ({ status, want }) => {
+		const s = server({ 'GET /api/music/search?q=x': [status, { error: 'x' }] });
+		await expect(searchAlbums(s.fetchFn, 'x', '', '')).rejects.toThrow(want);
 	});
 });

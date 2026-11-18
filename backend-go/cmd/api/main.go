@@ -125,6 +125,7 @@ func run() int {
 	deps.API = []server.Mounter{
 		collection.NewHandler(collection.NewStore(pool), logger),
 		lookupHandler,
+		&music.SearchHandler{Discogs: musicSearcher(), Logger: logger},
 		scanqueue.NewHandler(queue, logger),
 		deals.NewHandler(dealStore, hunter, logger),
 		valuation.NewHandler(valueStore, valuer, logger),
@@ -278,6 +279,15 @@ func newMovieProvider(allegro *movie.Allegro, logger *slog.Logger) *movie.Provid
 	metrics.InitSource("tmdb")
 	logger.Info("movie lookup sources", "sources", strings.Join(names, ","))
 	return p
+}
+
+// musicSearcher is the Discogs client the album search uses, or nil
+// without a token, which the handler answers with 503.
+func musicSearcher() music.DiscogsSearcher {
+	if d := newDiscogs(); d != nil {
+		return d
+	}
+	return nil
 }
 
 // newDiscogs is the Discogs client, or nil without OHARA_DISCOGS_TOKEN:

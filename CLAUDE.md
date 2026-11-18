@@ -89,6 +89,10 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   reaches `lookup.ConfirmThreshold` (0.8); clients never auto-pick otherwise.
   `PUT /api/lookup/{barcode}/selection` stores the picked candidate, which
   answers later scans of that barcode without provider requests.
+- A music barcode no source knows falls back to a Discogs text search for
+  Allegro's product name. `GET /api/music/search?q=&barcode=&format=`
+  runs that search for text the user types, answered as candidates for
+  the barcode being added.
 - DB tests call `dbtest.Migrated(t)`; each gets its own schema.
 - Deal sources implement `deals.Source`. A run matches listing titles to
   wishlist copies (all title words, the edition's format for movies, the

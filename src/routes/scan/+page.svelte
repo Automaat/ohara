@@ -26,6 +26,7 @@
 		resolveScan,
 		saveScan,
 		saveSticky,
+		searchAlbums,
 		wedgeBarcodeIn,
 		type Candidate,
 		type LookupResult,
@@ -45,7 +46,8 @@
 	};
 	type Outcome = 'added' | 'queued' | 'skipped';
 	type Recent = { id: number; barcode: string; outcome: Outcome; label: string; href?: string };
-	type Notice = { tone: 'quiet' | 'warning'; text: string };
+	/** manual is a queued barcode the user can fill in right away. */
+	type Notice = { tone: 'quiet' | 'warning'; text: string; manual?: string };
 
 	const outcomeLabels: Record<Outcome, string> = {
 		added: 'Dodano',
@@ -68,6 +70,8 @@
 	let form = $state<QuickForm>(quickForm(null, loadSticky(undefined), ''));
 	let issue = $state<FormIssue | null>(null);
 	let saving = $state(false);
+	let albumQuery = $state('');
+	let searching = $state(false);
 	let notice = $state<Notice | null>(null);
 	let recent = $state<Recent[]>([]);
 	let queued = $state<number | null>(null);
@@ -89,6 +93,7 @@
 		guard.remember(barcode, performance.now());
 		pending = null;
 		issue = null;
+		albumQuery = '';
 		if (fromKeyboard) void focus('scan-code');
 	}
 
@@ -154,6 +159,32 @@
 		};
 	}
 
+	async function searchDiscogs() {
+		const query = albumQuery.trim();
+		if (!pending || pending.target.kind !== 'new' || searching || !query) return;
+		searching = true;
+		try {
+			const found = await searchAlbums(fetch, query, pending.barcode, form.format);
+			if (found.length === 0) {
+				notice = { tone: 'warning', text: `Discogs nie zna „${query}”.` };
+				return;
+			}
+			notice = null;
+			pending.candidates = found;
+			pending.errors = [];
+			pick(0);
+		} catch (err) {
+			notice = { tone: 'warning', text: errorMessage(err) };
+		} finally {
+			searching = false;
+		}
+	}
+
+	function fillIn(barcode: string) {
+		notice = null;
+		openManual(barcode);
+	}
+
 	async function handle(raw: string) {
 		const barcode = cleanBarcode(raw);
 		if (!barcode || busy || pending) return;
@@ -170,7 +201,8 @@
 				log(r.barcode, 'queued', 'Brak danych, do uzupełnienia', '/scan/queue');
 				notice = {
 					tone: 'warning',
-					text: `Nie znaleziono ${r.barcode}. Kod czeka w kolejce do uzupełnienia.`
+					text: `Nie znaleziono ${r.barcode}. Kod czeka w kolejce do uzupełnienia.`,
+					manual: r.barcode
 				};
 				void countQueue();
 				finish(r.barcode);
@@ -300,6 +332,28 @@
 		<Callout tone="quiet" live>Szukam {busy}…</Callout>
 	{/if}
 
+	{#if pending && pending.target.kind === 'new' && form.kind === 'music'}
+		<form
+			class="manual"
+			novalidate
+			aria-label="Szukaj płyty w Discogs"
+			onsubmit={(e) => {
+				e.preventDefault();
+				void searchDiscogs();
+			}}
+		>
+			<Field
+				id="scan-album"
+				label="Szukaj w Discogs"
+				hint="Wykonawca i tytuł, np. Taco Hemingway 1-800-Oświecenie. Wybrane wydanie uzupełni pozycję."
+				enterkeyhint="search"
+				autocomplete="off"
+				bind:value={albumQuery}
+			/>
+			<Button type="submit" loading={searching} disabled={!albumQuery.trim()}>Szukaj</Button>
+		</form>
+	{/if}
+
 	{#if pending}
 		<ScanConfirm
 			barcode={pending.barcode}
@@ -318,6 +372,12 @@
 
 	{#if notice}
 		<Callout tone={notice.tone} live>{notice.text}</Callout>
+		{#if notice.manual && !pending}
+			{@const barcode = notice.manual}
+			<div>
+				<Button onclick={() => fillIn(barcode)}>Uzupełnij teraz</Button>
+			</div>
+		{/if}
 	{/if}
 
 	{#if recent.length > 0}

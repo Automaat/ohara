@@ -146,31 +146,32 @@ the container port beyond the LAN.
 
 ## Configuration
 
-| Variable                                                   | Default                         | Purpose                                                                                                   |
-| ---------------------------------------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL` or `PG*`                                    | —                               | Postgres connection (required). Prefer `PG*` when the password has URL-special characters.                |
-| `OHARA_ADDR`                                               | `:8000`                         | Listen address                                                                                            |
-| `OHARA_WEB_DIR`                                            | unset (`/app/web` in the image) | Built SPA to serve                                                                                        |
-| `OHARA_ACCESS_LOG`                                         | `false`                         | One log line per request                                                                                  |
-| `OHARA_LOOKUP_STUB`                                        | `false`                         | Register the stub lookup provider (placeholder candidate for every barcode)                               |
-| `OHARA_GOOGLE_BOOKS_API_KEY`                               | unset                           | Enable the Google Books provider (keyless clients get no quota)                                           |
-| `OHARA_DEALS_INTERVAL`                                     | `0s` (off)                      | Deal search schedule, at least `10m` (e.g. `2h`), jittered ±10%; `POST /api/deals/run` works either way   |
-| `OHARA_DEALS_DELAY`                                        | `5s`                            | Pause between two source requests, jittered ±50%                                                          |
-| `OHARA_DEALS_CANARY_QUERY`                                 | `dvd`                           | Query asked of OLX and Ceneo every run that should always find listings (`ohara_source_canary_ok`)        |
-| `OHARA_TELEGRAM_BOT_TOKEN`, `OHARA_TELEGRAM_CHAT_ID`       | unset (no alerts)               | Telegram bot for deal alerts; set both or neither                                                         |
-| `OHARA_DEALS_{OLX,PEPPER,CENEO}_URL`, `OHARA_TELEGRAM_URL` | public endpoints                | Point the sources and Telegram at test doubles                                                            |
-| `OHARA_VALUATION_INTERVAL`                                 | `0s` (off)                      | Valuation schedule, at least `1h` (e.g. `24h`), jittered ±10%; `POST /api/valuation/run` works either way |
-| `OHARA_VALUATION_WINDOW_DAYS`                              | `90`                            | How many days back a price still counts                                                                   |
-| `OHARA_VALUATION_SKUPSZOP_URL`                             | public site                     | Point the SkupSzop quote at a test double                                                                 |
-| `OHARA_TMDB_API_KEY`                                       | unset                           | TMDB v3 key or v4 read token; enables the movie lookup chain                                              |
-| `OHARA_ALLEGRO_CLIENT_ID`, `OHARA_ALLEGRO_CLIENT_SECRET`   | unset                           | Allegro device-flow app; adds the Allegro catalog to the movie chain after `api allegro-login`            |
-| `OHARA_CENEO`                                              | `true`                          | Ceneo search-page source in the movie chain                                                               |
-| `OHARA_UPCITEMDB`                                          | `true`                          | UPCitemdb free-tier source (100 requests a day) in the movie chain                                        |
-| `OHARA_DISCOGS_TOKEN`                                      | unset                           | Discogs personal access token; enables the Discogs music lookup and album valuation                       |
-| `OHARA_DISCOGS_PRICE_SUGGESTIONS`                          | `true`                          | Ask Discogs price suggestions (need the token owner's seller settings) for album mid and ceiling          |
-| `OHARA_MUSICBRAINZ`                                        | `true`                          | MusicBrainz + Cover Art Archive in the music chain                                                        |
-| `OHARA_{DISCOGS,MUSICBRAINZ,COVERART}_URL`                 | public endpoints                | Point the music sources at test doubles                                                                   |
-| `OHARA_VALUATION_NBP_URL`                                  | `https://api.nbp.pl`            | Point the NBP exchange rates at a test double                                                             |
+| Variable                                                   | Default                                            | Purpose                                                                                                   |
+| ---------------------------------------------------------- | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL` or `PG*`                                    | —                                                  | Postgres connection (required). Prefer `PG*` when the password has URL-special characters.                |
+| `OHARA_ADDR`                                               | `:8000`                                            | Listen address                                                                                            |
+| `OHARA_WEB_DIR`                                            | unset (`/app/web` in the image)                    | Built SPA to serve                                                                                        |
+| `OHARA_ACCESS_LOG`                                         | `false`                                            | One log line per request                                                                                  |
+| `OHARA_LOOKUP_STUB`                                        | `false`                                            | Register the stub lookup provider (placeholder candidate for every barcode)                               |
+| `OHARA_GOOGLE_BOOKS_API_KEY`                               | unset                                              | Enable the Google Books provider (keyless clients get no quota)                                           |
+| `OHARA_DEALS_INTERVAL`                                     | `0s` (off)                                         | Deal search schedule, at least `10m` (e.g. `2h`), jittered ±10%; `POST /api/deals/run` works either way   |
+| `OHARA_DEALS_DELAY`                                        | `5s`                                               | Pause between two source requests, jittered ±50%                                                          |
+| `OHARA_DEALS_CANARY_QUERY`                                 | `dvd`                                              | Query asked of OLX and Ceneo every run that should always find listings (`ohara_source_canary_ok`)        |
+| `OHARA_TELEGRAM_BOT_TOKEN`, `OHARA_TELEGRAM_CHAT_ID`       | unset (no alerts)                                  | Telegram bot for deal alerts; set both or neither                                                         |
+| `OHARA_DEALS_{OLX,PEPPER,CENEO}_URL`, `OHARA_TELEGRAM_URL` | public endpoints                                   | Point the sources and Telegram at test doubles                                                            |
+| `OHARA_VALUATION_INTERVAL`                                 | `0s` (off)                                         | Valuation schedule, at least `1h` (e.g. `24h`), jittered ±10%; `POST /api/valuation/run` works either way |
+| `OHARA_VALUATION_WINDOW_DAYS`                              | `90`                                               | How many days back a price still counts                                                                   |
+| `OHARA_VALUATION_SKUPSZOP_URL`                             | public site                                        | Point the SkupSzop quote at a test double                                                                 |
+| `OHARA_TMDB_API_KEY`                                       | unset                                              | TMDB v3 key or v4 read token; enables the movie lookup chain                                              |
+| `OHARA_ALLEGRO_CLIENT_ID`, `OHARA_ALLEGRO_CLIENT_SECRET`   | unset                                              | Allegro device-flow app; adds the Allegro catalog to the movie chain after `api allegro-login`            |
+| `OHARA_ALLEGRO_USER_AGENT`                                 | `Ohara/1.0.0 (+https://github.com/Automaat/ohara)` | User-Agent sent on every Allegro request; must match the one registered for the app                       |
+| `OHARA_CENEO`                                              | `true`                                             | Ceneo search-page source in the movie chain                                                               |
+| `OHARA_UPCITEMDB`                                          | `true`                                             | UPCitemdb free-tier source (100 requests a day) in the movie chain                                        |
+| `OHARA_DISCOGS_TOKEN`                                      | unset                                              | Discogs personal access token; enables the Discogs music lookup and album valuation                       |
+| `OHARA_DISCOGS_PRICE_SUGGESTIONS`                          | `true`                                             | Ask Discogs price suggestions (need the token owner's seller settings) for album mid and ceiling          |
+| `OHARA_MUSICBRAINZ`                                        | `true`                                             | MusicBrainz + Cover Art Archive in the music chain                                                        |
+| `OHARA_{DISCOGS,MUSICBRAINZ,COVERART}_URL`                 | public endpoints                                   | Point the music sources at test doubles                                                                   |
+| `OHARA_VALUATION_NBP_URL`                                  | `https://api.nbp.pl`                               | Point the NBP exchange rates at a test double                                                             |
 
 ## Commands
 

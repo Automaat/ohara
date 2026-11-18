@@ -225,6 +225,9 @@ func (a *allegroServer) handler(t *testing.T) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		a.mu.Lock()
 		defer a.mu.Unlock()
+		if ua := r.Header.Get("User-Agent"); ua != AllegroUserAgent {
+			t.Errorf("%s: User-Agent %q, want %q", r.URL.Path, ua, AllegroUserAgent)
+		}
 		q := r.URL.Query()
 		id, secret, ok := r.BasicAuth()
 		switch r.URL.Path {

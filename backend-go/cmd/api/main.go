@@ -321,7 +321,10 @@ func newAllegro(pool *pgxpool.Pool) *movie.Allegro {
 	if id == "" || secret == "" {
 		return nil
 	}
-	return &movie.Allegro{ClientID: id, ClientSecret: secret, Store: movie.PGTokenStore{Pool: pool}, Client: sourceClient}
+	return &movie.Allegro{
+		ClientID: id, ClientSecret: secret, Store: movie.PGTokenStore{Pool: pool}, Client: sourceClient,
+		UserAgent: os.Getenv("OHARA_ALLEGRO_USER_AGENT"),
+	}
 }
 
 // allegroLogin runs the one-time Allegro device flow and stores the token

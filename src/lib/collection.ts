@@ -72,6 +72,7 @@ export type CopyDetail = Copy & { edition: Edition; title: Title };
 
 export type CollectionItem = {
 	copy_id: number;
+	created_at_us: number;
 	status: CopyStatus;
 	price_cents: number | null;
 	purchased_on: string | null;

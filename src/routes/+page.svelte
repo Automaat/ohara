@@ -4,10 +4,12 @@
 		DataTable,
 		EmptyState,
 		FactList,
+		Field,
 		Link,
 		ListToolbar,
 		PageHeader,
 		Pill,
+		Select,
 		type DataTableColumn
 	} from '@smykla-skalski/sui';
 	import { onMount } from 'svelte';
@@ -24,9 +26,12 @@
 		type CollectionItem,
 		type CollectionView
 	} from '$lib/collection';
+	import { collectionSortOptions, sortCopies, type CollectionSort } from '$lib/collection-sort';
 	import { databaseBadge, fetchStatus, type Status } from '$lib/status';
 
 	type Row = CollectionItem & Record<string, unknown>;
+
+	let sort = $state<CollectionSort | null>('title');
 
 	let filter = $state<CollectionFilter>({ kind: '', format: '', status: '', q: '' });
 	let view = $state<CollectionView | null>(null);
@@ -73,7 +78,7 @@
 		{ key: 'purchased_on', label: 'Kupiono', nowrap: true }
 	];
 
-	const rows = $derived((view?.items ?? []) as Row[]);
+	const rows = $derived(sortCopies(view?.items ?? [], sort ?? 'title') as Row[]);
 	const totals = $derived(view?.totals);
 	const badge = $derived(info ? databaseBadge(info.database) : null);
 	const filtered = $derived(
@@ -117,6 +122,14 @@
 </PageHeader>
 
 <div class="content">
+	<div class="collection-sort">
+		<Field label="Sortowanie">
+			{#snippet control(c)}
+				<Select {...c} options={collectionSortOptions} bind:value={sort} />
+			{/snippet}
+		</Field>
+	</div>
+
 	<ListToolbar
 		searchLabel="Szukaj w kolekcji"
 		placeholder="Tytuł, autor, sklep lub kod kreskowy"
@@ -196,7 +209,7 @@
 					>
 				</Link>
 			{:else if column.key === 'price_cents'}
-				{formatPLN(row.price_cents)}
+				{row.price_cents === null ? 'Nieznana' : formatPLN(row.price_cents)}
 			{:else if column.key === 'shop'}
 				{row.shop}
 			{:else if column.key === 'purchased_on'}
@@ -229,5 +242,9 @@
 		display: grid;
 		gap: 1rem;
 		padding: var(--sui-pane-gutter, 1.5rem);
+	}
+
+	.collection-sort {
+		width: min(100%, 16rem);
 	}
 </style>

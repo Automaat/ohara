@@ -117,6 +117,44 @@ func (a *api) copyOf(body obj) int64 {
 	return c.ID
 }
 
+func TestEditionDetailReturnsArtworkForEachEdition(t *testing.T) {
+	a := newAPI(t)
+	const representative = "https://example.test/title.jpg"
+	var title collection.Title
+	a.mustDo(http.MethodPost, "/api/titles", obj{
+		"kind": "movie", "name": "Seksmisja", "cover_url": representative,
+	}, &title, http.StatusCreated)
+
+	for _, tt := range []struct {
+		name  string
+		cover string
+	}{
+		{name: "First release", cover: "https://example.test/first.jpg"},
+		{name: "Second release", cover: "https://example.test/second.jpg"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sub := &api{t: t, url: a.url}
+			editionID := sub.edition(obj{
+				"title_id": title.ID, "label": tt.name, "format": "dvd", "cover_url": tt.cover,
+			})
+			path := fmt.Sprintf("/api/editions/%d", editionID)
+			sub.mustDo(http.MethodPut, path, obj{
+				"title_id": title.ID, "label": tt.name, "format": "dvd",
+			}, nil, http.StatusOK)
+
+			var detail collection.EditionDetail
+			sub.mustDo(http.MethodGet, path, nil, &detail, http.StatusOK)
+
+			if detail.CoverURL == nil || *detail.CoverURL != tt.cover {
+				t.Errorf("edition cover = %v, want %q", detail.CoverURL, tt.cover)
+			}
+			if detail.Title.CoverURL == nil || *detail.Title.CoverURL != representative {
+				t.Errorf("title cover = %v, want %q", detail.Title.CoverURL, representative)
+			}
+		})
+	}
+}
+
 func TestCRUDLifecycle(t *testing.T) {
 	a := newAPI(t)
 

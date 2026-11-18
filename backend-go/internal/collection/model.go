@@ -4,6 +4,7 @@ package collection
 
 import (
 	"errors"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -87,6 +88,7 @@ type TitleInput struct {
 	BNID          *string  `json:"bn_id"`
 	OpenLibraryID *string  `json:"openlibrary_id"`
 	Notes         string   `json:"notes"`
+	CoverURL      *string  `json:"cover_url,omitempty"`
 }
 
 // Title is a work: a film, a book or an album.
@@ -116,8 +118,9 @@ type EditionInput struct {
 	Binding     *string  `json:"binding"`
 	// DiscogsReleaseID is the Discogs release an album edition is; the
 	// valuation prices it on the Discogs marketplace.
-	DiscogsReleaseID *int64 `json:"discogs_release_id"`
-	Notes            string `json:"notes"`
+	DiscogsReleaseID *int64  `json:"discogs_release_id"`
+	Notes            string  `json:"notes"`
+	CoverURL         *string `json:"cover_url,omitempty"`
 }
 
 // Edition is a concrete release of a title.
@@ -235,6 +238,7 @@ func (in *TitleInput) Normalize() *httpx.FieldError {
 		checkLen("bn_id", deref(in.BNID), maxText),
 		checkLen("openlibrary_id", deref(in.OpenLibraryID), maxText),
 		checkLen("notes", in.Notes, maxNotes),
+		normalizeCoverURL(in.CoverURL),
 		checkYear("year", in.Year),
 	); e != nil {
 		return e
@@ -307,12 +311,31 @@ func (in *EditionInput) Normalize() *httpx.FieldError {
 		checkLen("label", in.Label, maxText),
 		checkLen("publisher", in.Publisher, maxText),
 		checkLen("notes", in.Notes, maxNotes),
+		normalizeCoverURL(in.CoverURL),
 		checkYear("year", in.Year),
 		checkEnum("format", in.Format, formats),
 		checkEnum("binding", in.Binding, bindings),
 		checkEnum("pl_subtitles", &in.PLSubtitles, triStates),
 		checkEnum("pl_voiceover", &in.PLVoiceover, triStates),
 	)
+}
+
+func normalizeCoverURL(value *string) *httpx.FieldError {
+	if value == nil {
+		return nil
+	}
+	*value = strings.TrimSpace(*value)
+	if *value == "" {
+		return nil
+	}
+	if err := checkLen("cover_url", *value, maxNotes); err != nil {
+		return err
+	}
+	u, err := url.Parse(*value)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Hostname() == "" || u.User != nil {
+		return fieldErr("cover_url", "must be an HTTP or HTTPS URL without credentials")
+	}
+	return nil
 }
 
 // CheckKind enforces the fields that depend on the title's kind.

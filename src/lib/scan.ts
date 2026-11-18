@@ -289,7 +289,8 @@ export function scanEditionPayload(
 	if ((movie || music) && !formatFits(f.kind, f.format)) {
 		return { ok: false, issue: { field: 'format', message: 'Wybierz nośnik.' } };
 	}
-	const e = candidate?.type === f.kind ? candidate.edition : null;
+	const selected = candidate?.type === f.kind ? candidate : null;
+	const e = selected?.edition;
 	return {
 		ok: true,
 		value: {
@@ -304,6 +305,7 @@ export function scanEditionPayload(
 			packaging: movie ? (e?.packaging ?? []) : [],
 			binding: f.kind === 'book' && f.binding ? f.binding : null,
 			discogs_release_id: music ? opt(e?.discogs_release_id) : null,
+			cover_url: selected?.cover_url,
 			notes: ''
 		}
 	};

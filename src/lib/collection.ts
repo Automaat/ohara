@@ -20,6 +20,7 @@ export type TitlePayload = {
 	bn_id: string | null;
 	openlibrary_id: string | null;
 	notes: string;
+	cover_url?: string;
 };
 
 export type Title = TitlePayload & {
@@ -43,6 +44,7 @@ export type EditionPayload = {
 	binding: Binding | null;
 	discogs_release_id: number | null;
 	notes: string;
+	cover_url?: string;
 };
 
 export type Edition = EditionPayload & {

@@ -1,4 +1,4 @@
-import type { AcquiredAs, FormIssue, Parsed } from '$lib/collection';
+import type { AcquiredAs, FormIssue, Parsed } from '#lib/collection.js';
 
 export type DealSource = 'olx' | 'vinted' | 'pepper' | 'ceneo';
 export type AlertState = 'none' | 'pending' | 'sent' | 'failed';

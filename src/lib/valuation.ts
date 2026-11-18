@@ -1,5 +1,5 @@
 import type { ChartSeries } from '@smykla-skalski/sui';
-import { formatPLN, type Format, type Kind } from '$lib/collection';
+import { formatPLN, type Format, type Kind } from '#lib/collection.js';
 
 export type ValueSource = 'olx' | 'vinted' | 'olx+vinted' | 'ceneo' | 'skupszop' | 'discogs';
 export type BoundKey = 'floor' | 'mid' | 'ceiling';

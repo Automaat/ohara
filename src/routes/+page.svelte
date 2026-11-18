@@ -11,7 +11,7 @@
 		type DataTableColumn
 	} from '@smykla-skalski/sui';
 	import { onMount } from 'svelte';
-	import { errorMessage, request } from '$lib/api';
+	import { errorMessage, request } from '#lib/api.js';
 	import {
 		collectionURL,
 		displayName,
@@ -23,8 +23,8 @@
 		type CollectionFilter,
 		type CollectionItem,
 		type CollectionView
-	} from '$lib/collection';
-	import { purchaseDate, resultCount } from '$lib/polish';
+	} from '#lib/collection.js';
+	import { purchaseDate, resultCount } from '#lib/polish.js';
 
 	type Row = CollectionItem & Record<string, unknown>;
 

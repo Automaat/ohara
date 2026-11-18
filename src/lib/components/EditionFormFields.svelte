@@ -11,7 +11,7 @@
 		type FormIssue,
 		type Kind,
 		type Packaging
-	} from '$lib/collection';
+	} from '#lib/collection.js';
 
 	let {
 		form = $bindable(),

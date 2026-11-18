@@ -99,7 +99,7 @@ func run() int {
 	registerPoolMetrics(pool)
 
 	deps := server.Deps{DB: pool}
-	lookupHandler, err := newLookup(pool, logger)
+	lookupService, err := newLookup(pool, logger)
 	if err != nil {
 		logger.Error("lookup providers", "err", err)
 		return 2
@@ -122,10 +122,11 @@ func run() int {
 	defer stopHunt()
 	queue := scanqueue.NewStore(pool)
 	metrics.RegisterScanQueueCollector(queue.Count)
+	searchers := titleSearchers()
 	deps.API = []server.Mounter{
-		collection.NewHandler(collection.NewStore(pool), logger),
-		lookupHandler,
-		&lookup.SearchHandler{Searchers: titleSearchers(), Logger: logger},
+		collection.NewHandler(collection.NewStore(pool), logger).WithCatalogCovers(searchers, lookupService),
+		lookup.NewHandler(lookupService, logger),
+		&lookup.SearchHandler{Searchers: searchers, Logger: logger},
 		scanqueue.NewHandler(queue, logger),
 		deals.NewHandler(dealStore, hunter, logger),
 		valuation.NewHandler(valueStore, valuer, logger),
@@ -210,7 +211,7 @@ const musicCacheTTL = 7 * 24 * time.Hour
 // newLookup registers the barcode metadata providers. Registration order is
 // the field priority when book answers are merged: the national library
 // first, then Open Library, then Google Books when a key is set.
-func newLookup(pool *pgxpool.Pool, logger *slog.Logger) (*lookup.Handler, error) {
+func newLookup(pool *pgxpool.Pool, logger *slog.Logger) (*lookup.Service, error) {
 	registry := &lookup.Registry{}
 	client := &http.Client{}
 	providers := []lookup.Provider{
@@ -244,8 +245,7 @@ func newLookup(pool *pgxpool.Pool, logger *slog.Logger) (*lookup.Handler, error)
 		}
 	}
 	logger.Info("lookup providers", "providers", strings.Join(registry.Names(), ","))
-	service := lookup.NewService(registry, lookup.NewPGCache(pool), logger)
-	return lookup.NewHandler(service, logger), nil
+	return lookup.NewService(registry, lookup.NewPGCache(pool), logger), nil
 }
 
 // sourceClient is shared by the external sources; the lookup service bounds

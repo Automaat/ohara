@@ -390,7 +390,7 @@ describe('saveScan', () => {
 			'GET /api/titles?tmdb_id=11202': [200, []],
 			'POST /api/titles': [201, title],
 			'POST /api/editions': [201, edition],
-			'POST /api/copies': [201, copy]
+			'POST /api/copies?cover=auto': [201, copy]
 		});
 		const got = await saveScan(
 			s.fetchFn,
@@ -422,7 +422,7 @@ describe('saveScan', () => {
 		const s = server({
 			'GET /api/titles?tmdb_id=11202': [200, [{ id: 3, name: 'Seksmisja (1984)' }]],
 			'POST /api/editions': [201, { ...edition, title_id: 3 }],
-			'POST /api/copies': [201, copy]
+			'POST /api/copies?cover=auto': [201, copy]
 		});
 		const got = await saveScan(
 			s.fetchFn,
@@ -439,7 +439,7 @@ describe('saveScan', () => {
 		const s = server({
 			'POST /api/titles': [201, { id: 1, name: 'Lalka' }],
 			'POST /api/editions': [201, { id: 2, title_id: 1 }],
-			'POST /api/copies': [201, copy]
+			'POST /api/copies?cover=auto': [201, copy]
 		});
 		await saveScan(
 			s.fetchFn,
@@ -447,11 +447,15 @@ describe('saveScan', () => {
 			form({ kind: 'book', name: 'Lalka', format: '' }),
 			'k1'
 		);
-		expect(s.paths()).toEqual(['POST /api/titles', 'POST /api/editions', 'POST /api/copies']);
+		expect(s.paths()).toEqual([
+			'POST /api/titles',
+			'POST /api/editions',
+			'POST /api/copies?cover=auto'
+		]);
 	});
 
 	it('adds a copy to an owned edition', async () => {
-		const s = server({ 'POST /api/copies': [201, copy] });
+		const s = server({ 'POST /api/copies?cover=auto': [201, copy] });
 		const got = await saveScan(
 			s.fetchFn,
 			{ kind: 'owned', edition: ownedEdition },
@@ -470,7 +474,7 @@ describe('saveScan', () => {
 			'GET /api/editions?barcode=5901234123457': [200, [{ ...edition, id: 7, title_id: 4 }]],
 			'DELETE /api/titles/9': [204, null],
 			'GET /api/titles/4': [200, { id: 4, name: 'Seksmisja' }],
-			'POST /api/copies': [201, copy]
+			'POST /api/copies?cover=auto': [201, copy]
 		});
 		const got = await saveScan(
 			s.fetchFn,
@@ -489,7 +493,7 @@ describe('saveScan', () => {
 			'POST /api/editions': [409, { error: 'dup', field: 'barcode' }],
 			'GET /api/editions?barcode=5901234123457': [200, [{ ...edition, id: 7, title_id: 3 }]],
 			'GET /api/titles/3': [200, { id: 3, name: 'Seksmisja' }],
-			'POST /api/copies': [201, copy]
+			'POST /api/copies?cover=auto': [201, copy]
 		});
 		await saveScan(
 			s.fetchFn,
@@ -516,7 +520,7 @@ describe('saveScan', () => {
 		expect(err).toBeInstanceOf(ApiError);
 		expect((err as ApiError).field).toBe('year');
 		expect(s.paths()).toContain('DELETE /api/titles/9');
-		expect(s.paths()).not.toContain('POST /api/copies');
+		expect(s.paths()).not.toContain('POST /api/copies?cover=auto');
 	});
 
 	it('fails on a barcode conflict whose edition vanished', async () => {
@@ -561,7 +565,7 @@ describe('saveScan', () => {
 				[201, edition],
 				[409, { error: 'dup', field: 'barcode' }]
 			],
-			'POST /api/copies': [lost, [200, copy]],
+			'POST /api/copies?cover=auto': [lost, [200, copy]],
 			'GET /api/editions?barcode=5901234123457': [200, [edition]],
 			'DELETE /api/titles/10': [204, null],
 			'GET /api/titles/9': [200, title]
@@ -571,7 +575,7 @@ describe('saveScan', () => {
 		expect(first).toBeInstanceOf(ApiError);
 		const got = await saveScan(s.fetchFn, target, form(), 'k7');
 		expect(got).toMatchObject({ titleID: 9, editionID: 21, copy });
-		const keys = s.calls.filter((c) => c.url === '/api/copies').map((c) => c.body);
+		const keys = s.calls.filter((c) => c.url === '/api/copies?cover=auto').map((c) => c.body);
 		expect(keys).toMatchObject([{ request_key: 'k7' }, { request_key: 'k7' }]);
 		expect(s.paths()).toContain('DELETE /api/titles/10');
 	});

@@ -68,6 +68,30 @@
 		font-family: inherit;
 	}
 
+	/* WebKit hides native select text when SUI supplies a selectedcontent button. */
+	@supports (appearance: base-select) {
+		@media not (pointer: fine) {
+			:global(.sui-select > select.sui-select-control) {
+				appearance: base-select;
+				align-items: center;
+				display: flex;
+			}
+
+			:global(.sui-select-control::picker-icon),
+			:global(.sui-select-value .sui-select-check),
+			:global(.sui-select-value .sui-select-note) {
+				display: none;
+			}
+
+			:global(.sui-select-value) {
+				min-inline-size: 0;
+				overflow: hidden;
+				text-overflow: ellipsis;
+				white-space: nowrap;
+			}
+		}
+	}
+
 	:global(.metadata) {
 		color: var(--sui-text-secondary);
 		font-size: var(--sui-font-size-meta);

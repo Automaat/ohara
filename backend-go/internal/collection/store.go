@@ -416,24 +416,26 @@ type Filter struct {
 
 // Item is one copy in the collection view with its edition and title.
 type Item struct {
-	CopyID        int64   `json:"copy_id"`
-	Status        string  `json:"status"`
-	PriceCents    *int64  `json:"price_cents"`
-	PurchasedOn   *Date   `json:"purchased_on"`
-	Shop          string  `json:"shop"`
-	AcquiredAs    *string `json:"acquired_as"`
-	Condition     *string `json:"condition"`
-	EditionID     int64   `json:"edition_id"`
-	Barcode       *string `json:"barcode"`
-	Label         string  `json:"label"`
-	Format        *string `json:"format"`
-	Binding       *string `json:"binding"`
-	TitleID       int64   `json:"title_id"`
-	Kind          string  `json:"kind"`
-	Name          string  `json:"name"`
-	OriginalTitle *string `json:"original_title"`
-	PolishTitle   *string `json:"polish_title"`
-	Year          *int    `json:"year"`
+	CopyID        int64    `json:"copy_id"`
+	Status        string   `json:"status"`
+	PriceCents    *int64   `json:"price_cents"`
+	PurchasedOn   *Date    `json:"purchased_on"`
+	Shop          string   `json:"shop"`
+	AcquiredAs    *string  `json:"acquired_as"`
+	Condition     *string  `json:"condition"`
+	EditionID     int64    `json:"edition_id"`
+	Barcode       *string  `json:"barcode"`
+	Label         string   `json:"label"`
+	Format        *string  `json:"format"`
+	Binding       *string  `json:"binding"`
+	TitleID       int64    `json:"title_id"`
+	Kind          string   `json:"kind"`
+	Name          string   `json:"name"`
+	OriginalTitle *string  `json:"original_title"`
+	PolishTitle   *string  `json:"polish_title"`
+	Year          *int     `json:"year"`
+	Authors       []string `json:"authors,omitempty"`
+	CoverURL      *string  `json:"cover_url,omitempty"`
 }
 
 func scanItem(row pgx.Row) (Item, error) {
@@ -441,7 +443,8 @@ func scanItem(row pgx.Row) (Item, error) {
 	var purchased *time.Time
 	err := row.Scan(&it.CopyID, &it.Status, &it.PriceCents, &purchased, &it.Shop, &it.AcquiredAs,
 		&it.Condition, &it.EditionID, &it.Barcode, &it.Label, &it.Format, &it.Binding,
-		&it.TitleID, &it.Kind, &it.Name, &it.OriginalTitle, &it.PolishTitle, &it.Year)
+		&it.TitleID, &it.Kind, &it.Name, &it.OriginalTitle, &it.PolishTitle, &it.Year,
+		&it.Authors, &it.CoverURL)
 	if purchased != nil {
 		it.PurchasedOn = &Date{*purchased}
 	}
@@ -452,7 +455,8 @@ func scanItem(row pgx.Row) (Item, error) {
 func (s *Store) Collection(ctx context.Context, f Filter) ([]Item, error) {
 	rows, err := s.pool.Query(ctx, `SELECT c.id, c.status, c.price_cents, c.purchased_on, c.shop,
 			c.acquired_as, c.condition, e.id, e.barcode, e.label, e.format, e.binding,
-			t.id, t.kind, t.name, t.original_title, t.polish_title, t.year
+			t.id, t.kind, t.name, t.original_title, t.polish_title, t.year,
+			t.authors, COALESCE(e.cover_url, t.cover_url)
 		FROM copy c JOIN edition e ON e.id = c.edition_id JOIN title t ON t.id = e.title_id
 		WHERE ($1 = '' OR t.kind = $1) AND ($2 = '' OR e.format = $2) AND ($3 = '' OR c.status = $3)
 		  AND ($4 = '' OR e.barcode = $4 OR strpos(lower(concat_ws(' ', t.name, t.original_title,

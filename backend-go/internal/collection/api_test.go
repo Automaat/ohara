@@ -430,6 +430,40 @@ func TestCollectionViewFiltersAndTotals(t *testing.T) {
 	}
 }
 
+func TestCollectionViewReturnsArtworkAndCreators(t *testing.T) {
+	a := newAPI(t)
+	const titleCover = "https://example.test/title.jpg"
+	const editionCover = "https://example.test/edition.jpg"
+	var title collection.Title
+	a.mustDo(http.MethodPost, "/api/titles", obj{
+		"kind": "book", "name": "Solaris", "authors": []string{"Stanisław Lem"}, "cover_url": titleCover,
+	}, &title, http.StatusCreated)
+
+	withCover := a.edition(obj{"title_id": title.ID, "cover_url": editionCover})
+	withoutCover := a.edition(obj{"title_id": title.ID})
+	withoutArtwork := a.edition(obj{"title_id": a.title("book", "Lalka")})
+	wantByCopy := map[int64]string{
+		a.copyOf(obj{"edition_id": withCover, "status": "owned"}):      editionCover,
+		a.copyOf(obj{"edition_id": withoutCover, "status": "owned"}):   titleCover,
+		a.copyOf(obj{"edition_id": withoutArtwork, "status": "owned"}): "",
+	}
+
+	var view collection.CollectionView
+	a.mustDo(http.MethodGet, "/api/collection", nil, &view, http.StatusOK)
+	if len(view.Items) != len(wantByCopy) {
+		t.Fatalf("collection contains %d copies, want %d", len(view.Items), len(wantByCopy))
+	}
+	for _, item := range view.Items {
+		want, found := wantByCopy[item.CopyID]
+		if !found || (item.CoverURL == nil && want != "") || (item.CoverURL != nil && *item.CoverURL != want) {
+			t.Errorf("copy %d cover = %v, want %q", item.CopyID, item.CoverURL, want)
+		}
+		if item.TitleID == title.ID && (len(item.Authors) != 1 || item.Authors[0] != "Stanisław Lem") {
+			t.Errorf("copy %d authors = %v, want Stanisław Lem", item.CopyID, item.Authors)
+		}
+	}
+}
+
 func TestListTitles(t *testing.T) {
 	a := newAPI(t)
 	a.title("movie", "Rejs")

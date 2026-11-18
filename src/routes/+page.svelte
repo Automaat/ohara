@@ -25,6 +25,7 @@
 		type CollectionView
 	} from '$lib/collection';
 	import { databaseBadge, fetchStatus, type Status } from '$lib/status';
+	import CollectionRows from '$lib/components/CollectionRows.svelte';
 
 	type Row = CollectionItem & Record<string, unknown>;
 
@@ -118,6 +119,7 @@
 
 <div class="content">
 	<ListToolbar
+		class="collection-toolbar"
 		searchLabel="Szukaj w kolekcji"
 		placeholder="Tytuł, autor, sklep lub kod kreskowy"
 		query={filter.q}
@@ -166,7 +168,11 @@
 		]}
 	/>
 
+	<div class="mobile-results">
+		<CollectionRows {rows} {loading} {failure} onretry={load} {empty} />
+	</div>
 	<DataTable
+		class="desktop-results"
 		aria-label="Egzemplarze w kolekcji"
 		{columns}
 		{rows}
@@ -181,6 +187,7 @@
 		refreshingLabel="Odświeżanie…"
 		emptyLabel="Brak pozycji"
 		scrollHint="Przewiń tabelę w bok"
+		{empty}
 	>
 		{#snippet cell(row, column)}
 			{#if column.key === 'name'}
@@ -188,7 +195,9 @@
 			{:else if column.key === 'kind'}
 				{kindLabels[row.kind]}
 			{:else if column.key === 'edition_id'}
-				<Link href={`/editions/${row.edition_id}`}>{editionSummary(row)}</Link>
+				<Link href={`/editions/${row.edition_id}`}>
+					{editionSummary({ ...row, barcode: null })}
+				</Link>
 			{:else if column.key === 'status'}
 				<Link href={`/copies/${row.copy_id}`}>
 					<Pill tone={row.status === 'owned' ? 'success' : 'neutral'}
@@ -203,31 +212,61 @@
 				{row.purchased_on ?? ''}
 			{/if}
 		{/snippet}
-		{#snippet empty()}
-			{#if filtered}
-				<EmptyState
-					title="Nic nie pasuje"
-					description="Żaden egzemplarz nie spełnia filtrów."
-					step="Zmień filtry lub wyczyść wyszukiwanie."
-				/>
-			{:else}
-				<EmptyState
-					title="Kolekcja jest pusta"
-					description="Nie dodano jeszcze żadnego egzemplarza."
-				>
-					{#snippet action()}
-						<Button tone="signal" href="/titles/new">Dodaj pierwszy tytuł</Button>
-					{/snippet}
-				</EmptyState>
-			{/if}
-		{/snippet}
 	</DataTable>
 </div>
+
+{#snippet empty()}
+	{#if filtered}
+		<EmptyState
+			title="Nic nie pasuje"
+			description="Żaden egzemplarz nie spełnia filtrów."
+			step="Zmień filtry lub wyczyść wyszukiwanie."
+		/>
+	{:else}
+		<EmptyState title="Kolekcja jest pusta" description="Nie dodano jeszcze żadnego egzemplarza.">
+			{#snippet action()}
+				<Button tone="signal" href="/titles/new">Dodaj pierwszy tytuł</Button>
+			{/snippet}
+		</EmptyState>
+	{/if}
+{/snippet}
 
 <style>
 	.content {
 		display: grid;
+		grid-template-columns: minmax(0, 1fr);
 		gap: 1rem;
 		padding: var(--sui-pane-gutter, 1.5rem);
+	}
+
+	.mobile-results {
+		display: none;
+	}
+
+	@media (max-width: 640px) {
+		.content :global(.desktop-results) {
+			display: none;
+		}
+
+		.mobile-results {
+			display: block;
+		}
+
+		.content :global(.collection-toolbar .sui-list-toolbar-search) {
+			flex-basis: 100%;
+		}
+
+		.content :global(.collection-toolbar .sui-list-toolbar-field) {
+			flex-basis: 100%;
+		}
+
+		.content :global(.collection-toolbar .sui-list-toolbar-segments) {
+			display: none;
+		}
+
+		.content :global(.collection-toolbar .sui-list-toolbar-folded),
+		.content :global(.collection-toolbar .sui-list-toolbar-dot) {
+			display: block;
+		}
 	}
 </style>

@@ -76,12 +76,14 @@ describe('estimates', () => {
 });
 
 describe('boundTotal', () => {
-	it('omits the copy count when every copy has the bound', () => {
-		expect(nbsp(boundTotal({ cents: 1234500, copies: 3 }, 3))).toBe('12 345,00 zł');
-	});
-
-	it('says how many copies a partial bound covers', () => {
-		expect(nbsp(boundTotal({ cents: 537, copies: 1 }, 3))).toBe('5,37 zł (1 z 3 egz.)');
+	it.each([
+		[{ cents: 0, copies: 0 }, 0, 'Brak wyceny (0 z 0 egz.)'],
+		[{ cents: 0, copies: 0 }, 4, 'Brak wyceny (0 z 4 egz.)'],
+		[{ cents: 0, copies: 1 }, 4, '0,00 zł (1 z 4 egz.)'],
+		[{ cents: 537, copies: 1 }, 3, '5,37 zł (1 z 3 egz.)'],
+		[{ cents: 1234500, copies: 3 }, 3, '12 345,00 zł (3 z 3 egz.)']
+	])('formats %o over %i copies as %s', (bound, copies, expected) => {
+		expect(nbsp(boundTotal(bound, copies))).toBe(expected);
 	});
 });
 

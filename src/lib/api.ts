@@ -11,10 +11,13 @@ export class ApiError extends Error {
 
 type ErrorBody = { error?: unknown; field?: unknown };
 
+/** What the server's 422 for a barcode means: the shape fits, the check digit does not. */
+export const invalidBarcodeMessage = 'Nieprawidłowy kod kreskowy: sprawdź cyfry.';
+
 const fieldMessages: Record<string, Record<number, string>> = {
 	barcode: {
 		409: 'Wydanie z tym kodem kreskowym już istnieje.',
-		422: 'Nieprawidłowy kod kreskowy: sprawdź cyfry.'
+		422: invalidBarcodeMessage
 	},
 	tmdb_id: { 409: 'Tytuł z tym identyfikatorem TMDB już istnieje.' },
 	kind: { 409: 'Nie można zmienić typu tytułu, który ma wydania.' },

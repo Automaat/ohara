@@ -1,4 +1,4 @@
-import { ApiError, errorMessage, request } from './api';
+import { ApiError, errorMessage, invalidBarcodeMessage, request } from './api';
 import {
 	copyPayload,
 	displayName,
@@ -161,6 +161,45 @@ export function cleanBarcode(raw: string): string {
 /** Whether a cleaned input has a barcode's shape: 8, 12, 13 or 14 digits, or an ISBN-10. */
 export function looksLikeBarcode(code: string): boolean {
 	return /^(\d{8}|\d{12,14}|\d{9}[\dX])$/.test(code);
+}
+
+function digit(code: string, i: number): number {
+	return code.charCodeAt(i) - 48;
+}
+
+/**
+ * Whether a cleaned input is a barcode whose check digit matches, by the rules of the server's
+ * barcode.Normalize: mod 11 with weights 10 to 1 for an ISBN-10, where X stands for 10, and
+ * for EAN-8, UPC-A, EAN-13 and GTIN-14 the GS1 mod 10, whose weights 3 and 1 alternate from
+ * the digit left of the check digit. The server still decides; this only spares a pointless
+ * request.
+ */
+export function checkDigitMatches(code: string): boolean {
+	if (!looksLikeBarcode(code)) return false;
+	let sum = 0;
+	if (code.length === 10) {
+		for (let i = 0; i < 10; i++) sum += (code[i] === 'X' ? 10 : digit(code, i)) * (10 - i);
+		return sum % 11 === 0;
+	}
+	for (let i = code.length - 2, weight = 3; i >= 0; i--, weight = 4 - weight) {
+		sum += digit(code, i) * weight;
+	}
+	return (10 - (sum % 10)) % 10 === digit(code, code.length - 1);
+}
+
+/**
+ * Why typed input cannot be opened: no barcode's shape, or a wrong check digit. Undefined when
+ * the code can go to the add page.
+ */
+export function barcodeInputError(code: string): string | undefined {
+	if (!looksLikeBarcode(code)) return 'Wpisz pełny kod kreskowy lub ISBN i spróbuj ponownie.';
+	if (!checkDigitMatches(code)) return invalidBarcodeMessage;
+	return undefined;
+}
+
+/** Whether a request failed because the server refused the barcode itself. */
+export function isInvalidBarcode(err: unknown): boolean {
+	return err instanceof ApiError && err.status === 422 && err.field === 'barcode';
 }
 
 /** Whether a barcode is in the Bookland ISBN range, so a hand-added item starts as a book. */

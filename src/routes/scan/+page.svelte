@@ -16,7 +16,13 @@
 	import { request } from '#lib/api.js';
 	import BarcodeCamera from '#lib/components/BarcodeCamera.svelte';
 	import { outcomeLabels, outcomeTones, recentScans } from '#lib/recent.svelte.js';
-	import { RepeatGuard, cleanBarcode, looksLikeBarcode, type QueueEntry } from '#lib/scan.js';
+	import {
+		RepeatGuard,
+		barcodeInputError,
+		cleanBarcode,
+		looksLikeBarcode,
+		type QueueEntry
+	} from '#lib/scan.js';
 
 	let code = $state('');
 	let leaving = $state(false);
@@ -54,8 +60,8 @@
 
 	function submitCode() {
 		if (leaving) return;
-		if (!looksLikeBarcode(cleanBarcode(code))) {
-			codeError = 'Wpisz pełny kod kreskowy lub ISBN i spróbuj ponownie.';
+		codeError = barcodeInputError(cleanBarcode(code));
+		if (codeError) {
 			document.getElementById('scan-code')?.focus();
 			return;
 		}

@@ -112,9 +112,9 @@
 			<BackLink href={`/editions/${d.edition_id}`} label={editionSummary(d.edition)} />
 		{/snippet}
 		{#snippet actions()}
-			<Button tone="stop-quiet" onclick={() => ((deleteError = null), (confirmDelete = true))}
-				>Usuń</Button
-			>
+			<Button tone="stop-quiet" onclick={() => ((deleteError = null), (confirmDelete = true))}>
+				Usuń
+			</Button>
 		{/snippet}
 	</PageHeader>
 

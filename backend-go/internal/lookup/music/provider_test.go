@@ -434,3 +434,15 @@ func TestShopOutageFailsTheFetch(t *testing.T) {
 		t.Fatal("a shop outage on an unknown barcode must fail the fetch, so the miss is not cached")
 	}
 }
+
+func TestTextSearch(t *testing.T) {
+	u := newUpstream(t)
+	s := music.TextSearch{Discogs: &discogs.Client{HTTP: u.server.Client(), BaseURL: u.server.URL, Token: "secret"}}
+	got, err := s.SearchText(context.Background(), "Taco Hemingway 1-800-Oświecenie", "cd")
+	if err != nil || len(got) != 2 || got[1].Edition.DiscogsReleaseID == nil || *got[1].Edition.DiscogsReleaseID != 28352929 {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	if u.count("discogs q=Taco Hemingway 1-800-Oświecenie format=CD") != 1 {
+		t.Fatalf("discogs hits = %v", u.hits)
+	}
+}

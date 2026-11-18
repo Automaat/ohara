@@ -20,7 +20,12 @@ const fieldMessages: Record<string, Record<number, string>> = {
 	kind: { 409: 'Nie można zmienić typu tytułu, który ma wydania.' },
 	title_id: { 422: 'Wybrany tytuł nie istnieje.' },
 	edition_id: { 422: 'Wybrane wydanie nie istnieje.' },
-	phrase: { 409: 'Ta fraza już jest na liście.' }
+	phrase: { 409: 'Ta fraza już jest na liście.' },
+	cover_photo: {
+		400: 'Przesyłanie zdjęcia zostało przerwane. Spróbuj ponownie.',
+		413: 'Wybierz plik o rozmiarze do 8 MiB.',
+		422: 'Wybierz prawidłowe zdjęcie JPEG lub PNG o rozdzielczości do 16 megapikseli.'
+	}
 };
 
 function messageFor(status: number, body: ErrorBody): string {
@@ -33,7 +38,7 @@ function messageFor(status: number, body: ErrorBody): string {
 	return `Serwer zwrócił błąd ${status}.`;
 }
 
-/** Sends a JSON request to the API and returns the decoded body; 204 yields undefined. */
+/** Sends JSON or a binary upload to the API and decodes the response; 204 yields undefined. */
 export async function request<T>(
 	fetchFn: typeof fetch,
 	method: 'GET' | 'POST' | 'PUT' | 'DELETE',
@@ -41,14 +46,18 @@ export async function request<T>(
 	body?: unknown
 ): Promise<T> {
 	let res: Response;
+	const binary = body instanceof Blob;
 	try {
 		res = await fetchFn(path, {
 			method,
 			headers:
 				body === undefined
 					? { accept: 'application/json' }
-					: { accept: 'application/json', 'content-type': 'application/json' },
-			body: body === undefined ? undefined : JSON.stringify(body)
+					: {
+							accept: 'application/json',
+							'content-type': binary ? 'application/octet-stream' : 'application/json'
+						},
+			body: binary ? body : JSON.stringify(body)
 		});
 	} catch {
 		throw new ApiError('Serwer nie odpowiada.', 0);

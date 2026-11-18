@@ -130,7 +130,7 @@ const title: Title = {
 
 describe('title form', () => {
 	it('round-trips a title', () => {
-		const form = titleToForm(title);
+		const form = titleToForm({ ...title, cover_url: 'https://example.test/title.jpg' });
 		expect(form.authors).toBe('Stanisław Lem\nKtoś');
 		expect(form.year).toBe('1961');
 		const parsed = titlePayload(form);
@@ -138,6 +138,7 @@ describe('title form', () => {
 			kind: 'book',
 			authors: ['Stanisław Lem', 'Ktoś'],
 			bn_id: 'b1',
+			cover_url: 'https://example.test/title.jpg',
 			year: 1961,
 			tmdb_id: null
 		});
@@ -197,13 +198,15 @@ const edition: Edition = {
 
 describe('edition form', () => {
 	it('round-trips a movie edition', () => {
-		const parsed = editionPayload(editionToForm(edition), 1, 'movie');
+		const form = editionToForm({ ...edition, cover_url: 'https://example.test/edition.jpg' });
+		const parsed = editionPayload(form, 1, 'movie');
 		expect(parsed.ok && parsed.value).toMatchObject({
 			barcode: '5901234123457',
 			format: 'bluray',
 			pl_subtitles: 'yes',
 			packaging: ['steelbook'],
 			binding: null,
+			cover_url: 'https://example.test/edition.jpg',
 			year: 2019
 		});
 	});
@@ -250,6 +253,7 @@ describe('edition form', () => {
 				packaging: [],
 				binding: null,
 				discogs_release_id: 1873013,
+				cover_url: '',
 				notes: ''
 			}
 		});

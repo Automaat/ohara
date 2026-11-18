@@ -114,10 +114,9 @@ export function estimateSource(bound: BoundKey, e: Estimate | null): string {
 	return e.trimmed > 0 ? `${base} (${e.trimmed} odrzucone)` : base;
 }
 
-/** A collection bound as "1 234,00 zł" with how many copies it covers when not all. */
+/** A collection bound with its coverage, including observed zero offers. */
 export function boundTotal(b: Bound, copies: number): string {
-	const amount = formatPLN(b.cents);
-	if (b.copies === copies) return amount;
+	const amount = b.copies === 0 ? 'Brak wyceny' : formatPLN(b.cents);
 	return `${amount} (${b.copies} z ${copies} egz.)`;
 }
 

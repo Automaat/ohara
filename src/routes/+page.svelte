@@ -29,7 +29,7 @@
 		type CollectionView
 	} from '$lib/collection';
 	import { collectionSortOptions, sortCopies, type CollectionSort } from '$lib/collection-sort';
-	import { databaseBadge, fetchStatus, type Status } from '$lib/status';
+	import { purchaseDate, resultCount } from '$lib/polish';
 
 	const sort = $derived(collectionPage.state.collectionSort ?? 'title');
 
@@ -45,7 +45,6 @@
 	let view = $state<CollectionView | null>(null);
 	let failure = $state<string | null>(null);
 	let loading = $state(true);
-	let info = $state<Status | null>(null);
 	let seq = 0;
 
 	async function load() {
@@ -63,13 +62,7 @@
 		}
 	}
 
-	onMount(() => {
-		void load();
-		fetchStatus(fetch).then(
-			(s) => (info = s),
-			() => (info = null)
-		);
-	});
+	onMount(load);
 
 	function set<K extends keyof CollectionFilter>(key: K, value: CollectionFilter[K]) {
 		filter[key] = value;
@@ -88,7 +81,6 @@
 
 	const rows = $derived((view?.items ?? []) as Row[]);
 	const totals = $derived(view?.totals);
-	const badge = $derived(info ? databaseBadge(info.database) : null);
 	const filtered = $derived(
 		filter.kind !== '' || filter.format !== '' || filter.status !== '' || filter.q.trim() !== ''
 	);
@@ -100,27 +92,20 @@
 
 <PageHeader
 	title="Kolekcja"
-	description="Filmy i książki na półce i na liście życzeń, z tym, ile za nie zapłacono."
+	description="Egzemplarze filmów, książek i muzyki na półce i na liście życzeń."
 >
-	{#snippet status()}
-		{#if badge}
-			<Pill tone={badge.tone} dot>Baza: {badge.label}</Pill>
-		{/if}
-	{/snippet}
 	{#snippet facts()}
 		<FactList
 			layout="inline"
 			missingLabel="—"
 			facts={[
-				{ label: 'Egzemplarze', value: totals ? String(totals.copies) : null, mono: true },
-				{ label: 'Na półce', value: totals ? String(totals.owned) : null, mono: true },
-				{ label: 'Lista życzeń', value: totals ? String(totals.wishlist) : null, mono: true },
+				{ label: 'Egzemplarze', value: totals ? String(totals.copies) : null },
+				{ label: 'Na półce', value: totals ? String(totals.owned) : null },
+				{ label: 'Lista życzeń', value: totals ? String(totals.wishlist) : null },
 				{
 					label: 'Wydano',
-					value: totals ? spentLabel(totals) : null,
-					mono: true
-				},
-				{ label: 'Wersja', value: info?.version, mono: true }
+					value: totals ? spentLabel(totals) : null
+				}
 			]}
 		/>
 	{/snippet}
@@ -144,7 +129,7 @@
 		query={filter.q}
 		onsearch={(q: string) => set('q', q)}
 		count={rows.length}
-		countLabel={(_n: number, formatted: string) => `Pozycje: ${formatted}`}
+		countLabel={resultCount}
 		pending={loading}
 		pendingLabel="Wczytywanie…"
 		toolsLabel="Filtry"
@@ -187,6 +172,10 @@
 		]}
 	/>
 
+	{#if view && !loading && !failure}
+		<p class="metadata result-count" aria-hidden="true">{resultCount(rows.length)}</p>
+	{/if}
+
 	<DataTable
 		aria-label="Egzemplarze w kolekcji"
 		{columns}
@@ -212,18 +201,22 @@
 				<Link href={`/editions/${row.edition_id}`}>{editionSummary(row)}</Link>
 			{:else if column.key === 'status'}
 				<Link href={`/copies/${row.copy_id}`}>
-					<Pill tone={row.status === 'owned' ? 'success' : 'neutral'}
-						>{statusLabels[row.status]}</Pill
-					>
+					<Pill tone={row.status === 'owned' ? 'success' : 'neutral'}>
+						{statusLabels[row.status]}
+					</Pill>
 				</Link>
 			{:else if column.key === 'price_cents'}
 				{#if row.status === 'owned'}
-					{row.price_cents === null ? 'Nieznana' : formatPLN(row.price_cents)}
+					<span class="price">
+						{row.price_cents === null ? 'Nieznana' : formatPLN(row.price_cents)}
+					</span>
 				{/if}
 			{:else if column.key === 'shop'}
 				{row.shop}
 			{:else if column.key === 'purchased_on'}
-				{row.purchased_on ?? ''}
+				{#if row.purchased_on}
+					<time class="metadata" datetime={row.purchased_on}>{purchaseDate(row.purchased_on)}</time>
+				{/if}
 			{/if}
 		{/snippet}
 		{#snippet empty()}
@@ -256,5 +249,8 @@
 		display: grid;
 		gap: 1rem;
 		padding: var(--sui-pane-gutter, 1.5rem);
+	}
+	.result-count {
+		margin: 0;
 	}
 </style>

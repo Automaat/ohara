@@ -77,8 +77,7 @@ func DecodeJSON(w http.ResponseWriter, r *http.Request, logger *slog.Logger, dst
 }
 
 func decodeMessage(err error) string {
-	var typeErr *json.UnmarshalTypeError
-	if errors.As(err, &typeErr) && typeErr.Field != "" {
+	if typeErr, ok := errors.AsType[*json.UnmarshalTypeError](err); ok && typeErr.Field != "" {
 		return fmt.Sprintf("invalid JSON: %s must be %s", typeErr.Field, typeErr.Type)
 	}
 	if _, ok := errors.AsType[*http.MaxBytesError](err); ok {

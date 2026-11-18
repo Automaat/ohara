@@ -44,6 +44,9 @@ func (h *Handler) Mount(r chi.Router) {
 	r.Get("/editions/{id}", h.getEdition)
 	r.Put("/editions/{id}", h.updateEdition)
 	r.Delete("/editions/{id}", h.deleteEdition)
+	r.Get("/editions/{id}/cover", h.getEditionCover)
+	r.Put("/editions/{id}/cover", h.putEditionCover)
+	r.Delete("/editions/{id}/cover", h.deleteEditionCover)
 
 	r.Post("/copies", h.createCopy)
 	r.Get("/copies/{id}", h.getCopy)

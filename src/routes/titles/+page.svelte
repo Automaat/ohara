@@ -10,6 +10,7 @@
 	import { onMount } from 'svelte';
 	import { errorMessage, request } from '$lib/api';
 	import { displayName, kindLabels, type Kind, type Title } from '$lib/collection';
+	import { resultCount } from '$lib/polish';
 
 	type Row = Title & Record<string, unknown>;
 
@@ -53,10 +54,13 @@
 </script>
 
 <svelte:head>
-	<title>Tytuły · Ohara</title>
+	<title>Katalog tytułów · Ohara</title>
 </svelte:head>
 
-<PageHeader title="Tytuły" description="Filmy i książki, niezależnie od wydania.">
+<PageHeader
+	title="Katalog tytułów"
+	description="Tytuły filmów, książek i albumów muzycznych, niezależnie od wydania."
+>
 	{#snippet actions()}
 		<Button tone="signal" href="/titles/new">Nowy tytuł</Button>
 	{/snippet}
@@ -72,7 +76,7 @@
 			void load();
 		}}
 		count={rows.length}
-		countLabel={(_n: number, formatted: string) => `Tytuły: ${formatted}`}
+		countLabel={resultCount}
 		pending={loading}
 		pendingLabel="Wczytywanie…"
 		filter={{
@@ -90,6 +94,9 @@
 			}
 		}}
 	/>
+	{#if titles && !loading && !failure}
+		<p class="metadata result-count" aria-hidden="true">{resultCount(rows.length)}</p>
+	{/if}
 	<DataTable
 		aria-label="Tytuły"
 		{columns}
@@ -129,5 +136,8 @@
 		display: grid;
 		gap: 1rem;
 		padding: var(--sui-pane-gutter, 1.5rem);
+	}
+	.result-count {
+		margin: 0;
 	}
 </style>

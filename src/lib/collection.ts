@@ -20,6 +20,7 @@ export type TitlePayload = {
 	bn_id: string | null;
 	openlibrary_id: string | null;
 	notes: string;
+	cover_url?: string;
 };
 
 export type Title = TitlePayload & {
@@ -43,10 +44,12 @@ export type EditionPayload = {
 	binding: Binding | null;
 	discogs_release_id: number | null;
 	notes: string;
+	cover_url?: string;
 };
 
 export type Edition = EditionPayload & {
 	id: number;
+	cover_override_url?: string;
 	copy_count: number;
 	created_at: string;
 	updated_at: string;
@@ -90,6 +93,7 @@ export type CollectionItem = {
 	original_title: string | null;
 	polish_title: string | null;
 	year: number | null;
+	cover_url?: string;
 };
 
 export type Totals = {
@@ -276,6 +280,7 @@ export type TitleForm = {
 	authors: string;
 	bn_id: string;
 	openlibrary_id: string;
+	cover_url: string;
 	notes: string;
 };
 
@@ -291,6 +296,7 @@ export function titleToForm(t: TitlePayload | null, kind: Kind = 'movie'): Title
 		authors: t?.authors.join('\n') ?? '',
 		bn_id: t?.bn_id ?? '',
 		openlibrary_id: t?.openlibrary_id ?? '',
+		cover_url: t?.cover_url ?? '',
 		notes: t?.notes ?? ''
 	};
 }
@@ -323,6 +329,7 @@ export function titlePayload(f: TitleForm): Parsed<TitlePayload> {
 						.filter(Boolean),
 			bn_id: book ? optText(f.bn_id) : null,
 			openlibrary_id: book ? optText(f.openlibrary_id) : null,
+			cover_url: f.cover_url.trim(),
 			notes: f.notes.trim()
 		}
 	};
@@ -339,6 +346,7 @@ export type EditionForm = {
 	packaging: Packaging[];
 	binding: Binding | '';
 	discogs_release_id: string;
+	cover_url: string;
 	notes: string;
 };
 
@@ -355,6 +363,7 @@ export function editionToForm(e: EditionPayload | null): EditionForm {
 		packaging: [...(e?.packaging ?? [])],
 		binding: e?.binding ?? '',
 		discogs_release_id: e?.discogs_release_id?.toString() ?? '',
+		cover_url: e?.cover_url ?? '',
 		notes: e?.notes ?? ''
 	};
 }
@@ -390,6 +399,7 @@ export function editionPayload(
 			packaging: movie ? f.packaging : [],
 			binding: kind === 'book' && f.binding ? f.binding : null,
 			discogs_release_id: discogs.value,
+			cover_url: f.cover_url.trim(),
 			notes: f.notes.trim()
 		}
 	};

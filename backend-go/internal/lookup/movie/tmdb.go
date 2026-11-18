@@ -27,6 +27,18 @@ type TMDBMovie struct {
 	OriginalTitle string  `json:"original_title"`
 	ReleaseDate   string  `json:"release_date"`
 	Popularity    float64 `json:"popularity"`
+	PosterPath    string  `json:"poster_path"`
+}
+
+// tmdbPosterBase serves TMDB posters 342 pixels wide.
+const tmdbPosterBase = "https://image.tmdb.org/t/p/w342"
+
+// Poster is the poster URL, or empty when TMDB has none.
+func (m TMDBMovie) Poster() string {
+	if m.PosterPath == "" {
+		return ""
+	}
+	return tmdbPosterBase + m.PosterPath
 }
 
 // tmdbMaxResults keeps the candidates a user picks from short.

@@ -17,7 +17,8 @@
 		resolveScan,
 		saveScan,
 		saveSticky,
-		searchAlbums,
+		searchHints,
+		searchTitles,
 		wedgeBarcodeIn,
 		type Candidate,
 		type LookupResult,
@@ -37,6 +38,7 @@
 	type Status = 'found' | 'owned' | 'missing';
 	type Phase =
 		| { kind: 'loading' }
+		| { kind: 'queued' }
 		| { kind: 'ready'; status: Status }
 		| { kind: 'saved'; name: string; price: string; href: string }
 		| { kind: 'failed'; message: string };
@@ -44,7 +46,7 @@
 	const statusTitles: Record<Status, string> = {
 		found: 'Znaleziono',
 		owned: 'Masz już to wydanie',
-		missing: 'Nie znaleziono'
+		missing: 'Dodaj ręcznie'
 	};
 
 	function storage(): Storage | undefined {
@@ -108,8 +110,7 @@
 		}
 		if (byHand) {
 			blank(code);
-			phase = { kind: 'ready', status: 'missing' };
-			void focus('scan-name');
+			enterManually();
 			return;
 		}
 		try {
@@ -139,8 +140,10 @@
 				form = quickForm(first, sticky, r.barcode);
 				phase = { kind: 'ready', status: 'found' };
 			} else {
-				blank(r.barcode);
-				phase = { kind: 'ready', status: 'missing' };
+				blank(r.entry.barcode);
+				phase = { kind: 'queued' };
+				void focus('scan-next');
+				return;
 			}
 			void focus('scan-price');
 		} catch (err) {
@@ -153,22 +156,26 @@
 		const candidate = pending.candidates[index];
 		pending.picked = index;
 		pending.target = { kind: 'new', barcode: pending.barcode, candidate };
+		const next = quickForm(candidate, sticky, pending.barcode);
+		const sameKind = next.kind === form.kind;
 		form = {
-			...quickForm(candidate, sticky, pending.barcode),
+			...next,
+			format: next.format || (sameKind ? form.format : ''),
+			binding: next.binding || (sameKind ? form.binding : ''),
 			price: form.price,
 			shop: form.shop,
 			acquired_as: form.acquired_as
 		};
 	}
 
-	async function searchDiscogs() {
+	async function searchByTitle() {
 		const query = albumQuery.trim();
 		if (!pending || pending.target.kind !== 'new' || searching || !query) return;
 		searching = true;
 		try {
-			const found = await searchAlbums(fetch, query, pending.barcode, form.format);
+			const found = await searchTitles(fetch, form.kind, query, pending.barcode, form.format);
 			if (found.length === 0) {
-				notice = `Discogs nie zna „${query}”.`;
+				notice = `Nic nie znaleziono dla „${query}”.`;
 				return;
 			}
 			notice = null;
@@ -199,7 +206,7 @@
 			logScan(current.barcode, 'added', saved.titleName + (price ? ` · ${price}` : ''), href);
 			if (next) {
 				previous = `Dodano: ${saved.titleName}.`;
-				await goto(`/scan/${encodeURIComponent(next)}`);
+				await openNext(next);
 				return;
 			}
 			previous = null;
@@ -219,9 +226,10 @@
 		}
 	}
 
-	async function skip() {
-		if (pending) {
-			const missing = phase.kind === 'ready' && phase.status === 'missing';
+	function logSkippedScan() {
+		if (pending && !manual) {
+			const missing =
+				phase.kind === 'queued' || (phase.kind === 'ready' && phase.status === 'missing');
 			logScan(
 				pending.barcode,
 				missing ? 'queued' : 'skipped',
@@ -229,14 +237,31 @@
 				missing ? '/scan/queue' : undefined
 			);
 		}
+	}
+
+	async function skip() {
+		logSkippedScan();
 		previous = null;
 		await goto('/scan');
 	}
 
+	function enterManually() {
+		phase = { kind: 'ready', status: 'missing' };
+		void focus('scan-name');
+	}
+
 	async function scanNext() {
-		const code = cleanBarcode(nextCode);
+		if (phase.kind === 'queued') logSkippedScan();
 		previous = null;
-		await goto(code ? `/scan/${encodeURIComponent(code)}` : '/scan');
+		await openNext(cleanBarcode(nextCode));
+	}
+
+	async function openNext(code: string) {
+		if (code && code === barcode && !manual) {
+			await load(code, false);
+		} else {
+			await goto(code ? `/scan/${encodeURIComponent(code)}` : '/scan');
+		}
 	}
 </script>
 
@@ -247,17 +272,43 @@
 <PageHeader
 	title={phase.kind === 'saved'
 		? `Dodano: ${phase.name}`
-		: phase.kind === 'ready'
-			? statusTitles[phase.status]
-			: phase.kind === 'failed'
-				? 'Nie udało się sprawdzić kodu'
-				: 'Sprawdzam kod…'}
-	description={barcode}
+		: phase.kind === 'queued'
+			? 'Nie znaleziono'
+			: phase.kind === 'ready'
+				? statusTitles[phase.status]
+				: phase.kind === 'failed'
+					? 'Nie udało się sprawdzić kodu'
+					: 'Sprawdzam kod…'}
+	description={phase.kind === 'saved' ? phase.price || undefined : (pending?.barcode ?? barcode)}
 >
 	{#snippet kicker()}
 		<BackLink href="/scan" label="Skanuj" />
 	{/snippet}
 </PageHeader>
+
+{#snippet nextScanForm()}
+	<form
+		class="row"
+		novalidate
+		onsubmit={(e) => {
+			e.preventDefault();
+			void scanNext();
+		}}
+	>
+		<Field
+			id="scan-next"
+			label="Następny kod"
+			hint="Czytnik Bluetooth może skanować od razu; puste pole wraca do aparatu."
+			inputmode="numeric"
+			enterkeyhint="go"
+			autocomplete="off"
+			bind:value={nextCode}
+		/>
+		<Button type="submit" tone={phase.kind === 'queued' ? undefined : 'signal'}>
+			Skanuj kolejny
+		</Button>
+	</form>
+{/snippet}
 
 <div class="content">
 	{#if previous}
@@ -266,6 +317,13 @@
 
 	{#if phase.kind === 'loading'}
 		<Skeleton rows={3} />
+	{:else if phase.kind === 'queued'}
+		<Callout tone="warning" live>Kod trafił do kolejki do uzupełnienia.</Callout>
+		<div class="actions">
+			<Button tone="signal" onclick={enterManually}>Dodaj ręcznie</Button>
+			<Button href="/scan/queue">Do uzupełnienia</Button>
+		</div>
+		{@render nextScanForm()}
 	{:else if phase.kind === 'failed'}
 		<Callout tone="warning" live>{phase.message}</Callout>
 		<div class="actions">
@@ -274,59 +332,35 @@
 			<Button href="/scan">Skanuj kolejny</Button>
 		</div>
 	{:else if phase.kind === 'saved'}
-		<Callout tone="quiet" live>
-			{phase.name}{phase.price ? ` · ${phase.price}` : ''} jest w kolekcji.
-		</Callout>
-		<form
-			class="row"
-			novalidate
-			onsubmit={(e) => {
-				e.preventDefault();
-				void scanNext();
-			}}
-		>
-			<Field
-				id="scan-next"
-				label="Następny kod"
-				hint="Czytnik Bluetooth może skanować od razu; puste pole wraca do aparatu."
-				inputmode="numeric"
-				enterkeyhint="go"
-				autocomplete="off"
-				bind:value={nextCode}
-			/>
-			<Button type="submit" tone="signal">Skanuj kolejny</Button>
-		</form>
+		{@render nextScanForm()}
 		<div class="actions">
 			<Button href={phase.href}>Zobacz egzemplarz</Button>
 		</div>
 	{:else if pending}
-		{#if phase.status === 'missing'}
-			<Callout tone="warning">
-				Żadne źródło nie zna tego kodu. Kod czeka w kolejce do uzupełnienia; możesz uzupełnić go
-				teraz{form.kind === 'music' ? ', np. wyszukując płytę w Discogs' : ''}.
-			</Callout>
-		{/if}
-
-		{#if pending.target.kind === 'new' && form.kind === 'music'}
+		{#snippet titleSearch()}
 			<form
 				class="row"
 				novalidate
-				aria-label="Szukaj płyty w Discogs"
+				aria-label="Szukaj po tytule"
 				onsubmit={(e) => {
 					e.preventDefault();
-					void searchDiscogs();
+					void searchByTitle();
 				}}
 			>
 				<Field
 					id="scan-album"
-					label="Szukaj w Discogs"
-					hint="Wykonawca i tytuł, np. Taco Hemingway 1-800-Oświecenie. Wybrane wydanie uzupełni pozycję."
+					label="Szukaj po tytule"
+					hint={searchHints[form.kind]}
 					enterkeyhint="search"
 					autocomplete="off"
 					bind:value={albumQuery}
 				/>
 				<Button type="submit" loading={searching} disabled={!albumQuery.trim()}>Szukaj</Button>
 			</form>
+		{/snippet}
+
+		{#if phase.status === 'missing' && pending.target.kind === 'new'}
+			{@render titleSearch()}
 		{/if}
 
 		{#if notice}
@@ -341,10 +375,15 @@
 			bind:form
 			{issue}
 			{saving}
+			skipLabel={phase.status === 'missing' ? 'Anuluj' : undefined}
 			onpick={pick}
 			onsave={save}
 			onskip={skip}
 		/>
+
+		{#if phase.status === 'found' && pending.target.kind === 'new'}
+			{@render titleSearch()}
+		{/if}
 	{/if}
 </div>
 

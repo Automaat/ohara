@@ -17,7 +17,8 @@
 		resolveScan,
 		saveScan,
 		saveSticky,
-		searchAlbums,
+		searchHints,
+		searchTitles,
 		wedgeBarcodeIn,
 		type Candidate,
 		type LookupResult,
@@ -153,22 +154,26 @@
 		const candidate = pending.candidates[index];
 		pending.picked = index;
 		pending.target = { kind: 'new', barcode: pending.barcode, candidate };
+		const next = quickForm(candidate, sticky, pending.barcode);
+		const sameKind = next.kind === form.kind;
 		form = {
-			...quickForm(candidate, sticky, pending.barcode),
+			...next,
+			format: next.format || (sameKind ? form.format : ''),
+			binding: next.binding || (sameKind ? form.binding : ''),
 			price: form.price,
 			shop: form.shop,
 			acquired_as: form.acquired_as
 		};
 	}
 
-	async function searchDiscogs() {
+	async function searchByTitle() {
 		const query = albumQuery.trim();
 		if (!pending || pending.target.kind !== 'new' || searching || !query) return;
 		searching = true;
 		try {
-			const found = await searchAlbums(fetch, query, pending.barcode, form.format);
+			const found = await searchTitles(fetch, form.kind, query, pending.barcode, form.format);
 			if (found.length === 0) {
-				notice = `Discogs nie zna „${query}”.`;
+				notice = `Nic nie znaleziono dla „${query}”.`;
 				return;
 			}
 			notice = null;
@@ -307,24 +312,24 @@
 		{#if phase.status === 'missing'}
 			<Callout tone="warning">
 				Żadne źródło nie zna tego kodu. Kod czeka w kolejce do uzupełnienia; możesz uzupełnić go
-				teraz{form.kind === 'music' ? ', np. wyszukując płytę w Discogs' : ''}.
+				teraz, np. wyszukując po tytule.
 			</Callout>
 		{/if}
 
-		{#snippet discogsSearch()}
+		{#snippet titleSearch()}
 			<form
 				class="row"
 				novalidate
-				aria-label="Szukaj płyty w Discogs"
+				aria-label="Szukaj po tytule"
 				onsubmit={(e) => {
 					e.preventDefault();
-					void searchDiscogs();
+					void searchByTitle();
 				}}
 			>
 				<Field
 					id="scan-album"
-					label="Szukaj w Discogs"
-					hint="Wykonawca i tytuł, np. Taco Hemingway 1-800-Oświecenie. Wybrane wydanie uzupełni pozycję."
+					label="Szukaj po tytule"
+					hint={searchHints[form.kind]}
 					enterkeyhint="search"
 					autocomplete="off"
 					bind:value={albumQuery}
@@ -333,8 +338,8 @@
 			</form>
 		{/snippet}
 
-		{#if phase.status === 'missing' && form.kind === 'music'}
-			{@render discogsSearch()}
+		{#if phase.status === 'missing' && pending.target.kind === 'new'}
+			{@render titleSearch()}
 		{/if}
 
 		{#if notice}
@@ -354,8 +359,8 @@
 			onskip={skip}
 		/>
 
-		{#if phase.status === 'found' && form.kind === 'music'}
-			{@render discogsSearch()}
+		{#if phase.status === 'found' && pending.target.kind === 'new'}
+			{@render titleSearch()}
 		{/if}
 	{/if}
 </div>

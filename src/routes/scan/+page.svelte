@@ -21,6 +21,7 @@
 	let code = $state('');
 	let leaving = $state(false);
 	let notice = $state<string | null>(null);
+	let codeError = $state<string>();
 	let queued = $state<number | null>(null);
 	const guard = new RepeatGuard(1500);
 
@@ -49,6 +50,16 @@
 	function fromCamera(barcode: string) {
 		if (!guard.accepts(barcode, performance.now())) return;
 		void open(barcode);
+	}
+
+	function submitCode() {
+		if (leaving) return;
+		if (!looksLikeBarcode(cleanBarcode(code))) {
+			codeError = 'Wpisz pełny kod kreskowy lub ISBN i spróbuj ponownie.';
+			document.getElementById('scan-code')?.focus();
+			return;
+		}
+		void open(code);
 	}
 
 	onMount(() => {
@@ -82,24 +93,27 @@
 		novalidate
 		onsubmit={(e) => {
 			e.preventDefault();
-			void open(code);
+			submitCode();
 		}}
 	>
 		<Field
 			id="scan-code"
 			label="Kod kreskowy"
 			hint="Wpisz kod albo użyj czytnika Bluetooth: kursor musi być w tym polu."
+			error={codeError}
 		>
-			{#snippet control({ id, describedby })}
+			{#snippet control({ id, describedby, invalid })}
 				<div class="manual">
 					<TextInput
 						{id}
 						aria-describedby={describedby}
+						{invalid}
 						inputmode="numeric"
 						enterkeyhint="search"
 						autocomplete="off"
 						disabled={leaving}
 						bind:value={code}
+						oninput={() => (codeError = undefined)}
 					/>
 					<Button type="submit" loading={leaving}>Szukaj</Button>
 				</div>

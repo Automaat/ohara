@@ -39,10 +39,18 @@
 		'notes'
 	];
 	const general = $derived(issue && !fieldKeys.includes(issue.field) ? issue.message : null);
+	let titleForm: HTMLFormElement;
+
+	$effect(() => {
+		if (issue?.field) {
+			titleForm.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus();
+		}
+	});
 </script>
 
 <form
 	class="form"
+	bind:this={titleForm}
 	novalidate
 	onsubmit={(e) => {
 		e.preventDefault();

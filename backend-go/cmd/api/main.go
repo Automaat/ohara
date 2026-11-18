@@ -225,12 +225,14 @@ func newLookup(pool *pgxpool.Pool, logger *slog.Logger) (*lookup.Handler, error)
 		}
 		metrics.InitSource(p.Name())
 	}
-	if p := newMovieProvider(pool, logger); p != nil {
+	// One Allegro client serves both chains: it holds the token lock.
+	allegro := newAllegro(pool)
+	if p := newMovieProvider(allegro, logger); p != nil {
 		if err := registry.Register(p, movieCacheTTL); err != nil {
 			return nil, err
 		}
 	}
-	if p := newMusicProvider(logger); p != nil {
+	if p := newMusicProvider(allegro, logger); p != nil {
 		if err := registry.Register(p, musicCacheTTL); err != nil {
 			return nil, err
 		}
@@ -252,15 +254,15 @@ var sourceClient = &http.Client{Timeout: 8 * time.Second}
 // newMovieProvider builds the movie chain, or nil without a TMDB key: the
 // chain ends in a TMDB search. Allegro joins when its app credentials are
 // set; Ceneo and UPCitemdb can be switched off.
-func newMovieProvider(pool *pgxpool.Pool, logger *slog.Logger) *movie.Provider {
+func newMovieProvider(allegro *movie.Allegro, logger *slog.Logger) *movie.Provider {
 	key := os.Getenv("OHARA_TMDB_API_KEY")
 	if key == "" {
 		logger.Info("movie lookup disabled: OHARA_TMDB_API_KEY not set")
 		return nil
 	}
 	p := &movie.Provider{TMDB: movie.TMDB{Client: sourceClient, Key: key}}
-	if a := newAllegro(pool); a != nil {
-		p.Sources = append(p.Sources, a)
+	if allegro != nil {
+		p.Sources = append(p.Sources, allegro)
 	}
 	if envOr("OHARA_CENEO", "true") == "true" {
 		p.Sources = append(p.Sources, movie.Ceneo{Client: sourceClient})
@@ -289,14 +291,19 @@ func newDiscogs() *discogs.Client {
 }
 
 // newMusicProvider builds the music chain: Discogs when a token is set,
-// then MusicBrainz with Cover Art Archive covers unless switched off; nil
-// when neither is on.
-func newMusicProvider(logger *slog.Logger) *music.Provider {
+// then MusicBrainz with Cover Art Archive covers unless switched off, then
+// a Discogs search for Allegro's product name; nil when neither Discogs
+// nor MusicBrainz is on.
+func newMusicProvider(allegro *movie.Allegro, logger *slog.Logger) *music.Provider {
 	p := &music.Provider{}
 	var names []string
 	if d := newDiscogs(); d != nil {
 		p.Discogs = d
 		names = append(names, discogs.Source)
+		if allegro != nil {
+			p.Names = allegro
+			names = append(names, allegro.Name())
+		}
 	} else {
 		logger.Info("discogs lookup disabled: OHARA_DISCOGS_TOKEN not set")
 	}

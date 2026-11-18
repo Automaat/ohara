@@ -16,6 +16,7 @@
 		formatOptions as formatOptionsFor,
 		kindLabels,
 		options,
+		priceHint,
 		type FormIssue
 	} from '$lib/collection';
 	import {
@@ -124,6 +125,7 @@
 	<Field
 		id="scan-price"
 		label="Cena zakupu (zł)"
+		hint={priceHint}
 		inputmode="decimal"
 		placeholder="49,99"
 		enterkeyhint="done"

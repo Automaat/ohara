@@ -11,6 +11,7 @@
 		acquiredLabels,
 		conditionLabels,
 		options,
+		priceHint,
 		statusLabels,
 		type CopyForm,
 		type CopyStatus,
@@ -59,6 +60,7 @@
 	{#if form.status === 'owned'}
 		<Field
 			label="Cena zakupu (zł)"
+			hint={priceHint}
 			inputmode="decimal"
 			placeholder="49,99"
 			bind:value={form.price}

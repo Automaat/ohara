@@ -142,6 +142,7 @@
 			} else {
 				blank(r.entry.barcode);
 				phase = { kind: 'queued' };
+				void focus('scan-next');
 				return;
 			}
 			void focus('scan-price');
@@ -225,7 +226,7 @@
 		}
 	}
 
-	async function skip() {
+	function logSkippedScan() {
 		if (pending && !manual) {
 			const missing =
 				phase.kind === 'queued' || (phase.kind === 'ready' && phase.status === 'missing');
@@ -236,6 +237,10 @@
 				missing ? '/scan/queue' : undefined
 			);
 		}
+	}
+
+	async function skip() {
+		logSkippedScan();
 		previous = null;
 		await goto('/scan');
 	}
@@ -246,6 +251,7 @@
 	}
 
 	async function scanNext() {
+		if (phase.kind === 'queued') logSkippedScan();
 		previous = null;
 		await openNext(cleanBarcode(nextCode));
 	}
@@ -280,6 +286,30 @@
 	{/snippet}
 </PageHeader>
 
+{#snippet nextScanForm()}
+	<form
+		class="row"
+		novalidate
+		onsubmit={(e) => {
+			e.preventDefault();
+			void scanNext();
+		}}
+	>
+		<Field
+			id="scan-next"
+			label="Następny kod"
+			hint="Czytnik Bluetooth może skanować od razu; puste pole wraca do aparatu."
+			inputmode="numeric"
+			enterkeyhint="go"
+			autocomplete="off"
+			bind:value={nextCode}
+		/>
+		<Button type="submit" tone={phase.kind === 'queued' ? undefined : 'signal'}>
+			Skanuj kolejny
+		</Button>
+	</form>
+{/snippet}
+
 <div class="content">
 	{#if previous}
 		<Callout tone="quiet" live>{previous}</Callout>
@@ -291,9 +321,9 @@
 		<Callout tone="warning" live>Kod trafił do kolejki do uzupełnienia.</Callout>
 		<div class="actions">
 			<Button tone="signal" onclick={enterManually}>Dodaj ręcznie</Button>
-			<Button onclick={skip}>Skanuj kolejny</Button>
 			<Button href="/scan/queue">Do uzupełnienia</Button>
 		</div>
+		{@render nextScanForm()}
 	{:else if phase.kind === 'failed'}
 		<Callout tone="warning" live>{phase.message}</Callout>
 		<div class="actions">
@@ -302,25 +332,7 @@
 			<Button href="/scan">Skanuj kolejny</Button>
 		</div>
 	{:else if phase.kind === 'saved'}
-		<form
-			class="row"
-			novalidate
-			onsubmit={(e) => {
-				e.preventDefault();
-				void scanNext();
-			}}
-		>
-			<Field
-				id="scan-next"
-				label="Następny kod"
-				hint="Czytnik Bluetooth może skanować od razu; puste pole wraca do aparatu."
-				inputmode="numeric"
-				enterkeyhint="go"
-				autocomplete="off"
-				bind:value={nextCode}
-			/>
-			<Button type="submit" tone="signal">Skanuj kolejny</Button>
-		</form>
+		{@render nextScanForm()}
 		<div class="actions">
 			<Button href={phase.href}>Zobacz egzemplarz</Button>
 		</div>

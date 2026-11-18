@@ -8,9 +8,9 @@
 		registerServiceWorker
 	} from '@smykla-skalski/sui';
 	import type { Snippet } from 'svelte';
-	import { dev } from '$app/environment';
+	import { dev } from '$app/env';
 	import { page } from '$app/state';
-	import { currentItem, sections } from '$lib/nav';
+	import { currentItem, sections } from '#lib/nav.js';
 
 	let { children }: { children: Snippet } = $props();
 

@@ -13,7 +13,7 @@
 	} from '@smykla-skalski/sui';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { ApiError, errorMessage, request } from '$lib/api';
+	import { ApiError, errorMessage, request } from '#lib/api.js';
 	import {
 		acquiredLabels,
 		conditionLabels,
@@ -30,12 +30,12 @@
 		type Edition,
 		type EditionDetail,
 		type FormIssue
-	} from '$lib/collection';
-	import ArtworkHeader from '$lib/components/ArtworkHeader.svelte';
-	import CopyFormFields from '$lib/components/CopyFormFields.svelte';
-	import EditionFormFields from '$lib/components/EditionFormFields.svelte';
-	import EditionCoverForm from '$lib/components/EditionCoverForm.svelte';
-	import { purchaseDate } from '$lib/polish';
+	} from '#lib/collection.js';
+	import ArtworkHeader from '#lib/components/ArtworkHeader.svelte';
+	import CopyFormFields from '#lib/components/CopyFormFields.svelte';
+	import EditionFormFields from '#lib/components/EditionFormFields.svelte';
+	import EditionCoverForm from '#lib/components/EditionCoverForm.svelte';
+	import { purchaseDate } from '#lib/polish.js';
 
 	const id = $derived(Number(page.params.id));
 

@@ -18,14 +18,14 @@
 		options,
 		priceHint,
 		type FormIssue
-	} from '$lib/collection';
+	} from '#lib/collection.js';
 	import {
 		candidateLabel,
 		type Candidate,
 		type LookupResult,
 		type QuickForm,
 		type SaveTarget
-	} from '$lib/scan';
+	} from '#lib/scan.js';
 
 	let {
 		target,

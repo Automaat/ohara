@@ -18,7 +18,7 @@
 		type PillTone
 	} from '@smykla-skalski/sui';
 	import { onMount, tick } from 'svelte';
-	import { ApiError, errorMessage, request } from '$lib/api';
+	import { ApiError, errorMessage, request } from '#lib/api.js';
 	import {
 		acquiredLabels,
 		collectionURL,
@@ -27,7 +27,7 @@
 		options,
 		type CollectionView,
 		type FormIssue
-	} from '$lib/collection';
+	} from '#lib/collection.js';
 	import {
 		alertLabels,
 		intervalLabel,
@@ -43,7 +43,7 @@
 		type Keyword,
 		type KeywordKind,
 		type Observation
-	} from '$lib/deals';
+	} from '#lib/deals.js';
 
 	type Row = Observation & Record<string, unknown>;
 

@@ -3,10 +3,10 @@
 	import { tick, untrack } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { ApiError, errorMessage } from '$lib/api';
-	import { formatPLN, type FormIssue } from '$lib/collection';
-	import ScanConfirm from '$lib/components/ScanConfirm.svelte';
-	import { logScan } from '$lib/recent.svelte';
+	import { ApiError, errorMessage } from '#lib/api.js';
+	import { formatPLN, type FormIssue } from '#lib/collection.js';
+	import ScanConfirm from '#lib/components/ScanConfirm.svelte';
+	import { logScan } from '#lib/recent.svelte.js';
 	import {
 		FormRejected,
 		cleanBarcode,
@@ -24,7 +24,7 @@
 		type LookupResult,
 		type QuickForm,
 		type SaveTarget
-	} from '$lib/scan';
+	} from '#lib/scan.js';
 
 	type Pending = {
 		key: string;

@@ -13,10 +13,10 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { request } from '$lib/api';
-	import BarcodeCamera from '$lib/components/BarcodeCamera.svelte';
-	import { outcomeLabels, outcomeTones, recentScans } from '$lib/recent.svelte';
-	import { RepeatGuard, cleanBarcode, looksLikeBarcode, type QueueEntry } from '$lib/scan';
+	import { request } from '#lib/api.js';
+	import BarcodeCamera from '#lib/components/BarcodeCamera.svelte';
+	import { outcomeLabels, outcomeTones, recentScans } from '#lib/recent.svelte.js';
+	import { RepeatGuard, cleanBarcode, looksLikeBarcode, type QueueEntry } from '#lib/scan.js';
 
 	let code = $state('');
 	let leaving = $state(false);

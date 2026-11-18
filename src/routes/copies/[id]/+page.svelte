@@ -10,7 +10,7 @@
 	} from '@smykla-skalski/sui';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { ApiError, errorMessage, request } from '$lib/api';
+	import { ApiError, errorMessage, request } from '#lib/api.js';
 	import {
 		copyPayload,
 		copyToForm,
@@ -20,8 +20,8 @@
 		type Copy,
 		type CopyDetail,
 		type FormIssue
-	} from '$lib/collection';
-	import CopyFormFields from '$lib/components/CopyFormFields.svelte';
+	} from '#lib/collection.js';
+	import CopyFormFields from '#lib/components/CopyFormFields.svelte';
 
 	const id = $derived(Number(page.params.id));
 

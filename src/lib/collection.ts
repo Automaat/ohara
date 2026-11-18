@@ -243,7 +243,7 @@ export type CollectionFilter = {
 	q: string;
 };
 
-export function readCollectionFilter(params: URLSearchParams): CollectionFilter {
+export function readCollectionFilter(params: Pick<URLSearchParams, 'get'>): CollectionFilter {
 	function read<K extends string>(key: string, labels: Record<K, string>): K | '' {
 		const value = params.get(key);
 		return value && Object.hasOwn(labels, value) ? (value as K) : '';

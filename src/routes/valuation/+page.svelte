@@ -16,8 +16,8 @@
 		type Fact
 	} from '@smykla-skalski/sui';
 	import { onMount } from 'svelte';
-	import { ApiError, errorMessage, request } from '$lib/api';
-	import { formatLabels, formatPLN, kindLabels } from '$lib/collection';
+	import { ApiError, errorMessage, request } from '#lib/api.js';
+	import { formatLabels, formatPLN, kindLabels } from '#lib/collection.js';
 	import {
 		boundHints,
 		boundKeys,
@@ -34,7 +34,7 @@
 		type CopyValue,
 		type RunnerStatus,
 		type ValuationView
-	} from '$lib/valuation';
+	} from '#lib/valuation.js';
 
 	type Row = CopyValue & Record<string, unknown>;
 

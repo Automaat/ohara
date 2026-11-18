@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Button, FormError, Section } from '@smykla-skalski/sui';
-	import { errorMessage, request } from '$lib/api';
+	import { errorMessage, request } from '#lib/api.js';
 
 	let {
 		editionID,

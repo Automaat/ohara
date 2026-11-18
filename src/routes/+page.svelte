@@ -16,7 +16,7 @@
 	import { tick, untrack } from 'svelte';
 	import { afterNavigate, replaceState } from '$app/navigation';
 	import { page } from '$app/state';
-	import { errorMessage, request } from '$lib/api';
+	import { errorMessage, request } from '#lib/api.js';
 	import {
 		collectionSearch,
 		collectionURL,
@@ -33,9 +33,9 @@
 		type CollectionItem,
 		type CollectionView,
 		type Totals
-	} from '$lib/collection';
-	import { collectionSortOptions, sortCopies, type CollectionSort } from '$lib/collection-sort';
-	import { purchaseDate, resultCount } from '$lib/polish';
+	} from '#lib/collection.js';
+	import { collectionSortOptions, sortCopies, type CollectionSort } from '#lib/collection-sort.js';
+	import { purchaseDate, resultCount } from '#lib/polish.js';
 	import type { Snapshot } from './$types';
 
 	type Row = CollectionItem & Record<string, unknown>;

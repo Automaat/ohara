@@ -16,7 +16,7 @@
 		type CopyForm,
 		type CopyStatus,
 		type FormIssue
-	} from '$lib/collection';
+	} from '#lib/collection.js';
 
 	let {
 		form = $bindable(),

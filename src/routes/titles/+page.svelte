@@ -8,9 +8,9 @@
 		type DataTableColumn
 	} from '@smykla-skalski/sui';
 	import { onMount } from 'svelte';
-	import { errorMessage, request } from '$lib/api';
-	import { displayName, kindLabels, type Kind, type Title } from '$lib/collection';
-	import { resultCount } from '$lib/polish';
+	import { errorMessage, request } from '#lib/api.js';
+	import { displayName, kindLabels, type Kind, type Title } from '#lib/collection.js';
+	import { resultCount } from '#lib/polish.js';
 
 	type Row = Title & Record<string, unknown>;
 

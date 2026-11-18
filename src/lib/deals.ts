@@ -4,7 +4,7 @@ import {
 	type Format,
 	type FormIssue,
 	type Parsed
-} from '$lib/collection';
+} from '#lib/collection.js';
 
 export type DealSource = 'olx' | 'vinted' | 'pepper' | 'ceneo';
 export type AlertState = 'none' | 'pending' | 'sent' | 'failed';

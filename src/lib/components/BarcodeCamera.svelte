@@ -3,7 +3,7 @@
 	import { onMount, tick as flush } from 'svelte';
 	import { prepareZXingModule, readBarcodes } from 'zxing-wasm/reader';
 	import wasmURL from 'zxing-wasm/reader/zxing_reader.wasm?url';
-	import { cameraErrorMessage, cropRect, scanFormats } from '$lib/scan';
+	import { cameraErrorMessage, cropRect, scanFormats } from '#lib/scan.js';
 
 	let {
 		paused,

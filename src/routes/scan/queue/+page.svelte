@@ -12,8 +12,8 @@
 		Skeleton
 	} from '@smykla-skalski/sui';
 	import { onMount } from 'svelte';
-	import { errorMessage, request } from '$lib/api';
-	import { reasonLabels, type QueueEntry } from '$lib/scan';
+	import { errorMessage, request } from '#lib/api.js';
+	import { reasonLabels, type QueueEntry } from '#lib/scan.js';
 
 	let entries = $state<QueueEntry[] | null>(null);
 	let failure = $state<string | null>(null);

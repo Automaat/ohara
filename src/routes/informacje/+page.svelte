@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { Button, Callout, FactList, PageHeader, Pill, Section } from '@smykla-skalski/sui';
 	import { onMount } from 'svelte';
-	import { errorMessage } from '$lib/api';
-	import { databaseBadge, fetchStatus, StatusError, type Status } from '$lib/status';
+	import { errorMessage } from '#lib/api.js';
+	import { databaseBadge, fetchStatus, StatusError, type Status } from '#lib/status.js';
 
 	let info = $state<Status | null>(null);
 	let failure = $state<string | null>(null);

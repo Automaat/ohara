@@ -1,8 +1,16 @@
 import { sveltekit } from '@sveltejs/kit/vite';
+import adapter from '@sveltejs/adapter-static';
+import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
-	plugins: [sveltekit()],
+	plugins: [
+		sveltekit({
+			preprocess: vitePreprocess(),
+			adapter: adapter({ fallback: 'index.html' }),
+			serviceWorker: { register: false }
+		})
+	],
 	build: { cssTarget: ['chrome120', 'edge120', 'firefox115', 'safari16.4'] },
 	server: {
 		proxy: {

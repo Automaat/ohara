@@ -15,7 +15,7 @@
 		type DataTableColumn
 	} from '@smykla-skalski/sui';
 	import { onMount } from 'svelte';
-	import { errorMessage, request } from '$lib/api';
+	import { errorMessage, request } from '#lib/api.js';
 	import {
 		collectionURL,
 		displayName,
@@ -27,9 +27,9 @@
 		type CollectionFilter,
 		type CollectionItem,
 		type CollectionView
-	} from '$lib/collection';
-	import { collectionSortOptions, sortCopies, type CollectionSort } from '$lib/collection-sort';
-	import { purchaseDate, resultCount } from '$lib/polish';
+	} from '#lib/collection.js';
+	import { collectionSortOptions, sortCopies, type CollectionSort } from '#lib/collection-sort.js';
+	import { purchaseDate, resultCount } from '#lib/polish.js';
 
 	const sort = $derived(collectionPage.state.collectionSort ?? 'title');
 

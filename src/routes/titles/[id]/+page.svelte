@@ -12,7 +12,7 @@
 	} from '@smykla-skalski/sui';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { ApiError, errorMessage, request } from '$lib/api';
+	import { ApiError, errorMessage, request } from '#lib/api.js';
 	import {
 		displayName,
 		editionPayload,
@@ -27,10 +27,10 @@
 		type FormIssue,
 		type Title,
 		type TitleDetail
-	} from '$lib/collection';
-	import ArtworkHeader from '$lib/components/ArtworkHeader.svelte';
-	import EditionFormFields from '$lib/components/EditionFormFields.svelte';
-	import TitleFormFields from '$lib/components/TitleFormFields.svelte';
+	} from '#lib/collection.js';
+	import ArtworkHeader from '#lib/components/ArtworkHeader.svelte';
+	import EditionFormFields from '#lib/components/EditionFormFields.svelte';
+	import TitleFormFields from '#lib/components/TitleFormFields.svelte';
 
 	const id = $derived(Number(page.params.id));
 

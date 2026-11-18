@@ -6,7 +6,7 @@
 		options,
 		type FormIssue,
 		type TitleForm
-	} from '$lib/collection';
+	} from '#lib/collection.js';
 
 	let {
 		form = $bindable(),

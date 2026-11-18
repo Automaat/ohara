@@ -1,8 +1,7 @@
 <script lang="ts">
-	import { replaceState as replaceSortState } from '$app/navigation';
-	import { page as collectionPage } from '$app/state';
 	import {
 		Button,
+		Chip,
 		DataTable,
 		EmptyState,
 		FactList,
@@ -14,58 +13,118 @@
 		Select,
 		type DataTableColumn
 	} from '@smykla-skalski/sui';
-	import { onMount } from 'svelte';
+	import { tick, untrack } from 'svelte';
+	import { afterNavigate, replaceState } from '$app/navigation';
+	import { page } from '$app/state';
 	import { errorMessage, request } from '#lib/api.js';
 	import {
+		collectionSearch,
 		collectionURL,
 		displayName,
 		editionSummary,
+		formatLabels,
 		formatPLN,
 		kindLabels,
+		options,
+		readCollectionFilter,
 		spentLabel,
 		statusLabels,
 		type CollectionFilter,
 		type CollectionItem,
-		type CollectionView
+		type CollectionView,
+		type Totals
 	} from '#lib/collection.js';
 	import { collectionSortOptions, sortCopies, type CollectionSort } from '#lib/collection-sort.js';
 	import { purchaseDate, resultCount } from '#lib/polish.js';
-
-	const sort = $derived(collectionPage.state.collectionSort ?? 'title');
-
-	function setSort(value: CollectionSort | null) {
-		if (value !== null) {
-			replaceSortState(window.location.href, { ...collectionPage.state, collectionSort: value });
-		}
-	}
+	import type { Snapshot } from './$types';
 
 	type Row = CollectionItem & Record<string, unknown>;
 
-	let filter = $state<CollectionFilter>({ kind: '', format: '', status: '', q: '' });
+	const sort = $derived(page.state.collectionSort ?? 'title');
+
+	function setSort(value: CollectionSort | null) {
+		if (value !== null) {
+			replaceState(window.location.href, { ...page.state, collectionSort: value });
+		}
+	}
+
+	const emptyFilter: CollectionFilter = { q: '', kind: '', format: '', status: '' };
+	let filter = $state(untrack(() => readCollectionFilter(page.url.searchParams)));
+	let query = $state(untrack(() => filter.q));
 	let view = $state<CollectionView | null>(null);
+	let totals = $state<Totals | null>(null);
 	let failure = $state<string | null>(null);
 	let loading = $state(true);
 	let seq = 0;
+	let restoreScroll: [number, number] | undefined;
+	let pendingTotals: Promise<void> | undefined;
+
+	export const snapshot: Snapshot<[number, number]> = {
+		capture: () => [window.scrollX, window.scrollY],
+		restore: (position) => (restoreScroll = position)
+	};
+
+	function loadTotals() {
+		if (totals) return;
+		pendingTotals ??= request<CollectionView>(fetch, 'GET', '/api/collection')
+			.catch(() => null)
+			.then((full) => {
+				if (full) totals ??= full.totals;
+				pendingTotals = undefined;
+			});
+		return pendingTotals;
+	}
 
 	async function load() {
 		const mine = ++seq;
+		const url = collectionURL(filter);
 		loading = true;
+		const totalsReady = url === '/api/collection' ? undefined : loadTotals();
 		try {
-			const got = await request<CollectionView>(fetch, 'GET', collectionURL(filter));
+			const got = await request<CollectionView>(fetch, 'GET', url);
 			if (mine !== seq) return;
 			view = got;
+			if (url === '/api/collection') totals = got.totals;
 			failure = null;
 		} catch (err) {
 			if (mine === seq) failure = errorMessage(err);
 		} finally {
 			if (mine === seq) loading = false;
 		}
+		if (mine === seq && !failure && restoreScroll) {
+			// Shelf totals can wrap and change the height above the table.
+			await totalsReady;
+			await tick();
+			if (mine === seq && restoreScroll) {
+				window.scrollTo(...restoreScroll);
+				restoreScroll = undefined;
+			}
+		}
 	}
 
-	onMount(load);
+	afterNavigate(() => {
+		filter = readCollectionFilter(new URLSearchParams(window.location.search));
+		query = filter.q;
+		void load();
+	});
 
 	function set<K extends keyof CollectionFilter>(key: K, value: CollectionFilter[K]) {
-		filter[key] = value;
+		if (key === 'q') query = value;
+		updateFilter({ ...filter, [key]: value });
+	}
+
+	function clearFilters() {
+		query = '';
+		updateFilter(emptyFilter);
+	}
+
+	function updateFilter(next: CollectionFilter) {
+		filter = next;
+		const search = collectionSearch(next);
+		const { pathname, search: current, hash } = window.location;
+		if (current === search) return;
+		replaceState(`${pathname}${search}${hash}`, page.state);
+		restoreScroll = undefined;
 		void load();
 	}
 
@@ -80,9 +139,16 @@
 	];
 
 	const rows = $derived((view?.items ?? []) as Row[]);
-	const totals = $derived(view?.totals);
-	const filtered = $derived(
-		filter.kind !== '' || filter.format !== '' || filter.status !== '' || filter.q.trim() !== ''
+	const all = 'all';
+	const activeFilters = $derived(
+		(
+			[
+				{ key: 'q', label: filter.q.trim() },
+				{ key: 'kind', label: filter.kind && kindLabels[filter.kind] },
+				{ key: 'format', label: filter.format && formatLabels[filter.format] },
+				{ key: 'status', label: filter.status && statusLabels[filter.status] }
+			] as const
+		).filter((entry) => entry.label)
 	);
 </script>
 
@@ -126,7 +192,7 @@
 	<ListToolbar
 		searchLabel="Szukaj w kolekcji"
 		placeholder="Tytuł, autor, sklep lub kod kreskowy"
-		query={filter.q}
+		bind:query
 		onsearch={(q: string) => set('q', q)}
 		count={rows.length}
 		countLabel={resultCount}
@@ -136,41 +202,46 @@
 		filter={{
 			label: 'Typ',
 			options: [
-				{ value: '', label: 'Wszystko' },
+				{ value: all, label: 'Wszystko' },
 				{ value: 'movie', label: 'Filmy' },
 				{ value: 'book', label: 'Książki' },
 				{ value: 'music', label: 'Muzyka' }
 			],
-			value: filter.kind,
-			onchange: (v: string) => set('kind', v as CollectionFilter['kind'])
+			value: filter.kind || all,
+			onchange: (v: string) => set('kind', v === all ? '' : (v as CollectionFilter['kind']))
 		}}
 		tools={[
 			{
 				label: 'Nośnik',
-				options: [
-					{ value: '', label: 'Każdy' },
-					{ value: 'dvd', label: 'DVD' },
-					{ value: 'bluray', label: 'Blu-ray' },
-					{ value: 'uhd', label: '4K UHD' },
-					{ value: 'cd', label: 'CD' },
-					{ value: 'vinyl', label: 'Winyl' },
-					{ value: 'cassette', label: 'Kaseta' }
-				],
-				value: filter.format,
-				onchange: (v: string) => set('format', v as CollectionFilter['format'])
+				options: [{ value: all, label: 'Każdy' }, ...options(formatLabels)],
+				value: filter.format || all,
+				onchange: (v: string) => set('format', v === all ? '' : (v as CollectionFilter['format']))
 			},
 			{
 				label: 'Status',
 				options: [
-					{ value: '', label: 'Każdy' },
+					{ value: all, label: 'Każdy' },
 					{ value: 'owned', label: 'Na półce' },
 					{ value: 'wishlist', label: 'Lista życzeń' }
 				],
-				value: filter.status,
-				onchange: (v: string) => set('status', v as CollectionFilter['status'])
+				value: filter.status || all,
+				onchange: (v: string) => set('status', v === all ? '' : (v as CollectionFilter['status']))
 			}
 		]}
 	/>
+
+	{#if activeFilters.length}
+		<div class="active-filters" role="group" aria-label="Aktywne filtry">
+			{#each activeFilters as { key, label } (key)}
+				<Chip
+					{label}
+					onremove={() => set(key, '')}
+					removeLabel={(value) => `Usuń filtr: ${value}`}
+					removedLabel={(value) => `Usunięto filtr: ${value}`}
+				/>
+			{/each}
+		</div>
+	{/if}
 
 	{#if view && !loading && !failure}
 		<p class="metadata result-count" aria-hidden="true">{resultCount(rows.length)}</p>
@@ -220,12 +291,12 @@
 			{/if}
 		{/snippet}
 		{#snippet empty()}
-			{#if filtered}
-				<EmptyState
-					title="Nic nie pasuje"
-					description="Żaden egzemplarz nie spełnia filtrów."
-					step="Zmień filtry lub wyczyść wyszukiwanie."
-				/>
+			{#if activeFilters.length}
+				<EmptyState title="Nic nie pasuje" description="Żaden egzemplarz nie spełnia filtrów.">
+					{#snippet action()}
+						<Button onclick={clearFilters}>Wyczyść filtry</Button>
+					{/snippet}
+				</EmptyState>
 			{:else}
 				<EmptyState
 					title="Kolekcja jest pusta"
@@ -250,7 +321,16 @@
 		gap: 1rem;
 		padding: var(--sui-pane-gutter, 1.5rem);
 	}
+
+	.active-filters {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem;
+		min-width: 0;
+	}
+
 	.result-count {
+		font-family: var(--sui-sans, sans-serif);
 		margin: 0;
 	}
 </style>

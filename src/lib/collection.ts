@@ -243,15 +243,33 @@ export type CollectionFilter = {
 	q: string;
 };
 
-/** The /api/collection URL for a filter; empty fields are left out. */
-export function collectionURL(f: CollectionFilter): string {
+export function readCollectionFilter(params: Pick<URLSearchParams, 'get'>): CollectionFilter {
+	function read<K extends string>(key: string, labels: Record<K, string>): K | '' {
+		const value = params.get(key);
+		return value && Object.hasOwn(labels, value) ? (value as K) : '';
+	}
+
+	return {
+		kind: read('kind', kindLabels),
+		format: read('format', formatLabels),
+		status: read('status', statusLabels),
+		q: params.get('q') ?? ''
+	};
+}
+
+export function collectionSearch(f: CollectionFilter): string {
 	const params = new URLSearchParams();
 	if (f.kind) params.set('kind', f.kind);
 	if (f.format) params.set('format', f.format);
 	if (f.status) params.set('status', f.status);
 	if (f.q.trim()) params.set('q', f.q.trim());
 	const qs = params.toString();
-	return qs ? `/api/collection?${qs}` : '/api/collection';
+	return qs ? `?${qs}` : '';
+}
+
+/** The /api/collection URL for a filter; empty fields are left out. */
+export function collectionURL(f: CollectionFilter): string {
+	return `/api/collection${collectionSearch(f)}`;
 }
 
 /** A form value failed a check before it reached the server. */

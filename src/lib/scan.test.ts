@@ -3,6 +3,7 @@ import { ApiError } from './api';
 import type { EditionDetail, Format } from './collection';
 import {
 	FormRejected,
+	LatestLoad,
 	RepeatGuard,
 	barcodeInputError,
 	cameraErrorMessage,
@@ -672,6 +673,25 @@ describe('RepeatGuard', () => {
 		g.remember('5901234123457', 0);
 		expect(g.accepts('5901234123457', 1000)).toBe(false);
 		expect(g.accepts('5901234123457', 2500)).toBe(true);
+	});
+});
+
+describe('LatestLoad', () => {
+	it('lets only the newest load apply its outcome', () => {
+		const loads = new LatestLoad();
+		const first = loads.start();
+		expect(first()).toBe(true);
+		const second = loads.start();
+		expect(first()).toBe(false);
+		expect(second()).toBe(true);
+		loads.start();
+		expect(second()).toBe(false);
+	});
+
+	it('keeps separate pages apart', () => {
+		const one = new LatestLoad().start();
+		new LatestLoad().start();
+		expect(one()).toBe(true);
 	});
 });
 

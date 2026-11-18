@@ -9,6 +9,7 @@
 	import { logScan } from '#lib/recent.svelte.js';
 	import {
 		FormRejected,
+		LatestLoad,
 		checkDigitMatches,
 		cleanBarcode,
 		isInvalidBarcode,
@@ -72,6 +73,7 @@
 	/** What the previous barcode came to, when a scanner moved straight on to this one. */
 	let previous = $state<string | null>(null);
 	let sticky = loadSticky(storage());
+	const loads = new LatestLoad();
 
 	const barcode = $derived(cleanBarcode(page.params.barcode ?? ''));
 	const manual = $derived(page.url.searchParams.get('manual') === '1');
@@ -100,6 +102,7 @@
 	}
 
 	async function load(code: string, byHand: boolean) {
+		const current = loads.start();
 		phase = { kind: 'loading' };
 		pending = null;
 		issue = null;
@@ -122,7 +125,7 @@
 		}
 		try {
 			const r = await resolveScan(fetch, code);
-			if (code !== barcode) return;
+			if (!current()) return;
 			if (r.kind === 'owned') {
 				pending = {
 					key: newRequestKey(),
@@ -154,6 +157,7 @@
 			}
 			void focus('scan-price');
 		} catch (err) {
+			if (!current()) return;
 			if (isInvalidBarcode(err)) refuse(errorMessage(err));
 			else phase = { kind: 'failed', message: errorMessage(err) };
 		}

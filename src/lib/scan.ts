@@ -518,6 +518,20 @@ export class RepeatGuard {
 	}
 }
 
+/**
+ * Lets only the newest of overlapping loads apply its outcome: a page that moved on to another
+ * barcode, or reloaded the same one, ignores what an earlier load answers, failures included.
+ */
+export class LatestLoad {
+	#latest = 0;
+
+	/** Starts a load; the returned check stays true until another load starts. */
+	start(): () => boolean {
+		const ticket = ++this.#latest;
+		return () => ticket === this.#latest;
+	}
+}
+
 /** The part of a video frame the reader decodes, scaled down for speed. */
 export type Crop = { sx: number; sy: number; sw: number; sh: number; dw: number; dh: number };
 

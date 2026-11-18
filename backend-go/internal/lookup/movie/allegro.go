@@ -15,6 +15,10 @@ import (
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
 )
 
+// AllegroUserAgent identifies Ohara to Allegro. The Allegro REST API terms
+// require every request to carry the User-Agent registered for the app.
+const AllegroUserAgent = "Ohara/1.0.0 (+https://github.com/Automaat/ohara)"
+
 // Allegro searches the Allegro product catalog by GTIN. The catalog needs a
 // user token, which a one-time OAuth device flow (Login) obtains; the
 // refresh token is kept in a TokenStore and rotated on every refresh.
@@ -25,7 +29,9 @@ type Allegro struct {
 	Client       *http.Client
 	APIBase      string
 	AuthBase     string
-	Now          func() time.Time
+	// UserAgent overrides AllegroUserAgent.
+	UserAgent string
+	Now       func() time.Time
 
 	mu    sync.Mutex
 	token *Token
@@ -82,6 +88,7 @@ func (a *Allegro) Products(ctx context.Context, code string) ([]Product, error) 
 		req.Header.Set("Accept", "application/vnd.allegro.public.v1+json")
 		req.Header.Set("Accept-Language", "pl-PL")
 		req.Header.Set("Authorization", "Bearer "+tok)
+		req.Header.Set("User-Agent", a.userAgent())
 		_, body, err := get(a.client(), a.Name(), req, http.StatusOK)
 		switch {
 		case isStatus(err, http.StatusUnauthorized) && attempt == 0:
@@ -183,6 +190,7 @@ func (a *Allegro) authPost(ctx context.Context, path string, q url.Values, dst a
 	}
 	req.SetBasicAuth(a.ClientID, a.ClientSecret)
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", a.userAgent())
 	status, body, err := get(a.client(), "allegro", req, http.StatusOK, http.StatusBadRequest, http.StatusUnauthorized)
 	if err != nil {
 		return err
@@ -271,6 +279,13 @@ func (a *Allegro) client() *http.Client {
 		return a.Client
 	}
 	return http.DefaultClient
+}
+
+func (a *Allegro) userAgent() string {
+	if a.UserAgent != "" {
+		return a.UserAgent
+	}
+	return AllegroUserAgent
 }
 
 func (a *Allegro) apiBase() string {

@@ -1,0 +1,2501 @@
+<!doctype html>
+<html lang="pl">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Ohara redesign mockups</title>
+		<link rel="preconnect" href="https://fonts.googleapis.com" />
+		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+		<link
+			href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=JetBrains+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
+			rel="stylesheet"
+		/>
+		<style>
+			* {
+				box-sizing: border-box;
+				margin: 0;
+				padding: 0;
+			}
+
+			.t-light {
+				--canvas: #f8e9e6;
+				--surface: #fff7f5;
+				--inset: #f1dad6;
+				--line: #e6cbc6;
+				--ink: #1f3b33;
+				--muted: #5e6964;
+				--heading: #1f3b33;
+				--brand: #1f3b33;
+				--on-brand: #f8e9e6;
+				--brand-tint: #f4c6cc;
+				--accent: #b4245d;
+				--on-accent: #ffffff;
+				--accent-soft: #f6d3de;
+				--success: #276b4e;
+				--success-soft: #d9ecdf;
+				--danger: #a3322a;
+				--glass: rgb(255 247 245 / 72%);
+				--glass-line: rgb(31 59 51 / 10%);
+				--tab-on: rgb(31 59 51 / 9%);
+				--shadow: rgb(31 59 51 / 35%);
+			}
+
+			.t-dark {
+				--canvas: #0e1b17;
+				--surface: #16261f;
+				--inset: #1e3029;
+				--line: #2b4038;
+				--ink: #f7e6e3;
+				--muted: #a9b3ae;
+				--heading: #f4c6cc;
+				--brand: #1f3b33;
+				--on-brand: #f7e6e3;
+				--brand-tint: #f4c6cc;
+				--accent: #f2779f;
+				--on-accent: #0e1b17;
+				--accent-soft: #3a2230;
+				--success: #6fbf97;
+				--success-soft: #183a2c;
+				--danger: #f08a7e;
+				--glass: rgb(22 38 31 / 72%);
+				--glass-line: rgb(247 230 227 / 10%);
+				--tab-on: rgb(247 230 227 / 10%);
+				--shadow: rgb(0 0 0 / 55%);
+			}
+
+			body {
+				background: #efdcd8;
+				color: #1f3b33;
+				font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+				padding: 56px 48px 96px;
+				-webkit-font-smoothing: antialiased;
+			}
+
+			.serif {
+				font-family: 'Fraunces', Georgia, serif;
+				font-optical-sizing: auto;
+			}
+
+			.mono {
+				font-family: 'JetBrains Mono', ui-monospace, monospace;
+			}
+
+			.doc-head {
+				max-width: 1180px;
+				margin-bottom: 40px;
+			}
+
+			.doc-head h1 {
+				font-family: 'Fraunces', Georgia, serif;
+				font-weight: 600;
+				font-size: 64px;
+				letter-spacing: -0.02em;
+				line-height: 1;
+			}
+
+			.doc-head p {
+				margin-top: 14px;
+				font-size: 18px;
+				line-height: 1.5;
+				color: #5e6964;
+				max-width: 760px;
+			}
+
+			.palette {
+				display: grid;
+				grid-template-columns: 1.6fr 1.6fr 1fr;
+				gap: 16px;
+				max-width: 1180px;
+			}
+
+			.swatch {
+				border-radius: 28px;
+				padding: 22px 24px;
+				min-height: 220px;
+				display: flex;
+				flex-direction: column;
+				justify-content: space-between;
+				box-shadow: 0 20px 40px -24px rgb(31 59 51 / 45%);
+			}
+
+			.swatch .role {
+				font-size: 13px;
+				font-weight: 700;
+				letter-spacing: 0.08em;
+				text-transform: uppercase;
+				opacity: 0.75;
+			}
+
+			.swatch .name {
+				font-family: 'Fraunces', Georgia, serif;
+				font-size: 34px;
+				font-weight: 600;
+				letter-spacing: -0.01em;
+			}
+
+			.swatch .hex {
+				font-family: 'JetBrains Mono', monospace;
+				font-size: 14px;
+				opacity: 0.85;
+			}
+
+			.tokens {
+				display: grid;
+				grid-template-columns: 1fr 1fr;
+				gap: 16px;
+				max-width: 1180px;
+				margin-top: 16px;
+			}
+
+			.tokens section {
+				border-radius: 24px;
+				padding: 20px 22px;
+			}
+
+			.tokens h2 {
+				font-size: 15px;
+				font-weight: 700;
+				margin-bottom: 12px;
+			}
+
+			.tokens table {
+				width: 100%;
+				border-collapse: collapse;
+				font-size: 13px;
+			}
+
+			.tokens td {
+				padding: 5px 0;
+				border-top: 1px solid var(--line);
+				vertical-align: middle;
+			}
+
+			.tokens td:first-child {
+				width: 28px;
+			}
+
+			.tokens .chipc {
+				width: 18px;
+				height: 18px;
+				border-radius: 6px;
+				border: 1px solid rgb(0 0 0 / 12%);
+				display: inline-block;
+			}
+
+			.tokens td.r {
+				text-align: right;
+				color: var(--muted);
+				font-family: 'JetBrains Mono', monospace;
+			}
+
+			.typo {
+				max-width: 1180px;
+				margin-top: 16px;
+				display: grid;
+				grid-template-columns: repeat(3, 1fr);
+				gap: 16px;
+			}
+
+			.typo div {
+				background: #fff7f5;
+				border-radius: 24px;
+				padding: 20px 22px;
+			}
+
+			.typo b {
+				display: block;
+				font-size: 13px;
+				letter-spacing: 0.06em;
+				text-transform: uppercase;
+				color: #5e6964;
+				margin-bottom: 8px;
+			}
+
+			h2.section {
+				font-family: 'Fraunces', Georgia, serif;
+				font-size: 36px;
+				font-weight: 600;
+				margin: 64px 0 24px;
+				letter-spacing: -0.01em;
+			}
+
+			.frames {
+				display: flex;
+				flex-wrap: wrap;
+				gap: 56px 48px;
+				align-items: flex-start;
+			}
+
+			figure {
+				display: flex;
+				flex-direction: column;
+				gap: 16px;
+			}
+
+			figcaption {
+				max-width: 390px;
+				font-size: 14px;
+				line-height: 1.45;
+				color: #5e6964;
+			}
+
+			figcaption strong {
+				display: block;
+				color: #1f3b33;
+				font-size: 16px;
+				margin-bottom: 2px;
+			}
+
+			.phone {
+				width: 390px;
+				height: 844px;
+				border-radius: 54px;
+				overflow: hidden;
+				position: relative;
+				background: var(--canvas);
+				color: var(--ink);
+				font-size: 15px;
+				box-shadow:
+					0 0 0 10px #151515,
+					0 40px 70px -30px rgb(31 59 51 / 55%);
+				margin: 10px;
+			}
+
+			.island {
+				position: absolute;
+				top: 11px;
+				left: 50%;
+				width: 124px;
+				height: 36px;
+				border-radius: 20px;
+				background: #000;
+				transform: translateX(-50%);
+				z-index: 40;
+			}
+
+			.sb {
+				position: absolute;
+				top: 0;
+				left: 0;
+				right: 0;
+				height: 52px;
+				display: flex;
+				align-items: center;
+				justify-content: space-between;
+				padding: 6px 30px 0 44px;
+				font-weight: 700;
+				font-size: 16px;
+				z-index: 35;
+			}
+
+			.sb.light-on-dark {
+				color: #fff;
+			}
+
+			.sb .icons {
+				display: flex;
+				gap: 6px;
+				align-items: center;
+			}
+
+			.home {
+				position: absolute;
+				bottom: 8px;
+				left: 50%;
+				width: 134px;
+				height: 5px;
+				border-radius: 3px;
+				background: var(--ink);
+				transform: translateX(-50%);
+				z-index: 40;
+			}
+
+			.home.white {
+				background: #fff;
+			}
+
+			.content {
+				position: absolute;
+				inset: 52px 0 0;
+				padding: 0 16px;
+				overflow: hidden;
+			}
+
+			.lt {
+				display: flex;
+				align-items: flex-end;
+				justify-content: space-between;
+				margin-top: 12px;
+			}
+
+			.lt h1 {
+				font-family: 'Fraunces', Georgia, serif;
+				font-weight: 600;
+				font-size: 38px;
+				letter-spacing: -0.02em;
+				line-height: 1.05;
+				color: var(--heading);
+			}
+
+			.sub {
+				color: var(--muted);
+				font-size: 14px;
+				margin-top: 4px;
+			}
+
+			.iconbtn {
+				width: 40px;
+				height: 40px;
+				border-radius: 50%;
+				background: var(--surface);
+				border: 1px solid var(--line);
+				display: grid;
+				place-items: center;
+				color: var(--ink);
+				flex: none;
+			}
+
+			.search {
+				margin-top: 14px;
+				height: 46px;
+				border-radius: 15px;
+				background: var(--inset);
+				display: flex;
+				align-items: center;
+				gap: 8px;
+				padding: 0 6px 0 13px;
+				color: var(--muted);
+				font-size: 15px;
+			}
+
+			.search .fbtn {
+				margin-left: auto;
+				width: 36px;
+				height: 36px;
+				border-radius: 11px;
+				background: var(--surface);
+				display: grid;
+				place-items: center;
+				color: var(--ink);
+				position: relative;
+			}
+
+			.chips {
+				display: flex;
+				gap: 8px;
+				margin: 12px -16px 0;
+				padding: 0 16px;
+				overflow: hidden;
+				white-space: nowrap;
+			}
+
+			.chip {
+				height: 34px;
+				padding: 0 14px;
+				border-radius: 17px;
+				border: 1px solid var(--line);
+				display: inline-flex;
+				align-items: center;
+				gap: 6px;
+				font-size: 14px;
+				font-weight: 600;
+				background: var(--surface);
+				color: var(--ink);
+				flex: none;
+			}
+
+			.chip.on {
+				background: var(--brand);
+				color: var(--on-brand);
+				border-color: var(--brand);
+			}
+
+			.t-dark .chip.on {
+				background: var(--brand-tint);
+				color: #1f3b33;
+				border-color: var(--brand-tint);
+			}
+
+			.chip .n {
+				opacity: 0.6;
+				font-weight: 500;
+			}
+
+			.chip.sm {
+				height: 30px;
+				font-size: 13px;
+				padding: 0 12px;
+			}
+
+			.notice {
+				margin-top: 12px;
+				display: flex;
+				align-items: center;
+				gap: 10px;
+				padding: 9px 12px;
+				border-radius: 15px;
+				background: var(--surface);
+				border: 1px solid var(--line);
+				font-size: 14px;
+				font-weight: 600;
+			}
+
+			.notice .dot {
+				width: 30px;
+				height: 30px;
+				border-radius: 9px;
+				background: var(--accent-soft);
+				color: var(--accent);
+				display: grid;
+				place-items: center;
+				flex: none;
+			}
+
+			.notice .go {
+				margin-left: auto;
+				color: var(--muted);
+				display: flex;
+			}
+
+			.grid {
+				display: grid;
+				grid-template-columns: repeat(3, minmax(0, 1fr));
+				gap: 18px 12px;
+				margin-top: 16px;
+			}
+
+			.item .slot {
+				aspect-ratio: 2 / 3;
+				display: flex;
+				align-items: flex-end;
+			}
+
+			.cover {
+				width: 100%;
+				border-radius: 6px;
+				position: relative;
+				overflow: hidden;
+				box-shadow:
+					0 1px 1px rgb(0 0 0 / 8%),
+					0 8px 16px -8px var(--shadow);
+			}
+
+			.cover.movie,
+			.cover.book {
+				aspect-ratio: 2 / 3;
+			}
+
+			.cover.music {
+				aspect-ratio: 1;
+			}
+
+			.cover.book {
+				border-radius: 3px 6px 6px 3px;
+			}
+
+			.cover.book::before {
+				content: '';
+				position: absolute;
+				inset: 0 auto 0 0;
+				width: 5%;
+				background: linear-gradient(90deg, rgb(0 0 0 / 22%), transparent);
+				z-index: 2;
+			}
+
+			.t-dark .cover {
+				filter: brightness(0.92);
+			}
+
+			.cover svg.art {
+				position: absolute;
+				inset: 0;
+				width: 100%;
+				height: 100%;
+			}
+
+			.cover .ct {
+				position: absolute;
+				left: 8%;
+				right: 8%;
+				font-weight: 800;
+				text-transform: uppercase;
+				letter-spacing: 0.04em;
+				line-height: 1.05;
+				z-index: 3;
+			}
+
+			.cover .ct.top {
+				top: 7%;
+			}
+
+			.cover .ct.bottom {
+				bottom: 7%;
+			}
+
+			.cover .ct.serif {
+				text-transform: none;
+				font-weight: 600;
+				letter-spacing: 0;
+			}
+
+			.cover.placeholder {
+				background: var(--inset);
+				display: grid;
+				place-items: center;
+				color: var(--muted);
+				box-shadow: inset 0 0 0 1px var(--line);
+			}
+
+			.cover.placeholder .pt {
+				position: absolute;
+				bottom: 9%;
+				left: 9%;
+				right: 9%;
+				font-family: 'Fraunces', Georgia, serif;
+				font-size: 12px;
+				line-height: 1.15;
+				color: var(--ink);
+				text-align: center;
+			}
+
+			.item .t {
+				margin-top: 8px;
+				font-size: 13px;
+				font-weight: 700;
+				line-height: 1.25;
+				display: -webkit-box;
+				-webkit-line-clamp: 2;
+				-webkit-box-orient: vertical;
+				overflow: hidden;
+			}
+
+			.item .m {
+				font-size: 12px;
+				color: var(--muted);
+				margin-top: 2px;
+				white-space: nowrap;
+				overflow: hidden;
+				text-overflow: ellipsis;
+			}
+
+			.item .m.w {
+				color: var(--accent);
+				font-weight: 600;
+			}
+
+			.wish {
+				position: absolute;
+				top: 6px;
+				right: 6px;
+				width: 24px;
+				height: 24px;
+				border-radius: 50%;
+				background: rgb(255 247 245 / 94%);
+				color: #b4245d;
+				display: grid;
+				place-items: center;
+				z-index: 4;
+				box-shadow: 0 2px 6px rgb(0 0 0 / 20%);
+			}
+
+			.fade {
+				position: absolute;
+				left: 0;
+				right: 0;
+				bottom: 0;
+				height: 150px;
+				background: linear-gradient(to top, var(--canvas) 35%, transparent);
+				z-index: 10;
+				pointer-events: none;
+			}
+
+			.tabs {
+				position: absolute;
+				left: 16px;
+				right: 16px;
+				bottom: 28px;
+				display: flex;
+				gap: 10px;
+				align-items: center;
+				z-index: 20;
+			}
+
+			.pill {
+				flex: 1;
+				height: 64px;
+				border-radius: 32px;
+				background: var(--glass);
+				backdrop-filter: blur(24px) saturate(1.6);
+				-webkit-backdrop-filter: blur(24px) saturate(1.6);
+				border: 1px solid var(--glass-line);
+				box-shadow: 0 14px 30px -14px var(--shadow);
+				display: grid;
+				grid-template-columns: repeat(3, 1fr);
+				padding: 5px;
+			}
+
+			.tab {
+				border-radius: 27px;
+				display: flex;
+				flex-direction: column;
+				align-items: center;
+				justify-content: center;
+				gap: 3px;
+				font-size: 11px;
+				font-weight: 700;
+				color: var(--muted);
+				position: relative;
+			}
+
+			.tab.on {
+				background: var(--tab-on);
+				color: var(--ink);
+			}
+
+			.badge {
+				position: absolute;
+				top: 5px;
+				left: calc(50% + 6px);
+				min-width: 18px;
+				height: 18px;
+				border-radius: 9px;
+				background: var(--accent);
+				color: var(--on-accent);
+				font-size: 11px;
+				font-weight: 800;
+				display: grid;
+				place-items: center;
+				padding: 0 5px;
+			}
+
+			.scanbtn {
+				width: 64px;
+				height: 64px;
+				border-radius: 50%;
+				background: var(--accent);
+				color: var(--on-accent);
+				display: grid;
+				place-items: center;
+				box-shadow: 0 14px 26px -10px var(--accent);
+				flex: none;
+			}
+
+			.scanbtn.on {
+				box-shadow:
+					0 0 0 4px rgb(255 255 255 / 35%),
+					0 14px 26px -10px var(--accent);
+			}
+
+			.tabs.oncam .pill {
+				background: rgb(20 24 22 / 55%);
+				border-color: rgb(255 255 255 / 12%);
+			}
+
+			.tabs.oncam .tab {
+				color: rgb(255 255 255 / 70%);
+			}
+
+			.cam {
+				position: absolute;
+				inset: 0;
+				background: radial-gradient(120% 70% at 50% 30%, #4a3a33 0%, #241b18 55%, #120d0c 100%);
+				overflow: hidden;
+			}
+
+			.cam .case {
+				position: absolute;
+				left: 34px;
+				right: 30px;
+				top: 70px;
+				height: 560px;
+				border-radius: 18px;
+				background: linear-gradient(160deg, #2a3d58 0%, #12223a 60%, #0b1526 100%);
+				transform: rotate(-4deg);
+				box-shadow: 0 30px 60px rgb(0 0 0 / 55%);
+				filter: blur(0.6px);
+			}
+
+			.cam .case .label {
+				position: absolute;
+				left: 60px;
+				right: 60px;
+				top: 178px;
+				height: 120px;
+				background: #f3f0ea;
+				border-radius: 6px;
+				display: flex;
+				flex-direction: column;
+				align-items: center;
+				justify-content: center;
+				gap: 6px;
+				padding: 10px;
+			}
+
+			.cam .case .label .bars {
+				width: 100%;
+				height: 72px;
+				background: repeating-linear-gradient(
+					90deg,
+					#111 0 2px,
+					transparent 2px 4px,
+					#111 4px 7px,
+					transparent 7px 8px,
+					#111 8px 9px,
+					transparent 9px 12px
+				);
+			}
+
+			.cam .case .label .num {
+				font-family: 'JetBrains Mono', monospace;
+				font-size: 12px;
+				color: #111;
+				letter-spacing: 0.18em;
+			}
+
+			.band {
+				position: absolute;
+				left: 36px;
+				right: 36px;
+				height: 128px;
+				border-radius: 22px;
+				box-shadow: 0 0 0 999px rgb(8 6 6 / 52%);
+				z-index: 5;
+			}
+
+			.band::before,
+			.band::after {
+				content: '';
+				position: absolute;
+				inset: 0;
+				border-radius: 22px;
+				border: 3px solid rgb(255 255 255 / 92%);
+				mask:
+					linear-gradient(#000 0 0) top left / 34px 34px no-repeat,
+					linear-gradient(#000 0 0) top right / 34px 34px no-repeat,
+					linear-gradient(#000 0 0) bottom left / 34px 34px no-repeat,
+					linear-gradient(#000 0 0) bottom right / 34px 34px no-repeat;
+			}
+
+			.band::after {
+				border-color: transparent;
+			}
+
+			.band .laser {
+				position: absolute;
+				left: 18px;
+				right: 18px;
+				top: 50%;
+				height: 2px;
+				border-radius: 2px;
+				background: #f2779f;
+				box-shadow:
+					0 0 10px #f2779f,
+					0 0 22px rgb(242 119 159 / 60%);
+			}
+
+			.band.ok::before {
+				border-color: #6fbf97;
+			}
+
+			.band.ok .laser {
+				background: #6fbf97;
+				box-shadow:
+					0 0 10px #6fbf97,
+					0 0 22px rgb(111 191 151 / 60%);
+			}
+
+			.hint {
+				position: absolute;
+				left: 0;
+				right: 0;
+				text-align: center;
+				color: #fff;
+				font-size: 15px;
+				font-weight: 600;
+				z-index: 6;
+				text-shadow: 0 1px 6px rgb(0 0 0 / 50%);
+			}
+
+			.camtop {
+				position: absolute;
+				top: 60px;
+				left: 16px;
+				right: 16px;
+				display: flex;
+				gap: 10px;
+				align-items: center;
+				z-index: 8;
+			}
+
+			.glass {
+				background: rgb(20 24 22 / 50%);
+				backdrop-filter: blur(20px) saturate(1.5);
+				-webkit-backdrop-filter: blur(20px) saturate(1.5);
+				border: 1px solid rgb(255 255 255 / 14%);
+				color: #fff;
+			}
+
+			.gchip {
+				height: 40px;
+				border-radius: 20px;
+				padding: 0 14px 0 8px;
+				display: flex;
+				align-items: center;
+				gap: 8px;
+				font-size: 14px;
+				font-weight: 700;
+			}
+
+			.gchip .cnt {
+				min-width: 24px;
+				height: 24px;
+				border-radius: 12px;
+				background: #f2779f;
+				color: #0e1b17;
+				display: grid;
+				place-items: center;
+				font-size: 12px;
+				font-weight: 800;
+				padding: 0 6px;
+			}
+
+			.gbtn {
+				width: 44px;
+				height: 44px;
+				border-radius: 50%;
+				display: grid;
+				place-items: center;
+				flex: none;
+			}
+
+			.sheet {
+				position: absolute;
+				left: 0;
+				right: 0;
+				bottom: 0;
+				background: var(--surface);
+				border-radius: 30px 30px 0 0;
+				padding: 10px 20px 36px;
+				box-shadow: 0 -18px 50px rgb(0 0 0 / 35%);
+				z-index: 25;
+			}
+
+			.grabber {
+				width: 40px;
+				height: 5px;
+				border-radius: 3px;
+				background: var(--line);
+				margin: 0 auto 14px;
+			}
+
+			.found {
+				display: flex;
+				gap: 14px;
+				align-items: flex-start;
+			}
+
+			.found .cover {
+				width: 82px;
+				flex: none;
+			}
+
+			.overline {
+				font-size: 12px;
+				font-weight: 700;
+				letter-spacing: 0.06em;
+				text-transform: uppercase;
+				color: var(--success);
+				display: flex;
+				align-items: center;
+				gap: 5px;
+			}
+
+			.found h3 {
+				font-family: 'Fraunces', Georgia, serif;
+				font-size: 24px;
+				font-weight: 600;
+				line-height: 1.1;
+				letter-spacing: -0.01em;
+				margin-top: 4px;
+			}
+
+			.found .meta {
+				color: var(--muted);
+				font-size: 14px;
+				margin-top: 4px;
+			}
+
+			.found .code {
+				font-family: 'JetBrains Mono', monospace;
+				font-size: 12px;
+				color: var(--muted);
+				margin-top: 6px;
+			}
+
+			.lbl {
+				font-size: 13px;
+				font-weight: 700;
+				color: var(--muted);
+				margin: 13px 0 6px;
+			}
+
+			.seg {
+				display: grid;
+				grid-auto-flow: column;
+				grid-auto-columns: 1fr;
+				background: var(--inset);
+				border-radius: 13px;
+				padding: 3px;
+				height: 42px;
+			}
+
+			.seg span {
+				display: grid;
+				place-items: center;
+				border-radius: 10px;
+				font-size: 14px;
+				font-weight: 700;
+				color: var(--muted);
+			}
+
+			.seg span.on {
+				background: var(--surface);
+				color: var(--ink);
+				box-shadow:
+					0 1px 2px rgb(31 59 51 / 18%),
+					0 2px 8px -2px rgb(31 59 51 / 18%);
+			}
+
+			.t-dark .seg span.on {
+				background: var(--line);
+			}
+
+			.row2 {
+				display: grid;
+				grid-template-columns: 1.3fr 1fr;
+				gap: 10px;
+			}
+
+			.field {
+				height: 54px;
+				border-radius: 14px;
+				background: var(--inset);
+				padding: 7px 14px;
+				display: flex;
+				flex-direction: column;
+				justify-content: center;
+			}
+
+			.field small {
+				font-size: 11px;
+				font-weight: 700;
+				color: var(--muted);
+				letter-spacing: 0.02em;
+			}
+
+			.field b {
+				font-size: 18px;
+				font-weight: 700;
+				font-variant-numeric: tabular-nums;
+			}
+
+			.field.focus {
+				box-shadow: 0 0 0 2px var(--accent);
+				background: var(--surface);
+			}
+
+			.toggles {
+				display: flex;
+				gap: 8px;
+				overflow: hidden;
+				margin-right: -20px;
+			}
+
+			.toggles .chip.on {
+				background: var(--accent-soft);
+				color: var(--accent);
+				border-color: transparent;
+			}
+
+			.btn {
+				height: 54px;
+				border-radius: 17px;
+				display: flex;
+				align-items: center;
+				justify-content: center;
+				gap: 8px;
+				font-weight: 800;
+				font-size: 16px;
+			}
+
+			.btn.primary {
+				background: var(--accent);
+				color: var(--on-accent);
+				box-shadow: 0 10px 22px -12px var(--accent);
+			}
+
+			.btn.quiet {
+				height: 44px;
+				color: var(--ink);
+				font-weight: 700;
+				font-size: 15px;
+			}
+
+			.btnrow {
+				display: grid;
+				grid-template-columns: 1fr 1fr;
+				margin-top: 4px;
+			}
+
+			.toast {
+				position: absolute;
+				left: 16px;
+				right: 16px;
+				height: 58px;
+				border-radius: 20px;
+				display: flex;
+				align-items: center;
+				gap: 12px;
+				padding: 0 10px 0 10px;
+				z-index: 22;
+				font-size: 14px;
+			}
+
+			.toast .ok {
+				width: 36px;
+				height: 36px;
+				border-radius: 50%;
+				background: #6fbf97;
+				color: #0e1b17;
+				display: grid;
+				place-items: center;
+				flex: none;
+			}
+
+			.toast .undo {
+				margin-left: auto;
+				height: 38px;
+				padding: 0 14px;
+				border-radius: 19px;
+				background: rgb(255 255 255 / 14%);
+				font-weight: 800;
+				display: grid;
+				place-items: center;
+			}
+
+			.tray {
+				position: absolute;
+				left: 16px;
+				right: 16px;
+				height: 64px;
+				border-radius: 22px;
+				display: flex;
+				align-items: center;
+				gap: 12px;
+				padding: 0 14px 0 10px;
+				z-index: 22;
+			}
+
+			.tray .stack {
+				display: flex;
+			}
+
+			.tray .stack .cover {
+				width: 30px;
+				margin-right: -8px;
+				border: 2px solid rgb(20 24 22 / 80%);
+				border-radius: 5px;
+			}
+
+			.hero {
+				position: absolute;
+				top: 0;
+				left: 0;
+				right: 0;
+				height: 330px;
+				overflow: hidden;
+			}
+
+			.hero .bg {
+				position: absolute;
+				inset: -40px;
+				filter: blur(28px) saturate(1.2);
+				transform: scale(1.1);
+			}
+
+			.hero::after {
+				content: '';
+				position: absolute;
+				inset: 0;
+				background: linear-gradient(
+					to bottom,
+					rgb(0 0 0 / 25%) 0%,
+					transparent 35%,
+					var(--canvas) 100%
+				);
+			}
+
+			.navrow {
+				position: absolute;
+				top: 58px;
+				left: 16px;
+				right: 16px;
+				display: flex;
+				justify-content: space-between;
+				z-index: 8;
+			}
+
+			.detail-head {
+				position: absolute;
+				top: 186px;
+				left: 20px;
+				right: 20px;
+				display: flex;
+				gap: 16px;
+				align-items: flex-end;
+				z-index: 6;
+			}
+
+			.detail-head .cover {
+				width: 132px;
+				flex: none;
+				box-shadow:
+					0 2px 4px rgb(0 0 0 / 18%),
+					0 22px 40px -16px rgb(0 0 0 / 60%);
+			}
+
+			.detail-head h2 {
+				font-family: 'Fraunces', Georgia, serif;
+				font-size: 32px;
+				font-weight: 600;
+				line-height: 1.02;
+				letter-spacing: -0.02em;
+				color: var(--heading);
+			}
+
+			.detail-head .meta {
+				font-size: 14px;
+				color: var(--muted);
+				margin-top: 6px;
+			}
+
+			.detail-body {
+				position: absolute;
+				top: 400px;
+				left: 16px;
+				right: 16px;
+				display: grid;
+				gap: 12px;
+			}
+
+			.card {
+				background: var(--surface);
+				border: 1px solid var(--line);
+				border-radius: 22px;
+				padding: 14px 16px;
+			}
+
+			.card .ch {
+				display: flex;
+				align-items: center;
+				justify-content: space-between;
+				margin-bottom: 10px;
+			}
+
+			.card .ch h4 {
+				font-size: 15px;
+				font-weight: 800;
+			}
+
+			.card .ch .edit {
+				font-size: 14px;
+				font-weight: 700;
+				color: var(--accent);
+			}
+
+			.facts {
+				display: grid;
+				grid-template-columns: 1fr 1fr;
+				gap: 10px 14px;
+			}
+
+			.facts small {
+				display: block;
+				font-size: 12px;
+				color: var(--muted);
+				font-weight: 600;
+			}
+
+			.facts b {
+				font-size: 15px;
+				font-variant-numeric: tabular-nums;
+			}
+
+			.range {
+				position: relative;
+				height: 8px;
+				border-radius: 4px;
+				background: linear-gradient(90deg, var(--inset), var(--brand-tint));
+				margin: 14px 0 8px;
+			}
+
+			.t-dark .range {
+				background: linear-gradient(90deg, var(--inset), #4a3a3e);
+			}
+
+			.range .mark {
+				position: absolute;
+				top: 50%;
+				width: 18px;
+				height: 18px;
+				border-radius: 50%;
+				background: var(--brand);
+				border: 3px solid var(--surface);
+				transform: translate(-50%, -50%);
+				box-shadow: 0 1px 4px rgb(0 0 0 / 25%);
+			}
+
+			.range .paid {
+				position: absolute;
+				top: -5px;
+				width: 2px;
+				height: 18px;
+				background: var(--accent);
+				border-radius: 1px;
+			}
+
+			.rlabels {
+				display: flex;
+				justify-content: space-between;
+				font-size: 12px;
+				color: var(--muted);
+				font-variant-numeric: tabular-nums;
+			}
+
+			.big {
+				font-family: 'Fraunces', Georgia, serif;
+				font-size: 34px;
+				font-weight: 600;
+				letter-spacing: -0.02em;
+				font-variant-numeric: tabular-nums;
+			}
+
+			.delta {
+				display: inline-flex;
+				align-items: center;
+				gap: 4px;
+				height: 26px;
+				padding: 0 10px;
+				border-radius: 13px;
+				font-size: 13px;
+				font-weight: 700;
+				background: var(--inset);
+				color: var(--ink);
+				font-variant-numeric: tabular-nums;
+			}
+
+			.quietlinks {
+				display: grid;
+				grid-template-columns: 1fr 1fr;
+				gap: 10px;
+			}
+
+			.qbtn {
+				height: 46px;
+				border-radius: 15px;
+				border: 1px solid var(--line);
+				background: var(--surface);
+				display: flex;
+				align-items: center;
+				justify-content: center;
+				gap: 6px;
+				font-size: 14px;
+				font-weight: 700;
+			}
+
+			.vhero {
+				margin-top: 16px;
+				border-radius: 26px;
+				background: var(--brand);
+				color: var(--on-brand);
+				padding: 18px 18px 16px;
+				position: relative;
+				overflow: hidden;
+			}
+
+			.vhero .k {
+				font-size: 13px;
+				font-weight: 700;
+				color: var(--brand-tint);
+				letter-spacing: 0.04em;
+			}
+
+			.vhero .v {
+				font-family: 'Fraunces', Georgia, serif;
+				font-size: 52px;
+				font-weight: 600;
+				letter-spacing: -0.03em;
+				line-height: 1.05;
+				margin-top: 2px;
+				font-variant-numeric: tabular-nums;
+			}
+
+			.vhero .v small {
+				font-size: 26px;
+				font-weight: 500;
+				opacity: 0.8;
+			}
+
+			.vhero .line2 {
+				display: flex;
+				align-items: center;
+				gap: 8px;
+				margin-top: 6px;
+				font-size: 14px;
+			}
+
+			.vhero .delta {
+				background: rgb(244 198 204 / 18%);
+				color: var(--brand-tint);
+			}
+
+			.vhero .spark {
+				position: absolute;
+				right: 14px;
+				top: 18px;
+			}
+
+			.vhero .range {
+				background: linear-gradient(90deg, rgb(248 233 230 / 18%), rgb(244 198 204 / 55%));
+				margin-top: 18px;
+			}
+
+			.vhero .range .mark {
+				background: #f8e9e6;
+				border-color: var(--brand);
+			}
+
+			.vhero .range .paid {
+				background: #f2779f;
+			}
+
+			.vhero .rlabels {
+				color: rgb(248 233 230 / 75%);
+			}
+
+			.chartcard {
+				margin-top: 12px;
+			}
+
+			.legend {
+				display: flex;
+				gap: 14px;
+				font-size: 12px;
+				color: var(--muted);
+				margin-top: 6px;
+				align-items: center;
+			}
+
+			.legend i {
+				display: inline-block;
+				width: 14px;
+				height: 8px;
+				border-radius: 3px;
+				margin-right: 5px;
+				vertical-align: middle;
+			}
+
+			.list {
+				margin-top: 12px;
+				background: var(--surface);
+				border: 1px solid var(--line);
+				border-radius: 22px;
+				overflow: hidden;
+			}
+
+			.lrow {
+				display: flex;
+				align-items: center;
+				gap: 12px;
+				padding: 10px 14px;
+				border-top: 1px solid var(--line);
+			}
+
+			.lrow:first-child {
+				border-top: 0;
+			}
+
+			.lrow .cover {
+				width: 38px;
+				flex: none;
+			}
+
+			.lrow .tt {
+				font-weight: 700;
+				font-size: 14px;
+			}
+
+			.lrow .mm {
+				font-size: 12px;
+				color: var(--muted);
+				margin-top: 1px;
+			}
+
+			.lrow .val {
+				margin-left: auto;
+				text-align: right;
+				font-weight: 800;
+				font-variant-numeric: tabular-nums;
+				font-size: 15px;
+			}
+
+			.lrow .val small {
+				display: block;
+				font-weight: 600;
+				font-size: 11px;
+				color: var(--muted);
+			}
+
+			.pilltag {
+				display: inline-block;
+				font-size: 11px;
+				font-weight: 700;
+				padding: 2px 7px;
+				border-radius: 8px;
+				background: var(--accent-soft);
+				color: var(--accent);
+				margin-left: 4px;
+			}
+
+			.deal {
+				margin-top: 12px;
+				background: var(--surface);
+				border: 1px solid var(--line);
+				border-radius: 22px;
+				padding: 12px;
+			}
+
+			.deal .top {
+				display: flex;
+				gap: 12px;
+			}
+
+			.deal .photo {
+				width: 92px;
+				height: 92px;
+				border-radius: 14px;
+				overflow: hidden;
+				flex: none;
+				position: relative;
+			}
+
+			.deal .photo .cover {
+				position: absolute;
+				inset: 8px 22px;
+				width: auto;
+				border-radius: 4px;
+			}
+
+			.deal .dt {
+				font-weight: 700;
+				font-size: 14px;
+				line-height: 1.3;
+			}
+
+			.deal .dm {
+				font-size: 12px;
+				color: var(--muted);
+				margin-top: 3px;
+			}
+
+			.deal .pr {
+				display: flex;
+				align-items: center;
+				gap: 8px;
+				margin-top: 8px;
+			}
+
+			.deal .pr .p {
+				font-family: 'Fraunces', Georgia, serif;
+				font-size: 24px;
+				font-weight: 600;
+				font-variant-numeric: tabular-nums;
+			}
+
+			.under {
+				height: 24px;
+				padding: 0 9px;
+				border-radius: 12px;
+				font-size: 12px;
+				font-weight: 800;
+				background: var(--success-soft);
+				color: var(--success);
+				display: inline-flex;
+				align-items: center;
+			}
+
+			.deal .foot {
+				display: flex;
+				align-items: center;
+				gap: 10px;
+				margin-top: 10px;
+				padding-top: 10px;
+				border-top: 1px solid var(--line);
+				font-size: 12px;
+				color: var(--muted);
+			}
+
+			.deal .foot .open {
+				margin-left: auto;
+				height: 34px;
+				padding: 0 14px;
+				border-radius: 17px;
+				background: var(--brand);
+				color: var(--on-brand);
+				font-weight: 800;
+				font-size: 13px;
+				display: inline-flex;
+				align-items: center;
+				gap: 6px;
+			}
+
+			.t-dark .deal .foot .open {
+				background: var(--brand-tint);
+				color: #1f3b33;
+			}
+
+			.sent {
+				display: inline-flex;
+				align-items: center;
+				gap: 4px;
+				font-weight: 700;
+			}
+
+			.sent.ok {
+				color: var(--success);
+			}
+
+			.sent.bad {
+				color: var(--danger);
+			}
+
+			.qrow {
+				position: relative;
+				border-top: 1px solid var(--line);
+			}
+
+			.qrow:first-child {
+				border-top: 0;
+			}
+
+			.qrow .front {
+				position: relative;
+				display: flex;
+				align-items: center;
+				gap: 12px;
+				padding: 12px 14px;
+				background: var(--surface);
+				z-index: 2;
+			}
+
+			.qrow .icon {
+				width: 40px;
+				height: 40px;
+				border-radius: 12px;
+				background: var(--inset);
+				display: grid;
+				place-items: center;
+				color: var(--muted);
+				flex: none;
+			}
+
+			.qrow .code {
+				font-family: 'JetBrains Mono', monospace;
+				font-size: 15px;
+				font-weight: 500;
+				letter-spacing: 0.02em;
+			}
+
+			.qrow .mm {
+				font-size: 12px;
+				color: var(--muted);
+				margin-top: 2px;
+			}
+
+			.qrow .mm b {
+				color: var(--danger);
+				font-weight: 700;
+			}
+
+			.qrow .fix {
+				margin-left: auto;
+				height: 34px;
+				padding: 0 14px;
+				border-radius: 17px;
+				background: var(--accent-soft);
+				color: var(--accent);
+				font-weight: 800;
+				font-size: 13px;
+				display: grid;
+				place-items: center;
+			}
+
+			.qrow.swiped .front {
+				transform: translateX(-92px);
+				border-radius: 0 16px 16px 0;
+			}
+
+			.qrow .del {
+				position: absolute;
+				inset: 0 0 0 auto;
+				width: 92px;
+				background: var(--danger);
+				color: #fff;
+				display: grid;
+				place-items: center;
+				font-weight: 800;
+				font-size: 13px;
+				z-index: 1;
+			}
+
+			.backrow {
+				display: flex;
+				align-items: center;
+				gap: 4px;
+				color: var(--accent);
+				font-weight: 700;
+				font-size: 16px;
+				margin-top: 10px;
+			}
+
+			.desk {
+				width: 1280px;
+				height: 800px;
+				border-radius: 18px;
+				overflow: hidden;
+				position: relative;
+				background: var(--canvas);
+				color: var(--ink);
+				display: grid;
+				grid-template-columns: 248px 1fr;
+				box-shadow:
+					0 0 0 1px rgb(31 59 51 / 12%),
+					0 40px 80px -40px rgb(31 59 51 / 55%);
+			}
+
+			.side {
+				background: var(--inset);
+				padding: 22px 14px;
+				display: flex;
+				flex-direction: column;
+				gap: 4px;
+			}
+
+			.side .logo {
+				font-family: 'Fraunces', Georgia, serif;
+				font-size: 28px;
+				font-weight: 600;
+				padding: 0 10px 18px;
+				display: flex;
+				align-items: center;
+				gap: 10px;
+			}
+
+			.side .logo .mark {
+				width: 32px;
+				height: 32px;
+				border-radius: 10px;
+				background: var(--brand);
+				display: grid;
+				place-items: center;
+			}
+
+			.nav {
+				height: 42px;
+				border-radius: 13px;
+				display: flex;
+				align-items: center;
+				gap: 11px;
+				padding: 0 12px;
+				font-weight: 700;
+				font-size: 15px;
+				color: var(--muted);
+			}
+
+			.nav.on {
+				background: var(--brand);
+				color: var(--on-brand);
+			}
+
+			.nav .nb {
+				margin-left: auto;
+				min-width: 22px;
+				height: 22px;
+				border-radius: 11px;
+				background: var(--accent);
+				color: var(--on-accent);
+				font-size: 12px;
+				display: grid;
+				place-items: center;
+				padding: 0 6px;
+			}
+
+			.side .bottom {
+				margin-top: auto;
+			}
+
+			.main {
+				padding: 30px 40px;
+				overflow: hidden;
+			}
+
+			.main .head {
+				display: flex;
+				align-items: flex-end;
+				justify-content: space-between;
+			}
+
+			.main .head h1 {
+				font-family: 'Fraunces', Georgia, serif;
+				font-size: 44px;
+				font-weight: 600;
+				letter-spacing: -0.02em;
+				color: var(--heading);
+				line-height: 1;
+			}
+
+			.main .tools {
+				display: flex;
+				gap: 12px;
+				align-items: center;
+				margin-top: 22px;
+			}
+
+			.main .tools .search {
+				margin: 0;
+				width: 420px;
+			}
+
+			.main .tools .chips {
+				margin: 0;
+				padding: 0;
+			}
+
+			.btn.small {
+				height: 44px;
+				padding: 0 18px;
+				font-size: 15px;
+				border-radius: 14px;
+			}
+
+			.dgrid {
+				display: grid;
+				grid-template-columns: repeat(7, minmax(0, 1fr));
+				gap: 26px 20px;
+				margin-top: 26px;
+			}
+
+			.dgrid .item .t {
+				font-size: 14px;
+			}
+
+			.dgrid .item .m {
+				font-size: 13px;
+			}
+		</style>
+	</head>
+	<body>
+		<header class="doc-head">
+			<h1>Ohara · nowa szata</h1>
+			<p>
+				Pudrowy róż jako kolor główny, butelkowa zieleń jako drugi dominujący i malina jako jedyny
+				akcent dla działań. Okładki robią resztę: interfejs jest spokojny, żeby kolorowe wydania
+				grały pierwsze skrzypce. Okładki na mockach są generowane, w aplikacji będą prawdziwe.
+			</p>
+		</header>
+
+		<div class="palette" id="palette">
+			<div class="swatch" style="background: #f8e9e6; color: #1f3b33">
+				<span class="role">Dominujący 1 · tło, powierzchnie</span>
+				<div>
+					<div class="name">Pudrowy róż</div>
+					<div class="hex">#F8E9E6 · powierzchnia #FFF7F5 · wgłębienie #F1DAD6</div>
+				</div>
+			</div>
+			<div class="swatch" style="background: #1f3b33; color: #f8e9e6">
+				<span class="role">Dominujący 2 · tekst, nawigacja, ciemny motyw</span>
+				<div>
+					<div class="name">Butelkowa zieleń</div>
+					<div class="hex">#1F3B33 · tło ciemne #0E1B17 · powierzchnia #16261F</div>
+				</div>
+			</div>
+			<div class="swatch" style="background: #b4245d; color: #ffffff">
+				<span class="role">Akcent · tylko działania</span>
+				<div>
+					<div class="name">Malina</div>
+					<div class="hex">#B4245D · ciemny motyw #F2779F</div>
+				</div>
+			</div>
+		</div>
+
+		<div class="tokens">
+			<section class="t-light" style="background: var(--surface)">
+				<h2>Jasny motyw · kontrast z tłem</h2>
+				<table id="tok-light"></table>
+			</section>
+			<section class="t-dark" style="background: var(--surface); color: var(--ink)">
+				<h2>Ciemny motyw · kontrast z tłem</h2>
+				<table id="tok-dark"></table>
+			</section>
+		</div>
+
+		<div class="typo">
+			<div>
+				<b>Nagłówki</b>
+				<span class="serif" style="font-size: 34px; font-weight: 600">Fraunces 600</span>
+				<p style="margin-top: 6px; font-size: 14px; color: #5e6964">
+					Duże tytuły stron, tytuł na karcie, kwota wartości.
+				</p>
+			</div>
+			<div>
+				<b>Interfejs</b>
+				<span style="font-size: 28px; font-weight: 700">Plus Jakarta Sans</span>
+				<p style="margin-top: 6px; font-size: 14px; color: #5e6964">
+					Wszystko inne, jak dziś w SUI. Ceny z cyframi tabelarycznymi.
+				</p>
+			</div>
+			<div>
+				<b>Kody</b>
+				<span class="mono" style="font-size: 24px">5 900000 010045</span>
+				<p style="margin-top: 6px; font-size: 14px; color: #5e6964">
+					Tylko kody kreskowe. Lata i ceny już nie monospace.
+				</p>
+			</div>
+		</div>
+
+		<h2 class="section">Telefon</h2>
+		<div class="frames">
+			<figure id="collection-light">
+				<div class="phone t-light" data-screen="collection"></div>
+				<figcaption>
+					<strong>Kolekcja</strong>
+					Kolekcja i katalog tytułów w jednym miejscu. Siatka okładek od pierwszego ekranu, chipy
+					zamiast czterech rzędów filtrów, serce na pozycjach z listy życzeń. Pasek kart na dole,
+					skanowanie pod kciukiem.
+				</figcaption>
+			</figure>
+			<figure id="collection-dark">
+				<div class="phone t-dark" data-screen="collection"></div>
+				<figcaption>
+					<strong>Kolekcja · ciemny motyw</strong>
+					Głęboka zieleń zamiast zimnej czerni, róż w nagłówkach. Jasne okładki lekko przygaszone.
+				</figcaption>
+			</figure>
+			<figure id="scan-found">
+				<div class="phone t-light" data-screen="scan-found"></div>
+				<figcaption>
+					<strong>Skanuj · znaleziono</strong>
+					Aparat na cały ekran, wąski pas na kod. Po odczycie arkusz wysuwa się nad podglądem:
+					okładka, nośnik, cena, data, sklep i stan w jednym miejscu, bez przechodzenia na inną
+					stronę.
+				</figcaption>
+			</figure>
+			<figure id="scan-added">
+				<div class="phone t-light" data-screen="scan-added"></div>
+				<figcaption>
+					<strong>Skanuj · dodano</strong>
+					Dźwięk i zielony błysk pasa, komunikat z „Cofnij” i od razu kolejny kod. Okładki z tej
+					sesji zbierają się w tacce nad paskiem kart.
+				</figcaption>
+			</figure>
+			<figure id="title">
+				<div class="phone t-light" data-screen="title"></div>
+				<figcaption>
+					<strong>Tytuł</strong>
+					Rozmyta okładka w tle, duża okładka na pierwszym planie. Gdy jest jedno wydanie i jeden
+					egzemplarz, wszystko widać od razu, bez przechodzenia przez trzy strony.
+				</figcaption>
+			</figure>
+			<figure id="valuation">
+				<div class="phone t-light" data-screen="valuation"></div>
+				<figcaption>
+					<strong>Wartość</strong>
+					Jedna duża kwota, przedział od skupu do nowych i porównanie z tym, ile wydano. Wykres to
+					pasmo wartości z linią środka i linią wydatków.
+				</figcaption>
+			</figure>
+			<figure id="deals">
+				<div class="phone t-light" data-screen="deals"></div>
+				<figcaption>
+					<strong>Okazje</strong>
+					Domyślnie tylko oferty w limicie. Jedno zdjęcie, duża cena, ile poniżej limitu i przycisk
+					do oferty. Licznik na karcie Okazje.
+				</figcaption>
+			</figure>
+			<figure id="queue">
+				<div class="phone t-light" data-screen="queue"></div>
+				<figcaption>
+					<strong>Do uzupełnienia</strong>
+					Jeden przycisk na wiersz, usuwanie przesunięciem z cofnięciem. Wejście z chipu na ekranie
+					skanowania i z baneru w kolekcji.
+				</figcaption>
+			</figure>
+		</div>
+
+		<h2 class="section">Komputer</h2>
+		<div class="frames">
+			<figure id="desktop">
+				<div class="desk t-light" data-screen="desktop"></div>
+				<figcaption style="max-width: 1280px">
+					<strong>Kolekcja na komputerze</strong>
+					Boczny panel zostaje. Okładki w równych slotach wyrównane do dołu, więc tytuły stoją w
+					jednej linii.
+				</figcaption>
+			</figure>
+		</div>
+
+		<script>
+			const I = {
+				grid: '<rect x="3.5" y="3.5" width="7" height="7" rx="2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2"/>',
+				tag: '<path d="M3 12.2V4.5A1.5 1.5 0 0 1 4.5 3h7.7l8.8 8.8-9.2 9.2z"/><circle cx="8" cy="8" r="1.6"/>',
+				trend: '<polyline points="3 17 9 11 13 15 21 7"/><polyline points="15 7 21 7 21 13"/>',
+				scan: '<path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16"/><path d="M8 8v8M11 8v8M14 8v8M16.5 8v8"/>',
+				search: '<circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/>',
+				sliders:
+					'<path d="M4 7h9M18 7h2M4 17h3M12 17h8"/><circle cx="15.5" cy="7" r="2.3"/><circle cx="9.5" cy="17" r="2.3"/>',
+				heart:
+					'<path d="M12 20s-7.5-4.6-7.5-10.2A4.3 4.3 0 0 1 12 7.2a4.3 4.3 0 0 1 7.5 2.6C19.5 15.4 12 20 12 20z" fill="currentColor" stroke="none"/>',
+				gear: '<path d="M12.2 2h-.4a2 2 0 0 0-2 2v.2a2 2 0 0 1-1 1.7l-.4.3a2 2 0 0 1-2 0l-.2-.1a2 2 0 0 0-2.7.7l-.2.4a2 2 0 0 0 .7 2.7l.2.1a2 2 0 0 1 1 1.7v.5a2 2 0 0 1-1 1.7l-.2.1a2 2 0 0 0-.7 2.7l.2.4a2 2 0 0 0 2.7.7l.2-.1a2 2 0 0 1 2 0l.4.3a2 2 0 0 1 1 1.7v.2a2 2 0 0 0 2 2h.4a2 2 0 0 0 2-2v-.2a2 2 0 0 1 1-1.7l.4-.3a2 2 0 0 1 2 0l.2.1a2 2 0 0 0 2.7-.7l.2-.4a2 2 0 0 0-.7-2.7l-.2-.1a2 2 0 0 1-1-1.7v-.5a2 2 0 0 1 1-1.7l.2-.1a2 2 0 0 0 .7-2.7l-.2-.4a2 2 0 0 0-2.7-.7l-.2.1a2 2 0 0 1-2 0l-.4-.3a2 2 0 0 1-1-1.7V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
+				left: '<polyline points="15 18 9 12 15 6"/>',
+				right: '<polyline points="9 18 15 12 9 6"/>',
+				more: '<circle cx="5.5" cy="12" r="1.4" fill="currentColor"/><circle cx="12" cy="12" r="1.4" fill="currentColor"/><circle cx="18.5" cy="12" r="1.4" fill="currentColor"/>',
+				check: '<polyline points="5 12.5 10 17.5 19 7"/>',
+				bolt: '<path d="M13 2.5 4.5 13.5h6.5l-1 8 8.5-11h-6.5z"/>',
+				keys: '<rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6.5 10h1M10 10h1M13.5 10h1M17 10h.5M7 14h10"/>',
+				ext: '<path d="M8 16 16 8M9.5 8H16v6.5"/>',
+				plus: '<path d="M12 5v14M5 12h14"/>',
+				barcode: '<path d="M4 6v12M7 6v12M10 6v12M14 6v12M16.5 6v12M20 6v12"/>',
+				film: '<rect x="3.5" y="4" width="17" height="16" rx="2"/><path d="M3.5 9h17M3.5 15h17M8 4v16M16 4v16"/>',
+				info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8v.01"/>',
+				sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2"/>',
+				disc: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="2.2"/>'
+			};
+			const icon = (n, s = 22, w = 1.9) =>
+				`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round">${I[n]}</svg>`;
+
+			const shapes = {
+				sun: (a) =>
+					`<circle cx="50" cy="96" r="30" fill="${a}"/><rect x="0" y="118" width="100" height="40" fill="rgb(0 0 0 / 28%)"/>`,
+				ring: (a) =>
+					`<circle cx="50" cy="70" r="30" fill="none" stroke="${a}" stroke-width="5"/><circle cx="50" cy="70" r="8" fill="${a}"/>`,
+				split: (a) =>
+					`<path d="M0 150 L100 40 L100 150Z" fill="${a}" opacity=".75"/><circle cx="34" cy="62" r="18" fill="rgb(255 255 255 / 25%)"/>`,
+				dunes: (a) =>
+					`<path d="M0 104 Q30 84 56 100 T100 94 V150 H0Z" fill="${a}"/><path d="M0 126 Q40 106 70 122 T100 116 V150 H0Z" fill="rgb(0 0 0 / 22%)"/>`,
+				globe: (a) =>
+					`<circle cx="50" cy="78" r="28" fill="${a}"/><path d="M22 78h56M50 50v56M30 62q20 8 40 0M30 94q20-8 40 0" stroke="rgb(0 0 0 / 30%)" stroke-width="1.5" fill="none"/>`,
+				stripes: (a) =>
+					`${['#e94b3c', '#f39c33', '#f2d24b', '#5cb85c', '#3a8fd9', '#8e5bd1'].map((c, i) => `<rect x="0" y="${14 + i * 12}" width="100" height="7" fill="${c}"/>`).join('')}`,
+				bars: (a) =>
+					`<rect x="12" y="20" width="10" height="60" fill="${a}"/><rect x="28" y="30" width="6" height="50" fill="${a}" opacity=".7"/><rect x="40" y="12" width="14" height="68" fill="${a}" opacity=".85"/>`,
+				stars: (a) =>
+					`${Array.from({ length: 26 }, (_, i) => `<circle cx="${(i * 37) % 100}" cy="${(i * 53) % 150}" r="${(i % 3) * 0.6 + 0.6}" fill="${a}"/>`).join('')}<circle cx="64" cy="58" r="22" fill="${a}" opacity=".25"/>`,
+				frame: (a) =>
+					`<rect x="14" y="28" width="72" height="94" fill="none" stroke="${a}" stroke-width="2"/><rect x="22" y="44" width="56" height="44" fill="${a}" opacity=".35"/>`,
+				diagonal: (a) =>
+					`<path d="M0 60 L100 0 L100 40 L0 100Z" fill="${a}"/><path d="M0 120 L100 70 L100 90 L0 140Z" fill="rgb(0 0 0 / 25%)"/>`,
+				circle: (a) =>
+					`<circle cx="50" cy="66" r="34" fill="${a}"/><circle cx="38" cy="58" r="6" fill="rgb(0 0 0 / 55%)"/><circle cx="62" cy="58" r="6" fill="rgb(0 0 0 / 55%)"/>`,
+				grid: (a) =>
+					`${Array.from({ length: 30 }, (_, i) => `<rect x="${8 + (i % 6) * 15}" y="${12 + Math.floor(i / 6) * 15}" width="10" height="10" fill="${a}" opacity="${0.2 + ((i * 7) % 10) / 14}"/>`).join('')}`,
+				fire: (a) =>
+					`<circle cx="50" cy="66" r="40" fill="${a}" opacity=".55"/><circle cx="50" cy="66" r="24" fill="${a}"/><rect x="38" y="84" width="24" height="66" fill="rgb(0 0 0 / 70%)"/>`,
+				sword: (a) =>
+					`<path d="M50 14 L56 104 L50 116 L44 104Z" fill="${a}"/><rect x="34" y="102" width="32" height="5" fill="${a}"/>`,
+				lines: (a) =>
+					`${Array.from({ length: 9 }, (_, i) => `<rect x="0" y="${30 + i * 9}" width="100" height="1.5" fill="${a}" opacity=".7"/>`).join('')}<rect x="40" y="70" width="22" height="34" fill="rgb(0 0 0 / 35%)"/>`,
+				star: (a) =>
+					`<path d="M50 40 L57 62 L80 62 L61 76 L68 98 L50 84 L32 98 L39 76 L20 62 L43 62Z" fill="${a}"/>`,
+				helmet: (a) =>
+					`<ellipse cx="50" cy="52" rx="26" ry="30" fill="${a}"/><rect x="30" y="48" width="40" height="10" rx="5" fill="rgb(0 0 0 / 70%)"/>`,
+				arc: (a) =>
+					`<path d="M10 90 A40 40 0 0 1 90 90" stroke="${a}" stroke-width="10" fill="none"/>`,
+				burst: (a) =>
+					`${Array.from({ length: 12 }, (_, i) => `<path d="M50 75 L${50 + 70 * Math.cos((i * Math.PI) / 6)} ${75 + 70 * Math.sin((i * Math.PI) / 6)} L${50 + 70 * Math.cos(((i + 0.5) * Math.PI) / 6)} ${75 + 70 * Math.sin(((i + 0.5) * Math.PI) / 6)}Z" fill="${a}" opacity=".55"/>`).join('')}`,
+				vinyl: (a) =>
+					`<circle cx="50" cy="50" r="34" fill="rgb(0 0 0 / 70%)"/><circle cx="50" cy="50" r="12" fill="${a}"/>`,
+				portrait: (a) =>
+					`<circle cx="54" cy="64" r="17" fill="${a}"/><path d="M22 150 Q24 96 54 92 Q84 96 86 150Z" fill="${a}" opacity=".85"/>`,
+				blob: (a) => `<path d="M20 60 Q30 20 60 30 T84 70 Q70 92 40 84 T20 60Z" fill="${a}"/>`
+			};
+
+			const items = [
+				{
+					t: 'Bieguni',
+					a: 'Olga Tokarczuk',
+					k: 'book',
+					f: 'Miękka oprawa',
+					g: ['#d2b07a', '#7a4e2a'],
+					s: 'globe',
+					x: '#3b2414',
+					ct: 'top serif',
+					fc: '#2a1a0e'
+				},
+				{
+					t: 'Blade Runner 2049',
+					k: 'movie',
+					f: 'Blu-ray',
+					g: ['#f08a2c', '#0b5d68'],
+					s: 'split',
+					x: '#0a3d45',
+					ct: 'bottom',
+					fc: '#ffe8cf'
+				},
+				{
+					t: 'Brat',
+					a: 'Charli XCX',
+					k: 'music',
+					f: 'CD',
+					g: ['#b9e34c', '#9cc93a'],
+					s: 'blob',
+					x: '#86b32a',
+					ct: 'bottom serif',
+					fc: '#1b1b1b'
+				},
+				{
+					t: 'Diuna',
+					a: 'Frank Herbert',
+					k: 'book',
+					f: 'Twarda oprawa',
+					g: ['#e9b04d', '#8b3a1a'],
+					s: 'dunes',
+					x: '#5c2310',
+					ct: 'top',
+					fc: '#2b1306'
+				},
+				{
+					t: 'Diuna: Część druga',
+					k: 'movie',
+					f: '4K UHD · Steelbook',
+					g: ['#f6c86a', '#5b2410'],
+					s: 'sun',
+					x: '#fff1cf',
+					ct: 'bottom',
+					fc: '#fff4dc'
+				},
+				{
+					t: 'Ida',
+					k: 'movie',
+					f: 'DVD',
+					g: ['#d8d6d2', '#4a4846'],
+					s: 'portrait',
+					x: '#f2f0ec',
+					ct: 'top serif',
+					fc: '#1a1a1a'
+				},
+				{
+					t: 'In Rainbows',
+					a: 'Radiohead',
+					k: 'music',
+					f: 'Winyl',
+					g: ['#1a1a1a', '#262626'],
+					s: 'stripes',
+					x: '#fff',
+					ct: 'bottom',
+					fc: '#fff'
+				},
+				{
+					t: 'Interstellar',
+					k: 'movie',
+					f: '4K UHD',
+					g: ['#dfe7ea', '#5c6b73'],
+					s: 'ring',
+					x: '#ffffff',
+					ct: 'bottom',
+					fc: '#14202a'
+				},
+				{
+					t: 'Kind of Blue',
+					a: 'Miles Davis',
+					k: 'music',
+					f: 'Winyl',
+					g: ['#2a57b5', '#0a1a3a'],
+					s: 'bars',
+					x: '#9cc0ff',
+					ct: 'top serif',
+					fc: '#e8f0ff'
+				},
+				{
+					t: 'Kosmos',
+					a: 'Carl Sagan',
+					k: 'book',
+					f: 'Twarda oprawa',
+					g: ['#2a1b5c', '#c2367a'],
+					s: 'stars',
+					x: '#fff',
+					ct: 'top',
+					fc: '#ffe1ef'
+				},
+				{
+					t: 'Lalka',
+					a: 'Bolesław Prus',
+					k: 'book',
+					f: 'Twarda oprawa',
+					g: ['#f3e6c6', '#c4a873'],
+					s: 'frame',
+					x: '#6b4f22',
+					ct: 'bottom serif',
+					fc: '#3b2a10'
+				},
+				{
+					t: 'Mad Max: Na drodze gniewu',
+					k: 'movie',
+					f: 'Blu-ray',
+					g: ['#f6a623', '#b7410e'],
+					s: 'diagonal',
+					x: '#2b1203',
+					ct: 'bottom',
+					fc: '#fff5e0'
+				},
+				{
+					t: 'Miś',
+					k: 'movie',
+					f: 'Blu-ray',
+					g: ['#dcc6a4', '#6b4a2f'],
+					s: 'circle',
+					x: '#b98b55',
+					ct: 'top serif',
+					fc: '#2a1a0c'
+				},
+				{
+					t: 'OK Computer',
+					a: 'Radiohead',
+					k: 'music',
+					f: 'CD',
+					g: ['#d3e6ee', '#7aa3b6'],
+					s: 'grid',
+					x: '#ffffff',
+					ct: 'top',
+					fc: '#16323f'
+				},
+				{
+					t: 'Oppenheimer',
+					k: 'movie',
+					f: '4K UHD',
+					g: ['#ff8a2a', '#2b0a05'],
+					s: 'fire',
+					x: '#ffb35a',
+					ct: 'bottom',
+					fc: '#fff0dd',
+					w: 'do 80 zł'
+				},
+				{
+					t: 'Ostatnie życzenie',
+					a: 'Andrzej Sapkowski',
+					k: 'book',
+					f: 'Miękka oprawa',
+					g: ['#8a3422', '#1e0f0b'],
+					s: 'sword',
+					x: '#e9c88a',
+					ct: 'top serif',
+					fc: '#f6dfb4'
+				},
+				{
+					t: 'Parasite',
+					k: 'movie',
+					f: 'Blu-ray',
+					g: ['#7f9a68', '#2e3b2a'],
+					s: 'lines',
+					x: '#e8f0d8',
+					ct: 'top',
+					fc: '#f4f8ec',
+					w: 'do 40 zł'
+				},
+				{
+					t: 'Projekt Hail Mary',
+					a: 'Andy Weir',
+					k: 'book',
+					f: 'Miękka oprawa',
+					g: ['#2b2f3a', '#14161c'],
+					s: 'star',
+					x: '#f5d04a',
+					ct: 'top',
+					fc: '#f5d04a',
+					w: 'do 30 zł'
+				},
+				{
+					t: 'Random Access Memories',
+					a: 'Daft Punk',
+					k: 'music',
+					f: 'Winyl',
+					g: ['#1b1b1b', '#3a3a3a'],
+					s: 'helmet',
+					x: '#d9d9d9',
+					ct: 'top serif',
+					fc: '#eaeaea'
+				},
+				{
+					t: 'Rumours',
+					a: 'Fleetwood Mac',
+					k: 'music',
+					f: 'Winyl',
+					g: ['#f2ebdd', '#c9b48e'],
+					s: 'arc',
+					x: '#7b5b3a',
+					ct: 'top serif',
+					fc: '#3b2a18',
+					w: 'do 120 zł'
+				},
+				{
+					t: 'Seksmisja',
+					k: 'movie',
+					f: 'DVD',
+					g: ['#f5c542', '#e2483b'],
+					s: 'burst',
+					x: '#e2483b',
+					ct: 'top',
+					fc: '#1b1b1b'
+				},
+				{ t: 'Spirited Away: W krainie bogów', k: 'movie', f: 'Blu-ray', none: true },
+				{
+					t: 'Spokojnie',
+					a: 'Kult',
+					k: 'music',
+					f: 'Winyl',
+					g: ['#3b3b3b', '#8f8f8f'],
+					s: 'vinyl',
+					x: '#e85d4a',
+					ct: 'bottom',
+					fc: '#f2f2f2'
+				},
+				{
+					t: 'Solaris',
+					a: 'Stanisław Lem',
+					k: 'book',
+					f: 'Twarda oprawa',
+					g: ['#0d3b4f', '#06161f'],
+					s: 'ring',
+					x: '#7fd1e8',
+					ct: 'top',
+					fc: '#bfefff'
+				}
+			];
+			const byTitle = Object.fromEntries(items.map((i) => [i.t, i]));
+
+			function cover(it, size = 12) {
+				if (it.none)
+					return `<div class="cover ${it.k} placeholder">${icon('film', 22, 1.6)}<span class="pt">${it.t}</span></div>`;
+				const vb = it.k === 'music' ? '0 0 100 100' : '0 0 100 150';
+				return `<div class="cover ${it.k}" style="background:linear-gradient(160deg,${it.g[0]},${it.g[1]})"><svg class="art" viewBox="${vb}" preserveAspectRatio="xMidYMid slice">${shapes[it.s](it.x)}</svg><span class="ct ${it.ct}" style="color:${it.fc};font-size:${size}px">${it.t}</span></div>`;
+			}
+
+			function tile(it, size) {
+				const meta = it.w
+					? `<div class="m w">Lista życzeń · ${it.w}</div>`
+					: `<div class="m">${[it.a, it.f].filter(Boolean).join(' · ')}</div>`;
+				return `<div class="item"><div class="slot" style="position:relative">${cover(it, size)}${it.w ? `<span class="wish">${icon('heart', 14)}</span>` : ''}</div><div class="t">${it.t}</div>${meta}</div>`;
+			}
+
+			const status = (dark) =>
+				`<div class="island"></div><div class="sb${dark ? ' light-on-dark' : ''}"><span>9:41</span><span class="icons"><svg width="18" height="12" viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx="1"/><rect x="5" y="5.5" width="3" height="6.5" rx="1"/><rect x="10" y="3" width="3" height="9" rx="1"/><rect x="15" y="0" width="3" height="12" rx="1"/></svg><svg width="16" height="12" viewBox="0 0 16 12" fill="currentColor"><path d="M8 2.5c2.3 0 4.4.9 6 2.4l1.2-1.3A10.6 10.6 0 0 0 8 .7 10.6 10.6 0 0 0 .8 3.6L2 4.9a8.7 8.7 0 0 1 6-2.4zm0 3.6c1.3 0 2.5.5 3.4 1.3l1.2-1.3A6.7 6.7 0 0 0 8 4.3a6.7 6.7 0 0 0-4.6 1.8l1.2 1.3A5 5 0 0 1 8 6.1zm0 3.4 1.6-1.7a2.4 2.4 0 0 0-3.2 0z"/></svg><svg width="27" height="13" viewBox="0 0 27 13" fill="none"><rect x=".5" y=".5" width="23" height="12" rx="3.5" stroke="currentColor" opacity=".4"/><rect x="2" y="2" width="20" height="9" rx="2" fill="currentColor"/><rect x="24.5" y="4.5" width="1.6" height="4" rx=".8" fill="currentColor" opacity=".4"/></svg></span></div>`;
+
+			const tabs = (on, cam) =>
+				`<div class="tabs${cam ? ' oncam' : ''}"><div class="pill"><div class="tab${on === 'k' ? ' on' : ''}">${icon('grid')}Kolekcja</div><div class="tab${on === 'o' ? ' on' : ''}">${icon('tag')}<span class="badge">3</span>Okazje</div><div class="tab${on === 'w' ? ' on' : ''}">${icon('trend')}Wartość</div></div><div class="scanbtn${on === 's' ? ' on' : ''}">${icon('scan', 28, 2)}</div></div>`;
+
+			const grid9 = [
+				'Bieguni',
+				'Blade Runner 2049',
+				'Brat',
+				'Diuna',
+				'Diuna: Część druga',
+				'Ida',
+				'In Rainbows',
+				'Interstellar',
+				'Kind of Blue',
+				'Kosmos',
+				'Lalka',
+				'Mad Max: Na drodze gniewu'
+			];
+
+			const screens = {
+				collection: (dark) => `${status(dark)}<div class="content">
+					<div class="lt"><div><h1>Kolekcja</h1><div class="sub">20 na półce · 4 na liście życzeń</div></div><div class="iconbtn">${icon('gear', 20)}</div></div>
+					<div class="search">${icon('search', 19)}<span>Tytuł, autor, sklep, kod</span><span class="fbtn">${icon('sliders', 19)}</span></div>
+					<div class="chips"><span class="chip on">Wszystko <span class="n">24</span></span><span class="chip">Filmy <span class="n">10</span></span><span class="chip">Książki <span class="n">8</span></span><span class="chip">Muzyka <span class="n">7</span></span><span class="chip">${icon('heart', 14)} 4</span></div>
+					<div class="notice"><span class="dot">${icon('barcode', 18)}</span>3 kody czekają na uzupełnienie<span class="go">${icon('right', 18)}</span></div>
+					<div class="grid">${grid9.map((t) => tile(byTitle[t], 10)).join('')}</div>
+				</div><div class="fade"></div>${tabs('k')}<div class="home"></div>`,
+
+				'scan-found':
+					() => `<div class="cam"><div class="case"><div class="label"><div class="bars"></div><div class="num">5 900000 010038</div></div></div></div>
+					${status(true)}
+					<div class="camtop"><div class="gchip glass"><span class="cnt">3</span>Do uzupełnienia</div><div style="margin-left:auto" class="gbtn glass">${icon('bolt', 20)}</div><div class="gbtn glass">${icon('keys', 20)}</div></div>
+					<div class="band ok" style="top: 150px"><div class="laser"></div></div>
+					<div class="sheet"><div class="grabber"></div>
+						<div class="found">${cover(byTitle['Diuna: Część druga'], 9)}<div style="min-width:0"><div class="overline">${icon('check', 14, 2.6)} Znaleziono · TMDB</div><h3>Diuna: Część druga</h3><div class="meta">Film · 2024 · Dune: Part Two</div><div class="code">5 900000 010038</div></div></div>
+						<div class="lbl">Nośnik</div><div class="seg"><span>DVD</span><span>Blu-ray</span><span class="on">4K UHD</span></div>
+						<div class="toggles" style="margin-top:10px"><span class="chip sm on">${icon('check', 14, 2.4)} Steelbook</span><span class="chip sm">Slipcover</span><span class="chip sm">Digipak</span></div>
+						<div class="lbl">Zakup</div>
+						<div class="row2"><div class="field focus"><small>Cena</small><b>129,99 zł</b></div><div class="field"><small>Data</small><b>Dziś</b></div></div>
+						<div class="toggles" style="margin-top:10px"><span class="chip sm on">Media Expert</span><span class="chip sm">Empik</span><span class="chip sm">Allegro</span><span class="chip sm">OLX</span><span class="chip sm">${icon('plus', 14)}</span></div>
+						<div class="lbl">Stan</div><div class="seg"><span class="on">Nowy</span><span>Używany</span></div>
+						<div class="btn primary" style="margin-top:16px">Dodaj do kolekcji</div>
+						<div class="btnrow"><div class="btn quiet">${icon('heart', 16)} Na listę życzeń</div><div class="btn quiet">Pomiń</div></div>
+					</div><div class="home"></div>`,
+
+				'scan-added':
+					() => `<div class="cam"><div class="case" style="background:linear-gradient(160deg,#6b1f3a,#2a0d18)"><div class="label" style="top:150px"><div class="bars"></div><div class="num">5 901234 567892</div></div></div></div>
+					${status(true)}
+					<div class="camtop"><div class="gchip glass"><span class="cnt">3</span>Do uzupełnienia</div><div style="margin-left:auto" class="gbtn glass">${icon('bolt', 20)}</div><div class="gbtn glass">${icon('keys', 20)}</div></div>
+					<div class="band" style="top: 236px"><div class="laser"></div></div>
+					<div class="hint" style="top: 382px">Nakieruj na kod kreskowy</div>
+					<div class="toast glass" style="bottom: 196px"><span class="ok">${icon('check', 20, 2.6)}</span><div><div style="font-weight:800">Dodano do kolekcji</div><div style="opacity:.75;font-size:13px">Diuna: Część druga · 4K UHD</div></div><span class="undo">Cofnij</span></div>
+					<div class="tray glass" style="bottom: 118px"><div class="stack">${['Diuna: Część druga', 'Kind of Blue', 'Solaris'].map((t) => cover(byTitle[t], 3)).join('')}</div><div style="margin-left:6px"><div style="font-weight:800">Ta sesja: 3</div><div style="opacity:.7;font-size:13px">Wydano 339,97 zł</div></div><span style="margin-left:auto;opacity:.8">${icon('right', 20)}</span></div>
+					${tabs('s', true)}<div class="home white"></div>`,
+
+				title:
+					() => `<div class="hero"><div class="bg" style="background:linear-gradient(160deg,#dfe7ea,#5c6b73)"></div></div>
+					${status(false)}
+					<div class="navrow"><div class="iconbtn" style="background:rgb(255 247 245 / 70%);backdrop-filter:blur(12px)">${icon('left', 20)}</div><div class="iconbtn" style="background:rgb(255 247 245 / 70%);backdrop-filter:blur(12px)">${icon('more', 20)}</div></div>
+					<div class="detail-head">${cover(byTitle['Interstellar'], 13)}<div style="padding-bottom:6px"><div class="overline" style="color:var(--muted)">Film · 2014</div><h2>Interstellar</h2><div class="meta">4K UHD · Slipcover</div></div></div>
+					<div class="detail-body">
+						<div class="card"><div class="ch"><h4>Twój egzemplarz</h4><span class="edit">Edytuj</span></div>
+							<div class="facts"><div><small>Cena</small><b>89,99 zł</b></div><div><small>Kupiono</small><b>24 gru 2023</b></div><div><small>Sklep</small><b>Empik</b></div><div><small>Stan</small><b>Nowy</b></div></div></div>
+						<div class="card"><div class="ch"><h4>Wartość dziś</h4><span class="delta">−16 zł względem zakupu</span></div>
+							<div class="big">≈ 74 zł</div>
+							<div class="range"><span class="mark" style="left:51%"></span><span class="paid" style="left:63%"></span></div>
+							<div class="rlabels"><span>Skup 16 zł</span><span>Używane 74 zł</span><span>Nowe 103 zł</span></div></div>
+						<div class="quietlinks"><div class="qbtn">${icon('plus', 18)} Kolejny egzemplarz</div><div class="qbtn">${icon('disc', 18)} Inne wydanie</div></div>
+					</div>
+					<div class="fade" style="height:120px"></div>${tabs('k')}<div class="home"></div>`,
+
+				valuation: () => `${status(false)}<div class="content">
+					<div class="lt"><div><h1>Wartość</h1><div class="sub">20 egzemplarzy · wycena wczoraj</div></div><div class="iconbtn">${icon('trend', 20)}</div></div>
+					<div class="vhero"><div class="k">SZACOWANA WARTOŚĆ</div><div class="v">≈ 848 <small>zł</small></div>
+						<div class="line2"><span style="opacity:.85">Wydano 1173 zł</span><span class="delta">−325 zł · −28%</span></div>
+						<svg class="spark" width="92" height="36" viewBox="0 0 92 36" fill="none"><path d="M2 30 L14 27 L26 28 L38 21 L50 19 L62 20 L74 12 L90 6" stroke="#f4c6cc" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="90" cy="6" r="3.5" fill="#f4c6cc"/></svg>
+						<div class="range"><span class="mark" style="left:60%"></span><span class="paid" style="left:84%"></span></div>
+						<div class="rlabels"><span>Skup 39 zł</span><span>Używane 848 zł</span><span>Nowe 1375 zł</span></div></div>
+					<div class="card chartcard"><div class="ch"><h4>Ostatnie 90 dni</h4><span class="sub" style="margin:0">sie – lis</span></div>
+						<svg width="100%" height="128" viewBox="0 0 326 128" preserveAspectRatio="none"><path d="M0 92 C40 88 70 84 110 74 S180 60 220 52 S290 34 326 26 L326 70 C290 76 250 82 220 86 S150 96 110 100 S40 108 0 110Z" fill="#f4c6cc" opacity=".55"/><path d="M0 101 C40 98 70 94 110 87 S180 76 220 69 S290 52 326 48" stroke="#1f3b33" stroke-width="2.6" fill="none" stroke-linecap="round"/><path d="M0 64 L326 50" stroke="#b4245d" stroke-width="1.8" stroke-dasharray="5 5" fill="none"/></svg>
+						<div class="legend"><span><i style="background:#f4c6cc"></i>Przedział</span><span><i style="background:#1f3b33;height:3px"></i>Używane</span><span><i style="background:none;border-top:2px dashed #b4245d;height:0;border-radius:0"></i>Wydano</span></div></div>
+					<div class="list">
+						<div class="lrow">${cover(byTitle['Random Access Memories'], 4)}<div><div class="tt">Random Access Memories</div><div class="mm">Winyl · kupiono za 189,99 zł</div></div><div class="val">152 zł<small>118–201 zł</small></div></div>
+						<div class="lrow">${cover(byTitle['Diuna: Część druga'], 4)}<div><div class="tt">Diuna: Część druga</div><div class="mm">4K UHD · Steelbook</div></div><div class="val">104 zł<small>23–149 zł</small></div></div>
+						<div class="lrow">${cover(byTitle['Spokojnie'], 4)}<div><div class="tt">Spokojnie<span class="pilltag">mało danych</span></div><div class="mm">Winyl · Kult</div></div><div class="val">79 zł<small>2 oferty</small></div></div>
+					</div>
+				</div><div class="fade"></div>${tabs('w')}<div class="home"></div>`,
+
+				deals: () => `${status(false)}<div class="content">
+					<div class="lt"><div><h1>Okazje</h1><div class="sub">4 na liście życzeń · sprawdzono 2 godz. temu</div></div><div class="iconbtn">${icon('search', 20)}</div></div>
+					<div class="seg" style="margin-top:16px"><span class="on">Pod limitem · 3</span><span>Wszystkie</span><span>Wysłane</span></div>
+					${[
+						[
+							'Oppenheimer',
+							'Oppenheimer 4K UHD + Blu-ray steelbook −35%',
+							'Pepper · nowy · 1 godz. temu',
+							'79 zł',
+							'1 zł pod limitem',
+							'limit 80 zł',
+							'<span class="sent bad">Nie wysłano</span>'
+						],
+						[
+							'Parasite',
+							'Parasite Blu-ray PL lektor, stan idealny',
+							'OLX · używany · 3 godz. temu',
+							'35 zł',
+							'5 zł pod limitem',
+							'limit 40 zł',
+							`<span class="sent ok">${icon('check', 14, 2.6)} Wysłano</span>`
+						],
+						[
+							'Rumours',
+							'Fleetwood Mac – Rumours, winyl 1977, VG+',
+							'OLX · używany · wczoraj',
+							'99 zł',
+							'21 zł pod limitem',
+							'limit 120 zł',
+							`<span class="sent ok">${icon('check', 14, 2.6)} Wysłano</span>`
+						]
+					]
+						.map(
+							([t, title, meta, p, u, lim, s]) =>
+								`<div class="deal"><div class="top"><div class="photo" style="background:var(--inset)">${cover(byTitle[t], 6)}</div><div style="min-width:0"><div class="dt">${title}</div><div class="dm">${meta}</div><div class="pr"><span class="p">${p}</span><span class="under">${u}</span></div></div></div><div class="foot"><span>${t} · ${lim}</span>${s}<span class="open">Otwórz ${icon('ext', 14, 2.4)}</span></div></div>`
+						)
+						.join('')}
+				</div><div class="fade"></div>${tabs('o')}<div class="home"></div>`,
+
+				queue: () => `${status(false)}<div class="content">
+					<div class="backrow">${icon('left', 20, 2.2)}Skanuj</div>
+					<div class="lt" style="margin-top:6px"><div><h1>Do uzupełnienia</h1><div class="sub">Kody, których nie rozpoznano. Znikają po dodaniu wydania.</div></div></div>
+					<div class="list" style="margin-top:18px">
+						${[
+							['5 901234 123457', 'Nieznany kod · 2 skany · wczoraj', false],
+							['978 8375 780635', '<b>Wyszukiwanie nie powiodło się</b> · dziś', false],
+							['0 602445 790098', 'Nieznany kod · 1 skan · 3 dni temu', true]
+						]
+							.map(
+								([c, m, sw]) =>
+									`<div class="qrow${sw ? ' swiped' : ''}"><div class="del">Usuń</div><div class="front"><span class="icon">${icon('barcode', 20)}</span><div><div class="code">${c}</div><div class="mm">${m}</div></div><span class="fix">Uzupełnij</span></div></div>`
+							)
+							.join('')}
+					</div>
+					<div class="sub" style="margin-top:12px;text-align:center">Przesuń w lewo, aby usunąć. Cofniesz to z komunikatu.</div>
+				</div>${tabs('s')}<div class="home"></div>`,
+
+				desktop:
+					() => `<aside class="side"><div class="logo"><span class="mark" style="color:#f4c6cc">${icon('disc', 20, 2)}</span>Ohara</div>
+					<div class="nav on">${icon('grid', 20)}Kolekcja</div><div class="nav">${icon('scan', 20)}Skanuj</div><div class="nav">${icon('barcode', 20)}Do uzupełnienia<span class="nb">3</span></div><div class="nav">${icon('tag', 20)}Okazje<span class="nb">3</span></div><div class="nav">${icon('trend', 20)}Wartość</div>
+					<div class="bottom"><div class="nav">${icon('info', 20)}Informacje</div><div class="nav">${icon('sun', 20)}Motyw: systemowy</div></div></aside>
+					<main class="main"><div class="head"><div><h1>Kolekcja</h1><div class="sub" style="font-size:15px">20 na półce · 4 na liście życzeń · wydano 1173 zł</div></div><div class="btn primary small">${icon('plus', 18, 2.4)} Dodaj tytuł</div></div>
+					<div class="tools"><div class="search">${icon('search', 19)}<span>Tytuł, autor, sklep, kod</span><span class="fbtn">${icon('sliders', 19)}</span></div><div class="chips"><span class="chip on">Wszystko <span class="n">24</span></span><span class="chip">Filmy <span class="n">10</span></span><span class="chip">Książki <span class="n">8</span></span><span class="chip">Muzyka <span class="n">7</span></span><span class="chip">${icon('heart', 14)} 4</span></div><span class="chip" style="margin-left:auto">Sortuj: tytuł A–Z</span></div>
+					<div class="dgrid">${items
+						.slice(0, 14)
+						.map((it) => tile(it, 12))
+						.join('')}</div></main>`
+			};
+
+			document.querySelectorAll('[data-screen]').forEach((el) => {
+				el.innerHTML = screens[el.dataset.screen](el.classList.contains('t-dark'));
+			});
+
+			const hexL = (h) =>
+				[1, 3, 5]
+					.map((i) => parseInt(h.slice(i, i + 2), 16) / 255)
+					.map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4))
+					.reduce((s, c, i) => s + c * [0.2126, 0.7152, 0.0722][i], 0);
+			const ratio = (a, b) => {
+				const [x, y] = [hexL(a), hexL(b)];
+				return ((Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05)).toFixed(1);
+			};
+			const tokenRows = {
+				'tok-light': [
+					['Tło', '#f8e9e6', null],
+					['Powierzchnia', '#fff7f5', null],
+					['Tekst', '#1f3b33', '#f8e9e6'],
+					['Tekst drugorzędny', '#5e6964', '#f8e9e6'],
+					['Akcent (biały tekst)', '#b4245d', '#ffffff'],
+					['Sukces', '#276b4e', '#f8e9e6'],
+					['Błąd', '#a3322a', '#f8e9e6']
+				],
+				'tok-dark': [
+					['Tło', '#0e1b17', null],
+					['Powierzchnia', '#16261f', null],
+					['Tekst', '#f7e6e3', '#0e1b17'],
+					['Nagłówki', '#f4c6cc', '#0e1b17'],
+					['Akcent (ciemny tekst)', '#f2779f', '#0e1b17'],
+					['Sukces', '#6fbf97', '#16261f'],
+					['Błąd', '#f08a7e', '#16261f']
+				]
+			};
+			for (const [id, rows] of Object.entries(tokenRows)) {
+				document.getElementById(id).innerHTML = rows
+					.map(
+						([n, c, bg]) =>
+							`<tr><td><span class="chipc" style="background:${c}"></span></td><td>${n} <span class="mono" style="opacity:.7">${c.toUpperCase()}</span></td><td class="r">${bg ? ratio(c, bg) + ':1' : ''}</td></tr>`
+					)
+					.join('');
+			}
+		</script>
+	</body>
+</html>

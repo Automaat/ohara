@@ -2,9 +2,9 @@
 	import { BackLink, PageHeader } from '@smykla-skalski/sui';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { ApiError, errorMessage, request } from '$lib/api';
-	import { titlePayload, titleToForm, type FormIssue, type Title } from '$lib/collection';
-	import TitleFormFields from '$lib/components/TitleFormFields.svelte';
+	import { ApiError, errorMessage, request } from '#lib/api.js';
+	import { titlePayload, titleToForm, type FormIssue, type Title } from '#lib/collection.js';
+	import TitleFormFields from '#lib/components/TitleFormFields.svelte';
 
 	const requested = page.url.searchParams.get('kind');
 	let form = $state(

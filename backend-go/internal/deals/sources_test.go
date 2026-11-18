@@ -40,6 +40,9 @@ func TestParseOLX(t *testing.T) {
 		l.AcquiredAs == nil || *l.AcquiredAs != "used" || !strings.HasPrefix(l.URL, "https://www.olx.pl/d/oferta/") {
 		t.Fatalf("listing = %+v", l)
 	}
+	if l.PhotoURL != "https://images.example.test/bluray;s=400x300" || got["1045624035"].PhotoURL != "" {
+		t.Fatalf("OLX photo with fixture = %q, without fixture = %q", l.PhotoURL, got["1045624035"].PhotoURL)
+	}
 	if got["1045624035"].PriceCents != 2999 {
 		t.Fatalf("decimal price = %d, want 2999", got["1045624035"].PriceCents)
 	}
@@ -73,6 +76,9 @@ func TestParsePepper(t *testing.T) {
 	if l.PriceCents != 8999 || l.Source != "pepper" || !strings.HasPrefix(l.Title, "Łowca androidów 4K UHD") {
 		t.Fatalf("listing = %+v", l)
 	}
+	if !strings.HasPrefix(listings[0].PhotoURL, "https://static.pepper.pl/threads/") || l.PhotoURL != "" {
+		t.Fatalf("Pepper photo with fixture = %q, without fixture = %q", listings[0].PhotoURL, l.PhotoURL)
+	}
 	if listings[0].PriceCents != 300021 {
 		t.Fatalf("grouped price = %d, want 300021", listings[0].PriceCents)
 	}
@@ -87,6 +93,10 @@ func TestParseCeneo(t *testing.T) {
 	if l.Title != "Łowca androidów (Blade Runner) (Blu-Ray)" || l.PriceCents != 3370 ||
 		l.URL != "https://www.ceneo.pl/165912980" || l.AcquiredAs == nil || *l.AcquiredAs != "new" {
 		t.Fatalf("listing = %+v", l)
+	}
+	if l.PhotoURL != "https://image.ceneostatic.pl/data/products/165912980/f-blade-runner.jpg" ||
+		byID(listings)["148658552"].PhotoURL != "" {
+		t.Fatalf("unexpected Ceneo photos: %+v", listings)
 	}
 	if n := len(parseCeneo([]byte(`<html><div class="cat-prod-row__body"></div></html>`), "")); n != 0 {
 		t.Fatalf("page without tiles gave %d listings", n)

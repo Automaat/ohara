@@ -40,6 +40,8 @@ func (c Ceneo) Search(ctx context.Context, query string) ([]Listing, error) {
 
 // ceneoTile opens a search result: a div whose class list starts with
 // cat-prod-row, which carries the product in data- attributes.
+var ceneoImage = regexp.MustCompile(`<img\s+[^>]*>`)
+
 var ceneoTile = regexp.MustCompile(`<div\s+class="\s*cat-prod-row\s[^>]*>`)
 
 // tagAttr is one name="value" pair inside a tag, as price_tracker.py reads
@@ -68,8 +70,10 @@ type ceneoRaw struct {
 func parseCeneo(page []byte, base string) []Listing {
 	var out []Listing
 	seen := map[string]bool{}
-	for _, tag := range ceneoTile.FindAllString(string(page), -1) {
-		a := attrs(tag)
+	text := string(page)
+	tiles := ceneoTile.FindAllStringIndex(text, -1)
+	for i, tile := range tiles {
+		a := attrs(text[tile[0]:tile[1]])
 		pid, name := a["data-productid"], strings.TrimSpace(a["data-productname"])
 		if pid == "" || name == "" || seen[pid] {
 			continue
@@ -85,7 +89,20 @@ func parseCeneo(page []byte, base string) []Listing {
 		if err != nil {
 			continue
 		}
+		end := len(text)
+		if i+1 < len(tiles) {
+			end = tiles[i+1][0]
+		}
+		var photoURL string
+		for _, tag := range ceneoImage.FindAllString(text[tile[1]:end], -1) {
+			src := attrs(tag)["src"]
+			if strings.Contains(src, "/data/products/"+pid+"/") {
+				photoURL = imageURL(src)
+				break
+			}
+		}
 		out = append(out, Listing{
+			PhotoURL:   photoURL,
 			Source:     "ceneo",
 			ExternalID: pid,
 			Title:      name,

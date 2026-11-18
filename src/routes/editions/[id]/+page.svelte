@@ -1,26 +1,21 @@
 <script lang="ts">
 	import {
-		BackLink,
 		Button,
 		Card,
 		ConfirmDialog,
-		DataTable,
 		ErrorState,
 		FactList,
 		FormError,
 		Link,
-		PageHeader,
-		Pill,
+		CopyButton,
 		Section,
-		Skeleton,
-		type DataTableColumn
+		Skeleton
 	} from '@smykla-skalski/sui';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { ApiError, errorMessage, request } from '$lib/api';
+	import { ApiError, errorMessage, request } from '#lib/api.js';
 	import {
 		acquiredLabels,
-		bindingLabels,
 		conditionLabels,
 		copyPayload,
 		copyToForm,
@@ -28,20 +23,19 @@
 		editionPayload,
 		editionSummary,
 		editionToForm,
-		formatLabels,
 		formatPLN,
-		packagingLabels,
 		statusLabels,
 		triStateLabels,
 		type Copy,
 		type Edition,
 		type EditionDetail,
 		type FormIssue
-	} from '$lib/collection';
-	import CopyFormFields from '$lib/components/CopyFormFields.svelte';
-	import EditionFormFields from '$lib/components/EditionFormFields.svelte';
-
-	type Row = Copy & Record<string, unknown>;
+	} from '#lib/collection.js';
+	import ArtworkHeader from '#lib/components/ArtworkHeader.svelte';
+	import CopyFormFields from '#lib/components/CopyFormFields.svelte';
+	import EditionFormFields from '#lib/components/EditionFormFields.svelte';
+	import EditionCoverForm from '#lib/components/EditionCoverForm.svelte';
+	import { purchaseDate } from '#lib/polish.js';
 
 	const id = $derived(Number(page.params.id));
 
@@ -126,15 +120,6 @@
 			deleteError = errorMessage(err);
 		}
 	}
-
-	const columns: DataTableColumn<Row>[] = [
-		{ key: 'status', label: 'Status' },
-		{ key: 'price_cents', label: 'Cena', numeric: true },
-		{ key: 'purchased_on', label: 'Kupiono', nowrap: true },
-		{ key: 'shop', label: 'Sklep' },
-		{ key: 'acquired_as', label: 'Nowy/używany' },
-		{ key: 'condition', label: 'Stan' }
-	];
 </script>
 
 <svelte:head>
@@ -158,83 +143,38 @@
 	<div class="content"><Skeleton /></div>
 {:else}
 	{@const d = detail}
-	{@const cover = d.cover_url || d.title.cover_url}
-	<PageHeader title={editionSummary(d)} description={displayName(d.title)}>
-		{#snippet kicker()}
-			<BackLink href={`/titles/${d.title_id}`} label={displayName(d.title)} />
-		{/snippet}
+	<ArtworkHeader
+		title={displayName(d.title)}
+		description={editionSummary({ ...d, barcode: null })}
+		backHref={`/titles/${d.title_id}`}
+		backLabel="Tytuł"
+		cover={d.cover_override_url || d.cover_url || d.title.cover_url}
+		coverLabel={d.cover_override_url
+			? 'Własne zdjęcie okładki'
+			: d.cover_url
+				? 'Okładka wydania'
+				: 'Okładka poglądowa tytułu'}
+	>
 		{#snippet facts()}
 			<FactList
 				layout="inline"
-				missingLabel="—"
 				facts={[
-					{ label: 'Kod kreskowy', value: d.barcode, mono: true },
-					...(d.title.kind === 'movie'
-						? [
-								{ label: 'Nośnik', value: d.format ? formatLabels[d.format] : null },
-								{ label: 'Napisy PL', value: triStateLabels[d.pl_subtitles] },
-								{ label: 'Lektor/dubbing PL', value: triStateLabels[d.pl_voiceover] },
-								{
-									label: 'Opakowanie',
-									value: d.packaging.map((p) => packagingLabels[p]).join(', ')
-								}
-							]
-						: d.title.kind === 'music'
-							? [
-									{ label: 'Nośnik', value: d.format ? formatLabels[d.format] : null },
-									{
-										label: 'Discogs',
-										value: d.discogs_release_id?.toString(),
-										mono: true,
-										href: d.discogs_release_id
-											? `https://www.discogs.com/release/${d.discogs_release_id}`
-											: undefined
-									}
-								]
-							: [{ label: 'Oprawa', value: d.binding ? bindingLabels[d.binding] : null }]),
 					{ label: 'Wydawca', value: d.publisher },
-					{ label: 'Rok', value: d.year?.toString(), mono: true }
-				]}
+					{ label: 'Rok wydania', value: d.year?.toString(), mono: true }
+				].filter((fact) => fact.value)}
 			/>
 		{/snippet}
-		{#snippet actions()}
-			<Button
-				onclick={() => ((editionForm = editionToForm(d)), (editionIssue = null), (editing = true))}
-				>Edytuj</Button
-			>
-			<Button tone="stop-quiet" onclick={() => ((deleteError = null), (confirmDelete = true))}
-				>Usuń</Button
-			>
-		{/snippet}
-	</PageHeader>
+	</ArtworkHeader>
 
 	<div class="content">
-		<FormError message={deleteError} />
-		{#if cover}
-			<figure class="artwork">
-				<img
-					src={cover}
-					alt={d.cover_url ? 'Okładka wydania' : 'Okładka tytułu'}
-					referrerpolicy="no-referrer"
-				/>
-				{#if !d.cover_url}
-					<figcaption>Okładka poglądowa tytułu</figcaption>
-				{/if}
-			</figure>
-		{/if}
-		{#if editing}
-			<Section title="Edycja wydania">
-				<EditionFormFields
-					bind:form={editionForm}
-					kind={d.title.kind}
-					issue={editionIssue}
-					saving={savingEdition}
-					submitLabel="Zapisz zmiany"
-					onsubmit={() => saveEdition(d)}
-					oncancel={() => (editing = false)}
-				/>
-			</Section>
-		{/if}
+		{#key d.id}
+			<EditionCoverForm
+				editionID={d.id}
+				hasOverride={Boolean(d.cover_override_url)}
+				onchange={() => (d.id === id ? load(d.id) : Promise.resolve())}
+			/>
+		{/key}
+
 		{#if d.notes}
 			<p class="notes">{d.notes}</p>
 		{/if}
@@ -249,8 +189,9 @@
 					<Button
 						tone="add"
 						onclick={() => ((copyForm = copyToForm(null)), (copyIssue = null), (adding = true))}
-						>Dodaj egzemplarz</Button
 					>
+						Dodaj egzemplarz
+					</Button>
 				{/if}
 			{/snippet}
 			{#if adding}
@@ -265,34 +206,103 @@
 					/>
 				</Card>
 			{/if}
-			<DataTable
-				aria-label="Egzemplarze wydania"
-				{columns}
-				rows={d.copies as Row[]}
-				rowKey={(r) => r.id}
-				emptyLabel="Brak egzemplarzy"
-				scrollHint="Przewiń tabelę w bok"
-			>
-				{#snippet cell(row, column)}
-					{#if column.key === 'status'}
-						<Link href={`/copies/${row.id}`}>
-							<Pill tone={row.status === 'owned' ? 'success' : 'neutral'}
-								>{statusLabels[row.status]}</Pill
-							>
-						</Link>
-					{:else if column.key === 'price_cents'}
-						{formatPLN(row.price_cents)}
-					{:else if column.key === 'purchased_on'}
-						{row.purchased_on ?? ''}
-					{:else if column.key === 'shop'}
-						{row.shop}
-					{:else if column.key === 'acquired_as'}
-						{row.acquired_as ? acquiredLabels[row.acquired_as] : ''}
-					{:else if column.key === 'condition'}
-						{row.condition ? conditionLabels[row.condition] : ''}
-					{/if}
-				{/snippet}
-			</DataTable>
+			{#if d.copies.length}
+				<div class="cards">
+					{#each d.copies as copy (copy.id)}
+						<Card title={statusLabels[copy.status]} level={3} href={`/copies/${copy.id}`}>
+							<FactList
+								layout="inline"
+								facts={[
+									{
+										label: 'Cena',
+										value: copy.price_cents == null ? null : formatPLN(copy.price_cents)
+									},
+									{
+										label: 'Cena maksymalna',
+										value: copy.max_price_cents == null ? null : formatPLN(copy.max_price_cents)
+									},
+									{ label: 'Kupiono', value: purchaseDate(copy.purchased_on) },
+									{ label: 'Sklep', value: copy.shop },
+									{
+										label: 'Nowy/używany',
+										value: copy.acquired_as && acquiredLabels[copy.acquired_as]
+									},
+									{ label: 'Stan', value: copy.condition && conditionLabels[copy.condition] }
+								].filter((fact) => fact.value)}
+							/>
+						</Card>
+					{/each}
+				</div>
+			{:else if !adding}
+				<p class="muted">Brak egzemplarzy.</p>
+			{/if}
+		</Section>
+
+		{#if d.barcode || d.discogs_release_id || d.title.kind === 'movie'}
+			<Section title="Szczegóły wydania">
+				{#if d.barcode}
+					<div class="barcode">
+						<FactList
+							layout="inline"
+							facts={[{ label: 'Kod kreskowy', value: d.barcode, mono: true }]}
+						/>
+						{#key d.barcode}
+							<CopyButton
+								text={d.barcode}
+								label="Kopiuj kod kreskowy"
+								copiedLabel="Skopiowano"
+								failedLabel="Nie skopiowano"
+							/>
+						{/key}
+					</div>
+				{/if}
+				{#if d.title.kind === 'movie'}
+					<FactList
+						layout="inline"
+						facts={[
+							{ label: 'Napisy PL', value: triStateLabels[d.pl_subtitles] },
+							{ label: 'Lektor/dubbing PL', value: triStateLabels[d.pl_voiceover] }
+						]}
+					/>
+				{/if}
+				{#if d.discogs_release_id}
+					<Link href={`https://www.discogs.com/release/${d.discogs_release_id}`}>
+						Discogs · {d.discogs_release_id}
+					</Link>
+				{/if}
+			</Section>
+		{/if}
+
+		<Section title="Zarządzanie wydaniem">
+			<div class="actions">
+				<Button
+					tone="ghost"
+					onclick={() => (
+						(editionForm = editionToForm(d)),
+						(editionIssue = null),
+						(editing = true)
+					)}
+				>
+					Edytuj wydanie
+				</Button>
+				<Button tone="stop-quiet" onclick={() => ((deleteError = null), (confirmDelete = true))}>
+					Usuń wydanie
+				</Button>
+			</div>
+			<FormError message={deleteError} />
+			{#if editing}
+				<Card title="Edycja wydania" level={3}>
+					<EditionFormFields
+						bind:form={editionForm}
+						kind={d.title.kind}
+						issue={editionIssue}
+						saving={savingEdition}
+						submitLabel="Zapisz zmiany"
+						onsubmit={() => saveEdition(d)}
+						oncancel={() => (editing = false)}
+					/>
+				</Card>
+			{/if}
 		</Section>
 	</div>
 
@@ -320,15 +330,20 @@
 		margin: 0;
 		white-space: pre-wrap;
 	}
-	.artwork {
+	.cards {
+		display: grid;
+		gap: 1rem;
+		grid-template-columns: repeat(auto-fill, minmax(min(100%, 18rem), 1fr));
+	}
+	.actions,
+	.barcode {
+		display: flex;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: 0.5rem;
+	}
+	.muted {
 		margin: 0;
-	}
-	.artwork img {
-		display: block;
-		max-width: min(100%, 12rem);
-		max-height: 16rem;
-	}
-	.artwork figcaption {
-		margin-top: 0.5rem;
+		color: var(--sui-text-muted);
 	}
 </style>

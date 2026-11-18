@@ -3,10 +3,10 @@
 	import { tick, untrack } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { ApiError, errorMessage } from '$lib/api';
-	import { formatPLN, type FormIssue } from '$lib/collection';
-	import ScanConfirm from '$lib/components/ScanConfirm.svelte';
-	import { logScan } from '$lib/recent.svelte';
+	import { ApiError, errorMessage } from '#lib/api.js';
+	import { formatPLN, type FormIssue } from '#lib/collection.js';
+	import ScanConfirm from '#lib/components/ScanConfirm.svelte';
+	import { logScan } from '#lib/recent.svelte.js';
 	import {
 		FormRejected,
 		cleanBarcode,
@@ -24,7 +24,7 @@
 		type LookupResult,
 		type QuickForm,
 		type SaveTarget
-	} from '$lib/scan';
+	} from '#lib/scan.js';
 
 	type Pending = {
 		key: string;
@@ -38,6 +38,7 @@
 	type Status = 'found' | 'owned' | 'missing';
 	type Phase =
 		| { kind: 'loading' }
+		| { kind: 'queued' }
 		| { kind: 'ready'; status: Status }
 		| { kind: 'saved'; name: string; price: string; href: string }
 		| { kind: 'failed'; message: string };
@@ -45,7 +46,7 @@
 	const statusTitles: Record<Status, string> = {
 		found: 'Znaleziono',
 		owned: 'Masz już to wydanie',
-		missing: 'Nie znaleziono'
+		missing: 'Dodaj ręcznie'
 	};
 
 	function storage(): Storage | undefined {
@@ -109,8 +110,7 @@
 		}
 		if (byHand) {
 			blank(code);
-			phase = { kind: 'ready', status: 'missing' };
-			void focus('scan-name');
+			enterManually();
 			return;
 		}
 		try {
@@ -140,8 +140,10 @@
 				form = quickForm(first, sticky, r.barcode);
 				phase = { kind: 'ready', status: 'found' };
 			} else {
-				blank(r.barcode);
-				phase = { kind: 'ready', status: 'missing' };
+				blank(r.entry.barcode);
+				phase = { kind: 'queued' };
+				void focus('scan-next');
+				return;
 			}
 			void focus('scan-price');
 		} catch (err) {
@@ -224,9 +226,10 @@
 		}
 	}
 
-	async function skip() {
-		if (pending) {
-			const missing = phase.kind === 'ready' && phase.status === 'missing';
+	function logSkippedScan() {
+		if (pending && !manual) {
+			const missing =
+				phase.kind === 'queued' || (phase.kind === 'ready' && phase.status === 'missing');
 			logScan(
 				pending.barcode,
 				missing ? 'queued' : 'skipped',
@@ -234,11 +237,21 @@
 				missing ? '/scan/queue' : undefined
 			);
 		}
+	}
+
+	async function skip() {
+		logSkippedScan();
 		previous = null;
 		await goto('/scan');
 	}
 
+	function enterManually() {
+		phase = { kind: 'ready', status: 'missing' };
+		void focus('scan-name');
+	}
+
 	async function scanNext() {
+		if (phase.kind === 'queued') logSkippedScan();
 		previous = null;
 		await openNext(cleanBarcode(nextCode));
 	}
@@ -259,17 +272,43 @@
 <PageHeader
 	title={phase.kind === 'saved'
 		? `Dodano: ${phase.name}`
-		: phase.kind === 'ready'
-			? statusTitles[phase.status]
-			: phase.kind === 'failed'
-				? 'Nie udało się sprawdzić kodu'
-				: 'Sprawdzam kod…'}
-	description={phase.kind === 'saved' ? phase.price || undefined : barcode}
+		: phase.kind === 'queued'
+			? 'Nie znaleziono'
+			: phase.kind === 'ready'
+				? statusTitles[phase.status]
+				: phase.kind === 'failed'
+					? 'Nie udało się sprawdzić kodu'
+					: 'Sprawdzam kod…'}
+	description={phase.kind === 'saved' ? phase.price || undefined : (pending?.barcode ?? barcode)}
 >
 	{#snippet kicker()}
 		<BackLink href="/scan" label="Skanuj" />
 	{/snippet}
 </PageHeader>
+
+{#snippet nextScanForm()}
+	<form
+		class="row"
+		novalidate
+		onsubmit={(e) => {
+			e.preventDefault();
+			void scanNext();
+		}}
+	>
+		<Field
+			id="scan-next"
+			label="Następny kod"
+			hint="Czytnik Bluetooth może skanować od razu; puste pole wraca do aparatu."
+			inputmode="numeric"
+			enterkeyhint="go"
+			autocomplete="off"
+			bind:value={nextCode}
+		/>
+		<Button type="submit" tone={phase.kind === 'queued' ? undefined : 'signal'}>
+			Skanuj kolejny
+		</Button>
+	</form>
+{/snippet}
 
 <div class="content">
 	{#if previous}
@@ -278,6 +317,13 @@
 
 	{#if phase.kind === 'loading'}
 		<Skeleton rows={3} />
+	{:else if phase.kind === 'queued'}
+		<Callout tone="warning" live>Kod trafił do kolejki do uzupełnienia.</Callout>
+		<div class="actions">
+			<Button tone="signal" onclick={enterManually}>Dodaj ręcznie</Button>
+			<Button href="/scan/queue">Do uzupełnienia</Button>
+		</div>
+		{@render nextScanForm()}
 	{:else if phase.kind === 'failed'}
 		<Callout tone="warning" live>{phase.message}</Callout>
 		<div class="actions">
@@ -286,36 +332,11 @@
 			<Button href="/scan">Skanuj kolejny</Button>
 		</div>
 	{:else if phase.kind === 'saved'}
-		<form
-			class="row"
-			novalidate
-			onsubmit={(e) => {
-				e.preventDefault();
-				void scanNext();
-			}}
-		>
-			<Field
-				id="scan-next"
-				label="Następny kod"
-				hint="Czytnik Bluetooth może skanować od razu; puste pole wraca do aparatu."
-				inputmode="numeric"
-				enterkeyhint="go"
-				autocomplete="off"
-				bind:value={nextCode}
-			/>
-			<Button type="submit" tone="signal">Skanuj kolejny</Button>
-		</form>
+		{@render nextScanForm()}
 		<div class="actions">
 			<Button href={phase.href}>Zobacz egzemplarz</Button>
 		</div>
 	{:else if pending}
-		{#if phase.status === 'missing'}
-			<Callout tone="warning">
-				Żadne źródło nie zna tego kodu. Kod czeka w kolejce do uzupełnienia; możesz uzupełnić go
-				teraz, np. wyszukując po tytule.
-			</Callout>
-		{/if}
-
 		{#snippet titleSearch()}
 			<form
 				class="row"
@@ -354,6 +375,7 @@
 			bind:form
 			{issue}
 			{saving}
+			skipLabel={phase.status === 'missing' ? 'Anuluj' : undefined}
 			onpick={pick}
 			onsave={save}
 			onskip={skip}

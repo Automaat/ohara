@@ -18,14 +18,14 @@
 		options,
 		priceHint,
 		type FormIssue
-	} from '$lib/collection';
+	} from '#lib/collection.js';
 	import {
 		candidateLabel,
 		type Candidate,
 		type LookupResult,
 		type QuickForm,
 		type SaveTarget
-	} from '$lib/scan';
+	} from '#lib/scan.js';
 
 	let {
 		target,
@@ -35,6 +35,7 @@
 		form = $bindable(),
 		issue,
 		saving,
+		skipLabel = 'Pomiń',
 		onpick,
 		onsave,
 		onskip
@@ -46,6 +47,7 @@
 		form: QuickForm;
 		issue: FormIssue | null;
 		saving: boolean;
+		skipLabel?: string;
 		onpick: (index: number) => void;
 		onsave: () => void;
 		onskip: () => void;
@@ -156,7 +158,7 @@
 	/>
 	<div class="actions">
 		<Button tone="signal" type="submit" loading={saving}>Dodaj egzemplarz</Button>
-		<Button type="button" disabled={saving} onclick={onskip}>Pomiń</Button>
+		<Button type="button" disabled={saving} onclick={onskip}>{skipLabel}</Button>
 	</div>
 	<details open={issue?.field === 'shop' || undefined}>
 		<summary>Szczegóły zakupu</summary>

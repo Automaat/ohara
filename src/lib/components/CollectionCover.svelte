@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Icon } from '@smykla-skalski/sui';
-	import type { Kind } from '$lib/collection';
+	import type { Kind } from '#lib/collection.js';
 
 	let { kind, url }: { kind: Kind; url?: string } = $props();
 	let failedURL = $state<string>();

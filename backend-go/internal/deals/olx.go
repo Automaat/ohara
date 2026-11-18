@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 )
 
 // OLXURL is the undocumented JSON search the OLX web app uses. It may change
@@ -53,7 +54,12 @@ type olxOffer struct {
 	ID     int64      `json:"id"`
 	URL    string     `json:"url"`
 	Title  string     `json:"title"`
+	Photos []olxPhoto `json:"photos"`
 	Params []olxParam `json:"params"`
+}
+
+type olxPhoto struct {
+	Link string `json:"link"`
 }
 
 type olxPrice struct {
@@ -87,6 +93,13 @@ func parseOLX(body []byte) ([]Listing, error) {
 			Title:      o.Title,
 			URL:        o.URL,
 			Raw:        raw,
+		}
+		for _, photo := range o.Photos {
+			// OLX templates require a size and an optional quality suffix.
+			candidate := strings.NewReplacer("{width}", "400", "{height}", "300", "{fill}", "").Replace(photo.Link)
+			if l.PhotoURL = imageURL(candidate); l.PhotoURL != "" {
+				break
+			}
 		}
 		priced := false
 		for _, p := range o.Params {

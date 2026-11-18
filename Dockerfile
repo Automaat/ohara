@@ -1,8 +1,8 @@
-FROM node:24-alpine AS web
+FROM node:26-alpine AS web
 WORKDIR /src
 COPY package.json package-lock.json ./
 RUN npm ci
-COPY svelte.config.js vite.config.ts tsconfig.json ./
+COPY vite.config.ts tsconfig.json ./
 COPY src ./src
 COPY static ./static
 RUN npm run build

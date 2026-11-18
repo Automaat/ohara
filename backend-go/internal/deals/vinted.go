@@ -86,11 +86,12 @@ type vintedMoney struct {
 
 type vintedItem struct {
 	ProductItem struct {
-		ID             int64        `json:"id"`
-		Title          string       `json:"title"`
-		URL            string       `json:"url"`
-		Price          *vintedMoney `json:"price"`
-		TotalItemPrice *vintedMoney `json:"totalItemPrice"`
+		ID             int64          `json:"id"`
+		Title          string         `json:"title"`
+		URL            string         `json:"url"`
+		Photos         []listingPhoto `json:"photos"`
+		Price          *vintedMoney   `json:"price"`
+		TotalItemPrice *vintedMoney   `json:"totalItemPrice"`
 		User           struct {
 			ID         int64 `json:"id"`
 			IsBusiness bool  `json:"isBusiness"`
@@ -181,7 +182,14 @@ func parseVinted(body []byte, base string) ([]Listing, error) {
 		if err != nil {
 			continue
 		}
+		var photoURL string
+		for _, photo := range p.Photos {
+			if photoURL = imageURL(photo.URL); photoURL != "" {
+				break
+			}
+		}
 		out = append(out, Listing{
+			PhotoURL:   photoURL,
 			Source:     "vinted",
 			ExternalID: strconv.FormatInt(p.ID, 10),
 			Title:      p.Title,

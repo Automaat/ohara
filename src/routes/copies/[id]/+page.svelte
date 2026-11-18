@@ -10,7 +10,7 @@
 	} from '@smykla-skalski/sui';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { ApiError, errorMessage, request } from '$lib/api';
+	import { ApiError, errorMessage, request } from '#lib/api.js';
 	import {
 		copyPayload,
 		copyToForm,
@@ -20,8 +20,8 @@
 		type Copy,
 		type CopyDetail,
 		type FormIssue
-	} from '$lib/collection';
-	import CopyFormFields from '$lib/components/CopyFormFields.svelte';
+	} from '#lib/collection.js';
+	import CopyFormFields from '#lib/components/CopyFormFields.svelte';
 
 	const id = $derived(Number(page.params.id));
 
@@ -112,9 +112,9 @@
 			<BackLink href={`/editions/${d.edition_id}`} label={editionSummary(d.edition)} />
 		{/snippet}
 		{#snippet actions()}
-			<Button tone="stop-quiet" onclick={() => ((deleteError = null), (confirmDelete = true))}
-				>Usuń</Button
-			>
+			<Button tone="stop-quiet" onclick={() => ((deleteError = null), (confirmDelete = true))}>
+				Usuń
+			</Button>
 		{/snippet}
 	</PageHeader>
 

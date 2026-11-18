@@ -11,6 +11,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -27,9 +28,25 @@ type Listing struct {
 	ExternalID string
 	Title      string
 	URL        string
+	PhotoURL   string
 	PriceCents int64
 	AcquiredAs *string
 	Raw        json.RawMessage
+}
+
+func imageURL(value string) string {
+	if strings.HasPrefix(value, "//") {
+		value = "https:" + value
+	}
+	u, err := url.Parse(value)
+	if err != nil || u.Hostname() == "" || u.User != nil || (u.Scheme != "https" && u.Scheme != "http") {
+		return ""
+	}
+	return value
+}
+
+type listingPhoto struct {
+	URL string `json:"url"`
 }
 
 // Source finds listings. A query source is asked once per search query; a
@@ -87,9 +104,9 @@ func ObserveSearch(src Source, err error) {
 	metrics.ObserveSource(src.Name(), sourceStatus(err))
 }
 
-// get fetches url and returns the body of a 200 response.
-func get(ctx context.Context, client *http.Client, url, accept string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
+// get fetches the endpoint and returns the body of a 200 response.
+func get(ctx context.Context, client *http.Client, endpoint, accept string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, http.NoBody)
 	if err != nil {
 		return nil, err
 	}

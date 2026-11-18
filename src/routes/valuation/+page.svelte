@@ -16,8 +16,8 @@
 		type Fact
 	} from '@smykla-skalski/sui';
 	import { onMount } from 'svelte';
-	import { ApiError, errorMessage, request } from '$lib/api';
-	import { formatLabels, formatPLN, kindLabels } from '$lib/collection';
+	import { ApiError, errorMessage, request } from '#lib/api.js';
+	import { formatLabels, formatPLN, kindLabels } from '#lib/collection.js';
 	import {
 		boundHints,
 		boundKeys,
@@ -34,7 +34,7 @@
 		type CopyValue,
 		type RunnerStatus,
 		type ValuationView
-	} from '$lib/valuation';
+	} from '#lib/valuation.js';
 
 	type Row = CopyValue & Record<string, unknown>;
 
@@ -121,19 +121,21 @@
 			tone="signal"
 			loading={starting || !!status?.running}
 			onclick={runNow}
-			disabled={!status}>{status?.running ? 'Wyceniam…' : 'Wyceń teraz'}</Button
+			disabled={!status}
 		>
+			{status?.running ? 'Wyceniam…' : 'Wyceń teraz'}
+		</Button>
 	{/snippet}
 </PageHeader>
 
 <div class="content">
 	<FormError message={runError} />
 	{#if status}
-		<p class="status" role="status">
+		<p class="status metadata" role="status">
 			{#if status.scheduled}
 				Automatyczna wycena {intervalLabel(status)}.
 			{:else}
-				Automatyczna wycena wyłączona (OHARA_VALUATION_INTERVAL).
+				Automatyczna wycena wyłączona.
 			{/if}
 			{#if runSummary}
 				{runSummary}.
@@ -226,14 +228,14 @@
 					<Link href={`/copies/${row.copy_id}`}>{row.title_name}</Link>
 					<span class="meta">{row.format ? formatLabels[row.format] : kindLabels[row.kind]}</span>
 				{:else if column.key === 'price_cents'}
-					{row.price_cents == null ? '—' : formatPLN(row.price_cents)}
+					<span class="price">{row.price_cents == null ? '—' : formatPLN(row.price_cents)}</span>
 				{:else if column.key === 'floor' || column.key === 'mid' || column.key === 'ceiling'}
 					{estimateValue(row[column.key])}
 					<span class="meta">{estimateSource(column.key, row[column.key])}</span>
 				{:else if column.key === 'low_confidence'}
-					<Pill tone={row.low_confidence ? 'warning' : 'success'}
-						>{row.low_confidence ? 'Niska' : 'Dobra'}</Pill
-					>
+					<Pill tone={row.low_confidence ? 'warning' : 'success'}>
+						{row.low_confidence ? 'Niska' : 'Dobra'}
+					</Pill>
 				{/if}
 			{/snippet}
 		</DataTable>
@@ -246,15 +248,12 @@
 		gap: 1.5rem;
 		padding: var(--sui-pane-gutter, 1.5rem);
 	}
-	.status,
-	.hints,
 	.methodology {
 		font-family: 'SUI Plus Jakarta Sans', system-ui, sans-serif;
 		font-size: var(--sui-font-size-body, 0.875rem);
 	}
 	.status {
 		margin: 0;
-		color: var(--sui-text-primary, inherit);
 	}
 	.summary {
 		display: grid;

@@ -18,6 +18,16 @@ mise run dev      # Postgres + app on http://localhost:8000
 For frontend work, run `mise run backend` against a Postgres and
 `mise run frontend` for the Vite dev server on http://localhost:5173.
 
+## Personal cover photos
+
+Add, replace or remove a photo under **Zdjęcie okładki** on the edition page.
+Photos must be JPEG or PNG, up to 8 MiB and 16 megapixels. Export HEIC photos
+as JPEG before uploading. Removing a photo restores the provider cover when
+one is available.
+
+PostgreSQL stores the photos with their editions. Back up and restore the
+database with `pg_dump` and the corresponding restore tool to preserve them.
+
 ## Image
 
 `ghcr.io/automaat/ohara` serves the API, the web UI, `/health` and

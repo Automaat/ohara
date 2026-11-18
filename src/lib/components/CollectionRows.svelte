@@ -9,7 +9,7 @@
 		kindLabels,
 		statusLabels,
 		type CollectionItem
-	} from '$lib/collection';
+	} from '#lib/collection.js';
 	import CollectionCover from './CollectionCover.svelte';
 
 	let {

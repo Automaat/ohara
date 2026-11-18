@@ -29,9 +29,9 @@
 	import { collectionSortOptions, sortCopies, type CollectionSort } from '$lib/collection-sort';
 	import { databaseBadge, fetchStatus, type Status } from '$lib/status';
 
-	type Row = CollectionItem & Record<string, unknown>;
-
 	let sort = $state<CollectionSort | null>('title');
+
+	type Row = CollectionItem & Record<string, unknown>;
 
 	let filter = $state<CollectionFilter>({ kind: '', format: '', status: '', q: '' });
 	let view = $state<CollectionView | null>(null);
@@ -78,7 +78,7 @@
 		{ key: 'purchased_on', label: 'Kupiono', nowrap: true }
 	];
 
-	const rows = $derived(sortCopies(view?.items ?? [], sort ?? 'title') as Row[]);
+	const rows = $derived((view?.items ?? []) as Row[]);
 	const totals = $derived(view?.totals);
 	const badge = $derived(info ? databaseBadge(info.database) : null);
 	const filtered = $derived(
@@ -182,7 +182,7 @@
 	<DataTable
 		aria-label="Egzemplarze w kolekcji"
 		{columns}
-		{rows}
+		rows={sortCopies(rows, sort ?? 'title')}
 		rowHeader
 		rowKey={(r) => r.copy_id}
 		loading={loading && !view}
@@ -238,13 +238,13 @@
 </div>
 
 <style>
+	.collection-sort {
+		width: min(100%, 16rem);
+	}
+
 	.content {
 		display: grid;
 		gap: 1rem;
 		padding: var(--sui-pane-gutter, 1.5rem);
-	}
-
-	.collection-sort {
-		width: min(100%, 16rem);
 	}
 </style>

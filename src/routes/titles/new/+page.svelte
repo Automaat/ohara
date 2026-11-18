@@ -38,7 +38,7 @@
 	<title>Nowy tytuł · Ohara</title>
 </svelte:head>
 
-<PageHeader title="Nowy tytuł" description="Najpierw dzieło, potem jego wydania i egzemplarze.">
+<PageHeader title="Nowy tytuł" description="Po zapisaniu tytułu możesz dodać wydanie i egzemplarz.">
 	{#snippet kicker()}
 		<BackLink href="/titles" label="Tytuły" />
 	{/snippet}
@@ -49,6 +49,7 @@
 		bind:form
 		{issue}
 		{saving}
+		collapseDetails
 		submitLabel="Zapisz tytuł"
 		onsubmit={save}
 		oncancel={() => goto('/titles')}

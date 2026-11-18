@@ -1,4 +1,10 @@
-import type { AcquiredAs, FormIssue, Parsed } from '#lib/collection.js';
+import {
+	formatPLN,
+	type AcquiredAs,
+	type Format,
+	type FormIssue,
+	type Parsed
+} from '#lib/collection.js';
 
 export type DealSource = 'olx' | 'vinted' | 'pepper' | 'ceneo';
 export type AlertState = 'none' | 'pending' | 'sent' | 'failed';
@@ -16,10 +22,29 @@ export type Observation = {
 	title_id: number | null;
 	title_name: string | null;
 	edition_id: number | null;
+	format: Format | null;
+	listing_photo_url: string | null;
+	cover_url: string | null;
+	max_price_cents: number | null;
 	alert: AlertState;
 	alert_error: string;
 	alert_attempts: number;
 };
+
+const priceDifference = new Intl.NumberFormat('pl-PL', {
+	style: 'currency',
+	currency: 'PLN',
+	minimumFractionDigits: 0
+});
+
+export function limitComparison(price: number, limit: number | null): string {
+	if (limit == null) return 'Brak limitu';
+	const difference = limit - price;
+	if (difference === 0) return 'W limicie';
+	const cents = Math.abs(difference);
+	const amount = cents % 100 === 0 ? priceDifference.format(cents / 100) : formatPLN(cents);
+	return difference > 0 ? `${amount} poniżej limitu` : `${amount} powyżej limitu`;
+}
 
 export type RunResult = {
 	wants: number;

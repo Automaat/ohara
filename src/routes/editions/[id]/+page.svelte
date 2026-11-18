@@ -158,6 +158,7 @@
 	<div class="content"><Skeleton /></div>
 {:else}
 	{@const d = detail}
+	{@const cover = d.cover_url || d.title.cover_url}
 	<PageHeader title={editionSummary(d)} description={displayName(d.title)}>
 		{#snippet kicker()}
 			<BackLink href={`/titles/${d.title_id}`} label={displayName(d.title)} />
@@ -209,6 +210,18 @@
 
 	<div class="content">
 		<FormError message={deleteError} />
+		{#if cover}
+			<figure class="artwork">
+				<img
+					src={cover}
+					alt={d.cover_url ? 'Okładka wydania' : 'Okładka tytułu'}
+					referrerpolicy="no-referrer"
+				/>
+				{#if !d.cover_url}
+					<figcaption>Okładka poglądowa tytułu</figcaption>
+				{/if}
+			</figure>
+		{/if}
 		{#if editing}
 			<Section title="Edycja wydania">
 				<EditionFormFields
@@ -306,5 +319,16 @@
 	.notes {
 		margin: 0;
 		white-space: pre-wrap;
+	}
+	.artwork {
+		margin: 0;
+	}
+	.artwork img {
+		display: block;
+		max-width: min(100%, 12rem);
+		max-height: 16rem;
+	}
+	.artwork figcaption {
+		margin-top: 0.5rem;
 	}
 </style>

@@ -64,26 +64,26 @@ func mapErr(err, notFound error, op string) error {
 }
 
 const titleColumns = `t.id, t.kind, t.name, t.original_title, t.polish_title, t.year,
-	t.tmdb_id, t.authors, t.bn_id, t.openlibrary_id, t.notes, t.created_at, t.updated_at,
+	t.tmdb_id, t.authors, t.bn_id, t.openlibrary_id, t.notes, t.cover_url, t.created_at, t.updated_at,
 	(SELECT count(*) FROM edition e WHERE e.title_id = t.id),
 	(SELECT count(*) FROM copy c JOIN edition e ON e.id = c.edition_id WHERE e.title_id = t.id)`
 
 func scanTitle(row pgx.Row) (Title, error) {
 	var t Title
 	err := row.Scan(&t.ID, &t.Kind, &t.Name, &t.OriginalTitle, &t.PolishTitle, &t.Year,
-		&t.TMDBID, &t.Authors, &t.BNID, &t.OpenLibraryID, &t.Notes, &t.CreatedAt, &t.UpdatedAt,
+		&t.TMDBID, &t.Authors, &t.BNID, &t.OpenLibraryID, &t.Notes, &t.CoverURL, &t.CreatedAt, &t.UpdatedAt,
 		&t.EditionCount, &t.CopyCount)
 	return t, err
 }
 
 const editionColumns = `e.id, e.title_id, e.barcode, e.label, e.publisher, e.year, e.format,
-	e.pl_subtitles, e.pl_voiceover, e.packaging, e.binding, e.discogs_release_id, e.notes,
+	e.pl_subtitles, e.pl_voiceover, e.packaging, e.binding, e.discogs_release_id, e.notes, e.cover_url,
 	e.created_at, e.updated_at, (SELECT count(*) FROM copy c WHERE c.edition_id = e.id)`
 
 func scanEdition(row pgx.Row) (Edition, error) {
 	var e Edition
 	err := row.Scan(&e.ID, &e.TitleID, &e.Barcode, &e.Label, &e.Publisher, &e.Year, &e.Format,
-		&e.PLSubtitles, &e.PLVoiceover, &e.Packaging, &e.Binding, &e.DiscogsReleaseID, &e.Notes,
+		&e.PLSubtitles, &e.PLVoiceover, &e.Packaging, &e.Binding, &e.DiscogsReleaseID, &e.Notes, &e.CoverURL,
 		&e.CreatedAt, &e.UpdatedAt, &e.CopyCount)
 	return e, err
 }
@@ -150,10 +150,10 @@ func (s *Store) GetTitle(ctx context.Context, id int64) (Title, error) {
 func (s *Store) CreateTitle(ctx context.Context, in *TitleInput) (Title, error) {
 	var id int64
 	err := s.pool.QueryRow(ctx, `INSERT INTO title
-		(kind, name, original_title, polish_title, year, tmdb_id, authors, bn_id, openlibrary_id, notes)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
+		(kind, name, original_title, polish_title, year, tmdb_id, authors, bn_id, openlibrary_id, notes, cover_url)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, '')) RETURNING id`,
 		in.Kind, in.Name, in.OriginalTitle, in.PolishTitle, in.Year, in.TMDBID, in.Authors,
-		in.BNID, in.OpenLibraryID, in.Notes).Scan(&id)
+		in.BNID, in.OpenLibraryID, in.Notes, in.CoverURL).Scan(&id)
 	if err != nil {
 		return Title{}, mapErr(err, ErrTitleNotFound, "create title")
 	}
@@ -176,9 +176,10 @@ func (s *Store) UpdateTitle(ctx context.Context, id int64, in *TitleInput) (Titl
 		}
 		_, err = tx.Exec(ctx, `UPDATE title SET kind = $2, name = $3, original_title = $4,
 			polish_title = $5, year = $6, tmdb_id = $7, authors = $8, bn_id = $9,
-			openlibrary_id = $10, notes = $11, updated_at = now() WHERE id = $1`,
+			openlibrary_id = $10, notes = $11, cover_url = NULLIF(COALESCE($12, cover_url), ''),
+			updated_at = now() WHERE id = $1`,
 			id, in.Kind, in.Name, in.OriginalTitle, in.PolishTitle, in.Year, in.TMDBID, in.Authors,
-			in.BNID, in.OpenLibraryID, in.Notes)
+			in.BNID, in.OpenLibraryID, in.Notes, in.CoverURL)
 		return mapErr(err, ErrTitleNotFound, "update title")
 	})
 	if err != nil {
@@ -258,10 +259,10 @@ func (s *Store) CreateEdition(ctx context.Context, in *EditionInput) (Edition, e
 			return err
 		}
 		err := tx.QueryRow(ctx, `INSERT INTO edition (title_id, barcode, label, publisher, year,
-			format, pl_subtitles, pl_voiceover, packaging, binding, discogs_release_id, notes)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id`,
+			format, pl_subtitles, pl_voiceover, packaging, binding, discogs_release_id, notes, cover_url)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NULLIF($13, '')) RETURNING id`,
 			in.TitleID, in.Barcode, in.Label, in.Publisher, in.Year, in.Format, in.PLSubtitles,
-			in.PLVoiceover, in.Packaging, in.Binding, in.DiscogsReleaseID, in.Notes).Scan(&id)
+			in.PLVoiceover, in.Packaging, in.Binding, in.DiscogsReleaseID, in.Notes, in.CoverURL).Scan(&id)
 		return mapErr(err, ErrEditionNotFound, "create edition")
 	})
 	if err != nil {
@@ -290,9 +291,9 @@ func (s *Store) UpdateEdition(ctx context.Context, id int64, in *EditionInput) (
 		tag, err := tx.Exec(ctx, `UPDATE edition SET title_id = $2, barcode = $3, label = $4,
 			publisher = $5, year = $6, format = $7, pl_subtitles = $8, pl_voiceover = $9,
 			packaging = $10, binding = $11, discogs_release_id = $12, notes = $13,
-			updated_at = now() WHERE id = $1`,
+			cover_url = NULLIF(COALESCE($14, cover_url), ''), updated_at = now() WHERE id = $1`,
 			id, in.TitleID, in.Barcode, in.Label, in.Publisher, in.Year, in.Format, in.PLSubtitles,
-			in.PLVoiceover, in.Packaging, in.Binding, in.DiscogsReleaseID, in.Notes)
+			in.PLVoiceover, in.Packaging, in.Binding, in.DiscogsReleaseID, in.Notes, in.CoverURL)
 		if err != nil {
 			return mapErr(err, ErrEditionNotFound, "update edition")
 		}

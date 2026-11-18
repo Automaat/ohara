@@ -43,6 +43,7 @@
 		'pl_voiceover',
 		'packaging',
 		'discogs_release_id',
+		'cover_url',
 		'notes'
 	];
 	const general = $derived(issue && !fieldKeys.includes(issue.field) ? issue.message : null);
@@ -129,6 +130,12 @@
 		hint="Np. edycja kolekcjonerska."
 		bind:value={form.label}
 		error={errorFor('label')}
+	/>
+	<Field
+		label="Adres okładki wydania"
+		inputmode="url"
+		bind:value={form.cover_url}
+		error={errorFor('cover_url')}
 	/>
 	<Field label="Notatki" error={errorFor('notes')}>
 		{#snippet control(c)}

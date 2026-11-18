@@ -117,6 +117,57 @@ func (a *api) copyOf(body obj) int64 {
 	return c.ID
 }
 
+func TestEditionDetailReturnsArtworkForEachEdition(t *testing.T) {
+	a := newAPI(t)
+	const representative = "https://example.test/title.jpg"
+	var title collection.Title
+	a.mustDo(http.MethodPost, "/api/titles", obj{
+		"kind": "movie", "name": "Seksmisja", "cover_url": representative,
+	}, &title, http.StatusCreated)
+	a.mustDo(http.MethodPut, fmt.Sprintf("/api/titles/%d", title.ID), obj{
+		"kind": "movie", "name": "Seksmisja",
+	}, nil, http.StatusOK)
+
+	for _, tt := range []struct {
+		name  string
+		cover string
+	}{
+		{name: "First release", cover: "https://example.test/first.jpg"},
+		{name: "Second release", cover: "https://example.test/second.jpg"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sub := &api{t: t, url: a.url}
+			editionID := sub.edition(obj{
+				"title_id": title.ID, "label": tt.name, "format": "dvd", "cover_url": tt.cover,
+			})
+			path := fmt.Sprintf("/api/editions/%d", editionID)
+			sub.mustDo(http.MethodPut, path, obj{
+				"title_id": title.ID, "label": tt.name, "format": "dvd",
+			}, nil, http.StatusOK)
+
+			var detail collection.EditionDetail
+			sub.mustDo(http.MethodGet, path, nil, &detail, http.StatusOK)
+
+			if detail.CoverURL == nil || *detail.CoverURL != tt.cover {
+				t.Errorf("edition cover = %v, want %q", detail.CoverURL, tt.cover)
+			}
+			if detail.Title.CoverURL == nil || *detail.Title.CoverURL != representative {
+				t.Errorf("title cover = %v, want %q", detail.Title.CoverURL, representative)
+			}
+		})
+	}
+}
+
+func TestRejectsInvalidEditionArtworkURLs(t *testing.T) {
+	a := newAPI(t)
+	titleID := a.title("movie", "Seksmisja")
+	for _, cover := range []string{"javascript:x", "//example.test/cover.jpg", "https://u:p@example.test/cover.jpg"} {
+		a.fails(http.MethodPost, "/api/editions", obj{
+			"title_id": titleID, "format": "dvd", "cover_url": cover,
+		}, http.StatusUnprocessableEntity, "cover_url")
+	}
+}
+
 func TestCRUDLifecycle(t *testing.T) {
 	a := newAPI(t)
 
@@ -374,7 +425,7 @@ func TestCollectionViewFiltersAndTotals(t *testing.T) {
 	}
 
 	for _, q := range []string{"?kind=vinyl", "?format=vhs", "?status=lent"} {
-		field := strings.SplitN(strings.TrimPrefix(q, "?"), "=", 2)[0]
+		field, _, _ := strings.Cut(strings.TrimPrefix(q, "?"), "=")
 		a.fails(http.MethodGet, "/api/collection"+q, nil, http.StatusUnprocessableEntity, field)
 	}
 }

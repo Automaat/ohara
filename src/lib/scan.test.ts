@@ -315,6 +315,7 @@ describe('scan payloads', () => {
 			value: {
 				format: 'cd',
 				discogs_release_id: 1873013,
+				cover_url: 'https://i.discogs.com/dsotm.jpeg',
 				publisher: 'EMI',
 				label: 'Reissue, Remastered · Europe',
 				binding: null,

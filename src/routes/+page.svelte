@@ -47,27 +47,31 @@
 	let info = $state<Status | null>(null);
 	let seq = 0;
 	let restoreScroll: [number, number] | undefined;
+	let loadingTotals = false;
 
 	export const snapshot: Snapshot<[number, number]> = {
 		capture: () => [window.scrollX, window.scrollY],
 		restore: (position) => (restoreScroll = position)
 	};
 
+	async function loadTotals() {
+		if (totals || loadingTotals) return;
+		loadingTotals = true;
+		const full = await request<CollectionView>(fetch, 'GET', '/api/collection').catch(() => null);
+		loadingTotals = false;
+		if (full) totals ??= full.totals;
+	}
+
 	async function load() {
 		const mine = ++seq;
 		const url = collectionURL(filter);
 		loading = true;
+		if (url !== '/api/collection') void loadTotals();
 		try {
-			const [got, full] = await Promise.all([
-				request<CollectionView>(fetch, 'GET', url),
-				!totals && url !== '/api/collection'
-					? request<CollectionView>(fetch, 'GET', '/api/collection')
-					: null
-			]);
+			const got = await request<CollectionView>(fetch, 'GET', url);
 			if (mine !== seq) return;
 			view = got;
 			if (url === '/api/collection') totals = got.totals;
-			else if (full) totals = full.totals;
 			failure = null;
 		} catch (err) {
 			if (mine === seq) failure = errorMessage(err);
@@ -128,6 +132,7 @@
 
 	const rows = $derived((view?.items ?? []) as Row[]);
 	const count = new Intl.NumberFormat('pl-PL');
+	const all = 'all';
 	const badge = $derived(info ? databaseBadge(info.database) : null);
 	const activeFilters = $derived(
 		(
@@ -190,30 +195,30 @@
 		filter={{
 			label: 'Typ',
 			options: [
-				{ value: '', label: 'Wszystko' },
+				{ value: all, label: 'Wszystko' },
 				{ value: 'movie', label: 'Filmy' },
 				{ value: 'book', label: 'Książki' },
 				{ value: 'music', label: 'Muzyka' }
 			],
-			value: filter.kind || null,
-			onchange: (v: string) => set('kind', v as CollectionFilter['kind'])
+			value: filter.kind || all,
+			onchange: (v: string) => set('kind', v === all ? '' : (v as CollectionFilter['kind']))
 		}}
 		tools={[
 			{
 				label: 'Nośnik',
-				options: [{ value: '', label: 'Każdy' }, ...options(formatLabels)],
-				value: filter.format || null,
-				onchange: (v: string) => set('format', v as CollectionFilter['format'])
+				options: [{ value: all, label: 'Każdy' }, ...options(formatLabels)],
+				value: filter.format || all,
+				onchange: (v: string) => set('format', v === all ? '' : (v as CollectionFilter['format']))
 			},
 			{
 				label: 'Status',
 				options: [
-					{ value: '', label: 'Każdy' },
+					{ value: all, label: 'Każdy' },
 					{ value: 'owned', label: 'Na półce' },
 					{ value: 'wishlist', label: 'Lista życzeń' }
 				],
-				value: filter.status || null,
-				onchange: (v: string) => set('status', v as CollectionFilter['status'])
+				value: filter.status || all,
+				onchange: (v: string) => set('status', v === all ? '' : (v as CollectionFilter['status']))
 			}
 		]}
 	/>
@@ -308,6 +313,7 @@
 	}
 
 	.result-count {
+		font-family: var(--sui-sans, sans-serif);
 		margin: 0;
 	}
 </style>

@@ -3,6 +3,7 @@
 		Button,
 		Callout,
 		DataTable,
+		Disclosure,
 		FactList,
 		FormError,
 		LineChart,
@@ -89,6 +90,10 @@
 	const rows = $derived((view?.copies ?? []) as Row[]);
 	const status = $derived(view?.status);
 	const summary = $derived(view?.summary);
+	const lastValuation = $derived(
+		view?.history.at(-1)?.computed_at ??
+			(status?.last_result && !status.last_result.failure ? status.last_finished_at : null)
+	);
 	const runSummary = $derived(lastRunSummary(status?.last_result ?? null));
 	const sourceErrors = $derived(status?.last_result?.errors ?? []);
 	const series = $derived(historySeries(view?.history ?? []));
@@ -96,7 +101,6 @@
 		summary
 			? [
 					{ label: 'Egzemplarzy', value: String(summary.copies) },
-					{ label: 'Wydano', value: formatPLN(summary.spent_cents) },
 					...boundKeys.map((k) => ({
 						label: boundLabels[k],
 						value: boundTotal(summary[k], summary.copies)
@@ -111,10 +115,7 @@
 	<title>Wartość · Ohara</title>
 </svelte:head>
 
-<PageHeader
-	title="Wartość kolekcji"
-	description="Przedział wartości każdego egzemplarza: skup, ceny używanych na OLX i Vinted oraz ceny nowych z Ceneo."
->
+<PageHeader title="Wartość kolekcji">
 	{#snippet actions()}
 		<Button
 			tone="signal"
@@ -134,9 +135,6 @@
 			{:else}
 				Automatyczna wycena wyłączona (OHARA_VALUATION_INTERVAL).
 			{/if}
-			{#if status.last_finished_at}
-				Ostatnio: <RelativeTime value={status.last_finished_at} locale="pl" />.
-			{/if}
 			{#if runSummary}
 				{runSummary}.
 			{/if}
@@ -152,20 +150,36 @@
 		{/if}
 	{/if}
 
-	<Callout tone="quiet" title="Ceny ofertowe, nie transakcyjne">
-		Ceny z OLX i Vinted to kwoty, za które sprzedający wystawiają egzemplarze, a nie ceny, za które
-		je sprzedali. Liczą się oferty widziane w ostatnich {view?.window_days ?? 90} dniach; wycena z mniej
-		niż {offers(view?.min_observations ?? 3)} ma niską pewność.
-	</Callout>
-
 	{#if summary}
-		<FactList {facts} />
+		<Section title="Szacowana wartość">
+			<div class="summary">
+				<FactList {facts} />
+				{#if lastValuation}
+					<p class="status">
+						Ostatnia wycena: <RelativeTime value={lastValuation} locale="pl" />
+					</p>
+				{/if}
+				<p class="status">Wydano na zakup: {formatPLN(summary.spent_cents)}</p>
+			</div>
+		</Section>
+	{/if}
+
+	<Disclosure summary="Jak liczymy wartość?">
 		<ul class="hints">
 			{#each boundKeys as k (k)}
 				<li><strong>{boundLabels[k]}:</strong> {boundHints[k]}</li>
 			{/each}
 		</ul>
-	{/if}
+		<p>
+			Dla wydań powiązanych z Discogs używamy najtańszej oferty oraz sugerowanych cen dla stanów VG+
+			i Mint.
+		</p>
+		<p>
+			Ceny z OLX i Vinted pochodzą z ogłoszeń. Nie znamy cen, po których zawarto transakcje.
+			Uwzględniamy oferty z ostatnich {view?.window_days ?? 90} dni. Wycena używanych egzemplarzy na podstawie
+			mniej niż {offers(view?.min_observations ?? 3)} ma niską pewność.
+		</p>
+	</Disclosure>
 
 	<Section title="Historia">
 		<LineChart
@@ -240,6 +254,10 @@
 	.status {
 		margin: 0;
 		color: var(--sui-text-primary, inherit);
+	}
+	.summary {
+		display: grid;
+		gap: 0.75rem;
 	}
 	.hints {
 		margin: 0;

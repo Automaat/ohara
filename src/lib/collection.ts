@@ -49,6 +49,7 @@ export type EditionPayload = {
 
 export type Edition = EditionPayload & {
 	id: number;
+	cover_override_url?: string;
 	copy_count: number;
 	created_at: string;
 	updated_at: string;
@@ -91,6 +92,7 @@ export type CollectionItem = {
 	original_title: string | null;
 	polish_title: string | null;
 	year: number | null;
+	cover_url?: string;
 };
 
 export type Totals = {

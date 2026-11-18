@@ -34,6 +34,7 @@
 	import ArtworkHeader from '$lib/components/ArtworkHeader.svelte';
 	import CopyFormFields from '$lib/components/CopyFormFields.svelte';
 	import EditionFormFields from '$lib/components/EditionFormFields.svelte';
+	import EditionCoverForm from '$lib/components/EditionCoverForm.svelte';
 	import { purchaseDate } from '$lib/polish';
 
 	const id = $derived(Number(page.params.id));
@@ -147,8 +148,12 @@
 		description={editionSummary({ ...d, barcode: null })}
 		backHref={`/titles/${d.title_id}`}
 		backLabel="Tytuł"
-		cover={d.cover_url || d.title.cover_url}
-		coverLabel={d.cover_url ? 'Okładka wydania' : 'Okładka poglądowa tytułu'}
+		cover={d.cover_override_url || d.cover_url || d.title.cover_url}
+		coverLabel={d.cover_override_url
+			? 'Własne zdjęcie okładki'
+			: d.cover_url
+				? 'Okładka wydania'
+				: 'Okładka poglądowa tytułu'}
 	>
 		{#snippet facts()}
 			<FactList
@@ -162,6 +167,14 @@
 	</ArtworkHeader>
 
 	<div class="content">
+		{#key d.id}
+			<EditionCoverForm
+				editionID={d.id}
+				hasOverride={Boolean(d.cover_override_url)}
+				onchange={() => (d.id === id ? load(d.id) : Promise.resolve())}
+			/>
+		{/key}
+
 		{#if d.notes}
 			<p class="notes">{d.notes}</p>
 		{/if}

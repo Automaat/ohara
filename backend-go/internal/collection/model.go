@@ -127,9 +127,10 @@ type EditionInput struct {
 type Edition struct {
 	ID int64 `json:"id"`
 	EditionInput
-	CopyCount int       `json:"copy_count"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	CopyCount        int       `json:"copy_count"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+	CoverOverrideURL *string   `json:"cover_override_url,omitempty"`
 }
 
 // CopyInput is the body of POST and PUT /api/copies. Price and purchase date

@@ -38,7 +38,7 @@
 		{#each rows as row (row.copy_id)}
 			<li>
 				<div class="artwork">
-					<CollectionCover kind={row.kind} url={row.cover_url} />
+					<CollectionCover kind={row.kind} url={row.cover_url} large />
 				</div>
 				<Link href={`/titles/${row.title_id}`}>{displayName(row)}</Link>
 				{#if row.authors?.length}

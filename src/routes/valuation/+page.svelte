@@ -121,8 +121,10 @@
 			tone="signal"
 			loading={starting || !!status?.running}
 			onclick={runNow}
-			disabled={!status}>{status?.running ? 'Wyceniam…' : 'Wyceń teraz'}</Button
+			disabled={!status}
 		>
+			{status?.running ? 'Wyceniam…' : 'Wyceń teraz'}
+		</Button>
 	{/snippet}
 </PageHeader>
 
@@ -231,9 +233,9 @@
 					{estimateValue(row[column.key])}
 					<span class="meta">{estimateSource(column.key, row[column.key])}</span>
 				{:else if column.key === 'low_confidence'}
-					<Pill tone={row.low_confidence ? 'warning' : 'success'}
-						>{row.low_confidence ? 'Niska' : 'Dobra'}</Pill
-					>
+					<Pill tone={row.low_confidence ? 'warning' : 'success'}>
+						{row.low_confidence ? 'Niska' : 'Dobra'}
+					</Pill>
 				{/if}
 			{/snippet}
 		</DataTable>

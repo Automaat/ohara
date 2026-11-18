@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/png"
 	"io"
 	"log/slog"
 	"net/http"
@@ -38,7 +40,9 @@ func newAPI(t *testing.T) *api {
 func (a *api) do(method, path string, body, out any) int {
 	a.t.Helper()
 	var r io.Reader = http.NoBody
-	if body != nil {
+	if binary, ok := body.([]byte); ok {
+		r = bytes.NewReader(binary)
+	} else if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
 			a.t.Fatalf("marshal: %v", err)
@@ -58,7 +62,9 @@ func (a *api) do(method, path string, body, out any) int {
 	if err != nil {
 		a.t.Fatalf("read: %v", err)
 	}
-	if out != nil && len(raw) > 0 {
+	if binary, ok := out.(*[]byte); ok {
+		*binary = raw
+	} else if out != nil && len(raw) > 0 {
 		if err := json.Unmarshal(raw, out); err != nil {
 			a.t.Fatalf("%s %s: decode %q: %v", method, path, raw, err)
 		}
@@ -166,6 +172,84 @@ func TestRejectsInvalidEditionArtworkURLs(t *testing.T) {
 			"title_id": titleID, "format": "dvd", "cover_url": cover,
 		}, http.StatusUnprocessableEntity, "cover_url")
 	}
+}
+
+func coverPNG(t *testing.T, width int) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, image.NewRGBA(image.Rect(0, 0, width, 1))); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func TestEditionCoverLifecycle(t *testing.T) {
+	a := newAPI(t)
+	titleID := a.title("movie", "Seksmisja")
+	const provider = "https://example.test/first.jpg"
+	const siblingCover = "https://example.test/second.jpg"
+	edition := a.edition(obj{"title_id": titleID, "format": "dvd", "cover_url": provider})
+	sibling := a.edition(obj{"title_id": titleID, "format": "dvd", "cover_url": siblingCover})
+	a.copyOf(obj{"edition_id": edition, "status": "owned"})
+	a.copyOf(obj{"edition_id": sibling, "status": "owned"})
+	detailPath := fmt.Sprintf("/api/editions/%d", edition)
+	coverPath := detailPath + "/cover"
+
+	assertCovers := func(want string) {
+		t.Helper()
+		var view collection.CollectionView
+		a.mustDo(http.MethodGet, "/api/collection", nil, &view, http.StatusOK)
+		if len(view.Items) != 2 {
+			t.Fatalf("got %d copies, want 2", len(view.Items))
+		}
+		covers := map[int64]string{edition: want, sibling: siblingCover}
+		for _, item := range view.Items {
+			if item.CoverURL == nil || *item.CoverURL != covers[item.EditionID] {
+				t.Errorf("edition %d cover = %v, want %q", item.EditionID, item.CoverURL, covers[item.EditionID])
+			}
+		}
+	}
+	assertOverride := func(photo []byte) string {
+		t.Helper()
+		var detail collection.EditionDetail
+		a.mustDo(http.MethodGet, detailPath, nil, &detail, http.StatusOK)
+		if detail.CoverOverrideURL == nil || !strings.HasPrefix(*detail.CoverOverrideURL, coverPath+"?") {
+			t.Fatalf("missing cover override: %+v", detail.CoverOverrideURL)
+		}
+		if detail.CoverURL == nil || *detail.CoverURL != provider {
+			t.Fatalf("provider cover changed: %+v", detail.CoverURL)
+		}
+		var got []byte
+		if status := a.do(http.MethodGet, *detail.CoverOverrideURL, nil, &got); status != http.StatusOK || !bytes.Equal(got, photo) {
+			t.Fatalf("override image = %d, %d bytes, want %d bytes", status, len(got), len(photo))
+		}
+		assertCovers(*detail.CoverOverrideURL)
+		return *detail.CoverOverrideURL
+	}
+
+	first, second := coverPNG(t, 1), coverPNG(t, 2)
+	a.mustDo(http.MethodPut, coverPath, first, nil, http.StatusNoContent)
+	firstURL := assertOverride(first)
+
+	a.fails(http.MethodPut, coverPath, first[:40], http.StatusUnprocessableEntity, "cover_photo")
+	a.fails(http.MethodPut, coverPath, make([]byte, (8<<20)+1), http.StatusRequestEntityTooLarge, "cover_photo")
+	if assertOverride(first) != firstURL {
+		t.Fatal("a failed replacement changed the cover URL")
+	}
+
+	a.mustDo(http.MethodPut, coverPath, second, nil, http.StatusNoContent)
+	if assertOverride(second) == firstURL {
+		t.Fatal("replacement reused the previous cover URL")
+	}
+
+	a.mustDo(http.MethodDelete, coverPath, nil, nil, http.StatusNoContent)
+	a.mustDo(http.MethodGet, coverPath, nil, nil, http.StatusNotFound)
+	var detail collection.EditionDetail
+	a.mustDo(http.MethodGet, detailPath, nil, &detail, http.StatusOK)
+	if detail.CoverOverrideURL != nil || detail.CoverURL == nil || *detail.CoverURL != provider {
+		t.Fatal("removal did not restore the provider cover")
+	}
+	assertCovers(provider)
 }
 
 func TestCRUDLifecycle(t *testing.T) {

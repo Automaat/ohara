@@ -193,8 +193,10 @@
 				bind:element={headerSearch}
 				tone="signal"
 				loading={starting || !!status?.running}
-				onclick={runNow}>{status?.running ? 'Szukam…' : 'Szukaj teraz'}</Button
+				onclick={runNow}
 			>
+				{status?.running ? 'Szukam…' : 'Szukaj teraz'}
+			</Button>
 		{/if}
 	{/snippet}
 </PageHeader>
@@ -250,8 +252,10 @@
 						bind:element={emptySearch}
 						tone="signal"
 						loading={starting || !!status?.running}
-						onclick={runNow}>{status?.running ? 'Szukam…' : 'Szukaj teraz'}</Button
+						onclick={runNow}
 					>
+						{status?.running ? 'Szukam…' : 'Szukaj teraz'}
+					</Button>
 				{:else if hasWishlist === false}
 					<Button tone="signal" href="/titles/new">Dodaj pozycję</Button>
 				{/if}
@@ -277,9 +281,9 @@
 				{#if column.key === 'listing_title'}
 					<div class="offer">
 						<div>
-							<Link href={row.url} external externalLabel="otwiera się w nowej karcie"
-								>{row.listing_title || row.url}</Link
-							>
+							<Link href={row.url} external externalLabel="otwiera się w nowej karcie">
+								{row.listing_title || row.url}
+							</Link>
 							<div class="metadata">
 								{sourceLabels[row.source]}{row.acquired_as
 									? ` · ${acquiredLabels[row.acquired_as]}`
@@ -297,8 +301,9 @@
 							{#if row.title_id}
 								<Link
 									href={row.edition_id ? `/editions/${row.edition_id}` : `/titles/${row.title_id}`}
-									>{row.title_name ?? 'Tytuł'}</Link
 								>
+									{row.title_name ?? 'Tytuł'}
+								</Link>
 							{:else}
 								Usunięty tytuł
 							{/if}
@@ -320,9 +325,9 @@
 						{/if}
 					</div>
 				{:else if column.key === 'alert'}
-					<Pill tone={alertTones[row.alert]} title={row.alert_error || undefined}
-						>{alertLabels[row.alert]}</Pill
-					>
+					<Pill tone={alertTones[row.alert]} title={row.alert_error || undefined}>
+						{alertLabels[row.alert]}
+					</Pill>
 				{:else if column.key === 'observed_at'}
 					<RelativeTime value={row.observed_at} locale="pl" />
 				{/if}

@@ -25,9 +25,8 @@
 		boundTotal,
 		estimateSource,
 		estimateValue,
-		formatDay,
 		formatZl,
-		historySeries,
+		historyChart,
 		intervalLabel,
 		lastRunSummary,
 		offers,
@@ -96,7 +95,7 @@
 	);
 	const runSummary = $derived(lastRunSummary(status?.last_result ?? null));
 	const sourceErrors = $derived(status?.last_result?.errors ?? []);
-	const series = $derived(historySeries(view?.history ?? []));
+	const chart = $derived(historyChart(view?.history ?? []));
 	const facts = $derived<Fact[]>(
 		summary
 			? [
@@ -184,27 +183,29 @@
 	</Disclosure>
 
 	<Section title="Historia">
-		<LineChart
-			title="Wartość kolekcji w czasie"
-			description="Suma przedziałów wartości z każdej wyceny na tle tego, ile wydano na kolekcję."
-			level={3}
-			{series}
-			status={loading && !view ? 'loading' : failure && !view ? 'failed' : undefined}
-			error={failure ?? undefined}
-			onretry={load}
-			xLabel="Dzień"
-			yLabel="Wartość"
-			seriesHeading="Seria"
-			formatX={formatDay}
-			formatY={formatZl}
-			dataLabel="Pokaż dane"
-			emptyTitle="Brak historii"
-			emptyDescription="Pierwszy punkt pojawi się po pierwszej wycenie."
-			emptyStep="Uruchom wycenę przyciskiem „Wyceń teraz”."
-			loadingLabel="Wczytywanie historii…"
-			refreshingLabel="Odświeżanie…"
-			failedTitle="Nie udało się wczytać historii"
-		/>
+		<div class="history" class:single-day={view?.history.length === 1}>
+			<LineChart
+				title="Wartość kolekcji w czasie"
+				description="Suma przedziałów wartości z każdej wyceny na tle tego, ile wydano na kolekcję."
+				level={3}
+				series={chart.series}
+				status={loading && !view ? 'loading' : failure && !view ? 'failed' : undefined}
+				error={failure ?? undefined}
+				onretry={load}
+				xLabel="Dzień"
+				yLabel="Wartość"
+				seriesHeading="Seria"
+				formatX={chart.formatDay}
+				formatY={formatZl}
+				dataLabel="Pokaż dane"
+				emptyTitle="Brak historii"
+				emptyDescription="Pierwszy punkt pojawi się po pierwszej wycenie."
+				emptyStep="Uruchom wycenę przyciskiem „Wyceń teraz”."
+				loadingLabel="Wczytywanie historii…"
+				refreshingLabel="Odświeżanie…"
+				failedTitle="Nie udało się wczytać historii"
+			/>
+		</div>
 	</Section>
 
 	<Section title="Egzemplarze">
@@ -247,6 +248,13 @@
 		display: grid;
 		gap: 1.5rem;
 		padding: var(--sui-pane-gutter, 1.5rem);
+	}
+	.history :global(svg[role='img']) {
+		min-inline-size: 23rem;
+	}
+	.single-day :global(svg[role='img']) {
+		inline-size: 100%;
+		min-inline-size: 0;
 	}
 	.methodology {
 		font-family: 'SUI Plus Jakarta Sans', system-ui, sans-serif;

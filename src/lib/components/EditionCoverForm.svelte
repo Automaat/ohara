@@ -71,10 +71,13 @@
 <style>
 	form {
 		display: grid;
+		grid-template-columns: minmax(0, 1fr);
 		gap: 0.5rem;
 	}
 	input {
-		max-inline-size: 100%;
+		box-sizing: border-box;
+		inline-size: 100%;
+		min-inline-size: 0;
 	}
 	p {
 		margin: 0;

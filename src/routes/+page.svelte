@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { replaceState as replaceSortState } from '$app/navigation';
+	import { page as collectionPage } from '$app/state';
 	import {
 		Button,
 		DataTable,
@@ -29,7 +31,13 @@
 	import { collectionSortOptions, sortCopies, type CollectionSort } from '$lib/collection-sort';
 	import { databaseBadge, fetchStatus, type Status } from '$lib/status';
 
-	let sort = $state<CollectionSort | null>('title');
+	const sort = $derived(collectionPage.state.collectionSort ?? 'title');
+
+	function setSort(value: CollectionSort | null) {
+		if (value !== null) {
+			replaceSortState(collectionPage.url, { ...collectionPage.state, collectionSort: value });
+		}
+	}
 
 	type Row = CollectionItem & Record<string, unknown>;
 
@@ -125,7 +133,7 @@
 	<div class="collection-sort">
 		<Field label="Sortowanie">
 			{#snippet control(c)}
-				<Select {...c} options={collectionSortOptions} bind:value={sort} />
+				<Select {...c} options={collectionSortOptions} bind:value={() => sort, setSort} />
 			{/snippet}
 		</Field>
 	</div>
@@ -182,7 +190,7 @@
 	<DataTable
 		aria-label="Egzemplarze w kolekcji"
 		{columns}
-		rows={sortCopies(rows, sort ?? 'title')}
+		rows={sortCopies(rows, sort)}
 		rowHeader
 		rowKey={(r) => r.copy_id}
 		loading={loading && !view}
@@ -209,7 +217,9 @@
 					>
 				</Link>
 			{:else if column.key === 'price_cents'}
-				{row.price_cents === null ? 'Nieznana' : formatPLN(row.price_cents)}
+				{#if row.status === 'owned'}
+					{row.price_cents === null ? 'Nieznana' : formatPLN(row.price_cents)}
+				{/if}
 			{:else if column.key === 'shop'}
 				{row.shop}
 			{:else if column.key === 'purchased_on'}

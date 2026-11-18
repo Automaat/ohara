@@ -10,7 +10,10 @@ const collectionSortLabels = {
 export type CollectionSort = keyof typeof collectionSortLabels;
 export const collectionSortOptions = options(collectionSortLabels);
 
-type SortableCopy = Pick<CollectionItem, 'copy_id' | 'created_at_us' | 'name' | 'price_cents'>;
+type SortableCopy = Pick<
+	CollectionItem,
+	'copy_id' | 'created_at_us' | 'name' | 'price_cents' | 'title_id' | 'edition_id'
+>;
 
 const titleOrder = new Intl.Collator('pl-PL', { sensitivity: 'base' });
 
@@ -28,7 +31,12 @@ export function sortCopies<T extends SortableCopy>(items: readonly T[], sort: Co
 			case 'newest':
 				return b.created_at_us - a.created_at_us || tie;
 			case 'title':
-				return titleOrder.compare(a.name, b.name) || tie;
+				return (
+					titleOrder.compare(a.name, b.name) ||
+					a.title_id - b.title_id ||
+					a.edition_id - b.edition_id ||
+					tie
+				);
 			case 'priceAsc':
 			case 'priceDesc':
 				return comparePrice(a.price_cents, b.price_cents, sort === 'priceDesc') || tie;

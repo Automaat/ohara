@@ -10,10 +10,11 @@
 		ListToolbar,
 		PageHeader,
 		Pill,
+		SegmentedControl,
 		Select,
 		type DataTableColumn
 	} from '@smykla-skalski/sui';
-	import { tick, untrack } from 'svelte';
+	import { onMount, tick, untrack } from 'svelte';
 	import { afterNavigate, replaceState } from '$app/navigation';
 	import { page } from '$app/state';
 	import { errorMessage, request } from '#lib/api.js';
@@ -37,9 +38,35 @@
 	import { collectionSortOptions, sortCopies, type CollectionSort } from '#lib/collection-sort.js';
 	import { purchaseDate, resultCount } from '#lib/polish.js';
 	import CollectionRows from '#lib/components/CollectionRows.svelte';
+	import CollectionShelf from '#lib/components/CollectionShelf.svelte';
 	import type { Snapshot } from './$types';
 
 	type Row = CollectionItem & Record<string, unknown>;
+	type Layout = 'shelf' | 'table';
+
+	const layoutKey = 'ohara.collection.layout';
+	const layoutOptions: { value: Layout; label: string }[] = [
+		{ value: 'shelf', label: 'Półka' },
+		{ value: 'table', label: 'Tabela' }
+	];
+	let layout = $state<Layout>('shelf');
+
+	onMount(() => {
+		try {
+			if (localStorage.getItem(layoutKey) === 'table') layout = 'table';
+		} catch {
+			// Storage can be unavailable in restricted browser contexts.
+		}
+	});
+
+	function setLayout(value: Layout) {
+		layout = value;
+		try {
+			localStorage.setItem(layoutKey, value);
+		} catch {
+			// Keep the current view usable for this visit.
+		}
+	}
 
 	const sort = $derived(page.state.collectionSort ?? 'title');
 
@@ -131,8 +158,6 @@
 
 	const columns: DataTableColumn<Row>[] = [
 		{ key: 'name', label: 'Tytuł' },
-		{ key: 'kind', label: 'Typ' },
-		{ key: 'edition_id', label: 'Wydanie' },
 		{ key: 'status', label: 'Status' },
 		{ key: 'price_cents', label: 'Cena', numeric: true },
 		{ key: 'shop', label: 'Sklep' },
@@ -261,59 +286,76 @@
 			<p class="metadata result-count" aria-hidden="true">{resultCount(rows.length)}</p>
 		{/if}
 
+		<div class="desktop-results">
+			<SegmentedControl
+				label="Widok kolekcji"
+				options={layoutOptions}
+				bind:value={() => layout, setLayout}
+			/>
+		</div>
+
 		<div class="mobile-results">
 			<CollectionRows {rows} {loading} {failure} onretry={load} {empty} />
 		</div>
-		<DataTable
-			class="desktop-results"
-			aria-label="Egzemplarze w kolekcji"
-			{columns}
-			{rows}
-			rowHeader
-			rowKey={(r) => r.copy_id}
-			loading={loading && !view}
-			refreshing={loading && !!view}
-			error={failure}
-			onretry={load}
-			retryLabel="Spróbuj ponownie"
-			loadingLabel="Wczytywanie kolekcji…"
-			refreshingLabel="Odświeżanie…"
-			emptyLabel="Brak pozycji"
-			scrollHint="Przewiń tabelę w bok"
-			{empty}
-		>
-			{#snippet cell(row, column)}
-				{#if column.key === 'name'}
-					<Link href={`/titles/${row.title_id}`}>{displayName(row)}</Link>
-				{:else if column.key === 'kind'}
-					{kindLabels[row.kind]}
-				{:else if column.key === 'edition_id'}
-					<Link href={`/editions/${row.edition_id}`}>
-						{editionSummary({ ...row, barcode: null })}
-					</Link>
-				{:else if column.key === 'status'}
-					<Link href={`/copies/${row.copy_id}`}>
-						<Pill tone={row.status === 'owned' ? 'success' : 'neutral'}>
-							{statusLabels[row.status]}
-						</Pill>
-					</Link>
-				{:else if column.key === 'price_cents'}
-					{#if row.status === 'owned'}
-						<span class="price">
-							{row.price_cents === null ? 'Nieznana' : formatPLN(row.price_cents)}
-						</span>
+		{#if layout === 'shelf'}
+			<div class="desktop-results">
+				<CollectionShelf {rows} {loading} {failure} onretry={load} {empty} />
+			</div>
+		{:else}
+			<DataTable
+				class="desktop-results"
+				aria-label="Egzemplarze w kolekcji"
+				{columns}
+				{rows}
+				rowHeader
+				rowKey={(r) => r.copy_id}
+				loading={loading && !view}
+				refreshing={loading && !!view}
+				error={failure}
+				onretry={load}
+				retryLabel="Spróbuj ponownie"
+				loadingLabel="Wczytywanie kolekcji…"
+				refreshingLabel="Odświeżanie…"
+				emptyLabel="Brak pozycji"
+				scrollHint="Przewiń tabelę w bok"
+				{empty}
+			>
+				{#snippet cell(row, column)}
+					{#if column.key === 'name'}
+						<div class="title-details">
+							<Link href={`/titles/${row.title_id}`}>{displayName(row)}</Link>
+							<span class="metadata">
+								{[row.authors?.join(', '), kindLabels[row.kind]].filter(Boolean).join(' · ')}
+								·
+								<Link href={`/editions/${row.edition_id}`}>
+									{editionSummary({ ...row, barcode: null })}
+								</Link>
+							</span>
+						</div>
+					{:else if column.key === 'status'}
+						<Link href={`/copies/${row.copy_id}`}>
+							<Pill tone={row.status === 'owned' ? 'success' : 'neutral'}>
+								{statusLabels[row.status]}
+							</Pill>
+						</Link>
+					{:else if column.key === 'price_cents'}
+						{#if row.status === 'owned'}
+							<span class="price">
+								{row.price_cents === null ? 'Nieznana' : formatPLN(row.price_cents)}
+							</span>
+						{/if}
+					{:else if column.key === 'shop'}
+						{row.shop}
+					{:else if column.key === 'purchased_on'}
+						{#if row.purchased_on}
+							<time class="metadata" datetime={row.purchased_on}>
+								{purchaseDate(row.purchased_on)}
+							</time>
+						{/if}
 					{/if}
-				{:else if column.key === 'shop'}
-					{row.shop}
-				{:else if column.key === 'purchased_on'}
-					{#if row.purchased_on}
-						<time class="metadata" datetime={row.purchased_on}>
-							{purchaseDate(row.purchased_on)}
-						</time>
-					{/if}
-				{/if}
-			{/snippet}
-		</DataTable>
+				{/snippet}
+			</DataTable>
+		{/if}
 	</div>
 {/snippet}
 
@@ -373,6 +415,15 @@
 	}
 	.mobile-results {
 		display: none;
+	}
+
+	.title-details {
+		display: grid;
+		gap: var(--sui-space-1);
+	}
+
+	.price {
+		font-variant-numeric: tabular-nums;
 	}
 
 	@media (max-width: 640px) {

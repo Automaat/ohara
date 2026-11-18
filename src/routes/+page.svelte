@@ -1,13 +1,17 @@
 <script lang="ts">
+	import { replaceState as replaceSortState } from '$app/navigation';
+	import { page as collectionPage } from '$app/state';
 	import {
 		Button,
 		DataTable,
 		EmptyState,
 		FactList,
+		Field,
 		Link,
 		ListToolbar,
 		PageHeader,
 		Pill,
+		Select,
 		type DataTableColumn
 	} from '@smykla-skalski/sui';
 	import { onMount } from 'svelte';
@@ -24,7 +28,16 @@
 		type CollectionItem,
 		type CollectionView
 	} from '#lib/collection.js';
+	import { collectionSortOptions, sortCopies, type CollectionSort } from '#lib/collection-sort.js';
 	import { purchaseDate, resultCount } from '#lib/polish.js';
+
+	const sort = $derived(collectionPage.state.collectionSort ?? 'title');
+
+	function setSort(value: CollectionSort | null) {
+		if (value !== null) {
+			replaceSortState(window.location.href, { ...collectionPage.state, collectionSort: value });
+		}
+	}
 
 	type Row = CollectionItem & Record<string, unknown>;
 
@@ -102,6 +115,14 @@
 </PageHeader>
 
 <div class="content">
+	<div class="collection-sort">
+		<Field label="Sortowanie">
+			{#snippet control(c)}
+				<Select {...c} options={collectionSortOptions} bind:value={() => sort, setSort} />
+			{/snippet}
+		</Field>
+	</div>
+
 	<ListToolbar
 		searchLabel="Szukaj w kolekcji"
 		placeholder="Tytuł, autor, sklep lub kod kreskowy"
@@ -158,7 +179,7 @@
 	<DataTable
 		aria-label="Egzemplarze w kolekcji"
 		{columns}
-		{rows}
+		rows={sortCopies(rows, sort)}
 		rowHeader
 		rowKey={(r) => r.copy_id}
 		loading={loading && !view}
@@ -185,7 +206,11 @@
 					</Pill>
 				</Link>
 			{:else if column.key === 'price_cents'}
-				<span class="price">{formatPLN(row.price_cents)}</span>
+				{#if row.status === 'owned'}
+					<span class="price">
+						{row.price_cents === null ? 'Nieznana' : formatPLN(row.price_cents)}
+					</span>
+				{/if}
 			{:else if column.key === 'shop'}
 				{row.shop}
 			{:else if column.key === 'purchased_on'}
@@ -216,6 +241,10 @@
 </div>
 
 <style>
+	.collection-sort {
+		width: min(100%, 16rem);
+	}
+
 	.content {
 		display: grid;
 		gap: 1rem;

@@ -476,7 +476,7 @@ func TestCollectionViewFiltersAndTotals(t *testing.T) {
 	a.copyOf(obj{"edition_id": bluray, "status": "owned", "price_cents": 4999})
 	a.copyOf(obj{"edition_id": dvd, "status": "owned"})
 	a.copyOf(obj{"edition_id": dvd, "status": "wishlist"})
-	a.copyOf(obj{"edition_id": paper, "status": "owned", "price_cents": 2550})
+	bookCopy := a.copyOf(obj{"edition_id": paper, "status": "owned", "price_cents": 2550})
 
 	tests := []struct {
 		query string
@@ -506,6 +506,11 @@ func TestCollectionViewFiltersAndTotals(t *testing.T) {
 	a.mustDo(http.MethodGet, "/api/collection?kind=book", nil, &view, http.StatusOK)
 	if it := view.Items[0]; it.Name != "Solaris" || it.Kind != "book" || *it.Binding != "paperback" || it.TitleID != book {
 		t.Fatalf("item = %+v", it)
+	}
+	var copyDetail collection.CopyDetail
+	a.mustDo(http.MethodGet, fmt.Sprintf("/api/copies/%d", bookCopy), nil, &copyDetail, http.StatusOK)
+	if got, want := view.Items[0].CreatedAtUS, copyDetail.CreatedAt.UnixMicro(); got != want {
+		t.Fatalf("created_at_us = %d, want %d", got, want)
 	}
 
 	for _, q := range []string{"?kind=vinyl", "?format=vhs", "?status=lent"} {

@@ -284,3 +284,33 @@ func TestRecentUsesMatchedWishAfterValuation(t *testing.T) {
 		}
 	}
 }
+
+func TestRecentClearsPhotoOnRepeatObservation(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	wishlist(t, pool, wantBluray(nil))
+	wants, err := store.Wants(ctx)
+	if err != nil || len(wants) != 1 {
+		t.Fatalf("wants = %v, %v", wants, err)
+	}
+
+	listing := Listing{Source: "olx", ExternalID: "repeat", Title: "Blade Runner Blu-ray", PriceCents: 5000}
+	if _, _, err := store.Record(ctx, &listing, &wants[0], false); err != nil {
+		t.Fatal(err)
+	}
+	for _, photo := range []string{"https://images.example.test/offer.jpg", ""} {
+		listing.PhotoURL = photo
+		if created, _, err := store.Record(ctx, &listing, &wants[0], false); err != nil || created {
+			t.Fatalf("record photo %q: created=%t err=%v", photo, created, err)
+		}
+		got, err := store.Recent(ctx, 10)
+		if err != nil || len(got) != 1 {
+			t.Fatalf("recent = %v, %v", got, err)
+		}
+		if photo == "" && got[0].ListingPhotoURL != nil || photo != "" &&
+			(got[0].ListingPhotoURL == nil || *got[0].ListingPhotoURL != photo) {
+			t.Fatalf("listing photo = %v, want %q", got[0].ListingPhotoURL, photo)
+		}
+	}
+}

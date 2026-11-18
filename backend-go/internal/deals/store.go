@@ -118,7 +118,7 @@ func (s *Store) DeleteKeyword(ctx context.Context, id int64) error {
 }
 
 type observationRaw struct {
-	PhotoURL       string          `json:"photo_url,omitempty"`
+	PhotoURL       string          `json:"photo_url"`
 	WishlistCopyID int64           `json:"wishlist_copy_id,omitempty"`
 	Title          string          `json:"title"`
 	Data           json.RawMessage `json:"data,omitempty"`
@@ -265,7 +265,7 @@ type Observation struct {
 func (s *Store) Recent(ctx context.Context, limit int) ([]Observation, error) {
 	rows, err := s.pool.Query(ctx, `SELECT o.id, o.source, coalesce(o.external_id, ''), o.observed_at,
 			o.price_cents, o.acquired_as, o.url, coalesce(o.raw->>'title', ''), coalesce(e.title_id, o.title_id), t.name,
-			e.id, e.format, o.raw->>'photo_url', coalesce(nullif(e.cover_url, ''), t.cover_url), w.max_price_cents,
+			e.id, e.format, nullif(o.raw->>'photo_url', ''), coalesce(nullif(e.cover_url, ''), t.cover_url), w.max_price_cents,
 			CASE WHEN a.observation_id IS NULL THEN 'none'
 			     WHEN a.sent_at IS NOT NULL THEN 'sent'
 			     WHEN a.attempts >= $2 THEN 'failed'

@@ -170,11 +170,11 @@
 				<li><strong>{boundLabels[k]}:</strong> {boundHints[k]}</li>
 			{/each}
 		</ul>
-		<p>
+		<p class="methodology">
 			Dla wydań powiązanych z Discogs używamy najtańszej oferty oraz sugerowanych cen dla stanów VG+
 			i Mint.
 		</p>
-		<p>
+		<p class="methodology">
 			Ceny z OLX i Vinted pochodzą z ogłoszeń. Nie znamy cen, po których zawarto transakcje.
 			Uwzględniamy oferty z ostatnich {view?.window_days ?? 90} dni. Wycena używanych egzemplarzy na podstawie
 			mniej niż {offers(view?.min_observations ?? 3)} ma niską pewność.
@@ -247,7 +247,8 @@
 		padding: var(--sui-pane-gutter, 1.5rem);
 	}
 	.status,
-	.hints {
+	.hints,
+	.methodology {
 		font-family: 'SUI Plus Jakarta Sans', system-ui, sans-serif;
 		font-size: var(--sui-font-size-body, 0.875rem);
 	}

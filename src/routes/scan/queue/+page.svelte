@@ -97,10 +97,8 @@
 						{/if}
 					{/snippet}
 					{#snippet side()}
-						<Button href={`/scan?barcode=${entry.barcode}&manual=1`} tone="signal">
-							Dodaj ręcznie
-						</Button>
-						<Button href={`/scan?barcode=${entry.barcode}`}>Szukaj ponownie</Button>
+						<Button href={`/scan/${entry.barcode}?manual=1`} tone="signal">Dodaj ręcznie</Button>
+						<Button href={`/scan/${entry.barcode}`}>Szukaj ponownie</Button>
 						<Button
 							type="button"
 							tone="stop-quiet"

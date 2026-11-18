@@ -9,93 +9,19 @@
 		Pill,
 		Section
 	} from '@smykla-skalski/sui';
-	import { onMount, tick } from 'svelte';
+	import { onMount } from 'svelte';
+	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { ApiError, errorMessage, request } from '$lib/api';
-	import { formatPLN, type FormIssue } from '$lib/collection';
+	import { request } from '$lib/api';
 	import BarcodeCamera from '$lib/components/BarcodeCamera.svelte';
-	import ScanConfirm from '$lib/components/ScanConfirm.svelte';
-	import {
-		FormRejected,
-		RepeatGuard,
-		cleanBarcode,
-		loadSticky,
-		looksLikeBarcode,
-		newRequestKey,
-		quickForm,
-		resolveScan,
-		saveScan,
-		saveSticky,
-		searchAlbums,
-		wedgeBarcodeIn,
-		type Candidate,
-		type LookupResult,
-		type QueueEntry,
-		type QuickForm,
-		type Resolution,
-		type SaveTarget
-	} from '$lib/scan';
-
-	type Pending = {
-		key: string;
-		barcode: string;
-		target: SaveTarget;
-		candidates: Candidate[];
-		picked: number;
-		errors: LookupResult['errors'];
-	};
-	type Outcome = 'added' | 'queued' | 'skipped';
-	type Recent = { id: number; barcode: string; outcome: Outcome; label: string; href?: string };
-	/** manual is a queued barcode the user can fill in right away. */
-	type Notice = { tone: 'quiet' | 'warning'; text: string; manual?: string };
-
-	const outcomeLabels: Record<Outcome, string> = {
-		added: 'Dodano',
-		queued: 'W kolejce',
-		skipped: 'Pominięto'
-	};
-	const outcomeTones = { added: 'success', queued: 'warning', skipped: 'neutral' } as const;
-
-	function storage(): Storage | undefined {
-		try {
-			return localStorage;
-		} catch {
-			return undefined;
-		}
-	}
+	import { outcomeLabels, outcomeTones, recentScans } from '$lib/recent.svelte';
+	import { RepeatGuard, cleanBarcode, looksLikeBarcode, type QueueEntry } from '$lib/scan';
 
 	let code = $state('');
-	let busy = $state<string | null>(null);
-	let pending = $state<Pending | null>(null);
-	let form = $state<QuickForm>(quickForm(null, loadSticky(undefined), ''));
-	let issue = $state<FormIssue | null>(null);
-	let saving = $state(false);
-	let albumQuery = $state('');
-	let searching = $state(false);
-	let notice = $state<Notice | null>(null);
-	let recent = $state<Recent[]>([]);
+	let leaving = $state(false);
+	let notice = $state<string | null>(null);
 	let queued = $state<number | null>(null);
-	let fromKeyboard = false;
-	let sticky = loadSticky(storage());
 	const guard = new RepeatGuard(1500);
-	let nextID = 0;
-
-	function log(barcode: string, outcome: Outcome, label: string, href?: string) {
-		recent = [{ id: ++nextID, barcode, outcome, label, href }, ...recent].slice(0, 20);
-	}
-
-	async function focus(id: string) {
-		await tick();
-		document.getElementById(id)?.focus();
-	}
-
-	function finish(barcode: string) {
-		guard.remember(barcode, performance.now());
-		pending = null;
-		issue = null;
-		albumQuery = '';
-		if (fromKeyboard) void focus('scan-code');
-	}
 
 	async function countQueue() {
 		try {
@@ -105,187 +31,31 @@
 		}
 	}
 
-	function open(r: Exclude<Resolution, { kind: 'queued' }>) {
-		if (r.kind === 'owned') {
-			pending = {
-				key: newRequestKey(),
-				barcode: r.barcode,
-				target: { kind: 'owned', edition: r.edition },
-				candidates: [],
-				picked: 0,
-				errors: []
-			};
-			form = { ...quickForm(null, sticky, r.barcode), kind: r.edition.title.kind };
-		} else {
-			const first = r.candidates[0];
-			pending = {
-				key: newRequestKey(),
-				barcode: r.barcode,
-				target: { kind: 'new', barcode: r.barcode, candidate: first },
-				candidates: r.candidates,
-				picked: 0,
-				errors: r.errors
-			};
-			form = quickForm(first, sticky, r.barcode);
-		}
-		issue = null;
-		void focus('scan-price');
-	}
-
-	function openManual(barcode: string) {
-		pending = {
-			key: newRequestKey(),
-			barcode,
-			target: { kind: 'new', barcode, candidate: null },
-			candidates: [],
-			picked: 0,
-			errors: []
-		};
-		form = quickForm(null, sticky, barcode);
-		issue = null;
-		void focus('scan-price');
-	}
-
-	function pick(index: number) {
-		if (!pending || pending.target.kind !== 'new') return;
-		const candidate = pending.candidates[index];
-		pending.picked = index;
-		pending.target = { kind: 'new', barcode: pending.barcode, candidate };
-		form = {
-			...quickForm(candidate, sticky, pending.barcode),
-			price: form.price,
-			shop: form.shop,
-			acquired_as: form.acquired_as
-		};
-	}
-
-	async function searchDiscogs() {
-		const query = albumQuery.trim();
-		if (!pending || pending.target.kind !== 'new' || searching || !query) return;
-		searching = true;
-		try {
-			const found = await searchAlbums(fetch, query, pending.barcode, form.format);
-			if (found.length === 0) {
-				notice = { tone: 'warning', text: `Discogs nie zna „${query}”.` };
-				return;
-			}
-			notice = null;
-			pending.candidates = found;
-			pending.errors = [];
-			pick(0);
-		} catch (err) {
-			notice = { tone: 'warning', text: errorMessage(err) };
-		} finally {
-			searching = false;
-		}
-	}
-
-	function fillIn(barcode: string) {
-		notice = null;
-		openManual(barcode);
-	}
-
-	async function handle(raw: string) {
+	/** Every scan opens its own add page, which says what the barcode turned out to be. */
+	async function open(raw: string, manual = false) {
 		const barcode = cleanBarcode(raw);
-		if (!barcode || busy || pending) return;
+		if (!barcode || leaving) return;
 		if (!looksLikeBarcode(barcode)) {
-			notice = { tone: 'warning', text: `„${raw.trim()}” nie wygląda na kod kreskowy.` };
+			notice = `„${raw.trim()}” nie wygląda na kod kreskowy.`;
 			return;
 		}
-		busy = barcode;
+		leaving = true;
 		notice = null;
 		code = '';
-		try {
-			const r = await resolveScan(fetch, barcode);
-			if (r.kind === 'queued') {
-				log(r.barcode, 'queued', 'Brak danych, do uzupełnienia', '/scan/queue');
-				notice = {
-					tone: 'warning',
-					text: `Nie znaleziono ${r.barcode}. Kod czeka w kolejce do uzupełnienia.`,
-					manual: r.barcode
-				};
-				void countQueue();
-				finish(r.barcode);
-			} else {
-				open(r);
-			}
-		} catch (err) {
-			notice = { tone: 'warning', text: errorMessage(err) };
-			finish(barcode);
-		} finally {
-			busy = null;
-		}
+		await goto(`/scan/${encodeURIComponent(barcode)}${manual ? '?manual=1' : ''}`);
 	}
 
 	function fromCamera(barcode: string) {
 		if (!guard.accepts(barcode, performance.now())) return;
-		fromKeyboard = false;
-		void handle(barcode);
-	}
-
-	function fromInput() {
-		fromKeyboard = true;
-		void handle(code);
-	}
-
-	async function save() {
-		if (!pending || saving) return;
-		const current = pending;
-		const next = wedgeBarcodeIn(form.price);
-		if (next) form.price = '';
-		saving = true;
-		issue = null;
-		try {
-			const saved = await saveScan(fetch, current.target, form, current.key);
-			sticky = { shop: form.shop.trim(), acquired_as: form.acquired_as };
-			saveSticky(storage(), sticky);
-			const price =
-				saved.copy.price_cents === null ? '' : ` · ${formatPLN(saved.copy.price_cents)}`;
-			log(current.barcode, 'added', saved.titleName + price, `/copies/${saved.copy.id}`);
-			notice = { tone: 'quiet', text: `Dodano: ${saved.titleName}.` };
-			if (current.target.kind === 'new' && queued) void countQueue();
-			finish(current.barcode);
-			if (next) {
-				fromKeyboard = true;
-				void handle(next);
-			}
-		} catch (err) {
-			issue =
-				err instanceof FormRejected
-					? { field: err.field, message: err.message }
-					: {
-							field: err instanceof ApiError ? (err.field ?? '') : '',
-							message: errorMessage(err)
-						};
-			if (next) {
-				notice = {
-					tone: 'warning',
-					text: `Kod ${next} nie został sprawdzony: zeskanuj go ponownie.`
-				};
-			}
-		} finally {
-			saving = false;
-		}
-	}
-
-	function skip() {
-		if (!pending) return;
-		log(pending.barcode, 'skipped', 'Nie dodano');
-		notice = null;
-		finish(pending.barcode);
+		void open(barcode);
 	}
 
 	onMount(() => {
-		sticky = loadSticky(storage());
 		void countQueue();
+		// Links from before the add page existed: /scan?barcode=…[&manual=1].
 		const preset = page.url.searchParams.get('barcode');
-		if (!preset) return;
-		if (page.url.searchParams.get('manual') === '1') {
-			openManual(cleanBarcode(preset));
-		} else {
-			fromKeyboard = true;
-			void handle(preset);
-		}
+		if (preset) void open(preset, page.url.searchParams.get('manual') === '1');
+		else document.getElementById('scan-code')?.focus();
 	});
 </script>
 
@@ -295,7 +65,7 @@
 
 <PageHeader
 	title="Skanuj"
-	description="Aparat albo czytnik kodów: każdy kod trafia do kolekcji albo do kolejki."
+	description="Aparat albo czytnik kodów: każdy kod otwiera stronę, na której go dodasz."
 >
 	{#snippet actions()}
 		<Button href="/scan/queue">
@@ -305,14 +75,14 @@
 </PageHeader>
 
 <div class="content">
-	<BarcodeCamera paused={busy !== null || pending !== null} ondetect={fromCamera} />
+	<BarcodeCamera paused={leaving} ondetect={fromCamera} />
 
 	<form
 		class="manual"
 		novalidate
 		onsubmit={(e) => {
 			e.preventDefault();
-			fromInput();
+			void open(code);
 		}}
 	>
 		<Field
@@ -322,68 +92,20 @@
 			inputmode="numeric"
 			enterkeyhint="search"
 			autocomplete="off"
-			disabled={pending !== null}
+			disabled={leaving}
 			bind:value={code}
 		/>
-		<Button type="submit" loading={busy !== null} disabled={pending !== null}>Szukaj</Button>
+		<Button type="submit" loading={leaving}>Szukaj</Button>
 	</form>
 
-	{#if busy}
-		<Callout tone="quiet" live>Szukam {busy}…</Callout>
-	{/if}
-
-	{#if pending && pending.target.kind === 'new' && form.kind === 'music'}
-		<form
-			class="manual"
-			novalidate
-			aria-label="Szukaj płyty w Discogs"
-			onsubmit={(e) => {
-				e.preventDefault();
-				void searchDiscogs();
-			}}
-		>
-			<Field
-				id="scan-album"
-				label="Szukaj w Discogs"
-				hint="Wykonawca i tytuł, np. Taco Hemingway 1-800-Oświecenie. Wybrane wydanie uzupełni pozycję."
-				enterkeyhint="search"
-				autocomplete="off"
-				bind:value={albumQuery}
-			/>
-			<Button type="submit" loading={searching} disabled={!albumQuery.trim()}>Szukaj</Button>
-		</form>
-	{/if}
-
-	{#if pending}
-		<ScanConfirm
-			barcode={pending.barcode}
-			target={pending.target}
-			candidates={pending.candidates}
-			picked={pending.picked}
-			errors={pending.errors}
-			bind:form
-			{issue}
-			{saving}
-			onpick={pick}
-			onsave={save}
-			onskip={skip}
-		/>
-	{/if}
-
 	{#if notice}
-		<Callout tone={notice.tone} live>{notice.text}</Callout>
-		{#if notice.manual && !pending}
-			{@const barcode = notice.manual}
-			<div>
-				<Button onclick={() => fillIn(barcode)}>Uzupełnij teraz</Button>
-			</div>
-		{/if}
+		<Callout tone="warning" live>{notice}</Callout>
 	{/if}
 
-	{#if recent.length > 0}
+	{#if recentScans.list.length > 0}
 		<Section title="Ostatnie skany">
 			<ObjectList>
-				{#each recent as r (r.id)}
+				{#each recentScans.list as r (r.id)}
 					<ObjectRow href={r.href}>
 						{#snippet main()}
 							<span class="code">{r.barcode}</span>

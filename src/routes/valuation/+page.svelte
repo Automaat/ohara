@@ -160,7 +160,9 @@
 						Ostatnia wycena: <RelativeTime value={lastValuation} locale="pl" />
 					</p>
 				{/if}
-				<p class="status">Wydano na zakup: {formatPLN(summary.spent_cents)}</p>
+				<p class="status">
+					Wydano na zakup: <span class="price">{formatPLN(summary.spent_cents)}</span>
+				</p>
 			</div>
 		</Section>
 	{/if}

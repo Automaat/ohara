@@ -61,8 +61,23 @@
 	--sui-primitive-info-dark-tint: #3a2230;
 
 	--ohara-heading: #1f3b33;
+	/* A selected chip: bottle green in light, powder pink in dark, as the collection mockups
+	   draw them. */
+	--ohara-selected: #1f3b33;
+	--ohara-selected-hover: #2b4a41;
+	--ohara-selected-pressed: #172e28;
+	--ohara-on-selected: #f4c6cc;
 	--sui-border-subtle: #e6cbc6;
 	--sui-border-band: #e6cbc6;
+	/* Fields and segmented tracks sit on inset, as the README says. Hover lightens the field
+	   toward the surface, so a placeholder keeps its contrast. */
+	--sui-control-bg: var(--sui-surface-inset);
+	--sui-field-hover: color-mix(in srgb, var(--sui-surface-base) 35%, var(--sui-surface-inset));
+	--sui-field-danger-hover: color-mix(in srgb, var(--sui-danger) 4.5%, var(--sui-surface-inset));
+	--sui-segment-track: var(--sui-surface-inset);
+	--sui-segment-hover: color-mix(in srgb, var(--sui-surface-base) 60%, transparent);
+	/* A count's ground: SUI's hover veil over the canvas leaves muted digits under 4.5:1. */
+	--sui-local-count-ground: var(--sui-surface-inset);
 	--sui-brand-action: #b4245d;
 	--sui-brand-action-hover: #9e1f51;
 	--sui-brand-action-pressed: #8a1b47;
@@ -83,8 +98,18 @@
 :root[data-theme='dark'],
 [data-sui-theme='dark'] {
 	--ohara-heading: #f4c6cc;
+	--ohara-selected: #f4c6cc;
+	--ohara-selected-hover: #f7d5d9;
+	--ohara-selected-pressed: #efb3bb;
+	--ohara-on-selected: #1f3b33;
 	--sui-border-subtle: #2b4038;
 	--sui-border-band: #2b4038;
+	--sui-control-bg: var(--sui-surface-inset);
+	--sui-field-hover: color-mix(in srgb, #ffffff 3.4%, var(--sui-surface-inset));
+	--sui-field-danger-hover: color-mix(in srgb, var(--sui-danger) 6%, var(--sui-surface-inset));
+	--sui-segment-track: var(--sui-surface-inset);
+	--sui-segment-hover: var(--sui-interactive-hover-layer);
+	--sui-local-count-ground: var(--sui-surface-inset);
 	--sui-brand-action: #f2779f;
 	--sui-brand-action-hover: #f48eaf;
 	--sui-brand-action-pressed: #f6a5c0;
@@ -98,16 +123,26 @@
 	--sui-sidebar-bg: var(--sui-surface-inset);
 	--sui-sidebar-item-hover: color-mix(in srgb, #ffffff 4%, var(--sui-sidebar-bg));
 	--sui-sidebar-item-pressed: color-mix(in srgb, #ffffff 8%, var(--sui-sidebar-bg));
-	--sui-sidebar-active-bg: #f4c6cc;
-	--sui-sidebar-active-ink: #1f3b33;
+	--sui-sidebar-active-bg: #1f3b33;
+	--sui-sidebar-active-ink: #f4c6cc;
 	--sui-chart-1: #f4c6cc;
 }
 
 @media (prefers-color-scheme: dark) {
 	:root:not([data-theme], [data-sui-theme]) {
 		--ohara-heading: #f4c6cc;
+		--ohara-selected: #f4c6cc;
+		--ohara-selected-hover: #f7d5d9;
+		--ohara-selected-pressed: #efb3bb;
+		--ohara-on-selected: #1f3b33;
 		--sui-border-subtle: #2b4038;
 		--sui-border-band: #2b4038;
+		--sui-control-bg: var(--sui-surface-inset);
+		--sui-field-hover: color-mix(in srgb, #ffffff 3.4%, var(--sui-surface-inset));
+		--sui-field-danger-hover: color-mix(in srgb, var(--sui-danger) 6%, var(--sui-surface-inset));
+		--sui-segment-track: var(--sui-surface-inset);
+		--sui-segment-hover: var(--sui-interactive-hover-layer);
+		--sui-local-count-ground: var(--sui-surface-inset);
 		--sui-brand-action: #f2779f;
 		--sui-brand-action-hover: #f48eaf;
 		--sui-brand-action-pressed: #f6a5c0;
@@ -121,8 +156,8 @@
 		--sui-sidebar-bg: var(--sui-surface-inset);
 		--sui-sidebar-item-hover: color-mix(in srgb, #ffffff 4%, var(--sui-sidebar-bg));
 		--sui-sidebar-item-pressed: color-mix(in srgb, #ffffff 8%, var(--sui-sidebar-bg));
-		--sui-sidebar-active-bg: #f4c6cc;
-		--sui-sidebar-active-ink: #1f3b33;
+		--sui-sidebar-active-bg: #1f3b33;
+		--sui-sidebar-active-ink: #f4c6cc;
 		--sui-chart-1: #f4c6cc;
 	}
 }
@@ -136,6 +171,12 @@
 
 :root .sui-page-header .sui-page-header-title {
 	color: var(--ohara-heading);
+}
+
+/* The current nav item's plate is bottle green in both themes, so its focus ring takes the
+   raspberry focus colour where SUI would draw it in the row's own ink. */
+:root .sui-side-nav .sui-side-nav-row[aria-current='page']:focus-visible {
+	outline-color: var(--sui-sidebar-focus);
 }
 
 /* Years, prices and other numbers in facts line up in Plus Jakarta Sans's tabular figures. SUI's

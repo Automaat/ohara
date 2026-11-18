@@ -172,6 +172,16 @@ export const maxPriceCents = 100_000_000;
 const pln = new Intl.NumberFormat('pl-PL', { style: 'currency', currency: 'PLN' });
 
 /** Grosze as "49,99 zł"; null as an empty string. */
+/** Hint under a purchase price field: blank, not 0, is an unknown price. */
+export const priceHint = 'Nie pamiętasz? Zostaw puste. 0 zł liczy się jako cena.';
+
+/** What owned copies cost, and how many still have no price to fill in. */
+export function spentLabel(t: Totals): string {
+	const unpriced = t.owned - t.priced;
+	const spent = formatPLN(t.spent_cents);
+	return unpriced > 0 ? `${spent} (${unpriced} bez ceny)` : spent;
+}
+
 export function formatPLN(cents: number | null | undefined): string {
 	return cents == null ? '' : pln.format(cents / 100);
 }

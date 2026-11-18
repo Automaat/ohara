@@ -13,6 +13,7 @@ import (
 
 	"github.com/Automaat/ohara/backend-go/internal/discogs"
 	"github.com/Automaat/ohara/backend-go/internal/lookup"
+	"github.com/Automaat/ohara/backend-go/internal/lookup/movie"
 	"github.com/Automaat/ohara/backend-go/internal/lookup/music"
 )
 
@@ -33,6 +34,50 @@ const allDown = "5900000000039"
 
 // unknown is known to no source.
 const unknown = "5900000000046"
+
+// shopOnly is known only to the shop catalog, which names the product.
+const shopOnly = "5900000000053"
+
+// shopDown makes the shop catalog fail for a barcode no source knows.
+const shopDown = "5900000000060"
+
+// tacoCD is what a Discogs search for the shop's product name finds: the
+// standard pressing has no barcode on Discogs.
+var tacoCD = []map[string]any{
+	{
+		"id": 28352776, "title": "Taco Hemingway - 1-800-OŚWIECENIE", "year": "2023", "country": "Poland",
+		"format": []string{"CD", "Album", "Limited Edition"}, "barcode": []string{"602458447675"},
+	},
+	{
+		"id": 28352929, "title": "Taco Hemingway - 1-800-OŚWIECENIE", "year": "2023", "country": "Poland",
+		"format": []string{"CD", "Album"},
+	},
+}
+
+// shopNames answers like movie.Allegro: shopOnly is a listed product,
+// shopDown an outage, anything else no product.
+type shopNames struct {
+	mu    sync.Mutex
+	names []string
+	calls int
+}
+
+func (s *shopNames) Products(_ context.Context, code string) ([]movie.Product, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls++
+	switch code {
+	case shopOnly:
+		out := make([]movie.Product, 0, len(s.names))
+		for _, n := range s.names {
+			out = append(out, movie.Product{Source: "allegro", Name: n})
+		}
+		return out, nil
+	case shopDown:
+		return nil, errors.New("allegro: down")
+	}
+	return []movie.Product{}, nil
+}
 
 // discogsReleases follow the documented /database/search schema, trimmed
 // to the fields the provider reads.
@@ -89,6 +134,15 @@ func newUpstream(t *testing.T) *upstream {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /database/search", func(w http.ResponseWriter, r *http.Request) {
 		code := r.URL.Query().Get("barcode")
+		if q := r.URL.Query().Get("q"); q != "" {
+			u.hit("discogs q=" + q + " format=" + r.URL.Query().Get("format"))
+			if q == "1-800-Oświecenie Taco Hemingway" || q == "Taco Hemingway 1-800-Oświecenie" {
+				writeJSON(w, map[string]any{"results": tacoCD})
+				return
+			}
+			writeJSON(w, map[string]any{"results": []any{}})
+			return
+		}
 		u.hit("discogs " + code)
 		if r.Header.Get("Authorization") != "Discogs token=secret" || !strings.HasPrefix(r.Header.Get("User-Agent"), "ohara/") {
 			http.Error(w, `{"message":"You must authenticate"}`, http.StatusUnauthorized)
@@ -295,5 +349,84 @@ func TestDiscogsErrorsHideTheToken(t *testing.T) {
 func TestParseRejectsGarbage(t *testing.T) {
 	if _, err := (&music.Provider{}).Parse(twoPressings, json.RawMessage(`{"discogs":1}`)); err == nil {
 		t.Fatal("garbage parsed")
+	}
+}
+
+func TestShopNameFindsDiscogsReleases(t *testing.T) {
+	tests := []struct {
+		name, query, format string
+		names               []string
+		found               int
+	}{
+		{
+			name: "allegro listing", names: []string{"1-800-Oświecenie Taco Hemingway CD"},
+			query: "1-800-Oświecenie Taco Hemingway", format: "CD", found: 2,
+		},
+		{
+			name: "listing words dropped", names: []string{"Taco Hemingway 1-800-Oświecenie (Płyta CD) NOWA w folii"},
+			query: "Taco Hemingway 1-800-Oświecenie", format: "CD", found: 2,
+		},
+		{name: "vinyl", names: []string{"Kind of Blue Winyl LP"}, query: "Kind of Blue", format: "Vinyl"},
+		{
+			name: "first usable name", names: []string{" CD ", "1-800-Oświecenie Taco Hemingway"},
+			query: "1-800-Oświecenie Taco Hemingway", found: 2,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			u := newUpstream(t)
+			p := u.provider(true)
+			p.Names = &shopNames{names: tt.names}
+			res := lookupWith(t, p, shopOnly)
+			if len(res.Errors) != 0 || len(res.Candidates) != tt.found {
+				t.Fatalf("result = %+v", res)
+			}
+			if u.count("discogs q="+tt.query+" format="+tt.format) != 1 {
+				t.Fatalf("discogs hits = %v", u.hits)
+			}
+			if tt.found == 0 {
+				return
+			}
+			if !res.NeedsConfirmation {
+				t.Fatal("a release found by name, not barcode, must ask the user")
+			}
+			c := res.Candidates[1]
+			if c.Title.Name != "1-800-OŚWIECENIE" || c.Title.Authors[0] != "Taco Hemingway" ||
+				c.Edition.Barcode != shopOnly || c.Edition.DiscogsReleaseID == nil || *c.Edition.DiscogsReleaseID != 28352929 ||
+				c.Confidence >= lookup.ConfirmThreshold {
+				t.Fatalf("candidate = %+v", c)
+			}
+		})
+	}
+}
+
+func TestShopNameOnlyWhenNoSourceKnowsTheBarcode(t *testing.T) {
+	u := newUpstream(t)
+	names := &shopNames{names: []string{"Taco Hemingway 1-800-Oświecenie"}}
+	p := u.provider(true)
+	p.Names = names
+	if res := lookupWith(t, p, twoPressings); len(res.Candidates) != 2 {
+		t.Fatalf("result = %+v", res)
+	}
+	if res := lookupWith(t, p, mbOnly); len(res.Candidates) != 1 {
+		t.Fatalf("result = %+v", res)
+	}
+	if names.calls != 0 {
+		t.Fatalf("shop asked %d times for barcodes Discogs or MusicBrainz knew", names.calls)
+	}
+
+	noDiscogs := u.provider(false)
+	noDiscogs.Names = names
+	if res := lookupWith(t, noDiscogs, shopOnly); len(res.Candidates) != 0 || names.calls != 0 {
+		t.Fatalf("without Discogs: result = %+v, shop calls %d", res, names.calls)
+	}
+}
+
+func TestShopOutageFailsTheFetch(t *testing.T) {
+	u := newUpstream(t)
+	p := u.provider(true)
+	p.Names = &shopNames{}
+	if _, err := p.Fetch(context.Background(), shopDown); err == nil {
+		t.Fatal("a shop outage on an unknown barcode must fail the fetch, so the miss is not cached")
 	}
 }

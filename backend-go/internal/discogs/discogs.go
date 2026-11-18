@@ -65,7 +65,23 @@ func (e StatusError) Error() string { return "discogs: unexpected status " + str
 // SearchBarcode returns the releases whose barcode Discogs matches with
 // code; none is an empty slice and a nil error.
 func (c *Client) SearchBarcode(ctx context.Context, code string) ([]Release, error) {
-	q := url.Values{"barcode": {code}, "type": {"release"}, "per_page": {strconv.Itoa(maxResults)}}
+	return c.search(ctx, url.Values{"barcode": {code}})
+}
+
+// SearchText returns the releases a full-text search for query finds,
+// limited to format ("CD", "Vinyl", "Cassette") unless it is empty; none
+// is an empty slice and a nil error.
+func (c *Client) SearchText(ctx context.Context, query, format string) ([]Release, error) {
+	q := url.Values{"q": {query}}
+	if format != "" {
+		q.Set("format", format)
+	}
+	return c.search(ctx, q)
+}
+
+func (c *Client) search(ctx context.Context, q url.Values) ([]Release, error) {
+	q.Set("type", "release")
+	q.Set("per_page", strconv.Itoa(maxResults))
 	var r struct {
 		Results *[]Release `json:"results"`
 	}

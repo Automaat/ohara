@@ -17,6 +17,7 @@ import {
 	titlePayload,
 	titleToForm,
 	type Edition,
+	spentLabel,
 	type Title
 } from './collection';
 
@@ -350,5 +351,24 @@ describe('copy form', () => {
 	])('rejects %j on %s', (patch, field) => {
 		const parsed = copyPayload({ ...copyToForm(null), ...patch }, 3);
 		expect(!parsed.ok && parsed.issue.field).toBe(field);
+	});
+});
+
+describe('spentLabel', () => {
+	const base = { copies: 3, owned: 3, wishlist: 0, priced: 3, spent_cents: 12000 };
+	it.each([
+		{ name: 'every owned copy priced', totals: base, want: /^120,00\s*zł$/ },
+		{
+			name: 'some without a price',
+			totals: { ...base, priced: 1 },
+			want: /^120,00\s*zł \(2 bez ceny\)$/
+		},
+		{
+			name: 'none priced',
+			totals: { ...base, priced: 0, spent_cents: 0 },
+			want: /^0,00\s*zł \(3 bez ceny\)$/
+		}
+	])('$name', ({ totals, want }) => {
+		expect(spentLabel(totals)).toMatch(want);
 	});
 });

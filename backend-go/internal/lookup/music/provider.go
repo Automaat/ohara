@@ -1,7 +1,10 @@
 // Package music resolves a CD, vinyl or cassette barcode to album
 // releases. Discogs is asked first, since its release is what the
 // valuation prices; when it finds nothing, fails or has no token,
-// MusicBrainz answers instead, with covers from the Cover Art Archive. One
+// MusicBrainz answers instead, with covers from the Cover Art Archive.
+// When neither knows the barcode, a shop catalog (Allegro) names the
+// product and Discogs is searched for that name; those releases always go
+// to the user to confirm. One
 // barcode often maps to several releases (pressings, countries), so each
 // becomes a candidate and the user picks the edition.
 package music
@@ -19,12 +22,20 @@ import (
 	"github.com/Automaat/ohara/backend-go/internal/barcode"
 	"github.com/Automaat/ohara/backend-go/internal/discogs"
 	"github.com/Automaat/ohara/backend-go/internal/lookup"
+	"github.com/Automaat/ohara/backend-go/internal/lookup/movie"
 )
 
-// DiscogsSearcher finds Discogs releases by barcode; *discogs.Client
-// implements it.
+// DiscogsSearcher finds Discogs releases by barcode or by name;
+// *discogs.Client implements it.
 type DiscogsSearcher interface {
 	SearchBarcode(ctx context.Context, code string) ([]discogs.Release, error)
+	SearchText(ctx context.Context, query, format string) ([]discogs.Release, error)
+}
+
+// ProductNamer names the products a shop catalog lists for a barcode;
+// *movie.Allegro implements it.
+type ProductNamer interface {
+	Products(ctx context.Context, code string) ([]movie.Product, error)
 }
 
 // ReleaseSearcher finds MusicBrainz releases by barcode.
@@ -39,20 +50,24 @@ type CoverFinder interface {
 
 // Provider is the "music" lookup provider. A nil Discogs skips it (no
 // token); a nil MusicBrainz leaves Discogs alone; a nil Covers shows
-// MusicBrainz releases without covers.
+// MusicBrainz releases without covers; a nil Names, or a nil Discogs, skips
+// the search by product name.
 type Provider struct {
 	Discogs     DiscogsSearcher
 	MusicBrainz ReleaseSearcher
 	Covers      CoverFinder
+	Names       ProductNamer
 }
 
 // maxCovers bounds the Cover Art Archive requests per barcode.
 const maxCovers = 3
 
-// Raw is the provider's cached response.
+// Raw is the provider's cached response. Query is the product name
+// Discogs was searched for when no source knew the barcode.
 type Raw struct {
 	Discogs     []discogs.Release `json:"discogs"`
 	MusicBrainz []MBRelease       `json:"musicbrainz"`
+	Query       string            `json:"query,omitempty"`
 }
 
 // Name is "music".
@@ -61,7 +76,8 @@ func (*Provider) Name() string { return "music" }
 // Accepts every barcode except ISBNs.
 func (*Provider) Accepts(code string) bool { return !barcode.IsBook(code) }
 
-// Fetch asks Discogs, then MusicBrainz when Discogs found nothing. With no
+// Fetch asks Discogs, then MusicBrainz when Discogs found nothing, then
+// searches Discogs for the shop catalog's product name. With no
 // release found, a failed source fails the fetch so a "no match" built on
 // an outage is not cached; with releases found, the failures come back as
 // a *lookup.PartialError.
@@ -83,6 +99,14 @@ func (p *Provider) Fetch(ctx context.Context, code string) (json.RawMessage, err
 		} else {
 			raw.MusicBrainz = rel
 			errs = append(errs, p.addCovers(ctx, raw.MusicBrainz))
+		}
+	}
+	if len(raw.Discogs) == 0 && len(raw.MusicBrainz) == 0 && p.Names != nil && p.Discogs != nil {
+		rel, query, err := p.searchByName(ctx, code)
+		if err != nil {
+			errs = append(errs, err)
+		} else {
+			raw.Discogs, raw.Query = rel, query
 		}
 	}
 	failed := errors.Join(errs...)
@@ -110,6 +134,61 @@ func (p *Provider) searchDiscogs(ctx context.Context, code string) ([]discogs.Re
 		return p.Discogs.SearchBarcode(ctx, upc)
 	}
 	return rel, nil
+}
+
+// maxNamed bounds the releases a product-name search keeps: a name
+// matches every pressing of an album.
+const maxNamed = 5
+
+// searchByName asks the shop catalog what code is and searches Discogs for
+// the first product name that is still a query once cleaned.
+func (p *Provider) searchByName(ctx context.Context, code string) ([]discogs.Release, string, error) {
+	products, err := p.Names.Products(ctx, code)
+	if err != nil {
+		return nil, "", err
+	}
+	for _, prod := range products {
+		query, format := productQuery(prod.Name)
+		if query == "" {
+			continue
+		}
+		rel, err := p.Discogs.SearchText(ctx, query, format)
+		if err != nil {
+			return nil, "", err
+		}
+		return rel[:min(len(rel), maxNamed)], query, nil
+	}
+	return []discogs.Release{}, "", nil
+}
+
+// mediumWords are shop-listing words that name the medium or the
+// listing's state, not the album; the first medium word sets the format.
+var mediumWords = map[string]string{
+	"cd": "CD", "2cd": "CD", "płyta": "", "plyta": "", "album": "",
+	"winyl": "Vinyl", "vinyl": "Vinyl", "lp": "Vinyl", "2lp": "Vinyl", "kaseta": "Cassette", "mc": "Cassette",
+	"nowa": "", "nowy": "", "folia": "", "folii": "", "w": "", "digipack": "", "digipak": "", "box": "",
+}
+
+// productQuery strips medium and listing words from a shop product name
+// ("1-800-Oświecenie Taco Hemingway CD") and returns the rest as a Discogs
+// query with the medium as its format filter.
+func productQuery(name string) (string, string) {
+	var kept []string
+	format := ""
+	for w := range strings.FieldsSeq(name) {
+		key := strings.ToLower(strings.Trim(w, "()[]{},.;:!\"'"))
+		if f, ok := mediumWords[key]; ok {
+			if format == "" {
+				format = f
+			}
+			continue
+		}
+		if key == "" {
+			continue
+		}
+		kept = append(kept, w)
+	}
+	return strings.Join(kept, " "), format
 }
 
 func (p *Provider) addCovers(ctx context.Context, releases []MBRelease) error {

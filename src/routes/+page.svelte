@@ -18,6 +18,7 @@
 		editionSummary,
 		formatPLN,
 		kindLabels,
+		spentLabel,
 		statusLabels,
 		type CollectionFilter,
 		type CollectionItem,
@@ -103,7 +104,7 @@
 				{ label: 'Lista życzeń', value: totals ? String(totals.wishlist) : null, mono: true },
 				{
 					label: 'Wydano',
-					value: totals ? `${formatPLN(totals.spent_cents)} (${totals.priced} z ceną)` : null,
+					value: totals ? spentLabel(totals) : null,
 					mono: true
 				},
 				{ label: 'Wersja', value: info?.version, mono: true }

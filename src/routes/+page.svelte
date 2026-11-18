@@ -36,6 +36,7 @@
 	} from '#lib/collection.js';
 	import { collectionSortOptions, sortCopies, type CollectionSort } from '#lib/collection-sort.js';
 	import { purchaseDate, resultCount } from '#lib/polish.js';
+	import CollectionRows from '#lib/components/CollectionRows.svelte';
 	import type { Snapshot } from './$types';
 
 	type Row = CollectionItem & Record<string, unknown>;
@@ -138,7 +139,7 @@
 		{ key: 'purchased_on', label: 'Kupiono', nowrap: true }
 	];
 
-	const rows = $derived((view?.items ?? []) as Row[]);
+	const rows = $derived(sortCopies((view?.items ?? []) as Row[], sort));
 	const all = 'all';
 	const activeFilters = $derived(
 		(
@@ -190,6 +191,7 @@
 	</div>
 
 	<ListToolbar
+		class="collection-toolbar"
 		searchLabel="Szukaj w kolekcji"
 		placeholder="Tytuł, autor, sklep lub kod kreskowy"
 		bind:query
@@ -247,10 +249,14 @@
 		<p class="metadata result-count" aria-hidden="true">{resultCount(rows.length)}</p>
 	{/if}
 
+	<div class="mobile-results">
+		<CollectionRows {rows} {loading} {failure} onretry={load} {empty} />
+	</div>
 	<DataTable
+		class="desktop-results"
 		aria-label="Egzemplarze w kolekcji"
 		{columns}
-		rows={sortCopies(rows, sort)}
+		{rows}
 		rowHeader
 		rowKey={(r) => r.copy_id}
 		loading={loading && !view}
@@ -262,6 +268,7 @@
 		refreshingLabel="Odświeżanie…"
 		emptyLabel="Brak pozycji"
 		scrollHint="Przewiń tabelę w bok"
+		{empty}
 	>
 		{#snippet cell(row, column)}
 			{#if column.key === 'name'}
@@ -269,7 +276,9 @@
 			{:else if column.key === 'kind'}
 				{kindLabels[row.kind]}
 			{:else if column.key === 'edition_id'}
-				<Link href={`/editions/${row.edition_id}`}>{editionSummary(row)}</Link>
+				<Link href={`/editions/${row.edition_id}`}>
+					{editionSummary({ ...row, barcode: null })}
+				</Link>
 			{:else if column.key === 'status'}
 				<Link href={`/copies/${row.copy_id}`}>
 					<Pill tone={row.status === 'owned' ? 'success' : 'neutral'}>
@@ -290,26 +299,24 @@
 				{/if}
 			{/if}
 		{/snippet}
-		{#snippet empty()}
-			{#if activeFilters.length}
-				<EmptyState title="Nic nie pasuje" description="Żaden egzemplarz nie spełnia filtrów.">
-					{#snippet action()}
-						<Button onclick={clearFilters}>Wyczyść filtry</Button>
-					{/snippet}
-				</EmptyState>
-			{:else}
-				<EmptyState
-					title="Kolekcja jest pusta"
-					description="Nie dodano jeszcze żadnego egzemplarza."
-				>
-					{#snippet action()}
-						<Button tone="signal" href="/titles/new">Dodaj pierwszy tytuł</Button>
-					{/snippet}
-				</EmptyState>
-			{/if}
-		{/snippet}
 	</DataTable>
 </div>
+
+{#snippet empty()}
+	{#if activeFilters.length}
+		<EmptyState title="Nic nie pasuje" description="Żaden egzemplarz nie spełnia filtrów.">
+			{#snippet action()}
+				<Button onclick={clearFilters}>Wyczyść filtry</Button>
+			{/snippet}
+		</EmptyState>
+	{:else}
+		<EmptyState title="Kolekcja jest pusta" description="Nie dodano jeszcze żadnego egzemplarza.">
+			{#snippet action()}
+				<Button tone="signal" href="/titles/new">Dodaj pierwszy tytuł</Button>
+			{/snippet}
+		</EmptyState>
+	{/if}
+{/snippet}
 
 <style>
 	.collection-sort {
@@ -318,6 +325,7 @@
 
 	.content {
 		display: grid;
+		grid-template-columns: minmax(0, 1fr);
 		gap: 1rem;
 		padding: var(--sui-pane-gutter, 1.5rem);
 	}
@@ -332,5 +340,35 @@
 	.result-count {
 		font-family: var(--sui-sans, sans-serif);
 		margin: 0;
+	}
+	.mobile-results {
+		display: none;
+	}
+
+	@media (max-width: 640px) {
+		.content :global(.desktop-results) {
+			display: none;
+		}
+
+		.mobile-results {
+			display: block;
+		}
+
+		.content :global(.collection-toolbar .sui-list-toolbar-search) {
+			flex-basis: 100%;
+		}
+
+		.content :global(.collection-toolbar .sui-list-toolbar-field) {
+			flex-basis: 100%;
+		}
+
+		.content :global(.collection-toolbar .sui-list-toolbar-segments) {
+			display: none;
+		}
+
+		.content :global(.collection-toolbar .sui-list-toolbar-folded),
+		.content :global(.collection-toolbar .sui-list-toolbar-dot) {
+			display: block;
+		}
 	}
 </style>

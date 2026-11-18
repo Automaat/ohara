@@ -94,6 +94,7 @@ export type CollectionItem = {
 	polish_title: string | null;
 	year: number | null;
 	cover_url?: string;
+	authors?: string[];
 };
 
 export type Totals = {

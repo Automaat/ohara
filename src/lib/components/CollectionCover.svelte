@@ -2,14 +2,16 @@
 	import { Icon } from '@smykla-skalski/sui';
 	import type { Kind } from '#lib/collection.js';
 
-	let { kind, url }: { kind: Kind; url?: string } = $props();
+	let { kind, url, large = false }: { kind: Kind; url?: string; large?: boolean } = $props();
 	let failedURL = $state<string>();
 	let loadedURL = $state<string>();
 
 	const thumbnail = $derived(
-		url
-			?.replace(/^https:\/\/image\.tmdb\.org\/t\/p\/w342\//, 'https://image.tmdb.org/t/p/w154/')
-			.replace(/^(https:\/\/covers\.openlibrary\.org\/b\/id\/\d+)-L\.jpg$/, '$1-M.jpg')
+		large
+			? url
+			: url
+					?.replace(/^https:\/\/image\.tmdb\.org\/t\/p\/w342\//, 'https://image.tmdb.org/t/p/w154/')
+					.replace(/^(https:\/\/covers\.openlibrary\.org\/b\/id\/\d+)-L\.jpg$/, '$1-M.jpg')
 	);
 </script>
 
@@ -21,8 +23,6 @@
 				src={thumbnail}
 				class:loaded={loadedURL === thumbnail}
 				alt=""
-				width="64"
-				height={kind === 'music' ? 64 : 96}
 				loading="lazy"
 				decoding="async"
 				referrerpolicy="no-referrer"
@@ -38,7 +38,7 @@
 		position: relative;
 		display: grid;
 		place-items: center;
-		inline-size: 4rem;
+		inline-size: var(--collection-cover-width, 4rem);
 		aspect-ratio: 2 / 3;
 		border: 1px solid var(--sui-border-divider);
 		border-radius: var(--sui-radius-control);

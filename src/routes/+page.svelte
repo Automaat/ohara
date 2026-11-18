@@ -57,26 +57,29 @@
 	let loading = $state(true);
 	let seq = 0;
 	let restoreScroll: [number, number] | undefined;
-	let loadingTotals = false;
+	let pendingTotals: Promise<void> | undefined;
 
 	export const snapshot: Snapshot<[number, number]> = {
 		capture: () => [window.scrollX, window.scrollY],
 		restore: (position) => (restoreScroll = position)
 	};
 
-	async function loadTotals() {
-		if (totals || loadingTotals) return;
-		loadingTotals = true;
-		const full = await request<CollectionView>(fetch, 'GET', '/api/collection').catch(() => null);
-		loadingTotals = false;
-		if (full) totals ??= full.totals;
+	function loadTotals() {
+		if (totals) return;
+		pendingTotals ??= request<CollectionView>(fetch, 'GET', '/api/collection')
+			.catch(() => null)
+			.then((full) => {
+				if (full) totals ??= full.totals;
+				pendingTotals = undefined;
+			});
+		return pendingTotals;
 	}
 
 	async function load() {
 		const mine = ++seq;
 		const url = collectionURL(filter);
 		loading = true;
-		if (url !== '/api/collection') void loadTotals();
+		const totalsReady = url === '/api/collection' ? undefined : loadTotals();
 		try {
 			const got = await request<CollectionView>(fetch, 'GET', url);
 			if (mine !== seq) return;
@@ -89,6 +92,8 @@
 			if (mine === seq) loading = false;
 		}
 		if (mine === seq && !failure && restoreScroll) {
+			// Shelf totals can wrap and change the height above the table.
+			await totalsReady;
 			await tick();
 			if (mine === seq && restoreScroll) {
 				window.scrollTo(...restoreScroll);

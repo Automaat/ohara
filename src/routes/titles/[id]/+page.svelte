@@ -178,8 +178,10 @@
 							(editionForm = editionToForm(null)),
 							(editionIssue = null),
 							(adding = true)
-						)}>Dodaj wydanie</Button
+						)}
 					>
+						Dodaj wydanie
+					</Button>
 				{/if}
 			{/snippet}
 			{#if adding}
@@ -237,9 +239,9 @@
 			{/if}
 			<div class="actions">
 				<Button tone="ghost" onclick={() => startEdit(t)}>Edytuj tytuł</Button>
-				<Button tone="stop-quiet" onclick={() => ((deleteError = null), (confirmDelete = true))}
-					>Usuń tytuł</Button
-				>
+				<Button tone="stop-quiet" onclick={() => ((deleteError = null), (confirmDelete = true))}>
+					Usuń tytuł
+				</Button>
 			</div>
 			<FormError message={deleteError} />
 			{#if editing}

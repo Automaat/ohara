@@ -180,9 +180,9 @@
 				<Link href={`/editions/${row.edition_id}`}>{editionSummary(row)}</Link>
 			{:else if column.key === 'status'}
 				<Link href={`/copies/${row.copy_id}`}>
-					<Pill tone={row.status === 'owned' ? 'success' : 'neutral'}
-						>{statusLabels[row.status]}</Pill
-					>
+					<Pill tone={row.status === 'owned' ? 'success' : 'neutral'}>
+						{statusLabels[row.status]}
+					</Pill>
 				</Link>
 			{:else if column.key === 'price_cents'}
 				<span class="price">{formatPLN(row.price_cents)}</span>

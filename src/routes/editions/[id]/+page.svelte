@@ -189,8 +189,9 @@
 					<Button
 						tone="add"
 						onclick={() => ((copyForm = copyToForm(null)), (copyIssue = null), (adding = true))}
-						>Dodaj egzemplarz</Button
 					>
+						Dodaj egzemplarz
+					</Button>
 				{/if}
 			{/snippet}
 			{#if adding}
@@ -265,9 +266,9 @@
 					/>
 				{/if}
 				{#if d.discogs_release_id}
-					<Link href={`https://www.discogs.com/release/${d.discogs_release_id}`}
-						>Discogs · {d.discogs_release_id}</Link
-					>
+					<Link href={`https://www.discogs.com/release/${d.discogs_release_id}`}>
+						Discogs · {d.discogs_release_id}
+					</Link>
 				{/if}
 			</Section>
 		{/if}
@@ -280,11 +281,13 @@
 						(editionForm = editionToForm(d)),
 						(editionIssue = null),
 						(editing = true)
-					)}>Edytuj wydanie</Button
+					)}
 				>
-				<Button tone="stop-quiet" onclick={() => ((deleteError = null), (confirmDelete = true))}
-					>Usuń wydanie</Button
-				>
+					Edytuj wydanie
+				</Button>
+				<Button tone="stop-quiet" onclick={() => ((deleteError = null), (confirmDelete = true))}>
+					Usuń wydanie
+				</Button>
 			</div>
 			<FormError message={deleteError} />
 			{#if editing}

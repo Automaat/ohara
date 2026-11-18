@@ -167,11 +167,11 @@
 <div class="content">
 	<FormError message={runError} />
 	{#if status}
-		<p class="status" role="status">
+		<p class="status metadata" role="status">
 			{#if status.scheduled}
 				Automatyczne wyszukiwanie {intervalLabel(status)}.
 			{:else}
-				Automatyczne wyszukiwanie wyłączone (OHARA_DEALS_INTERVAL).
+				Automatyczne wyszukiwanie wyłączone.
 			{/if}
 			{#if !status.telegram}
 				Powiadomienia Telegram wyłączone.
@@ -221,7 +221,7 @@
 					>{row.listing_title || row.url}</Link
 				>
 			{:else if column.key === 'price_cents'}
-				{formatPLN(row.price_cents)}
+				<span class="price">{formatPLN(row.price_cents)}</span>
 			{:else if column.key === 'source'}
 				{sourceLabels[row.source]}{row.acquired_as ? ` · ${acquiredLabels[row.acquired_as]}` : ''}
 			{:else if column.key === 'alert'}

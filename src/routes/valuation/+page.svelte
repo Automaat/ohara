@@ -128,11 +128,11 @@
 <div class="content">
 	<FormError message={runError} />
 	{#if status}
-		<p class="status" role="status">
+		<p class="status metadata" role="status">
 			{#if status.scheduled}
 				Automatyczna wycena {intervalLabel(status)}.
 			{:else}
-				Automatyczna wycena wyłączona (OHARA_VALUATION_INTERVAL).
+				Automatyczna wycena wyłączona.
 			{/if}
 			{#if status.last_finished_at}
 				Ostatnio: <RelativeTime value={status.last_finished_at} locale="pl" />.
@@ -212,7 +212,7 @@
 					<Link href={`/copies/${row.copy_id}`}>{row.title_name}</Link>
 					<span class="meta">{row.format ? formatLabels[row.format] : kindLabels[row.kind]}</span>
 				{:else if column.key === 'price_cents'}
-					{row.price_cents == null ? '—' : formatPLN(row.price_cents)}
+					<span class="price">{row.price_cents == null ? '—' : formatPLN(row.price_cents)}</span>
 				{:else if column.key === 'floor' || column.key === 'mid' || column.key === 'ceiling'}
 					{estimateValue(row[column.key])}
 					<span class="meta">{estimateSource(column.key, row[column.key])}</span>

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
 	centsToInput,
+	collectionSearch,
 	collectionURL,
 	copyPayload,
 	copyToForm,
@@ -14,6 +15,7 @@ import {
 	formatPLN,
 	options,
 	parsePLN,
+	readCollectionFilter,
 	titlePayload,
 	titleToForm,
 	type Edition,
@@ -107,6 +109,26 @@ describe('collectionURL', () => {
 		[{ kind: '', format: '', status: 'wishlist', q: '' }, '/api/collection?status=wishlist']
 	] as const)('%j → %s', (filter, url) => {
 		expect(collectionURL(filter)).toBe(url);
+	});
+});
+
+describe('collection search links', () => {
+	it('restores shareable filters and encodes special characters', () => {
+		const filter = {
+			kind: 'music',
+			format: 'vinyl',
+			status: 'owned',
+			q: 'Łódź + jazz & blues'
+		} as const;
+		expect(readCollectionFilter(new URLSearchParams(collectionSearch(filter)))).toEqual(filter);
+	});
+
+	it('ignores unsupported options without dropping the query', () => {
+		expect(
+			readCollectionFilter(
+				new URLSearchParams('kind=constructor&format=bad&status=owned&q=Solaris')
+			)
+		).toEqual({ kind: '', format: '', status: 'owned', q: 'Solaris' });
 	});
 });
 

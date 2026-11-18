@@ -76,15 +76,18 @@ func scanTitle(row pgx.Row) (Title, error) {
 	return t, err
 }
 
+const editionCoverOverrideURL = `CASE WHEN e.cover_photo IS NOT NULL
+	THEN '/api/editions/' || e.id || '/cover?v=' || extract(epoch FROM e.updated_at) END`
+
 const editionColumns = `e.id, e.title_id, e.barcode, e.label, e.publisher, e.year, e.format,
 	e.pl_subtitles, e.pl_voiceover, e.packaging, e.binding, e.discogs_release_id, e.notes, e.cover_url,
-	e.created_at, e.updated_at, (SELECT count(*) FROM copy c WHERE c.edition_id = e.id)`
+	e.created_at, e.updated_at, (SELECT count(*) FROM copy c WHERE c.edition_id = e.id), ` + editionCoverOverrideURL
 
 func scanEdition(row pgx.Row) (Edition, error) {
 	var e Edition
 	err := row.Scan(&e.ID, &e.TitleID, &e.Barcode, &e.Label, &e.Publisher, &e.Year, &e.Format,
 		&e.PLSubtitles, &e.PLVoiceover, &e.Packaging, &e.Binding, &e.DiscogsReleaseID, &e.Notes, &e.CoverURL,
-		&e.CreatedAt, &e.UpdatedAt, &e.CopyCount)
+		&e.CreatedAt, &e.UpdatedAt, &e.CopyCount, &e.CoverOverrideURL)
 	return e, err
 }
 
@@ -323,6 +326,25 @@ func (s *Store) DeleteEdition(ctx context.Context, id int64) error {
 	return nil
 }
 
+func (s *Store) editionCover(ctx context.Context, id int64) ([]byte, error) {
+	var photo []byte
+	err := s.pool.QueryRow(ctx, `SELECT cover_photo FROM edition WHERE id = $1 AND cover_photo IS NOT NULL`, id).
+		Scan(&photo)
+	return photo, mapErr(err, ErrEditionNotFound, "get edition cover")
+}
+
+func (s *Store) setEditionCover(ctx context.Context, id int64, photo []byte) error {
+	tag, err := s.pool.Exec(ctx, `UPDATE edition SET cover_photo = $2, updated_at = clock_timestamp() WHERE id = $1`,
+		id, photo)
+	if err != nil {
+		return fmt.Errorf("set edition cover: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrEditionNotFound
+	}
+	return nil
+}
+
 // ListCopies returns the copies of editionID.
 func (s *Store) ListCopies(ctx context.Context, editionID int64) ([]Copy, error) {
 	rows, err := s.pool.Query(ctx, `SELECT `+copyColumns+` FROM copy c
@@ -434,6 +456,7 @@ type Item struct {
 	OriginalTitle *string `json:"original_title"`
 	PolishTitle   *string `json:"polish_title"`
 	Year          *int    `json:"year"`
+	CoverURL      *string `json:"cover_url,omitempty"`
 }
 
 func scanItem(row pgx.Row) (Item, error) {
@@ -441,7 +464,7 @@ func scanItem(row pgx.Row) (Item, error) {
 	var purchased *time.Time
 	err := row.Scan(&it.CopyID, &it.Status, &it.PriceCents, &purchased, &it.Shop, &it.AcquiredAs,
 		&it.Condition, &it.EditionID, &it.Barcode, &it.Label, &it.Format, &it.Binding,
-		&it.TitleID, &it.Kind, &it.Name, &it.OriginalTitle, &it.PolishTitle, &it.Year)
+		&it.TitleID, &it.Kind, &it.Name, &it.OriginalTitle, &it.PolishTitle, &it.Year, &it.CoverURL)
 	if purchased != nil {
 		it.PurchasedOn = &Date{*purchased}
 	}
@@ -452,7 +475,8 @@ func scanItem(row pgx.Row) (Item, error) {
 func (s *Store) Collection(ctx context.Context, f Filter) ([]Item, error) {
 	rows, err := s.pool.Query(ctx, `SELECT c.id, c.status, c.price_cents, c.purchased_on, c.shop,
 			c.acquired_as, c.condition, e.id, e.barcode, e.label, e.format, e.binding,
-			t.id, t.kind, t.name, t.original_title, t.polish_title, t.year
+			t.id, t.kind, t.name, t.original_title, t.polish_title, t.year,
+			COALESCE(`+editionCoverOverrideURL+`, e.cover_url, t.cover_url)
 		FROM copy c JOIN edition e ON e.id = c.edition_id JOIN title t ON t.id = e.title_id
 		WHERE ($1 = '' OR t.kind = $1) AND ($2 = '' OR e.format = $2) AND ($3 = '' OR c.status = $3)
 		  AND ($4 = '' OR e.barcode = $4 OR strpos(lower(concat_ws(' ', t.name, t.original_title,

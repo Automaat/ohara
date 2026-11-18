@@ -412,7 +412,7 @@ func TestCollectionViewFiltersAndTotals(t *testing.T) {
 	}
 
 	for _, q := range []string{"?kind=vinyl", "?format=vhs", "?status=lent"} {
-		field := strings.SplitN(strings.TrimPrefix(q, "?"), "=", 2)[0]
+		field, _, _ := strings.Cut(strings.TrimPrefix(q, "?"), "=")
 		a.fails(http.MethodGet, "/api/collection"+q, nil, http.StatusUnprocessableEntity, field)
 	}
 }

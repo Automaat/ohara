@@ -38,6 +38,7 @@
 	type Status = 'found' | 'owned' | 'missing';
 	type Phase =
 		| { kind: 'loading' }
+		| { kind: 'queued' }
 		| { kind: 'ready'; status: Status }
 		| { kind: 'saved'; name: string; price: string; href: string }
 		| { kind: 'failed'; message: string };
@@ -45,7 +46,7 @@
 	const statusTitles: Record<Status, string> = {
 		found: 'Znaleziono',
 		owned: 'Masz już to wydanie',
-		missing: 'Nie znaleziono'
+		missing: 'Dodaj ręcznie'
 	};
 
 	function storage(): Storage | undefined {
@@ -109,8 +110,7 @@
 		}
 		if (byHand) {
 			blank(code);
-			phase = { kind: 'ready', status: 'missing' };
-			void focus('scan-name');
+			enterManually();
 			return;
 		}
 		try {
@@ -140,8 +140,9 @@
 				form = quickForm(first, sticky, r.barcode);
 				phase = { kind: 'ready', status: 'found' };
 			} else {
-				blank(r.barcode);
-				phase = { kind: 'ready', status: 'missing' };
+				blank(r.entry.barcode);
+				phase = { kind: 'queued' };
+				return;
 			}
 			void focus('scan-price');
 		} catch (err) {
@@ -225,8 +226,9 @@
 	}
 
 	async function skip() {
-		if (pending) {
-			const missing = phase.kind === 'ready' && phase.status === 'missing';
+		if (pending && !manual) {
+			const missing =
+				phase.kind === 'queued' || (phase.kind === 'ready' && phase.status === 'missing');
 			logScan(
 				pending.barcode,
 				missing ? 'queued' : 'skipped',
@@ -236,6 +238,11 @@
 		}
 		previous = null;
 		await goto('/scan');
+	}
+
+	function enterManually() {
+		phase = { kind: 'ready', status: 'missing' };
+		void focus('scan-name');
 	}
 
 	async function scanNext() {
@@ -259,12 +266,14 @@
 <PageHeader
 	title={phase.kind === 'saved'
 		? `Dodano: ${phase.name}`
-		: phase.kind === 'ready'
-			? statusTitles[phase.status]
-			: phase.kind === 'failed'
-				? 'Nie udało się sprawdzić kodu'
-				: 'Sprawdzam kod…'}
-	description={phase.kind === 'saved' ? phase.price || undefined : barcode}
+		: phase.kind === 'queued'
+			? 'Nie znaleziono'
+			: phase.kind === 'ready'
+				? statusTitles[phase.status]
+				: phase.kind === 'failed'
+					? 'Nie udało się sprawdzić kodu'
+					: 'Sprawdzam kod…'}
+	description={phase.kind === 'saved' ? phase.price || undefined : (pending?.barcode ?? barcode)}
 >
 	{#snippet kicker()}
 		<BackLink href="/scan" label="Skanuj" />
@@ -278,6 +287,13 @@
 
 	{#if phase.kind === 'loading'}
 		<Skeleton rows={3} />
+	{:else if phase.kind === 'queued'}
+		<Callout tone="warning" live>Kod trafił do kolejki do uzupełnienia.</Callout>
+		<div class="actions">
+			<Button tone="signal" onclick={enterManually}>Dodaj ręcznie</Button>
+			<Button onclick={skip}>Skanuj kolejny</Button>
+			<Button href="/scan/queue">Do uzupełnienia</Button>
+		</div>
 	{:else if phase.kind === 'failed'}
 		<Callout tone="warning" live>{phase.message}</Callout>
 		<div class="actions">
@@ -309,13 +325,6 @@
 			<Button href={phase.href}>Zobacz egzemplarz</Button>
 		</div>
 	{:else if pending}
-		{#if phase.status === 'missing'}
-			<Callout tone="warning">
-				Żadne źródło nie zna tego kodu. Kod czeka w kolejce do uzupełnienia; możesz uzupełnić go
-				teraz, np. wyszukując po tytule.
-			</Callout>
-		{/if}
-
 		{#snippet titleSearch()}
 			<form
 				class="row"
@@ -354,6 +363,7 @@
 			bind:form
 			{issue}
 			{saving}
+			skipLabel={phase.status === 'missing' ? 'Anuluj' : undefined}
 			onpick={pick}
 			onsave={save}
 			onskip={skip}

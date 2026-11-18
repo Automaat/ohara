@@ -40,12 +40,17 @@ type pepperMerchant struct {
 	Price string `xml:"price,attr"`
 }
 
+type pepperImage struct {
+	URL string `xml:"url,attr"`
+}
+
 type pepperItem struct {
-	Title    string          `xml:"title"`
-	Link     string          `xml:"link"`
-	GUID     string          `xml:"guid"`
-	PubDate  string          `xml:"pubDate"`
-	Merchant *pepperMerchant `xml:"http://www.pepper.com/rss merchant"`
+	Thumbnail pepperImage     `xml:"http://search.yahoo.com/mrss/ thumbnail"`
+	Title     string          `xml:"title"`
+	Link      string          `xml:"link"`
+	GUID      string          `xml:"guid"`
+	PubDate   string          `xml:"pubDate"`
+	Merchant  *pepperMerchant `xml:"http://www.pepper.com/rss merchant"`
 }
 
 type pepperFeed struct {
@@ -90,6 +95,7 @@ func parsePepper(body []byte) ([]Listing, error) {
 		}
 		out = append(out, Listing{
 			Source:     "pepper",
+			PhotoURL:   imageURL(it.Thumbnail.URL),
 			ExternalID: id,
 			Title:      strings.TrimSpace(it.Title),
 			URL:        strings.TrimSpace(it.Link),

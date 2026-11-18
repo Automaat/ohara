@@ -199,7 +199,7 @@
 			logScan(current.barcode, 'added', saved.titleName + (price ? ` · ${price}` : ''), href);
 			if (next) {
 				previous = `Dodano: ${saved.titleName}.`;
-				await goto(`/scan/${encodeURIComponent(next)}`);
+				await openNext(next);
 				return;
 			}
 			previous = null;
@@ -234,8 +234,11 @@
 	}
 
 	async function scanNext() {
-		const code = cleanBarcode(nextCode);
 		previous = null;
+		await openNext(cleanBarcode(nextCode));
+	}
+
+	async function openNext(code: string) {
 		if (code && code === barcode && !manual) {
 			await load(code, false);
 		} else {

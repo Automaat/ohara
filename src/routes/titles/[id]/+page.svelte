@@ -154,7 +154,7 @@
 				layout="inline"
 				facts={[
 					{ label: t.kind === 'music' ? 'Wykonawcy' : 'Autorzy', value: t.authors.join(', ') },
-					{ label: 'Rok', value: t.year?.toString(), mono: true }
+					{ label: 'Rok', value: t.year?.toString() }
 				].filter((fact) => fact.value)}
 			/>
 		{/snippet}
@@ -231,9 +231,9 @@
 				<FactList
 					layout="inline"
 					facts={[
-						{ label: 'BN', value: t.bn_id, mono: true },
-						{ label: 'Open Library', value: t.openlibrary_id, mono: true },
-						{ label: 'TMDB', value: t.tmdb_id?.toString(), mono: true }
+						{ label: 'BN', value: t.bn_id },
+						{ label: 'Open Library', value: t.openlibrary_id },
+						{ label: 'TMDB', value: t.tmdb_id?.toString() }
 					].filter((fact) => fact.value)}
 				/>
 			{/if}

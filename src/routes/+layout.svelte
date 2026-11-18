@@ -18,11 +18,10 @@
 	const worker = registerServiceWorker('/service-worker.js', { dev });
 </script>
 
-<AppShell title={current?.label ?? 'Ohara'} label="Nawigacja" menuLabel="Menu">
+<AppShell title="Ohara" label="Nawigacja" menuLabel="Menu">
 	{#snippet sidebar()}
 		<SideNav
 			title="Ohara"
-			kicker="Kolekcja"
 			{sections}
 			current={current?.href}
 			label="Strony Ohary"
@@ -31,7 +30,7 @@
 			expandLabel="Rozwiń"
 		>
 			{#snippet foot()}
-				<ThemeSwitch />
+				<ThemeSwitch label="Motyw" lightLabel="Jasny" darkLabel="Ciemny" systemLabel="Systemowy" />
 			{/snippet}
 		</SideNav>
 	{/snippet}
@@ -49,3 +48,34 @@
 	onlineTitle="Połączenie wróciło"
 	dismissLabel="Zamknij"
 />
+
+<style>
+	:global(:root) {
+		--sui-primitive-light-canvas: #f8f5ee;
+		--sui-primitive-light-inset: #eeeae1;
+	}
+
+	:global(body) {
+		background: var(--sui-canvas);
+		color: var(--sui-text-primary);
+		font: var(--sui-font-size-body) / var(--sui-leading-body) var(--sui-sans);
+	}
+
+	:global(button),
+	:global(input),
+	:global(select),
+	:global(textarea) {
+		font-family: inherit;
+	}
+
+	:global(.metadata) {
+		color: var(--sui-text-secondary);
+		font-size: var(--sui-font-size-meta);
+		line-height: var(--sui-leading-meta);
+	}
+
+	:global(.price) {
+		font-weight: var(--sui-weight-semibold);
+		font-variant-numeric: tabular-nums;
+	}
+</style>

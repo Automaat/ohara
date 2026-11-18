@@ -49,23 +49,25 @@ func (p GoogleBooks) Fetch(ctx context.Context, code string) (json.RawMessage, e
 	})
 }
 
+type googleVolume struct {
+	Title               string   `json:"title"`
+	Authors             []string `json:"authors"`
+	Publisher           string   `json:"publisher"`
+	PublishedDate       string   `json:"publishedDate"`
+	Description         string   `json:"description"`
+	IndustryIdentifiers []struct {
+		Type       string `json:"type"`
+		Identifier string `json:"identifier"`
+	} `json:"industryIdentifiers"`
+	ImageLinks struct {
+		Thumbnail string `json:"thumbnail"`
+	} `json:"imageLinks"`
+}
+
 type googleResponse struct {
 	Items []struct {
-		ID         string `json:"id"`
-		VolumeInfo struct {
-			Title               string   `json:"title"`
-			Authors             []string `json:"authors"`
-			Publisher           string   `json:"publisher"`
-			PublishedDate       string   `json:"publishedDate"`
-			Description         string   `json:"description"`
-			IndustryIdentifiers []struct {
-				Type       string `json:"type"`
-				Identifier string `json:"identifier"`
-			} `json:"industryIdentifiers"`
-			ImageLinks struct {
-				Thumbnail string `json:"thumbnail"`
-			} `json:"imageLinks"`
-		} `json:"volumeInfo"`
+		ID         string       `json:"id"`
+		VolumeInfo googleVolume `json:"volumeInfo"`
 	} `json:"items"`
 }
 
@@ -87,26 +89,34 @@ func (GoogleBooks) Parse(code string, raw json.RawMessage) ([]lookup.Candidate, 
 				match = true
 			}
 		}
-		name := clean(v.Title)
-		if !match || name == "" {
-			continue
+		if c, ok := volumeCandidate(code, v); match && ok {
+			out = append(out, c)
 		}
-		authors := make([]string, 0, len(v.Authors))
-		for _, a := range v.Authors {
-			authors = append(authors, personName(a))
-		}
-		out = append(out, lookup.Candidate{
-			Type:  "book",
-			Title: lookup.TitleFields{Name: name, Authors: dedupe(authors)},
-			Edition: lookup.EditionFields{
-				Barcode:   code,
-				Publisher: clean(v.Publisher),
-				Year:      year(v.PublishedDate),
-			},
-			CoverURL:    strings.Replace(v.ImageLinks.Thumbnail, "http://", "https://", 1),
-			Description: strings.TrimSpace(v.Description),
-			Confidence:  0.7,
-		})
 	}
 	return out, nil
+}
+
+// volumeCandidate is a book candidate for a volume; ok is false for a
+// volume without a title.
+func volumeCandidate(code string, v *googleVolume) (lookup.Candidate, bool) {
+	name := clean(v.Title)
+	if name == "" {
+		return lookup.Candidate{}, false
+	}
+	authors := make([]string, 0, len(v.Authors))
+	for _, a := range v.Authors {
+		authors = append(authors, personName(a))
+	}
+	return lookup.Candidate{
+		Type:  "book",
+		Title: lookup.TitleFields{Name: name, Authors: dedupe(authors)},
+		Edition: lookup.EditionFields{
+			Barcode:   code,
+			Publisher: clean(v.Publisher),
+			Year:      year(v.PublishedDate),
+		},
+		CoverURL:    strings.Replace(v.ImageLinks.Thumbnail, "http://", "https://", 1),
+		Description: strings.TrimSpace(v.Description),
+		Confidence:  0.7,
+	}, true
 }

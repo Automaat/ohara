@@ -5,13 +5,15 @@
 		DataTable,
 		EmptyState,
 		FactList,
+		Field,
 		Link,
 		ListToolbar,
 		PageHeader,
 		Pill,
+		Select,
 		type DataTableColumn
 	} from '@smykla-skalski/sui';
-	import { onMount, tick, untrack } from 'svelte';
+	import { tick, untrack } from 'svelte';
 	import { afterNavigate, replaceState } from '$app/navigation';
 	import { page } from '$app/state';
 	import { errorMessage, request } from '$lib/api';
@@ -32,10 +34,19 @@
 		type CollectionView,
 		type Totals
 	} from '$lib/collection';
-	import { databaseBadge, fetchStatus, type Status } from '$lib/status';
+	import { collectionSortOptions, sortCopies, type CollectionSort } from '$lib/collection-sort';
+	import { purchaseDate, resultCount } from '$lib/polish';
 	import type { Snapshot } from './$types';
 
 	type Row = CollectionItem & Record<string, unknown>;
+
+	const sort = $derived(page.state.collectionSort ?? 'title');
+
+	function setSort(value: CollectionSort | null) {
+		if (value !== null) {
+			replaceState(window.location.href, { ...page.state, collectionSort: value });
+		}
+	}
 
 	const emptyFilter: CollectionFilter = { q: '', kind: '', format: '', status: '' };
 	let filter = $state(untrack(() => readCollectionFilter(page.url.searchParams)));
@@ -44,7 +55,6 @@
 	let totals = $state<Totals | null>(null);
 	let failure = $state<string | null>(null);
 	let loading = $state(true);
-	let info = $state<Status | null>(null);
 	let seq = 0;
 	let restoreScroll: [number, number] | undefined;
 	let loadingTotals = false;
@@ -93,13 +103,6 @@
 		void load();
 	});
 
-	onMount(() => {
-		fetchStatus(fetch).then(
-			(s) => (info = s),
-			() => (info = null)
-		);
-	});
-
 	function set<K extends keyof CollectionFilter>(key: K, value: CollectionFilter[K]) {
 		if (key === 'q') query = value;
 		updateFilter({ ...filter, [key]: value });
@@ -131,9 +134,7 @@
 	];
 
 	const rows = $derived((view?.items ?? []) as Row[]);
-	const count = new Intl.NumberFormat('pl-PL');
 	const all = 'all';
-	const badge = $derived(info ? databaseBadge(info.database) : null);
 	const activeFilters = $derived(
 		(
 			[
@@ -152,27 +153,20 @@
 
 <PageHeader
 	title="Kolekcja"
-	description="Filmy i książki na półce i na liście życzeń, z tym, ile za nie zapłacono."
+	description="Egzemplarze filmów, książek i muzyki na półce i na liście życzeń."
 >
-	{#snippet status()}
-		{#if badge}
-			<Pill tone={badge.tone} dot>Baza: {badge.label}</Pill>
-		{/if}
-	{/snippet}
 	{#snippet facts()}
 		<FactList
 			layout="inline"
 			missingLabel="—"
 			facts={[
-				{ label: 'Egzemplarze', value: totals ? String(totals.copies) : null, mono: true },
-				{ label: 'Na półce', value: totals ? String(totals.owned) : null, mono: true },
-				{ label: 'Lista życzeń', value: totals ? String(totals.wishlist) : null, mono: true },
+				{ label: 'Egzemplarze', value: totals ? String(totals.copies) : null },
+				{ label: 'Na półce', value: totals ? String(totals.owned) : null },
+				{ label: 'Lista życzeń', value: totals ? String(totals.wishlist) : null },
 				{
 					label: 'Wydano',
-					value: totals ? spentLabel(totals) : null,
-					mono: true
-				},
-				{ label: 'Wersja', value: info?.version, mono: true }
+					value: totals ? spentLabel(totals) : null
+				}
 			]}
 		/>
 	{/snippet}
@@ -182,13 +176,21 @@
 </PageHeader>
 
 <div class="content">
+	<div class="collection-sort">
+		<Field label="Sortowanie">
+			{#snippet control(c)}
+				<Select {...c} options={collectionSortOptions} bind:value={() => sort, setSort} />
+			{/snippet}
+		</Field>
+	</div>
+
 	<ListToolbar
 		searchLabel="Szukaj w kolekcji"
 		placeholder="Tytuł, autor, sklep lub kod kreskowy"
 		bind:query
 		onsearch={(q: string) => set('q', q)}
 		count={rows.length}
-		countLabel={(_n: number, formatted: string) => `Wyniki: ${formatted}`}
+		countLabel={resultCount}
 		pending={loading}
 		pendingLabel="Wczytywanie…"
 		toolsLabel="Filtry"
@@ -237,13 +239,13 @@
 	{/if}
 
 	{#if view && !loading && !failure}
-		<p class="result-count">Wyniki: {count.format(rows.length)}</p>
+		<p class="metadata result-count" aria-hidden="true">{resultCount(rows.length)}</p>
 	{/if}
 
 	<DataTable
 		aria-label="Egzemplarze w kolekcji"
 		{columns}
-		{rows}
+		rows={sortCopies(rows, sort)}
 		rowHeader
 		rowKey={(r) => r.copy_id}
 		loading={loading && !view}
@@ -265,16 +267,22 @@
 				<Link href={`/editions/${row.edition_id}`}>{editionSummary(row)}</Link>
 			{:else if column.key === 'status'}
 				<Link href={`/copies/${row.copy_id}`}>
-					<Pill tone={row.status === 'owned' ? 'success' : 'neutral'}
-						>{statusLabels[row.status]}</Pill
-					>
+					<Pill tone={row.status === 'owned' ? 'success' : 'neutral'}>
+						{statusLabels[row.status]}
+					</Pill>
 				</Link>
 			{:else if column.key === 'price_cents'}
-				{formatPLN(row.price_cents)}
+				{#if row.status === 'owned'}
+					<span class="price">
+						{row.price_cents === null ? 'Nieznana' : formatPLN(row.price_cents)}
+					</span>
+				{/if}
 			{:else if column.key === 'shop'}
 				{row.shop}
 			{:else if column.key === 'purchased_on'}
-				{row.purchased_on ?? ''}
+				{#if row.purchased_on}
+					<time class="metadata" datetime={row.purchased_on}>{purchaseDate(row.purchased_on)}</time>
+				{/if}
 			{/if}
 		{/snippet}
 		{#snippet empty()}
@@ -299,6 +307,10 @@
 </div>
 
 <style>
+	.collection-sort {
+		width: min(100%, 16rem);
+	}
+
 	.content {
 		display: grid;
 		gap: 1rem;

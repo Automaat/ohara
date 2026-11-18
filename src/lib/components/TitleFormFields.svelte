@@ -36,13 +36,22 @@
 		'original_title',
 		'bn_id',
 		'openlibrary_id',
+		'cover_url',
 		'notes'
 	];
 	const general = $derived(issue && !fieldKeys.includes(issue.field) ? issue.message : null);
+	let titleForm: HTMLFormElement;
+
+	$effect(() => {
+		if (issue?.field) {
+			titleForm.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus();
+		}
+	});
 </script>
 
 <form
 	class="form"
+	bind:this={titleForm}
 	novalidate
 	onsubmit={(e) => {
 		e.preventDefault();
@@ -101,6 +110,12 @@
 			/>
 		{/if}
 	{/if}
+	<Field
+		label="Adres okładki tytułu"
+		inputmode="url"
+		bind:value={form.cover_url}
+		error={errorFor('cover_url')}
+	/>
 	<Field label="Notatki" error={errorFor('notes')}>
 		{#snippet control(c)}
 			<Textarea {...c} rows={3} bind:value={form.notes} />

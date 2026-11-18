@@ -154,13 +154,26 @@ func TestDealsViewAndManualRun(t *testing.T) {
 		t.Fatalf("observations = %+v", view.Observations)
 	}
 	sent := 0
+	photos := 0
 	for _, o := range view.Observations {
+		if o.Format == nil || *o.Format != "bluray" || o.MaxPriceCents == nil || *o.MaxPriceCents != 5000 {
+			t.Fatalf("observation format or limit missing: %+v", o)
+		}
+		if o.ListingPhotoURL != nil {
+			photos++
+			if *o.ListingPhotoURL != "https://images.example.test/bluray;s=400x300" {
+				t.Fatalf("unexpected photo: %q", *o.ListingPhotoURL)
+			}
+		}
 		if o.TitleName == nil || *o.TitleName != "Blade Runner" || o.ListingTitle == "" || o.Source != "olx" {
 			t.Fatalf("observation = %+v", o)
 		}
 		if o.Alert == AlertSent {
 			sent++
 		}
+	}
+	if photos != 1 {
+		t.Fatalf("got %d observations with photos, want 1", photos)
 	}
 	if sent != 1 {
 		t.Fatalf("sent alerts = %d, want 1", sent)
@@ -214,5 +227,90 @@ func TestTelegramSend(t *testing.T) {
 	err := down.Send(context.Background(), "x")
 	if err == nil || strings.Contains(err.Error(), "SECRET") {
 		t.Fatalf("transport err = %v, want an error without the token", err)
+	}
+}
+
+func TestRecentUsesMatchedWishAfterValuation(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	wishlist(t, pool, wantBluray(new(int64(5000))))
+	wants, err := store.Wants(ctx)
+	if err != nil || len(wants) != 1 {
+		t.Fatalf("wants = %v, %v", wants, err)
+	}
+	wanted := &wants[0]
+	const wantedCover = "https://images.example.test/wanted.jpg"
+	if _, err := pool.Exec(ctx, "UPDATE edition SET cover_url = $1 WHERE id = $2", wantedCover, wanted.EditionID); err != nil {
+		t.Fatal(err)
+	}
+
+	var ownedEdition int64
+	if err := pool.QueryRow(ctx, `INSERT INTO edition (title_id, format, cover_url)
+		VALUES ($1, 'bluray', 'https://images.example.test/owned.jpg') RETURNING id`, wanted.TitleID).Scan(&ownedEdition); err != nil {
+		t.Fatal(err)
+	}
+	owned := &Want{EditionID: ownedEdition, TitleID: wanted.TitleID}
+	for _, tc := range []struct {
+		id    string
+		price int64
+		alert bool
+	}{
+		{id: "under-limit", price: 4500, alert: true},
+		{id: "over-limit", price: 5500, alert: false},
+	} {
+		listing := Listing{Source: "olx", ExternalID: tc.id, Title: "Blade Runner Blu-ray", PriceCents: tc.price}
+		if _, _, err := store.Record(ctx, &listing, owned, false); err != nil {
+			t.Fatal(err)
+		}
+		if created, alerted, err := store.Record(ctx, &listing, wanted, tc.alert); err != nil || created || alerted != tc.alert {
+			t.Fatalf("record %s: created=%t alerted=%t err=%v", tc.id, created, alerted, err)
+		}
+	}
+
+	observations, err := store.Recent(ctx, 10)
+	if err != nil || len(observations) != 2 {
+		t.Fatalf("recent = %v, %v", observations, err)
+	}
+	for _, got := range observations {
+		if got.EditionID == nil || *got.EditionID != wanted.EditionID ||
+			got.CoverURL == nil || *got.CoverURL != wantedCover ||
+			got.MaxPriceCents == nil || *got.MaxPriceCents != 5000 {
+			t.Fatalf("listing %s did not retain the match: %+v", got.ExternalID, got)
+		}
+		var storedEdition int64
+		if err := pool.QueryRow(ctx, "SELECT edition_id FROM price_observation WHERE id = $1", got.ID).Scan(&storedEdition); err != nil || storedEdition != ownedEdition {
+			t.Fatalf("valuation edition = %d, %v", storedEdition, err)
+		}
+	}
+}
+
+func TestRecentClearsPhotoOnRepeatObservation(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	wishlist(t, pool, wantBluray(nil))
+	wants, err := store.Wants(ctx)
+	if err != nil || len(wants) != 1 {
+		t.Fatalf("wants = %v, %v", wants, err)
+	}
+
+	listing := Listing{Source: "olx", ExternalID: "repeat", Title: "Blade Runner Blu-ray", PriceCents: 5000}
+	if _, _, err := store.Record(ctx, &listing, &wants[0], false); err != nil {
+		t.Fatal(err)
+	}
+	for _, photo := range []string{"https://images.example.test/offer.jpg", ""} {
+		listing.PhotoURL = photo
+		if created, _, err := store.Record(ctx, &listing, &wants[0], false); err != nil || created {
+			t.Fatalf("record photo %q: created=%t err=%v", photo, created, err)
+		}
+		got, err := store.Recent(ctx, 10)
+		if err != nil || len(got) != 1 {
+			t.Fatalf("recent = %v, %v", got, err)
+		}
+		if photo == "" && got[0].ListingPhotoURL != nil || photo != "" &&
+			(got[0].ListingPhotoURL == nil || *got[0].ListingPhotoURL != photo) {
+			t.Fatalf("listing photo = %v, want %q", got[0].ListingPhotoURL, photo)
+		}
 	}
 }

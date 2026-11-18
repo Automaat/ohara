@@ -4,12 +4,15 @@ export const sections: NavSection[] = [
 	{
 		items: [
 			{ href: '/', label: 'Kolekcja', icon: 'book' },
-			{ href: '/titles', label: 'Tytuły', icon: 'repositories' },
+			{ href: '/titles', label: 'Katalog tytułów', icon: 'repositories' },
 			{ href: '/scan', label: 'Skanuj', icon: 'plus' },
 			{ href: '/scan/queue', label: 'Do uzupełnienia', icon: 'pending' },
 			{ href: '/deals', label: 'Okazje', icon: 'tag' },
 			{ href: '/valuation', label: 'Wartość', icon: 'gauge' }
 		]
+	},
+	{
+		items: [{ href: '/informacje', label: 'Informacje o aplikacji', icon: 'info' }]
 	}
 ];
 

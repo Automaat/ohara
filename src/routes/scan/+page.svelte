@@ -7,7 +7,8 @@
 		ObjectRow,
 		PageHeader,
 		Pill,
-		Section
+		Section,
+		TextInput
 	} from '@smykla-skalski/sui';
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
@@ -20,6 +21,7 @@
 	let code = $state('');
 	let leaving = $state(false);
 	let notice = $state<string | null>(null);
+	let codeError = $state<string>();
 	let queued = $state<number | null>(null);
 	const guard = new RepeatGuard(1500);
 
@@ -50,6 +52,16 @@
 		void open(barcode);
 	}
 
+	function submitCode() {
+		if (leaving) return;
+		if (!looksLikeBarcode(cleanBarcode(code))) {
+			codeError = 'Wpisz pełny kod kreskowy lub ISBN i spróbuj ponownie.';
+			document.getElementById('scan-code')?.focus();
+			return;
+		}
+		void open(code);
+	}
+
 	onMount(() => {
 		void countQueue();
 		// Links from before the add page existed: /scan?barcode=…[&manual=1].
@@ -78,24 +90,35 @@
 	<BarcodeCamera paused={leaving} ondetect={fromCamera} />
 
 	<form
-		class="manual"
 		novalidate
 		onsubmit={(e) => {
 			e.preventDefault();
-			void open(code);
+			submitCode();
 		}}
 	>
 		<Field
 			id="scan-code"
 			label="Kod kreskowy"
 			hint="Wpisz kod albo użyj czytnika Bluetooth: kursor musi być w tym polu."
-			inputmode="numeric"
-			enterkeyhint="search"
-			autocomplete="off"
-			disabled={leaving}
-			bind:value={code}
-		/>
-		<Button type="submit" loading={leaving}>Szukaj</Button>
+			error={codeError}
+		>
+			{#snippet control({ id, describedby, invalid })}
+				<div class="manual">
+					<TextInput
+						{id}
+						aria-describedby={describedby}
+						{invalid}
+						inputmode="numeric"
+						enterkeyhint="search"
+						autocomplete="off"
+						disabled={leaving}
+						bind:value={code}
+						oninput={() => (codeError = undefined)}
+					/>
+					<Button type="submit" loading={leaving}>Szukaj</Button>
+				</div>
+			{/snippet}
+		</Field>
 	</form>
 
 	{#if notice}
@@ -131,12 +154,10 @@
 		max-width: 48rem;
 	}
 	.manual {
-		display: flex;
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto;
 		gap: 0.5rem;
-		align-items: end;
-	}
-	.manual :global(> :first-child) {
-		flex: 1;
+		align-items: center;
 	}
 	.code {
 		font-family: var(--sui-mono);

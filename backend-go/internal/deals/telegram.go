@@ -54,8 +54,7 @@ func (t *Telegram) send(ctx context.Context, text string) error {
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := t.Client.Do(req)
 	if err != nil {
-		var uerr *url.Error
-		if errors.As(err, &uerr) {
+		if uerr, ok := errors.AsType[*url.Error](err); ok {
 			err = uerr.Err
 		}
 		return fmt.Errorf("telegram: %w", err)

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Button, Callout } from '@smykla-skalski/sui';
-	import { onMount } from 'svelte';
+	import { onMount, tick as flush } from 'svelte';
 	import { prepareZXingModule, readBarcodes } from 'zxing-wasm/reader';
 	import wasmURL from 'zxing-wasm/reader/zxing_reader.wasm?url';
 	import { cameraErrorMessage, cropRect, scanFormats } from '$lib/scan';
@@ -73,6 +73,8 @@
 			}
 			stream = media;
 			video.srcObject = media;
+			await flush();
+			if (stream !== media) return;
 			await video.play();
 			remember(true);
 			schedule();
@@ -153,17 +155,17 @@
 	<video bind:this={video} playsinline muted autoplay></video>
 	{#if stream}
 		<div class="guide" class:paused aria-hidden="true"></div>
-	{:else}
-		<div class="off">
-			<Button tone="signal" type="button" loading={starting} onclick={() => void start()}>
-				Włącz aparat
-			</Button>
-		</div>
 	{/if}
 </div>
 {#if stream}
 	<div class="controls">
 		<Button type="button" tone="ghost" onclick={stop}>Wyłącz aparat</Button>
+	</div>
+{:else}
+	<div>
+		<Button tone="signal" type="button" loading={starting} onclick={() => void start()}>
+			Włącz aparat
+		</Button>
 	</div>
 {/if}
 {#if error}
@@ -172,6 +174,10 @@
 
 <style>
 	.camera {
+		display: none;
+	}
+	.camera.live {
+		display: block;
 		position: relative;
 		aspect-ratio: 4 / 3;
 		max-height: 50vh;
@@ -184,16 +190,7 @@
 		width: 100%;
 		height: 100%;
 		object-fit: cover;
-		display: none;
-	}
-	.live video {
 		display: block;
-	}
-	.off {
-		position: absolute;
-		inset: 0;
-		display: grid;
-		place-items: center;
 	}
 	.guide {
 		position: absolute;

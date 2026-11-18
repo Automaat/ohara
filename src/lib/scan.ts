@@ -66,6 +66,11 @@ export function candidateLabel(c: Candidate): string {
 		original_title: t.original_title ?? null
 	});
 	const parts: string[] = [];
+	if (c.type === 'book' && t.authors?.length) name = `${t.authors.join(', ')} – ${name}`;
+	if (c.type !== 'music') {
+		const year = t.year ?? c.edition.year;
+		if (year) parts.push(String(year));
+	}
 	if (c.type === 'music') {
 		if (t.authors?.length) name = `${t.authors.join(', ')} – ${name}`;
 		const e = c.edition;
@@ -81,33 +86,39 @@ export function candidateLabel(c: Candidate): string {
 	return [name, ...parts, c.provider, `${Math.round(c.confidence * 100)}%`].join(' · ');
 }
 
-/** What the album search tells the user when Discogs is off or down. */
-const searchFailures: Record<number, string> = {
-	502: 'Discogs nie odpowiada, spróbuj za chwilę.',
-	503: 'Wyszukiwanie w Discogs jest wyłączone: brak tokenu.'
+/** What to type into the search by title, per kind. */
+export const searchHints: Record<Kind, string> = {
+	movie: 'Tytuł filmu, np. Łowca androidów. Wybrany film uzupełni pozycję.',
+	book: 'Tytuł i autor, np. Solaris Lem. Wybrana książka uzupełni pozycję.',
+	music: 'Wykonawca i tytuł, np. Taco Hemingway 1-800-Oświecenie. Wybrane wydanie uzupełni pozycję.'
 };
 
-/** Formats the album search can filter Discogs by. */
-const searchFormats: readonly Format[] = ['cd', 'vinyl', 'cassette'];
+/** What the search tells the user when its source is off or down. */
+const searchFailures: Record<number, string> = {
+	502: 'Źródło nie odpowiada, spróbuj za chwilę.',
+	503: 'Wyszukiwanie dla tego typu jest wyłączone: brak klucza API.'
+};
 
 /**
- * Albums a Discogs text search finds for an artist and title typed by hand, as candidates for
- * the barcode being added; a CD, vinyl or cassette format narrows the search.
+ * Titles a search finds for text typed by hand (TMDB films, Google Books books, Discogs albums),
+ * as candidates for the barcode being added. The picked format narrows an album search and stays
+ * on a film's edition.
  */
-export async function searchAlbums(
+export async function searchTitles(
 	fetchFn: typeof fetch,
+	kind: Kind,
 	query: string,
 	barcode: string,
 	format: Format | ''
 ): Promise<Candidate[]> {
-	const params = new URLSearchParams({ q: query.trim() });
+	const params = new URLSearchParams({ kind, q: query.trim() });
 	if (barcode) params.set('barcode', barcode);
-	if (format && searchFormats.includes(format)) params.set('format', format);
+	if (format) params.set('format', format);
 	try {
 		const res = await request<{ candidates: Candidate[] }>(
 			fetchFn,
 			'GET',
-			`/api/music/search?${params.toString()}`
+			`/api/search?${params.toString()}`
 		);
 		return res.candidates;
 	} catch (err) {
@@ -289,7 +300,8 @@ export function scanEditionPayload(
 	if ((movie || music) && !formatFits(f.kind, f.format)) {
 		return { ok: false, issue: { field: 'format', message: 'Wybierz nośnik.' } };
 	}
-	const e = candidate?.type === f.kind ? candidate.edition : null;
+	const selected = candidate?.type === f.kind ? candidate : null;
+	const e = selected?.edition;
 	return {
 		ok: true,
 		value: {
@@ -304,6 +316,7 @@ export function scanEditionPayload(
 			packaging: movie ? (e?.packaging ?? []) : [],
 			binding: f.kind === 'book' && f.binding ? f.binding : null,
 			discogs_release_id: music ? opt(e?.discogs_release_id) : null,
+			cover_url: selected?.cover_url,
 			notes: ''
 		}
 	};

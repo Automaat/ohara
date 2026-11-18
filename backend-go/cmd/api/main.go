@@ -125,7 +125,7 @@ func run() int {
 	deps.API = []server.Mounter{
 		collection.NewHandler(collection.NewStore(pool), logger),
 		lookupHandler,
-		&music.SearchHandler{Discogs: musicSearcher(), Logger: logger},
+		&lookup.SearchHandler{Searchers: titleSearchers(), Logger: logger},
 		scanqueue.NewHandler(queue, logger),
 		deals.NewHandler(dealStore, hunter, logger),
 		valuation.NewHandler(valueStore, valuer, logger),
@@ -281,13 +281,21 @@ func newMovieProvider(allegro *movie.Allegro, logger *slog.Logger) *movie.Provid
 	return p
 }
 
-// musicSearcher is the Discogs client the album search uses, or nil
-// without a token, which the handler answers with 503.
-func musicSearcher() music.DiscogsSearcher {
-	if d := newDiscogs(); d != nil {
-		return d
+// titleSearchers back the search by title for a barcode no source knows:
+// TMDB for films and Discogs for albums when their keys are set, Google
+// Books for books with a key and Open Library without one.
+func titleSearchers() map[string]lookup.TextSearcher {
+	s := map[string]lookup.TextSearcher{"book": books.OpenLibrary{Client: sourceClient}}
+	if key := os.Getenv("OHARA_GOOGLE_BOOKS_API_KEY"); key != "" {
+		s["book"] = books.GoogleBooks{APIKey: key, Client: sourceClient}
 	}
-	return nil
+	if key := os.Getenv("OHARA_TMDB_API_KEY"); key != "" {
+		s["movie"] = movie.TextSearch{TMDB: movie.TMDB{Client: sourceClient, Key: key}}
+	}
+	if d := newDiscogs(); d != nil {
+		s["music"] = music.TextSearch{Discogs: d}
+	}
+	return s
 }
 
 // newDiscogs is the Discogs client, or nil without OHARA_DISCOGS_TOKEN:

@@ -311,6 +311,16 @@ func (s *Store) UpdateEdition(ctx context.Context, id int64, in *EditionInput) (
 	return s.GetEdition(ctx, id)
 }
 
+func (s *Store) fillEditionCover(ctx context.Context, edition *Edition, url string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE edition SET cover_url = $2, updated_at = now()
+		WHERE id = $1 AND updated_at = $3 AND cover_url IS NULL AND cover_photo IS NULL`,
+		edition.ID, url, edition.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("fill edition cover: %w", err)
+	}
+	return nil
+}
+
 // DeleteEdition removes an edition without copies; ErrHasCopies otherwise.
 func (s *Store) DeleteEdition(ctx context.Context, id int64) error {
 	tag, err := s.pool.Exec(ctx, `DELETE FROM edition WHERE id = $1`, id)

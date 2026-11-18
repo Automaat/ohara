@@ -411,7 +411,7 @@ export async function saveScan(
 		const copy = await request<Copy>(
 			fetchFn,
 			'POST',
-			'/api/copies',
+			'/api/copies?cover=auto',
 			must(scanCopyPayload(f, e.id, requestKey))
 		);
 		return { titleID: e.title.id, titleName: e.title.name, editionID: e.id, copy };
@@ -446,7 +446,7 @@ export async function saveScan(
 	const copy = await request<Copy>(
 		fetchFn,
 		'POST',
-		'/api/copies',
+		'/api/copies?cover=auto',
 		must(scanCopyPayload(f, edition.id, requestKey))
 	);
 	return { titleID, titleName, editionID: edition.id, copy };

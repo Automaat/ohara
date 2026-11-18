@@ -19,6 +19,7 @@ import (
 type Handler struct {
 	store  *Store
 	logger *slog.Logger
+	covers *catalogCovers
 }
 
 // NewHandler wires the store and logger.
@@ -248,6 +249,9 @@ func (h *Handler) createTitle(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if h.covers != nil && emptyCover(in.CoverURL) {
+		in.CoverURL = h.titleCover(r.Context(), in)
+	}
 	t, err := h.store.CreateTitle(r.Context(), in)
 	if err != nil {
 		h.writeErr(w, "create title", err)
@@ -453,6 +457,9 @@ func (h *Handler) createCopy(w http.ResponseWriter, r *http.Request) {
 	status := http.StatusOK
 	if created {
 		status = http.StatusCreated
+	}
+	if h.covers != nil && r.URL.Query().Get("cover") == "auto" {
+		h.fillScannedCover(r.Context(), c.EditionID)
 	}
 	httpx.WriteJSON(w, h.logger, status, c)
 }

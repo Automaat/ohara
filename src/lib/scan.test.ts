@@ -18,7 +18,7 @@ import {
 	saveScan,
 	saveSticky,
 	scanEditionPayload,
-	searchAlbums,
+	searchTitles,
 	scanTitlePayload,
 	wedgeBarcodeIn,
 	type Candidate,
@@ -329,7 +329,7 @@ describe('scan payloads', () => {
 		expect(candidateLabel(album)).toBe(
 			'Pink Floyd – The Dark Side Of The Moon · CD · 2011 · EMI · Reissue, Remastered · Europe · music · 90%'
 		);
-		expect(candidateLabel(movie)).toBe('Seksmisja · filmweb · 90%');
+		expect(candidateLabel(movie)).toBe('Seksmisja · 1984 · filmweb · 90%');
 	});
 
 	it('keeps book fields for a book', () => {
@@ -695,7 +695,7 @@ describe('sticky settings', () => {
 	});
 });
 
-describe('searchAlbums', () => {
+describe('searchTitles', () => {
 	const album: Candidate = {
 		type: 'music',
 		title: { name: '1-800-OŚWIECENIE', authors: ['Taco Hemingway'] },
@@ -705,31 +705,46 @@ describe('searchAlbums', () => {
 	};
 	it.each([
 		{
-			name: 'with barcode and a music format',
+			name: 'album with barcode and format',
+			kind: 'music' as const,
 			query: '  Taco Hemingway ',
 			barcode: '0602458447651',
-			format: 'cd' as Format,
-			url: '/api/music/search?q=Taco+Hemingway&barcode=0602458447651&format=cd'
+			format: 'cd' as Format | '',
+			url: '/api/search?kind=music&q=Taco+Hemingway&barcode=0602458447651&format=cd'
 		},
 		{
-			name: 'a non-music format is not sent',
-			query: 'Taco',
+			name: 'film without barcode or format',
+			kind: 'movie' as const,
+			query: 'Łowca androidów',
 			barcode: '',
-			format: 'dvd' as Format,
-			url: '/api/music/search?q=Taco'
+			format: '' as Format | '',
+			url: '/api/search?kind=movie&q=%C5%81owca+android%C3%B3w'
 		}
-	])('$name', async ({ query, barcode, format, url }) => {
+	])('$name', async ({ kind, query, barcode, format, url }) => {
 		const s = server({ [`GET ${url}`]: [200, { candidates: [album] }] });
-		await expect(searchAlbums(s.fetchFn, query, barcode, format)).resolves.toEqual([album]);
+		await expect(searchTitles(s.fetchFn, kind, query, barcode, format)).resolves.toEqual([album]);
 		expect(s.paths()).toEqual([`GET ${url}`]);
 	});
 
 	it.each([
-		{ status: 502, want: 'Discogs nie odpowiada, spróbuj za chwilę.' },
-		{ status: 503, want: 'Wyszukiwanie w Discogs jest wyłączone: brak tokenu.' },
+		{ status: 502, want: 'Źródło nie odpowiada, spróbuj za chwilę.' },
+		{ status: 503, want: 'Wyszukiwanie dla tego typu jest wyłączone: brak klucza API.' },
 		{ status: 500, want: 'Serwer zwrócił błąd 500.' }
 	])('explains a $status', async ({ status, want }) => {
-		const s = server({ 'GET /api/music/search?q=x': [status, { error: 'x' }] });
-		await expect(searchAlbums(s.fetchFn, 'x', '', '')).rejects.toThrow(want);
+		const s = server({ 'GET /api/search?kind=book&q=x': [status, { error: 'x' }] });
+		await expect(searchTitles(s.fetchFn, 'book', 'x', '', '')).rejects.toThrow(want);
+	});
+});
+
+describe('candidateLabel for search results', () => {
+	it('puts the author before a book and the year after it', () => {
+		const book: Candidate = {
+			type: 'book',
+			title: { name: 'Solaris', authors: ['Stanisław Lem'], year: 1961 },
+			edition: { barcode: '' },
+			provider: 'openlibrary',
+			confidence: 0.6
+		};
+		expect(candidateLabel(book)).toBe('Stanisław Lem – Solaris · 1961 · openlibrary · 60%');
 	});
 });

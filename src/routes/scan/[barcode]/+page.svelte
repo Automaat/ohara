@@ -204,7 +204,7 @@
 			logScan(current.barcode, 'added', saved.titleName + (price ? ` · ${price}` : ''), href);
 			if (next) {
 				previous = `Dodano: ${saved.titleName}.`;
-				await goto(`/scan/${encodeURIComponent(next)}`);
+				await openNext(next);
 				return;
 			}
 			previous = null;
@@ -239,9 +239,16 @@
 	}
 
 	async function scanNext() {
-		const code = cleanBarcode(nextCode);
 		previous = null;
-		await goto(code ? `/scan/${encodeURIComponent(code)}` : '/scan');
+		await openNext(cleanBarcode(nextCode));
+	}
+
+	async function openNext(code: string) {
+		if (code && code === barcode && !manual) {
+			await load(code, false);
+		} else {
+			await goto(code ? `/scan/${encodeURIComponent(code)}` : '/scan');
+		}
 	}
 </script>
 
@@ -257,7 +264,7 @@
 			: phase.kind === 'failed'
 				? 'Nie udało się sprawdzić kodu'
 				: 'Sprawdzam kod…'}
-	description={barcode}
+	description={phase.kind === 'saved' ? phase.price || undefined : barcode}
 >
 	{#snippet kicker()}
 		<BackLink href="/scan" label="Skanuj" />
@@ -279,9 +286,6 @@
 			<Button href="/scan">Skanuj kolejny</Button>
 		</div>
 	{:else if phase.kind === 'saved'}
-		<Callout tone="quiet" live>
-			{phase.name}{phase.price ? ` · ${phase.price}` : ''} jest w kolekcji.
-		</Callout>
 		<form
 			class="row"
 			novalidate
@@ -312,7 +316,7 @@
 			</Callout>
 		{/if}
 
-		{#if pending.target.kind === 'new'}
+		{#snippet titleSearch()}
 			<form
 				class="row"
 				novalidate
@@ -332,6 +336,10 @@
 				/>
 				<Button type="submit" loading={searching} disabled={!albumQuery.trim()}>Szukaj</Button>
 			</form>
+		{/snippet}
+
+		{#if phase.status === 'missing' && pending.target.kind === 'new'}
+			{@render titleSearch()}
 		{/if}
 
 		{#if notice}
@@ -350,6 +358,10 @@
 			onsave={save}
 			onskip={skip}
 		/>
+
+		{#if phase.status === 'found' && pending.target.kind === 'new'}
+			{@render titleSearch()}
+		{/if}
 	{/if}
 </div>
 

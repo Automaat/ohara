@@ -7,7 +7,8 @@
 		ObjectRow,
 		PageHeader,
 		Pill,
-		Section
+		Section,
+		TextInput
 	} from '@smykla-skalski/sui';
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
@@ -89,7 +90,6 @@
 	<BarcodeCamera paused={leaving} ondetect={fromCamera} />
 
 	<form
-		class="manual"
 		novalidate
 		onsubmit={(e) => {
 			e.preventDefault();
@@ -101,14 +101,24 @@
 			label="Kod kreskowy"
 			hint="Wpisz kod albo użyj czytnika Bluetooth: kursor musi być w tym polu."
 			error={codeError}
-			inputmode="numeric"
-			enterkeyhint="search"
-			autocomplete="off"
-			disabled={leaving}
-			bind:value={code}
-			oninput={() => (codeError = undefined)}
-		/>
-		<Button type="submit" loading={leaving}>Szukaj</Button>
+		>
+			{#snippet control({ id, describedby, invalid })}
+				<div class="manual">
+					<TextInput
+						{id}
+						aria-describedby={describedby}
+						{invalid}
+						inputmode="numeric"
+						enterkeyhint="search"
+						autocomplete="off"
+						disabled={leaving}
+						bind:value={code}
+						oninput={() => (codeError = undefined)}
+					/>
+					<Button type="submit" loading={leaving}>Szukaj</Button>
+				</div>
+			{/snippet}
+		</Field>
 	</form>
 
 	{#if notice}
@@ -144,12 +154,10 @@
 		max-width: 48rem;
 	}
 	.manual {
-		display: flex;
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto;
 		gap: 0.5rem;
-		align-items: end;
-	}
-	.manual :global(> :first-child) {
-		flex: 1;
+		align-items: center;
 	}
 	.code {
 		font-family: var(--sui-mono);

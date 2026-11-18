@@ -81,8 +81,7 @@ func decodeMessage(err error) string {
 	if errors.As(err, &typeErr) && typeErr.Field != "" {
 		return fmt.Sprintf("invalid JSON: %s must be %s", typeErr.Field, typeErr.Type)
 	}
-	var tooLarge *http.MaxBytesError
-	if errors.As(err, &tooLarge) {
+	if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 		return "request body too large"
 	}
 	return "invalid JSON: " + err.Error()

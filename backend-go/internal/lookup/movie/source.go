@@ -46,8 +46,7 @@ func get(client *http.Client, source string, req *http.Request, ok ...int) (int,
 	resp, err := client.Do(req)
 	if err != nil {
 		metrics.ObserveSource(source, metrics.SourceError)
-		var ue *url.Error
-		if errors.As(err, &ue) {
+		if ue, isURL := errors.AsType[*url.Error](err); isURL {
 			err = ue.Err
 		}
 		return 0, nil, fmt.Errorf("%s: %s %s://%s%s: %w", source, req.Method, req.URL.Scheme, req.URL.Host, req.URL.Path, err)

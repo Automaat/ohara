@@ -118,8 +118,10 @@ func (s *Store) DeleteKeyword(ctx context.Context, id int64) error {
 }
 
 type observationRaw struct {
-	Title string          `json:"title"`
-	Data  json.RawMessage `json:"data,omitempty"`
+	PhotoURL       string          `json:"photo_url,omitempty"`
+	WishlistCopyID int64           `json:"wishlist_copy_id,omitempty"`
+	Title          string          `json:"title"`
+	Data           json.RawMessage `json:"data,omitempty"`
 }
 
 // Record stores l as an observation of w and, with alert, queues its
@@ -130,7 +132,7 @@ type observationRaw struct {
 // dropped under the limit, still alerts once. It reports whether the
 // listing was new and whether an alert was queued.
 func (s *Store) Record(ctx context.Context, l *Listing, w *Want, alert bool) (bool, bool, error) {
-	raw, err := json.Marshal(observationRaw{Title: l.Title, Data: l.Raw})
+	raw, err := json.Marshal(observationRaw{Title: l.Title, Data: l.Raw, PhotoURL: l.PhotoURL, WishlistCopyID: w.CopyID})
 	if err != nil {
 		return false, false, fmt.Errorf("record: encode raw: %w", err)
 	}
@@ -148,6 +150,9 @@ func (s *Store) Record(ctx context.Context, l *Listing, w *Want, alert bool) (bo
 			price_cents = EXCLUDED.price_cents,
 			last_seen_at = now(),
 			url = EXCLUDED.url,
+            raw = coalesce(price_observation.raw, '{}'::jsonb) ||
+                CASE WHEN price_observation.edition_id IS NULL OR price_observation.edition_id = EXCLUDED.edition_id
+                    THEN EXCLUDED.raw ELSE EXCLUDED.raw - 'wishlist_copy_id' END,
 			acquired_as = coalesce(EXCLUDED.acquired_as, price_observation.acquired_as),
 			edition_id = coalesce(price_observation.edition_id, EXCLUDED.edition_id),
 			title_id = coalesce(price_observation.title_id, EXCLUDED.title_id)
@@ -238,36 +243,49 @@ const (
 
 // Observation is one stored listing in the deals view.
 type Observation struct {
-	ID            int64     `json:"id"`
-	Source        string    `json:"source"`
-	ExternalID    string    `json:"external_id"`
-	ObservedAt    time.Time `json:"observed_at"`
-	PriceCents    int64     `json:"price_cents"`
-	AcquiredAs    *string   `json:"acquired_as"`
-	URL           string    `json:"url"`
-	ListingTitle  string    `json:"listing_title"`
-	TitleID       *int64    `json:"title_id"`
-	TitleName     *string   `json:"title_name"`
-	EditionID     *int64    `json:"edition_id"`
-	Alert         string    `json:"alert"`
-	AlertError    string    `json:"alert_error"`
-	AlertAttempts int       `json:"alert_attempts"`
+	ID              int64     `json:"id"`
+	Source          string    `json:"source"`
+	ExternalID      string    `json:"external_id"`
+	ObservedAt      time.Time `json:"observed_at"`
+	PriceCents      int64     `json:"price_cents"`
+	AcquiredAs      *string   `json:"acquired_as"`
+	URL             string    `json:"url"`
+	ListingTitle    string    `json:"listing_title"`
+	TitleID         *int64    `json:"title_id"`
+	TitleName       *string   `json:"title_name"`
+	EditionID       *int64    `json:"edition_id"`
+	Format          *string   `json:"format"`
+	ListingPhotoURL *string   `json:"listing_photo_url"`
+	CoverURL        *string   `json:"cover_url"`
+	MaxPriceCents   *int64    `json:"max_price_cents"`
+	Alert           string    `json:"alert"`
+	AlertError      string    `json:"alert_error"`
+	AlertAttempts   int       `json:"alert_attempts"`
 }
 
 // Recent returns the newest deal observations, at most limit.
 func (s *Store) Recent(ctx context.Context, limit int) ([]Observation, error) {
 	rows, err := s.pool.Query(ctx, `SELECT o.id, o.source, coalesce(o.external_id, ''), o.observed_at,
 			o.price_cents, o.acquired_as, o.url, coalesce(o.raw->>'title', ''), o.title_id, t.name,
-			o.edition_id,
-			CASE WHEN a.observation_id IS NULL THEN 'none'
+			o.edition_id, e.format, o.raw->>'photo_url', coalesce(nullif(e.cover_url, ''), t.cover_url), w.max_price_cents,
+            CASE WHEN a.observation_id IS NULL THEN 'none'
 			     WHEN a.sent_at IS NOT NULL THEN 'sent'
 			     WHEN a.attempts >= $2 THEN 'failed'
 			     ELSE 'pending' END,
 			coalesce(a.last_error, ''), coalesce(a.attempts, 0)
 		FROM price_observation o
 		LEFT JOIN title t ON t.id = o.title_id
-		LEFT JOIN deal_alert a ON a.observation_id = o.id
-		WHERE o.source = ANY ($3)
+		LEFT JOIN edition e ON e.id = o.edition_id
+        LEFT JOIN deal_alert a ON a.observation_id = o.id
+        LEFT JOIN LATERAL (
+            SELECT c.max_price_cents FROM copy c
+            WHERE c.edition_id = e.id AND c.status = 'wishlist'
+                AND (o.raw->>'wishlist_copy_id' IS NULL OR c.id = (o.raw->>'wishlist_copy_id')::bigint)
+            ORDER BY (c.id = a.copy_id) DESC NULLS LAST,
+                coalesce(c.max_price_cents >= o.price_cents, false) DESC, c.id
+            LIMIT 1
+        ) w ON true
+        WHERE o.source = ANY ($3)
 		ORDER BY o.observed_at DESC, o.id DESC LIMIT $1`, limit, MaxAttempts, sources)
 	if err != nil {
 		return nil, fmt.Errorf("recent observations: %w", err)

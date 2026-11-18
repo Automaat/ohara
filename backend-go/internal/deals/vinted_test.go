@@ -23,6 +23,9 @@ func TestParseVinted(t *testing.T) {
 		t.Fatalf("got %d listings, want the 10 priced in PLN", len(got))
 	}
 	l := got["10464769656"]
+	if got["10789493495"].PhotoURL != "https://images.example.test/vinted.jpg" || l.PhotoURL != "" {
+		t.Fatalf("unexpected Vinted photos: %+v", got)
+	}
 	if l.Source != "vinted" || l.Title != "Łowca Androidów Blu-Ray PL Edycja kolekcjonerska 30 rocznica" ||
 		l.PriceCents != 25000 || l.URL != "https://www.vinted.pl/items/10464769656-lowca-androidow-blu-ray-pl-edycja-kolekcjonerska-30-rocznica" ||
 		l.AcquiredAs == nil || *l.AcquiredAs != "used" {

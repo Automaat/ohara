@@ -4,6 +4,7 @@ import {
 	keywordPayload,
 	keywordsOf,
 	lastRunSummary,
+	limitComparison,
 	type HunterStatus,
 	type Keyword,
 	type RunResult
@@ -87,5 +88,17 @@ describe('lastRunSummary', () => {
 		expect(lastRunSummary(result({ failure: 'context canceled' }))).toBe(
 			'Ostatnie wyszukiwanie przerwane: context canceled'
 		);
+	});
+});
+
+describe('limitComparison', () => {
+	it.each([
+		[8500, 10000, '15\u00a0zł poniżej limitu'],
+		[10000, 10000, 'W limicie'],
+		[10001, 10000, '0,01\u00a0zł powyżej limitu'],
+		[8500, null, 'Brak limitu'],
+		[0, 0, 'W limicie']
+	] as const)('compares %s grosze against %s', (price, limit, expected) => {
+		expect(limitComparison(price, limit)).toBe(expected);
 	});
 });

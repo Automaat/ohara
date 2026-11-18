@@ -154,13 +154,26 @@ func TestDealsViewAndManualRun(t *testing.T) {
 		t.Fatalf("observations = %+v", view.Observations)
 	}
 	sent := 0
+	photos := 0
 	for _, o := range view.Observations {
+		if o.Format == nil || *o.Format != "bluray" || o.MaxPriceCents == nil || *o.MaxPriceCents != 5000 {
+			t.Fatalf("observation format or limit missing: %+v", o)
+		}
+		if o.ListingPhotoURL != nil {
+			photos++
+			if *o.ListingPhotoURL != "https://images.example.test/bluray;s=400x300" {
+				t.Fatalf("unexpected photo: %q", *o.ListingPhotoURL)
+			}
+		}
 		if o.TitleName == nil || *o.TitleName != "Blade Runner" || o.ListingTitle == "" || o.Source != "olx" {
 			t.Fatalf("observation = %+v", o)
 		}
 		if o.Alert == AlertSent {
 			sent++
 		}
+	}
+	if photos != 1 {
+		t.Fatalf("got %d observations with photos, want 1", photos)
 	}
 	if sent != 1 {
 		t.Fatalf("sent alerts = %d, want 1", sent)

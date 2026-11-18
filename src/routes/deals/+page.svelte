@@ -22,6 +22,7 @@
 	import {
 		acquiredLabels,
 		collectionURL,
+		formatLabels,
 		formatPLN,
 		options,
 		type CollectionView,
@@ -34,6 +35,7 @@
 		keywordPayload,
 		keywordsOf,
 		lastRunSummary,
+		limitComparison,
 		sourceLabels,
 		type AlertState,
 		type DealsView,
@@ -167,10 +169,7 @@
 	};
 
 	const columns: DataTableColumn<Row>[] = [
-		{ key: 'title_name', label: 'Pozycja' },
 		{ key: 'listing_title', label: 'Oferta' },
-		{ key: 'price_cents', label: 'Cena', numeric: true },
-		{ key: 'source', label: 'Źródło' },
 		{ key: 'alert', label: 'Powiadomienie' },
 		{ key: 'observed_at', label: 'Znaleziono' }
 	];
@@ -275,20 +274,51 @@
 			scrollHint="Przewiń tabelę w bok"
 		>
 			{#snippet cell(row, column)}
-				{#if column.key === 'title_name'}
-					{#if row.title_id}
-						<Link href={`/titles/${row.title_id}`}>{row.title_name ?? 'Tytuł'}</Link>
-					{:else}
-						Usunięty tytuł
-					{/if}
-				{:else if column.key === 'listing_title'}
-					<Link href={row.url} external externalLabel="otwiera się w nowej karcie"
-						>{row.listing_title || row.url}</Link
-					>
-				{:else if column.key === 'price_cents'}
-					<span class="price">{formatPLN(row.price_cents)}</span>
-				{:else if column.key === 'source'}
-					{sourceLabels[row.source]}{row.acquired_as ? ` · ${acquiredLabels[row.acquired_as]}` : ''}
+				{#if column.key === 'listing_title'}
+					<div class="offer">
+						<div>
+							<Link href={row.url} external externalLabel="otwiera się w nowej karcie"
+								>{row.listing_title || row.url}</Link
+							>
+							<div class="metadata">
+								{sourceLabels[row.source]}{row.acquired_as
+									? ` · ${acquiredLabels[row.acquired_as]}`
+									: ''}
+							</div>
+						</div>
+						<div>
+							<strong class="price">{formatPLN(row.price_cents)}</strong>
+							<div>{limitComparison(row.price_cents, row.max_price_cents)}</div>
+							{#if row.max_price_cents != null}
+								<div class="metadata">Limit {formatPLN(row.max_price_cents)}</div>
+							{/if}
+						</div>
+						<div>
+							{#if row.title_id}
+								<Link
+									href={row.edition_id ? `/editions/${row.edition_id}` : `/titles/${row.title_id}`}
+									>{row.title_name ?? 'Tytuł'}</Link
+								>
+							{:else}
+								Usunięty tytuł
+							{/if}
+							{#if row.format}
+								<span class="metadata"> · {formatLabels[row.format]}</span>
+							{/if}
+						</div>
+						{#if row.listing_photo_url || row.cover_url}
+							<div class="artwork">
+								{#each [{ url: row.listing_photo_url, label: 'Zdjęcie oferty' }, { url: row.cover_url, label: 'Okładka wydania' }] as image (image.label)}
+									{#if image.url}
+										<figure>
+											<img src={image.url} alt="" loading="lazy" referrerpolicy="no-referrer" />
+											<figcaption>{image.label}</figcaption>
+										</figure>
+									{/if}
+								{/each}
+							</div>
+						{/if}
+					</div>
 				{:else if column.key === 'alert'}
 					<Pill tone={alertTones[row.alert]} title={row.alert_error || undefined}
 						>{alertLabels[row.alert]}</Pill
@@ -351,6 +381,27 @@
 		display: grid;
 		gap: 1.5rem;
 		padding: var(--sui-pane-gutter, 1.5rem);
+	}
+	.offer {
+		display: grid;
+		gap: 0.5rem;
+		overflow-wrap: anywhere;
+	}
+	.artwork {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 6rem));
+		gap: 0.5rem;
+	}
+	.artwork figure {
+		margin: 0;
+		font-size: 0.75rem;
+	}
+	.artwork img {
+		display: block;
+		width: 100%;
+		aspect-ratio: 1;
+		object-fit: contain;
+		object-position: center;
 	}
 	.status {
 		margin: 0;

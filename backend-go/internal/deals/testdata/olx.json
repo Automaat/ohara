@@ -4,6 +4,7 @@
    "id": 1112718649,
    "url": "https://www.olx.pl/d/oferta/blade-runner-the-final-cut-bluray-CID751-ID1diQVZ.html",
    "title": "Blade Runner The Final Cut BluRay",
+   "photos": [{"url": "https://images.example.test/bluray;s={width}x{height}"}],
    "params": [
     {
      "key": "price",

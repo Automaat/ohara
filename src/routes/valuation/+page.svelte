@@ -232,14 +232,8 @@
 		gap: 1.5rem;
 		padding: var(--sui-pane-gutter, 1.5rem);
 	}
-	.status,
-	.hints {
-		font-family: 'SUI Plus Jakarta Sans', system-ui, sans-serif;
-		font-size: var(--sui-font-size-body, 0.875rem);
-	}
 	.status {
 		margin: 0;
-		color: var(--sui-text-primary, inherit);
 	}
 	.hints {
 		margin: 0;

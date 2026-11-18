@@ -38,7 +38,7 @@
 		position: relative;
 		display: grid;
 		place-items: center;
-		inline-size: 4rem;
+		inline-size: var(--collection-cover-width, 4rem);
 		aspect-ratio: 2 / 3;
 		border: 1px solid var(--sui-border-divider);
 		border-radius: var(--sui-radius-control);

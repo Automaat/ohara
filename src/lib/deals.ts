@@ -1,4 +1,10 @@
-import type { AcquiredAs, Format, FormIssue, Parsed } from '$lib/collection';
+import {
+	formatPLN,
+	type AcquiredAs,
+	type Format,
+	type FormIssue,
+	type Parsed
+} from '$lib/collection';
 
 export type DealSource = 'olx' | 'vinted' | 'pepper' | 'ceneo';
 export type AlertState = 'none' | 'pending' | 'sent' | 'failed';
@@ -35,7 +41,8 @@ export function limitComparison(price: number, limit: number | null): string {
 	if (limit == null) return 'Brak limitu';
 	const difference = limit - price;
 	if (difference === 0) return 'W limicie';
-	const amount = priceDifference.format(Math.abs(difference) / 100);
+	const cents = Math.abs(difference);
+	const amount = cents % 100 === 0 ? priceDifference.format(cents / 100) : formatPLN(cents);
 	return difference > 0 ? `${amount} poniżej limitu` : `${amount} powyżej limitu`;
 }
 

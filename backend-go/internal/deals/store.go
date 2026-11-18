@@ -150,9 +150,7 @@ func (s *Store) Record(ctx context.Context, l *Listing, w *Want, alert bool) (bo
 			price_cents = EXCLUDED.price_cents,
 			last_seen_at = now(),
 			url = EXCLUDED.url,
-            raw = coalesce(price_observation.raw, '{}'::jsonb) ||
-                CASE WHEN price_observation.edition_id IS NULL OR price_observation.edition_id = EXCLUDED.edition_id
-                    THEN EXCLUDED.raw ELSE EXCLUDED.raw - 'wishlist_copy_id' END,
+			raw = coalesce(price_observation.raw, '{}'::jsonb) || EXCLUDED.raw,
 			acquired_as = coalesce(EXCLUDED.acquired_as, price_observation.acquired_as),
 			edition_id = coalesce(price_observation.edition_id, EXCLUDED.edition_id),
 			title_id = coalesce(price_observation.title_id, EXCLUDED.title_id)
@@ -266,26 +264,28 @@ type Observation struct {
 // Recent returns the newest deal observations, at most limit.
 func (s *Store) Recent(ctx context.Context, limit int) ([]Observation, error) {
 	rows, err := s.pool.Query(ctx, `SELECT o.id, o.source, coalesce(o.external_id, ''), o.observed_at,
-			o.price_cents, o.acquired_as, o.url, coalesce(o.raw->>'title', ''), o.title_id, t.name,
-			o.edition_id, e.format, o.raw->>'photo_url', coalesce(nullif(e.cover_url, ''), t.cover_url), w.max_price_cents,
-            CASE WHEN a.observation_id IS NULL THEN 'none'
+			o.price_cents, o.acquired_as, o.url, coalesce(o.raw->>'title', ''), coalesce(e.title_id, o.title_id), t.name,
+			e.id, e.format, o.raw->>'photo_url', coalesce(nullif(e.cover_url, ''), t.cover_url), w.max_price_cents,
+			CASE WHEN a.observation_id IS NULL THEN 'none'
 			     WHEN a.sent_at IS NOT NULL THEN 'sent'
 			     WHEN a.attempts >= $2 THEN 'failed'
 			     ELSE 'pending' END,
 			coalesce(a.last_error, ''), coalesce(a.attempts, 0)
 		FROM price_observation o
-		LEFT JOIN title t ON t.id = o.title_id
-		LEFT JOIN edition e ON e.id = o.edition_id
-        LEFT JOIN deal_alert a ON a.observation_id = o.id
-        LEFT JOIN LATERAL (
-            SELECT c.max_price_cents FROM copy c
-            WHERE c.edition_id = e.id AND c.status = 'wishlist'
-                AND (o.raw->>'wishlist_copy_id' IS NULL OR c.id = (o.raw->>'wishlist_copy_id')::bigint)
-            ORDER BY (c.id = a.copy_id) DESC NULLS LAST,
-                coalesce(c.max_price_cents >= o.price_cents, false) DESC, c.id
-            LIMIT 1
-        ) w ON true
-        WHERE o.source = ANY ($3)
+		LEFT JOIN deal_alert a ON a.observation_id = o.id
+		LEFT JOIN LATERAL (
+			SELECT coalesce((o.raw->>'wishlist_copy_id')::bigint, a.copy_id) AS copy_id
+		) matched ON true
+		LEFT JOIN LATERAL (
+			SELECT c.edition_id, c.max_price_cents FROM copy c
+			WHERE c.status = 'wishlist'
+				AND (c.id = matched.copy_id OR (matched.copy_id IS NULL AND c.edition_id = o.edition_id))
+			ORDER BY coalesce(c.max_price_cents >= o.price_cents, false) DESC, c.id
+			LIMIT 1
+		) w ON true
+		LEFT JOIN edition e ON e.id = coalesce(w.edition_id, o.edition_id)
+		LEFT JOIN title t ON t.id = coalesce(e.title_id, o.title_id)
+		WHERE o.source = ANY ($3)
 		ORDER BY o.observed_at DESC, o.id DESC LIMIT $1`, limit, MaxAttempts, sources)
 	if err != nil {
 		return nil, fmt.Errorf("recent observations: %w", err)

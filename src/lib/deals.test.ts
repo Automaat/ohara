@@ -95,6 +95,7 @@ describe('limitComparison', () => {
 	it.each([
 		[8500, 10000, '15\u00a0zł poniżej limitu'],
 		[10000, 10000, 'W limicie'],
+		[8450, 10000, '15,50\u00a0zł poniżej limitu'],
 		[10001, 10000, '0,01\u00a0zł powyżej limitu'],
 		[8500, null, 'Brak limitu'],
 		[0, 0, 'W limicie']

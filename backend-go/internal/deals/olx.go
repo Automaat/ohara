@@ -51,11 +51,15 @@ type olxParam struct {
 }
 
 type olxOffer struct {
-	ID     int64          `json:"id"`
-	URL    string         `json:"url"`
-	Title  string         `json:"title"`
-	Photos []listingPhoto `json:"photos"`
-	Params []olxParam     `json:"params"`
+	ID     int64      `json:"id"`
+	URL    string     `json:"url"`
+	Title  string     `json:"title"`
+	Photos []olxPhoto `json:"photos"`
+	Params []olxParam `json:"params"`
+}
+
+type olxPhoto struct {
+	Link string `json:"link"`
 }
 
 type olxPrice struct {
@@ -92,7 +96,7 @@ func parseOLX(body []byte) ([]Listing, error) {
 		}
 		for _, photo := range o.Photos {
 			// OLX templates require a size and an optional quality suffix.
-			candidate := strings.NewReplacer("{width}", "400", "{height}", "300", "{fill}", "").Replace(photo.URL)
+			candidate := strings.NewReplacer("{width}", "400", "{height}", "300", "{fill}", "").Replace(photo.Link)
 			if l.PhotoURL = imageURL(candidate); l.PhotoURL != "" {
 				break
 			}

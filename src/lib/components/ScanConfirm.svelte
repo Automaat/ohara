@@ -28,7 +28,6 @@
 	} from '$lib/scan';
 
 	let {
-		barcode,
 		target,
 		candidates,
 		picked,
@@ -40,7 +39,6 @@
 		onsave,
 		onskip
 	}: {
-		barcode: string;
 		target: SaveTarget;
 		candidates: Candidate[];
 		picked: number;
@@ -76,7 +74,6 @@
 		onsave();
 	}}
 >
-	<p class="code">{barcode}</p>
 	<FormError message={general} />
 	{#if target.kind === 'owned'}
 		<p>
@@ -111,7 +108,13 @@
 			<Callout tone="warning">Nie odpowiedziały źródła: {sources}.</Callout>
 		{/if}
 		<SegmentedControl label="Typ" options={options(kindLabels)} bind:value={form.kind} />
-		<Field label="Tytuł" bind:value={form.name} error={errorFor('name')} autocomplete="off" />
+		<Field
+			id="scan-name"
+			label="Tytuł"
+			bind:value={form.name}
+			error={errorFor('name')}
+			autocomplete="off"
+		/>
 		{#if formatOptions.length > 0}
 			<SegmentedControl label="Nośnik" options={formatOptions} bind:value={form.format} />
 		{:else}
@@ -165,11 +168,6 @@
 		width: 8rem;
 		height: auto;
 		border-radius: var(--sui-radius-sm, 0.25rem);
-	}
-	.code {
-		margin: 0;
-		font-family: var(--sui-mono);
-		font-size: 1.125rem;
 	}
 	p {
 		margin: 0;

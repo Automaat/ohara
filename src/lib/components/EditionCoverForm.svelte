@@ -55,13 +55,13 @@
 		/>
 		<p id="edition-cover-limits">JPEG lub PNG, do 8 MiB i 16 megapikseli.</p>
 		<div class="actions">
-			<Button type="submit" disabled={!file || busy}
-				>{hasOverride ? 'Zastąp zdjęcie' : 'Dodaj zdjęcie'}</Button
-			>
+			<Button type="submit" disabled={!file || busy}>
+				{hasOverride ? 'Zastąp zdjęcie' : 'Dodaj zdjęcie'}
+			</Button>
 			{#if hasOverride}
-				<Button type="button" tone="stop-quiet" disabled={busy} onclick={() => save()}
-					>Usuń własne zdjęcie</Button
-				>
+				<Button type="button" tone="stop-quiet" disabled={busy} onclick={() => save()}>
+					Usuń własne zdjęcie
+				</Button>
 			{/if}
 		</div>
 		<FormError message={failure} />

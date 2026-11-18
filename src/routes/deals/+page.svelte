@@ -194,8 +194,10 @@
 				bind:element={headerSearch}
 				tone="signal"
 				loading={starting || !!status?.running}
-				onclick={runNow}>{status?.running ? 'Szukam…' : 'Szukaj teraz'}</Button
+				onclick={runNow}
 			>
+				{status?.running ? 'Szukam…' : 'Szukaj teraz'}
+			</Button>
 		{/if}
 	{/snippet}
 </PageHeader>
@@ -251,8 +253,10 @@
 						bind:element={emptySearch}
 						tone="signal"
 						loading={starting || !!status?.running}
-						onclick={runNow}>{status?.running ? 'Szukam…' : 'Szukaj teraz'}</Button
+						onclick={runNow}
 					>
+						{status?.running ? 'Szukam…' : 'Szukaj teraz'}
+					</Button>
 				{:else if hasWishlist === false}
 					<Button tone="signal" href="/titles/new">Dodaj pozycję</Button>
 				{/if}
@@ -282,17 +286,17 @@
 						Usunięty tytuł
 					{/if}
 				{:else if column.key === 'listing_title'}
-					<Link href={row.url} external externalLabel="otwiera się w nowej karcie"
-						>{row.listing_title || row.url}</Link
-					>
+					<Link href={row.url} external externalLabel="otwiera się w nowej karcie">
+						{row.listing_title || row.url}
+					</Link>
 				{:else if column.key === 'price_cents'}
 					<span class="price">{formatPLN(row.price_cents)}</span>
 				{:else if column.key === 'source'}
 					{sourceLabels[row.source]}{row.acquired_as ? ` · ${acquiredLabels[row.acquired_as]}` : ''}
 				{:else if column.key === 'alert'}
-					<Pill tone={alertTones[row.alert]} title={row.alert_error || undefined}
-						>{alertLabels[row.alert]}</Pill
-					>
+					<Pill tone={alertTones[row.alert]} title={row.alert_error || undefined}>
+						{alertLabels[row.alert]}
+					</Pill>
 				{:else if column.key === 'observed_at'}
 					<RelativeTime value={row.observed_at} locale="pl" />
 				{/if}

@@ -34,6 +34,7 @@
 	import ArtworkHeader from '$lib/components/ArtworkHeader.svelte';
 	import CopyFormFields from '$lib/components/CopyFormFields.svelte';
 	import EditionFormFields from '$lib/components/EditionFormFields.svelte';
+	import { purchaseDate } from '$lib/polish';
 
 	const id = $derived(Number(page.params.id));
 
@@ -206,7 +207,7 @@
 										label: 'Cena maksymalna',
 										value: copy.max_price_cents == null ? null : formatPLN(copy.max_price_cents)
 									},
-									{ label: 'Kupiono', value: copy.purchased_on },
+									{ label: 'Kupiono', value: purchaseDate(copy.purchased_on) },
 									{ label: 'Sklep', value: copy.shop },
 									{
 										label: 'Nowy/używany',

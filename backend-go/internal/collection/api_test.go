@@ -124,6 +124,9 @@ func TestEditionDetailReturnsArtworkForEachEdition(t *testing.T) {
 	a.mustDo(http.MethodPost, "/api/titles", obj{
 		"kind": "movie", "name": "Seksmisja", "cover_url": representative,
 	}, &title, http.StatusCreated)
+	a.mustDo(http.MethodPut, fmt.Sprintf("/api/titles/%d", title.ID), obj{
+		"kind": "movie", "name": "Seksmisja",
+	}, nil, http.StatusOK)
 
 	for _, tt := range []struct {
 		name  string
@@ -152,6 +155,16 @@ func TestEditionDetailReturnsArtworkForEachEdition(t *testing.T) {
 				t.Errorf("title cover = %v, want %q", detail.Title.CoverURL, representative)
 			}
 		})
+	}
+}
+
+func TestRejectsInvalidEditionArtworkURLs(t *testing.T) {
+	a := newAPI(t)
+	titleID := a.title("movie", "Seksmisja")
+	for _, cover := range []string{"javascript:x", "//example.test/cover.jpg", "https://u:p@example.test/cover.jpg"} {
+		a.fails(http.MethodPost, "/api/editions", obj{
+			"title_id": titleID, "format": "dvd", "cover_url": cover,
+		}, http.StatusUnprocessableEntity, "cover_url")
 	}
 }
 

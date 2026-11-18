@@ -180,6 +180,7 @@
 		{/if}
 
 		<Section
+			class="copies"
 			title="Egzemplarze"
 			count={d.copies.length}
 			countedName={(title: string, n: string) => `${title} (${n})`}
@@ -323,8 +324,23 @@
 <style>
 	.content {
 		display: grid;
+		grid-template-columns: minmax(0, 1fr);
 		gap: 1.5rem;
 		padding: var(--sui-pane-gutter, 1.5rem);
+	}
+	@container (max-width: 19rem) {
+		.content :global(.copies > .sui-section-head) {
+			flex-wrap: wrap;
+			row-gap: 0.75rem;
+		}
+		.content :global(.copies > .sui-section-head > .sui-section-seat) {
+			block-size: auto;
+			flex-basis: 100%;
+			margin-block-start: 0;
+		}
+		.content :global(.copies > .sui-section-head .sui-section-actions) {
+			justify-content: flex-start;
+		}
 	}
 	.notes {
 		margin: 0;

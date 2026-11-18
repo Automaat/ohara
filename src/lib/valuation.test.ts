@@ -1,12 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
 	boundTotal,
-	dayTimestamp,
 	estimateSource,
 	estimateValue,
-	formatDay,
 	formatZl,
-	historySeries,
+	historyChart,
 	intervalLabel,
 	lastRunSummary,
 	offers,
@@ -153,19 +151,28 @@ const point = (day: string, base: number): HistoryPoint => ({
 });
 
 describe('history chart', () => {
-	it('maps days to UTC midnight and back to a short label', () => {
-		const ts = dayTimestamp('2026-11-17');
-		expect(ts).toBe(Date.UTC(2026, 10, 17));
-		expect(formatDay(ts)).toBe('17 lis');
+	it('labels the first valuation with its date and leaves padding ticks blank', () => {
+		const chart = historyChart([point('2026-11-17', 1000)]);
+
+		const first = chart.series[0].points[0];
+
+		expect(first.x).toBe(0);
+		expect(chart.formatDay(first.x)).toBe('17 lis');
+		expect(chart.formatDay(-1)).toBe('');
+		expect(chart.formatDay(1)).toBe('');
 	});
 
-	it('draws each bound and the spending in złoty', () => {
-		const series = historySeries([point('2026-11-16', 1000), point('2026-11-17', 1100)]);
+	it('preserves elapsed days and values in złoty across a gap', () => {
+		const history = [point('2026-10-24', 1000), point('2026-10-27', 1100)];
+
+		const { series, formatDay } = historyChart(history);
+
 		expect(series.map((s) => s.label)).toEqual(['Skup', 'Używane', 'Nowe', 'Wydano']);
 		expect(series[1].points).toEqual([
-			{ x: Date.UTC(2026, 10, 16), y: 40 },
-			{ x: Date.UTC(2026, 10, 17), y: 44 }
+			{ x: 0, y: 40 },
+			{ x: 3, y: 44 }
 		]);
+		expect(formatDay(3)).toBe('27 paź');
 		expect(series[3].points.map((p) => p.y)).toEqual([100, 100]);
 	});
 

@@ -143,8 +143,9 @@ export function lastRunSummary(result: RunResult | null): string | null {
 	return parts.join(', ');
 }
 
-/** A day "2026-11-17" as its UTC midnight timestamp, for the chart's x axis. */
-export function dayTimestamp(day: string): number {
+const dayMilliseconds = 86_400_000;
+
+function dayTimestamp(day: string): number {
 	return Date.parse(`${day}T00:00:00Z`);
 }
 
@@ -154,22 +155,27 @@ const dayFormat = new Intl.DateTimeFormat('pl-PL', {
 	timeZone: 'UTC'
 });
 
-/** A chart timestamp as "17 lis". */
-export function formatDay(ts: number): string {
-	return dayFormat.format(new Date(ts));
-}
-
-/** The value history as chart series in złoty: the three bounds and what was spent. */
-export function historySeries(history: HistoryPoint[]): ChartSeries[] {
+/** The valuation series in złoty, with x measured in days from the first valuation. */
+export function historyChart(history: HistoryPoint[]) {
+	const start = history[0] ? dayTimestamp(history[0].day) : 0;
 	const series = (id: string, label: string, cents: (p: HistoryPoint) => number): ChartSeries => ({
 		id,
 		label,
-		points: history.map((p) => ({ x: dayTimestamp(p.day), y: cents(p) / 100 }))
+		points: history.map((p) => ({
+			x: (dayTimestamp(p.day) - start) / dayMilliseconds,
+			y: cents(p) / 100
+		}))
 	});
-	return [
-		...boundKeys.map((k) => series(k, boundLabels[k], (p) => p[k].cents)),
-		series('spent', 'Wydano', (p) => p.spent_cents)
-	];
+	return {
+		series: [
+			...boundKeys.map((k) => series(k, boundLabels[k], (p) => p[k].cents)),
+			series('spent', 'Wydano', (p) => p.spent_cents)
+		],
+		formatDay: (offset: number) =>
+			history.length === 1 && offset !== 0
+				? ''
+				: dayFormat.format(new Date(start + offset * dayMilliseconds))
+	};
 }
 
 const zl = new Intl.NumberFormat('pl-PL', { maximumFractionDigits: 0 });

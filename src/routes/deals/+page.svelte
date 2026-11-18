@@ -17,7 +17,7 @@
 		type DataTableColumn,
 		type PillTone
 	} from '@smykla-skalski/sui';
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 	import { ApiError, errorMessage, request } from '$lib/api';
 	import {
 		acquiredLabels,
@@ -46,7 +46,10 @@
 	type Row = Observation & Record<string, unknown>;
 
 	let view = $state<DealsView | null>(null);
-	let hasWishlist = $state(false);
+	let hasWishlist = $state<boolean | null>(null);
+	let wishlistFailure = $state<string | null>(null);
+	let emptySearch = $state<HTMLButtonElement | HTMLAnchorElement | null>(null);
+	let headerSearch = $state<HTMLButtonElement | HTMLAnchorElement | null>(null);
 	let failure = $state<string | null>(null);
 	let loading = $state(true);
 	let runError = $state<string | null>(null);
@@ -65,16 +68,15 @@
 		loading = true;
 		try {
 			const next = await request<DealsView>(fetch, 'GET', '/api/deals');
-			if (next.observations.length === 0) {
-				const wishlist = await request<CollectionView>(
-					fetch,
-					'GET',
-					collectionURL({ kind: '', format: '', status: 'wishlist', q: '' })
-				);
-				hasWishlist = wishlist.totals.wishlist > 0;
-			}
+			const restoreFocus = emptySearch !== null && document.activeElement === emptySearch;
 			view = next;
 			failure = null;
+			if (next.observations.length === 0) {
+				await loadWishlist();
+			} else if (restoreFocus) {
+				await tick();
+				if (document.activeElement === document.body) headerSearch?.focus();
+			}
 		} catch (err) {
 			failure = errorMessage(err);
 		} finally {
@@ -82,6 +84,20 @@
 		}
 		clearTimeout(poll);
 		if (view?.status.running) poll = setTimeout(load, 3000);
+	}
+
+	async function loadWishlist() {
+		try {
+			const wishlist = await request<CollectionView>(
+				fetch,
+				'GET',
+				collectionURL({ kind: '', format: '', status: 'wishlist', q: '' })
+			);
+			hasWishlist = wishlist.totals.wishlist > 0;
+			wishlistFailure = null;
+		} catch (err) {
+			wishlistFailure = errorMessage(err);
+		}
 	}
 
 	async function loadKeywords() {
@@ -168,19 +184,18 @@
 	<title>Okazje · Ohara</title>
 </svelte:head>
 
-{#snippet searchButton()}
-	<Button tone="signal" loading={starting || !!status?.running} onclick={runNow}
-		>{status?.running ? 'Szukam…' : 'Szukaj teraz'}</Button
-	>
-{/snippet}
-
 <PageHeader
 	title="Okazje"
 	description="Oferty z OLX, Vinted, Pepper i Ceneo pasujące do pozycji z listy życzeń."
 >
 	{#snippet actions()}
 		{#if rows.length > 0}
-			{@render searchButton()}
+			<Button
+				bind:element={headerSearch}
+				tone="signal"
+				loading={starting || !!status?.running}
+				onclick={runNow}>{status?.running ? 'Szukam…' : 'Szukaj teraz'}</Button
+			>
 		{/if}
 	{/snippet}
 </PageHeader>
@@ -216,16 +231,29 @@
 	{/if}
 
 	{#if view && !failure && rows.length === 0}
+		{#if wishlistFailure}
+			<Callout tone="warning" title="Nie udało się sprawdzić listy życzeń">
+				<p>{wishlistFailure}</p>
+				<Button {loading} onclick={load}>Spróbuj ponownie</Button>
+			</Callout>
+		{/if}
 		<EmptyState
-			title={hasWishlist ? 'Brak pasujących ofert' : 'Lista życzeń jest pusta'}
-			description={hasWishlist
-				? 'Uruchom wyszukiwanie, aby sprawdzić, czy pojawiły się nowe oferty.'
-				: 'Dodaj pozycję do listy życzeń, aby szukać pasujących ofert.'}
+			title={hasWishlist === false ? 'Lista życzeń jest pusta' : 'Brak pasujących ofert'}
+			description={hasWishlist === null
+				? ''
+				: hasWishlist
+					? 'Uruchom wyszukiwanie, aby sprawdzić, czy pojawiły się nowe oferty.'
+					: 'Dodaj pozycję do listy życzeń, aby szukać pasujących ofert.'}
 		>
 			{#snippet action()}
 				{#if hasWishlist}
-					{@render searchButton()}
-				{:else}
+					<Button
+						bind:element={emptySearch}
+						tone="signal"
+						loading={starting || !!status?.running}
+						onclick={runNow}>{status?.running ? 'Szukam…' : 'Szukaj teraz'}</Button
+					>
+				{:else if hasWishlist === false}
 					<Button tone="signal" href="/titles/new">Dodaj pozycję</Button>
 				{/if}
 			{/snippet}

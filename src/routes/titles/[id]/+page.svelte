@@ -1,13 +1,12 @@
 <script lang="ts">
 	import {
-		BackLink,
 		Button,
 		Card,
 		ConfirmDialog,
 		ErrorState,
 		FactList,
 		FormError,
-		PageHeader,
+		Link,
 		Section,
 		Skeleton
 	} from '@smykla-skalski/sui';
@@ -29,6 +28,7 @@
 		type Title,
 		type TitleDetail
 	} from '$lib/collection';
+	import ArtworkHeader from '$lib/components/ArtworkHeader.svelte';
 	import EditionFormFields from '$lib/components/EditionFormFields.svelte';
 	import TitleFormFields from '$lib/components/TitleFormFields.svelte';
 
@@ -120,10 +120,6 @@
 			deleteError = errorMessage(err);
 		}
 	}
-
-	function authorsLine(t: Title): string | null {
-		return t.authors.length ? t.authors.join(', ') : null;
-	}
 </script>
 
 <svelte:head>
@@ -145,52 +141,26 @@
 	<div class="content"><Skeleton /></div>
 {:else}
 	{@const t = detail}
-	<PageHeader title={displayName(t)} description={kindLabels[t.kind]}>
-		{#snippet kicker()}
-			<BackLink href="/titles" label="Tytuły" />
-		{/snippet}
+	<ArtworkHeader
+		title={displayName(t)}
+		description={kindLabels[t.kind]}
+		backHref="/titles"
+		backLabel="Tytuły"
+		cover={t.cover_url}
+		coverLabel="Okładka poglądowa tytułu"
+	>
 		{#snippet facts()}
 			<FactList
 				layout="inline"
-				missingLabel="—"
 				facts={[
-					{ label: 'Rok', value: t.year?.toString(), mono: true },
-					...(t.kind === 'book'
-						? [
-								{ label: 'Autorzy', value: authorsLine(t) },
-								{ label: 'BN', value: t.bn_id, mono: true },
-								{ label: 'Open Library', value: t.openlibrary_id, mono: true }
-							]
-						: t.kind === 'music'
-							? [{ label: 'Wykonawcy', value: authorsLine(t) }]
-							: [{ label: 'TMDB', value: t.tmdb_id?.toString(), mono: true }]),
-					{ label: 'Egzemplarze', value: String(t.copy_count), mono: true }
-				]}
+					{ label: t.kind === 'music' ? 'Wykonawcy' : 'Autorzy', value: t.authors.join(', ') },
+					{ label: 'Rok', value: t.year?.toString(), mono: true }
+				].filter((fact) => fact.value)}
 			/>
 		{/snippet}
-		{#snippet actions()}
-			<Button onclick={() => startEdit(t)}>Edytuj</Button>
-			<Button tone="stop-quiet" onclick={() => ((deleteError = null), (confirmDelete = true))}
-				>Usuń</Button
-			>
-		{/snippet}
-	</PageHeader>
+	</ArtworkHeader>
 
 	<div class="content">
-		<FormError message={deleteError} />
-		{#if editing}
-			<Section title="Edycja tytułu">
-				<TitleFormFields
-					bind:form={titleForm}
-					issue={titleIssue}
-					saving={savingTitle}
-					kindLocked={t.edition_count > 0}
-					submitLabel="Zapisz zmiany"
-					onsubmit={saveTitle}
-					oncancel={() => (editing = false)}
-				/>
-			</Section>
-		{/if}
 		{#if t.notes}
 			<p class="notes">{t.notes}</p>
 		{/if}
@@ -230,14 +200,20 @@
 			{/if}
 			<div class="cards">
 				{#each t.editions as e (e.id)}
-					<Card title={editionSummary(e)} level={3} href={`/editions/${e.id}`}>
+					<Card
+						title={editionSummary(e)}
+						description={[e.publisher, e.year].filter(Boolean).join(' · ') || undefined}
+						level={3}
+						href={`/editions/${e.id}`}
+					>
 						{#if e.copies.length === 0}
 							<p class="muted">Brak egzemplarzy.</p>
 						{:else}
 							<ul class="copies">
 								{#each e.copies as c (c.id)}
 									<li>
-										{statusLabels[c.status]}{c.price_cents != null
+										<Link href={`/copies/${c.id}`}>{statusLabels[c.status]}</Link>{c.price_cents !=
+										null
 											? ` · ${formatPLN(c.price_cents)}`
 											: ''}{c.shop ? ` · ${c.shop}` : ''}
 									</li>
@@ -247,6 +223,38 @@
 					</Card>
 				{/each}
 			</div>
+		</Section>
+		<Section title="Zarządzanie tytułem">
+			{#if t.bn_id || t.openlibrary_id || t.tmdb_id}
+				<FactList
+					layout="inline"
+					facts={[
+						{ label: 'BN', value: t.bn_id, mono: true },
+						{ label: 'Open Library', value: t.openlibrary_id, mono: true },
+						{ label: 'TMDB', value: t.tmdb_id?.toString(), mono: true }
+					].filter((fact) => fact.value)}
+				/>
+			{/if}
+			<div class="actions">
+				<Button tone="ghost" onclick={() => startEdit(t)}>Edytuj tytuł</Button>
+				<Button tone="stop-quiet" onclick={() => ((deleteError = null), (confirmDelete = true))}
+					>Usuń tytuł</Button
+				>
+			</div>
+			<FormError message={deleteError} />
+			{#if editing}
+				<Card title="Edycja tytułu" level={3}>
+					<TitleFormFields
+						bind:form={titleForm}
+						issue={titleIssue}
+						saving={savingTitle}
+						kindLocked={t.edition_count > 0}
+						submitLabel="Zapisz zmiany"
+						onsubmit={saveTitle}
+						oncancel={() => (editing = false)}
+					/>
+				</Card>
+			{/if}
 		</Section>
 	</div>
 
@@ -273,7 +281,12 @@
 	.cards {
 		display: grid;
 		gap: 1rem;
-		grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr));
+		grid-template-columns: repeat(auto-fill, minmax(min(100%, 18rem), 1fr));
+	}
+	.actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem;
 	}
 	.copies {
 		margin: 0;

@@ -3,13 +3,16 @@
 	import { tick, untrack } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { ApiError, errorMessage } from '#lib/api.js';
+	import { ApiError, errorMessage, invalidBarcodeMessage } from '#lib/api.js';
 	import { formatPLN, type FormIssue } from '#lib/collection.js';
 	import ScanConfirm from '#lib/components/ScanConfirm.svelte';
 	import { logScan } from '#lib/recent.svelte.js';
 	import {
 		FormRejected,
+		LatestLoad,
+		checkDigitMatches,
 		cleanBarcode,
+		isInvalidBarcode,
 		loadSticky,
 		looksLikeBarcode,
 		newRequestKey,
@@ -41,6 +44,7 @@
 		| { kind: 'queued' }
 		| { kind: 'ready'; status: Status }
 		| { kind: 'saved'; name: string; price: string; href: string }
+		| { kind: 'invalid'; message: string }
 		| { kind: 'failed'; message: string };
 
 	const statusTitles: Record<Status, string> = {
@@ -69,6 +73,7 @@
 	/** What the previous barcode came to, when a scanner moved straight on to this one. */
 	let previous = $state<string | null>(null);
 	let sticky = loadSticky(storage());
+	const loads = new LatestLoad();
 
 	const barcode = $derived(cleanBarcode(page.params.barcode ?? ''));
 	const manual = $derived(page.url.searchParams.get('manual') === '1');
@@ -97,6 +102,7 @@
 	}
 
 	async function load(code: string, byHand: boolean) {
+		const current = loads.start();
 		phase = { kind: 'loading' };
 		pending = null;
 		issue = null;
@@ -105,7 +111,11 @@
 		nextCode = '';
 		sticky = loadSticky(storage());
 		if (!looksLikeBarcode(code)) {
-			phase = { kind: 'failed', message: `„${code}” nie wygląda na kod kreskowy.` };
+			refuse(`„${code}” nie wygląda na kod kreskowy.`);
+			return;
+		}
+		if (!checkDigitMatches(code)) {
+			refuse(invalidBarcodeMessage);
 			return;
 		}
 		if (byHand) {
@@ -115,7 +125,7 @@
 		}
 		try {
 			const r = await resolveScan(fetch, code);
-			if (code !== barcode) return;
+			if (!current()) return;
 			if (r.kind === 'owned') {
 				pending = {
 					key: newRequestKey(),
@@ -147,8 +157,16 @@
 			}
 			void focus('scan-price');
 		} catch (err) {
-			phase = { kind: 'failed', message: errorMessage(err) };
+			if (!current()) return;
+			if (isInvalidBarcode(err)) refuse(errorMessage(err));
+			else phase = { kind: 'failed', message: errorMessage(err) };
 		}
+	}
+
+	/** A barcode no retry can fix: the way on is the next scan. */
+	function refuse(message: string) {
+		phase = { kind: 'invalid', message };
+		void focus('scan-next');
 	}
 
 	function pick(index: number) {
@@ -276,9 +294,11 @@
 			? 'Nie znaleziono'
 			: phase.kind === 'ready'
 				? statusTitles[phase.status]
-				: phase.kind === 'failed'
-					? 'Nie udało się sprawdzić kodu'
-					: 'Sprawdzam kod…'}
+				: phase.kind === 'invalid'
+					? 'Nieprawidłowy kod'
+					: phase.kind === 'failed'
+						? 'Nie udało się sprawdzić kodu'
+						: 'Sprawdzam kod…'}
 	description={phase.kind === 'saved' ? phase.price || undefined : (pending?.barcode ?? barcode)}
 >
 	{#snippet kicker()}
@@ -323,6 +343,9 @@
 			<Button tone="signal" onclick={enterManually}>Dodaj ręcznie</Button>
 			<Button href="/scan/queue">Do uzupełnienia</Button>
 		</div>
+		{@render nextScanForm()}
+	{:else if phase.kind === 'invalid'}
+		<Callout tone="warning" live>{phase.message}</Callout>
 		{@render nextScanForm()}
 	{:else if phase.kind === 'failed'}
 		<Callout tone="warning" live>{phase.message}</Callout>

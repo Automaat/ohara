@@ -3,13 +3,17 @@ import { ApiError } from './api';
 import type { EditionDetail, Format } from './collection';
 import {
 	FormRejected,
+	LatestLoad,
 	RepeatGuard,
+	barcodeInputError,
 	cameraErrorMessage,
 	candidateLabel,
+	checkDigitMatches,
 	cleanBarcode,
 	cropRect,
 	emptySticky,
 	isBookBarcode,
+	isInvalidBarcode,
 	loadSticky,
 	looksLikeBarcode,
 	newRequestKey,
@@ -128,6 +132,57 @@ describe('barcode input', () => {
 		['', false]
 	])('looksLikeBarcode(%j) is %s', (code, want) => {
 		expect(looksLikeBarcode(code)).toBe(want);
+	});
+
+	it.each([
+		['EAN-8', '96385074', true],
+		['EAN-8', '96385075', false],
+		['UPC-A', '036000291452', true],
+		['UPC-A', '036000291453', false],
+		['EAN-13', '5901234123457', true],
+		['EAN-13', '5907000000014', true],
+		['EAN-13', '5907000000017', false],
+		['EAN-13 ISBN', '9780306406157', true],
+		['EAN-13 ISBN', '9780306406158', false],
+		['GTIN-14', '15901234123454', true],
+		['GTIN-14', '15901234123455', false],
+		['ISBN-10', '0306406152', true],
+		['ISBN-10', '0306406153', false],
+		['ISBN-10 with X', '080442957X', true],
+		['ISBN-10 with X', '030640615X', false],
+		['X inside ISBN-10', '03X6406152', false],
+		['too short', '1234567', false],
+		['empty', '', false]
+	])('checkDigitMatches for %s %j is %s', (_, code, want) => {
+		expect(checkDigitMatches(code)).toBe(want);
+	});
+
+	it('accepts exactly one check digit for every body', () => {
+		for (const body of ['9638507', '03600029145', '590700000001', '1590123412345']) {
+			const fits = [...'0123456789'].filter((d) => checkDigitMatches(body + d));
+			expect(fits, body).toHaveLength(1);
+		}
+		const isbn = [...'0123456789X'].filter((d) => checkDigitMatches('030640615' + d));
+		expect(isbn).toEqual(['2']);
+	});
+
+	it.each([
+		['5907000000014', undefined],
+		['5907000000017', 'Nieprawidłowy kod kreskowy: sprawdź cyfry.'],
+		['59070000000', 'Wpisz pełny kod kreskowy lub ISBN i spróbuj ponownie.'],
+		['', 'Wpisz pełny kod kreskowy lub ISBN i spróbuj ponownie.']
+	])('barcodeInputError(%j) is %j', (code, want) => {
+		expect(barcodeInputError(code)).toBe(want);
+	});
+
+	it.each([
+		['a refused barcode', new ApiError('x', 422, 'barcode'), true],
+		['another field', new ApiError('x', 422, 'price'), false],
+		['a barcode conflict', new ApiError('x', 409, 'barcode'), false],
+		['a server failure', new ApiError('x', 500), false],
+		['a network failure', new TypeError('Failed to fetch'), false]
+	])('isInvalidBarcode for %s is %s', (_, err, want) => {
+		expect(isInvalidBarcode(err)).toBe(want);
 	});
 
 	it.each([
@@ -618,6 +673,25 @@ describe('RepeatGuard', () => {
 		g.remember('5901234123457', 0);
 		expect(g.accepts('5901234123457', 1000)).toBe(false);
 		expect(g.accepts('5901234123457', 2500)).toBe(true);
+	});
+});
+
+describe('LatestLoad', () => {
+	it('lets only the newest load apply its outcome', () => {
+		const loads = new LatestLoad();
+		const first = loads.start();
+		expect(first()).toBe(true);
+		const second = loads.start();
+		expect(first()).toBe(false);
+		expect(second()).toBe(true);
+		loads.start();
+		expect(second()).toBe(false);
+	});
+
+	it('keeps separate pages apart', () => {
+		const one = new LatestLoad().start();
+		new LatestLoad().start();
+		expect(one()).toBe(true);
 	});
 });
 

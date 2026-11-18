@@ -2,7 +2,7 @@
 	import { Button, Callout, FactList, PageHeader, Pill, Section } from '@smykla-skalski/sui';
 	import { onMount } from 'svelte';
 	import { errorMessage } from '$lib/api';
-	import { databaseBadge, fetchStatus, type Status } from '$lib/status';
+	import { databaseBadge, fetchStatus, StatusError, type Status } from '$lib/status';
 
 	let info = $state<Status | null>(null);
 	let failure = $state<string | null>(null);
@@ -15,7 +15,7 @@
 		try {
 			info = await fetchStatus(fetch);
 		} catch (err) {
-			failure = errorMessage(err);
+			failure = err instanceof StatusError ? err.message : errorMessage(err);
 		} finally {
 			loading = false;
 		}
@@ -35,14 +35,14 @@
 		{#if loading}
 			<p class="metadata" role="status">Sprawdzanie stanu serwera…</p>
 		{:else if failure}
-			<Callout tone="warning" title="Nie udało się sprawdzić stanu serwera">
+			<Callout tone="warning" warningLabel="Uwaga:" title="Nie udało się sprawdzić stanu serwera">
 				<p>{failure}</p>
 				<Button onclick={load}>Spróbuj ponownie</Button>
 			</Callout>
 		{:else if info && database}
 			<FactList layout="inline" missingLabel="—" facts={[{ label: 'Wersja', value: info.version }]}
 			></FactList>
-			<p>Baza danych <Pill tone={database.tone} dot>{database.label}</Pill></p>
+			<p>Baza danych <Pill tone={database.tone}>{database.label}</Pill></p>
 		{/if}
 	</Section>
 
@@ -68,5 +68,8 @@
 	dd {
 		margin: 0 0 var(--sui-space-3);
 		overflow-wrap: anywhere;
+	}
+	code {
+		font-family: inherit;
 	}
 </style>

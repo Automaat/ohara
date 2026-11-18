@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { purchaseDate } from '$lib/polish';
 	import {
 		BackLink,
 		Button,
@@ -281,9 +282,13 @@
 							>
 						</Link>
 					{:else if column.key === 'price_cents'}
-						{formatPLN(row.price_cents)}
+						<span class="price">{formatPLN(row.price_cents)}</span>
 					{:else if column.key === 'purchased_on'}
-						{row.purchased_on ?? ''}
+						{#if row.purchased_on}
+							<time class="metadata" datetime={row.purchased_on}
+								>{purchaseDate(row.purchased_on)}</time
+							>
+						{/if}
 					{:else if column.key === 'shop'}
 						{row.shop}
 					{:else if column.key === 'acquired_as'}

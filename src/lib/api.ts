@@ -22,6 +22,7 @@ const fieldMessages: Record<string, Record<number, string>> = {
 	edition_id: { 422: 'Wybrane wydanie nie istnieje.' },
 	phrase: { 409: 'Ta fraza już jest na liście.' },
 	cover_photo: {
+		400: 'Przesyłanie zdjęcia zostało przerwane. Spróbuj ponownie.',
 		413: 'Wybierz plik o rozmiarze do 8 MiB.',
 		422: 'Wybierz prawidłowe zdjęcie JPEG lub PNG o rozdzielczości do 16 megapikseli.'
 	}

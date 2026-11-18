@@ -56,7 +56,12 @@ func (h *Handler) putEditionCover(w http.ResponseWriter, r *http.Request) {
 			httpx.Error{Error: "choose a file up to 8 MiB", Field: "cover_photo"})
 		return
 	}
-	if err != nil || !validCover(photo) {
+	if err != nil {
+		httpx.WriteJSON(w, h.logger, http.StatusBadRequest,
+			httpx.Error{Error: "photo upload interrupted; try again", Field: "cover_photo"})
+		return
+	}
+	if !validCover(photo) {
 		httpx.WriteFieldError(w, h.logger, fieldErr("cover_photo", "choose a valid JPEG or PNG up to 16 megapixels"))
 		return
 	}

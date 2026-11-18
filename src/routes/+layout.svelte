@@ -18,7 +18,7 @@
 	const worker = registerServiceWorker('/service-worker.js', { dev });
 </script>
 
-<AppShell title="Ohara" label="Nawigacja" menuLabel="Menu">
+<AppShell class="ohara-shell" title="Ohara" label="Nawigacja" menuLabel="Menu">
 	{#snippet sidebar()}
 		<SideNav
 			title="Ohara"
@@ -66,6 +66,24 @@
 	:global(select),
 	:global(textarea) {
 		font-family: inherit;
+	}
+
+	:global(.ohara-shell .sui-shell-side[aria-modal='true']:popover-open) {
+		inset: 0;
+		inline-size: 100%;
+		max-inline-size: none;
+		block-size: 100dvh;
+		max-block-size: none;
+		padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+			env(safe-area-inset-left);
+	}
+
+	:global(.ohara-shell .sui-shell-side[aria-modal='true']:popover-open > .sui-shell-pages) {
+		inline-size: 100%;
+	}
+
+	:global(:root:has(.ohara-shell .sui-shell-side[aria-modal='true']:popover-open)) {
+		overflow: hidden;
 	}
 
 	/* WebKit hides native select text when SUI supplies a selectedcontent button. */

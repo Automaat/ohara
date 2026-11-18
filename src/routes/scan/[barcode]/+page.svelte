@@ -236,7 +236,11 @@
 	async function scanNext() {
 		const code = cleanBarcode(nextCode);
 		previous = null;
-		await goto(code ? `/scan/${encodeURIComponent(code)}` : '/scan');
+		if (code && code === barcode && !manual) {
+			await load(code, false);
+		} else {
+			await goto(code ? `/scan/${encodeURIComponent(code)}` : '/scan');
+		}
 	}
 </script>
 
@@ -252,7 +256,7 @@
 			: phase.kind === 'failed'
 				? 'Nie udało się sprawdzić kodu'
 				: 'Sprawdzam kod…'}
-	description={barcode}
+	description={phase.kind === 'saved' ? phase.price || undefined : barcode}
 >
 	{#snippet kicker()}
 		<BackLink href="/scan" label="Skanuj" />
@@ -274,9 +278,6 @@
 			<Button href="/scan">Skanuj kolejny</Button>
 		</div>
 	{:else if phase.kind === 'saved'}
-		<Callout tone="quiet" live>
-			{phase.name}{phase.price ? ` · ${phase.price}` : ''} jest w kolekcji.
-		</Callout>
 		<form
 			class="row"
 			novalidate
@@ -307,7 +308,7 @@
 			</Callout>
 		{/if}
 
-		{#if pending.target.kind === 'new' && form.kind === 'music'}
+		{#snippet discogsSearch()}
 			<form
 				class="row"
 				novalidate
@@ -327,6 +328,10 @@
 				/>
 				<Button type="submit" loading={searching} disabled={!albumQuery.trim()}>Szukaj</Button>
 			</form>
+		{/snippet}
+
+		{#if phase.status === 'missing' && form.kind === 'music'}
+			{@render discogsSearch()}
 		{/if}
 
 		{#if notice}
@@ -345,6 +350,10 @@
 			onsave={save}
 			onskip={skip}
 		/>
+
+		{#if phase.status === 'found' && form.kind === 'music'}
+			{@render discogsSearch()}
+		{/if}
 	{/if}
 </div>
 

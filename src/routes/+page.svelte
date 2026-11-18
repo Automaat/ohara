@@ -35,7 +35,7 @@
 
 	function setSort(value: CollectionSort | null) {
 		if (value !== null) {
-			replaceSortState(collectionPage.url, { ...collectionPage.state, collectionSort: value });
+			replaceSortState(window.location.href, { ...collectionPage.state, collectionSort: value });
 		}
 	}
 

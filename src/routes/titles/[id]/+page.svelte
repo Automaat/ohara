@@ -173,7 +173,7 @@
 			{#snippet actions()}
 				{#if !adding}
 					<Button
-						tone="add"
+						tone={t.editions.length === 0 ? 'signal' : 'add'}
 						onclick={() => (
 							(editionForm = editionToForm(null)),
 							(editionIssue = null),

@@ -1,5 +1,13 @@
 <script lang="ts">
-	import { Button, Field, FormError, SegmentedControl, Textarea } from '@smykla-skalski/sui';
+	import {
+		Button,
+		Disclosure,
+		Field,
+		FormError,
+		SegmentedControl,
+		Textarea
+	} from '@smykla-skalski/sui';
+	import { tick } from 'svelte';
 	import {
 		authorsLabel,
 		kindLabels,
@@ -14,6 +22,7 @@
 		saving,
 		submitLabel,
 		kindLocked = false,
+		collapseDetails = false,
 		onsubmit,
 		oncancel
 	}: {
@@ -22,16 +31,14 @@
 		saving: boolean;
 		submitLabel: string;
 		kindLocked?: boolean;
+		collapseDetails?: boolean;
 		onsubmit: () => void;
 		oncancel?: () => void;
 	} = $props();
 
 	const errorFor = (field: string) => (issue?.field === field ? issue.message : undefined);
-	const fieldKeys = [
-		'name',
-		'year',
+	const detailFields = [
 		'tmdb_id',
-		'authors',
 		'polish_title',
 		'original_title',
 		'bn_id',
@@ -39,13 +46,15 @@
 		'cover_url',
 		'notes'
 	];
+	const fieldKeys = ['name', 'year', 'authors', ...detailFields];
 	const general = $derived(issue && !fieldKeys.includes(issue.field) ? issue.message : null);
 	let titleForm: HTMLFormElement;
+	let detailsOpen = $state(false);
 
 	$effect(() => {
-		if (issue?.field) {
-			titleForm.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus();
-		}
+		if (!issue?.field) return;
+		if (collapseDetails && detailFields.includes(issue.field)) detailsOpen = true;
+		void tick().then(() => titleForm.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus());
 	});
 </script>
 
@@ -72,6 +81,36 @@
 		bind:value={form.name}
 		error={errorFor('name')}
 	/>
+	<Field label="Rok" inputmode="numeric" bind:value={form.year} error={errorFor('year')} />
+	{#if form.kind !== 'movie'}
+		<Field
+			label={authorsLabel(form.kind)}
+			hint={form.kind === 'music' ? 'Jeden wykonawca w wierszu.' : 'Jeden autor w wierszu.'}
+			error={errorFor('authors')}
+		>
+			{#snippet control(c)}
+				<Textarea {...c} rows={2} bind:value={form.authors} />
+			{/snippet}
+		</Field>
+	{/if}
+	{#if collapseDetails}
+		<Disclosure summary="Więcej szczegółów" bind:open={detailsOpen}>
+			<div class="details">
+				{@render optionalFields()}
+			</div>
+		</Disclosure>
+	{:else}
+		{@render optionalFields()}
+	{/if}
+	<div class="actions">
+		<Button tone="signal" type="submit" loading={saving}>{submitLabel}</Button>
+		{#if oncancel}
+			<Button type="button" onclick={oncancel}>Anuluj</Button>
+		{/if}
+	</div>
+</form>
+
+{#snippet optionalFields()}
 	<Field
 		label="Polski tytuł"
 		bind:value={form.polish_title}
@@ -83,7 +122,6 @@
 		bind:value={form.original_title}
 		error={errorFor('original_title')}
 	/>
-	<Field label="Rok" inputmode="numeric" bind:value={form.year} error={errorFor('year')} />
 	{#if form.kind === 'movie'}
 		<Field
 			label="Identyfikator TMDB"
@@ -91,24 +129,13 @@
 			bind:value={form.tmdb_id}
 			error={errorFor('tmdb_id')}
 		/>
-	{:else}
+	{:else if form.kind === 'book'}
+		<Field label="Identyfikator BN" bind:value={form.bn_id} error={errorFor('bn_id')} />
 		<Field
-			label={authorsLabel(form.kind)}
-			hint={form.kind === 'music' ? 'Jeden wykonawca w wierszu.' : 'Jeden autor w wierszu.'}
-			error={errorFor('authors')}
-		>
-			{#snippet control(c)}
-				<Textarea {...c} rows={2} bind:value={form.authors} />
-			{/snippet}
-		</Field>
-		{#if form.kind === 'book'}
-			<Field label="Identyfikator BN" bind:value={form.bn_id} error={errorFor('bn_id')} />
-			<Field
-				label="Identyfikator Open Library"
-				bind:value={form.openlibrary_id}
-				error={errorFor('openlibrary_id')}
-			/>
-		{/if}
+			label="Identyfikator Open Library"
+			bind:value={form.openlibrary_id}
+			error={errorFor('openlibrary_id')}
+		/>
 	{/if}
 	<Field
 		label="Adres okładki tytułu"
@@ -121,19 +148,17 @@
 			<Textarea {...c} rows={3} bind:value={form.notes} />
 		{/snippet}
 	</Field>
-	<div class="actions">
-		<Button tone="signal" type="submit" loading={saving}>{submitLabel}</Button>
-		{#if oncancel}
-			<Button type="button" onclick={oncancel}>Anuluj</Button>
-		{/if}
-	</div>
-</form>
+{/snippet}
 
 <style>
 	.form {
 		display: grid;
 		gap: 1rem;
 		max-width: 40rem;
+	}
+	.details {
+		display: grid;
+		gap: 1rem;
 	}
 	.actions {
 		display: flex;

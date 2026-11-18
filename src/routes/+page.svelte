@@ -140,6 +140,7 @@
 	];
 
 	const rows = $derived(sortCopies((view?.items ?? []) as Row[], sort));
+	const emptyShelf = $derived(!failure && totals?.copies === 0 && rows.length === 0);
 	const all = 'all';
 	const activeFilters = $derived(
 		(
@@ -177,133 +178,156 @@
 		/>
 	{/snippet}
 	{#snippet actions()}
-		<Button tone="signal" href="/titles/new">Dodaj tytuł</Button>
+		{#if !emptyShelf}
+			<Button tone="signal" href="/titles/new">Dodaj tytuł</Button>
+		{/if}
 	{/snippet}
 </PageHeader>
 
-<div class="content">
-	<div class="collection-sort">
-		<Field label="Sortowanie">
-			{#snippet control(c)}
-				<Select {...c} options={collectionSortOptions} bind:value={() => sort, setSort} />
-			{/snippet}
-		</Field>
+{#if emptyShelf}
+	<div class="content">
+		{@render empty()}
 	</div>
+{:else}
+	{@render collectionResults()}
+{/if}
 
-	<ListToolbar
-		class="collection-toolbar"
-		searchLabel="Szukaj w kolekcji"
-		placeholder="Tytuł, autor, sklep lub kod kreskowy"
-		bind:query
-		onsearch={(q: string) => set('q', q)}
-		count={rows.length}
-		countLabel={resultCount}
-		pending={loading}
-		pendingLabel="Wczytywanie…"
-		toolsLabel="Filtry"
-		filter={{
-			label: 'Typ',
-			options: [
-				{ value: all, label: 'Wszystko' },
-				{ value: 'movie', label: 'Filmy' },
-				{ value: 'book', label: 'Książki' },
-				{ value: 'music', label: 'Muzyka' }
-			],
-			value: filter.kind || all,
-			onchange: (v: string) => set('kind', v === all ? '' : (v as CollectionFilter['kind']))
-		}}
-		tools={[
-			{
-				label: 'Nośnik',
-				options: [{ value: all, label: 'Każdy' }, ...options(formatLabels)],
-				value: filter.format || all,
-				onchange: (v: string) => set('format', v === all ? '' : (v as CollectionFilter['format']))
-			},
-			{
-				label: 'Status',
-				options: [
-					{ value: all, label: 'Każdy' },
-					{ value: 'owned', label: 'Na półce' },
-					{ value: 'wishlist', label: 'Lista życzeń' }
-				],
-				value: filter.status || all,
-				onchange: (v: string) => set('status', v === all ? '' : (v as CollectionFilter['status']))
-			}
-		]}
-	/>
-
-	{#if activeFilters.length}
-		<div class="active-filters" role="group" aria-label="Aktywne filtry">
-			{#each activeFilters as { key, label } (key)}
-				<Chip
-					{label}
-					onremove={() => set(key, '')}
-					removeLabel={(value) => `Usuń filtr: ${value}`}
-					removedLabel={(value) => `Usunięto filtr: ${value}`}
-				/>
-			{/each}
+{#snippet collectionResults()}
+	<div class="content">
+		<div class="collection-sort">
+			<Field label="Sortowanie">
+				{#snippet control(c)}
+					<Select {...c} options={collectionSortOptions} bind:value={() => sort, setSort} />
+				{/snippet}
+			</Field>
 		</div>
-	{/if}
 
-	{#if view && !loading && !failure}
-		<p class="metadata result-count" aria-hidden="true">{resultCount(rows.length)}</p>
-	{/if}
+		<ListToolbar
+			class="collection-toolbar"
+			searchLabel="Szukaj w kolekcji"
+			placeholder="Tytuł, autor, sklep lub kod kreskowy"
+			bind:query
+			onsearch={(q: string) => set('q', q)}
+			count={rows.length}
+			countLabel={resultCount}
+			pending={loading}
+			pendingLabel="Wczytywanie…"
+			toolsLabel="Filtry"
+			filter={{
+				label: 'Typ',
+				options: [
+					{ value: all, label: 'Wszystko' },
+					{ value: 'movie', label: 'Filmy' },
+					{ value: 'book', label: 'Książki' },
+					{ value: 'music', label: 'Muzyka' }
+				],
+				value: filter.kind || all,
+				onchange: (v: string) => set('kind', v === all ? '' : (v as CollectionFilter['kind']))
+			}}
+			tools={[
+				{
+					label: 'Nośnik',
+					options: [{ value: all, label: 'Każdy' }, ...options(formatLabels)],
+					value: filter.format || all,
+					onchange: (v: string) => set('format', v === all ? '' : (v as CollectionFilter['format']))
+				},
+				{
+					label: 'Status',
+					options: [
+						{ value: all, label: 'Każdy' },
+						{ value: 'owned', label: 'Na półce' },
+						{ value: 'wishlist', label: 'Lista życzeń' }
+					],
+					value: filter.status || all,
+					onchange: (v: string) => set('status', v === all ? '' : (v as CollectionFilter['status']))
+				}
+			]}
+		/>
 
-	<div class="mobile-results">
-		<CollectionRows {rows} {loading} {failure} onretry={load} {empty} />
+		{#if activeFilters.length}
+			<div class="active-filters" role="group" aria-label="Aktywne filtry">
+				{#each activeFilters as { key, label } (key)}
+					<Chip
+						{label}
+						onremove={() => set(key, '')}
+						removeLabel={(value) => `Usuń filtr: ${value}`}
+						removedLabel={(value) => `Usunięto filtr: ${value}`}
+					/>
+				{/each}
+			</div>
+		{/if}
+
+		{#if view && !loading && !failure}
+			<p class="metadata result-count" aria-hidden="true">{resultCount(rows.length)}</p>
+		{/if}
+
+		<div class="mobile-results">
+			<CollectionRows {rows} {loading} {failure} onretry={load} {empty} />
+		</div>
+		<DataTable
+			class="desktop-results"
+			aria-label="Egzemplarze w kolekcji"
+			{columns}
+			{rows}
+			rowHeader
+			rowKey={(r) => r.copy_id}
+			loading={loading && !view}
+			refreshing={loading && !!view}
+			error={failure}
+			onretry={load}
+			retryLabel="Spróbuj ponownie"
+			loadingLabel="Wczytywanie kolekcji…"
+			refreshingLabel="Odświeżanie…"
+			emptyLabel="Brak pozycji"
+			scrollHint="Przewiń tabelę w bok"
+			{empty}
+		>
+			{#snippet cell(row, column)}
+				{#if column.key === 'name'}
+					<Link href={`/titles/${row.title_id}`}>{displayName(row)}</Link>
+				{:else if column.key === 'kind'}
+					{kindLabels[row.kind]}
+				{:else if column.key === 'edition_id'}
+					<Link href={`/editions/${row.edition_id}`}>
+						{editionSummary({ ...row, barcode: null })}
+					</Link>
+				{:else if column.key === 'status'}
+					<Link href={`/copies/${row.copy_id}`}>
+						<Pill tone={row.status === 'owned' ? 'success' : 'neutral'}>
+							{statusLabels[row.status]}
+						</Pill>
+					</Link>
+				{:else if column.key === 'price_cents'}
+					{#if row.status === 'owned'}
+						<span class="price">
+							{row.price_cents === null ? 'Nieznana' : formatPLN(row.price_cents)}
+						</span>
+					{/if}
+				{:else if column.key === 'shop'}
+					{row.shop}
+				{:else if column.key === 'purchased_on'}
+					{#if row.purchased_on}
+						<time class="metadata" datetime={row.purchased_on}>
+							{purchaseDate(row.purchased_on)}
+						</time>
+					{/if}
+				{/if}
+			{/snippet}
+		</DataTable>
 	</div>
-	<DataTable
-		class="desktop-results"
-		aria-label="Egzemplarze w kolekcji"
-		{columns}
-		{rows}
-		rowHeader
-		rowKey={(r) => r.copy_id}
-		loading={loading && !view}
-		refreshing={loading && !!view}
-		error={failure}
-		onretry={load}
-		retryLabel="Spróbuj ponownie"
-		loadingLabel="Wczytywanie kolekcji…"
-		refreshingLabel="Odświeżanie…"
-		emptyLabel="Brak pozycji"
-		scrollHint="Przewiń tabelę w bok"
-		{empty}
-	>
-		{#snippet cell(row, column)}
-			{#if column.key === 'name'}
-				<Link href={`/titles/${row.title_id}`}>{displayName(row)}</Link>
-			{:else if column.key === 'kind'}
-				{kindLabels[row.kind]}
-			{:else if column.key === 'edition_id'}
-				<Link href={`/editions/${row.edition_id}`}>
-					{editionSummary({ ...row, barcode: null })}
-				</Link>
-			{:else if column.key === 'status'}
-				<Link href={`/copies/${row.copy_id}`}>
-					<Pill tone={row.status === 'owned' ? 'success' : 'neutral'}>
-						{statusLabels[row.status]}
-					</Pill>
-				</Link>
-			{:else if column.key === 'price_cents'}
-				{#if row.status === 'owned'}
-					<span class="price">
-						{row.price_cents === null ? 'Nieznana' : formatPLN(row.price_cents)}
-					</span>
-				{/if}
-			{:else if column.key === 'shop'}
-				{row.shop}
-			{:else if column.key === 'purchased_on'}
-				{#if row.purchased_on}
-					<time class="metadata" datetime={row.purchased_on}>{purchaseDate(row.purchased_on)}</time>
-				{/if}
-			{/if}
-		{/snippet}
-	</DataTable>
-</div>
+{/snippet}
 
 {#snippet empty()}
-	{#if activeFilters.length}
+	{#if emptyShelf}
+		<EmptyState title="Kolekcja jest pusta" description="Dodaj pierwszy egzemplarz do kolekcji.">
+			{#snippet action()}
+				<div class="empty-actions">
+					<Button tone="signal" href="/scan">Zeskanuj pierwszy kod</Button>
+					<Button href="/titles/new">Dodaj ręcznie</Button>
+				</div>
+			{/snippet}
+		</EmptyState>
+	{:else if activeFilters.length}
 		<EmptyState title="Nic nie pasuje" description="Żaden egzemplarz nie spełnia filtrów.">
 			{#snippet action()}
 				<Button onclick={clearFilters}>Wyczyść filtry</Button>
@@ -319,6 +343,12 @@
 {/snippet}
 
 <style>
+	.empty-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem;
+	}
+
 	.collection-sort {
 		width: min(100%, 16rem);
 	}

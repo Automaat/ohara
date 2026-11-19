@@ -35,7 +35,8 @@
 	import ArtworkHeader from '#lib/components/ArtworkHeader.svelte';
 	import CopyFormFields from '#lib/components/CopyFormFields.svelte';
 	import EditionFormFields from '#lib/components/EditionFormFields.svelte';
-	import EditionCoverForm from '#lib/components/EditionCoverForm.svelte';
+	import EditionCoverSheet from '#lib/components/EditionCoverSheet.svelte';
+	import { coverUndo } from '#lib/edition-cover.js';
 	import { purchaseDate } from '#lib/polish.js';
 	import { copyRequest } from '#lib/title-detail.js';
 
@@ -54,6 +55,8 @@
 	let copyForm = $state(copyToForm(null));
 	let copyIssue = $state<FormIssue | null>(null);
 	let savingCopy = $state(false);
+
+	let coverSheet = $state(false);
 
 	let confirmDelete = $state(false);
 	let deleteError = $state<string | null>(null);
@@ -180,6 +183,7 @@
 			: d.cover_url
 				? 'Okładka wydania'
 				: 'Okładka poglądowa tytułu'}
+		coverAction={{ label: 'Zmień okładkę', onclick: () => (coverSheet = true) }}
 	>
 		{#snippet facts()}
 			<FactList
@@ -193,18 +197,6 @@
 	</ArtworkHeader>
 
 	<div class="content">
-		{#key d.id}
-			<EditionCoverForm
-				editionID={d.id}
-				hasOverride={Boolean(d.cover_override_url)}
-				onchange={() => (d.id === id ? load(d.id) : Promise.resolve())}
-			/>
-		{/key}
-
-		{#if d.notes}
-			<p class="notes">{d.notes}</p>
-		{/if}
-
 		<Section
 			class="copies"
 			title="Egzemplarze"
@@ -259,6 +251,10 @@
 				<p class="muted">Brak egzemplarzy.</p>
 			{/if}
 		</Section>
+
+		{#if d.notes}
+			<p class="notes">{d.notes}</p>
+		{/if}
 
 		{#if d.barcode || d.discogs_release_id || d.title.kind === 'movie'}
 			<Section title="Szczegóły wydania">
@@ -327,6 +323,15 @@
 			{/if}
 		</Section>
 	</div>
+
+	{#key d.id}
+		<EditionCoverSheet
+			bind:open={coverSheet}
+			editionID={d.id}
+			undo={coverUndo(d)}
+			onchange={() => (d.id === id ? load(d.id) : Promise.resolve())}
+		/>
+	{/key}
 
 	<ConfirmDialog
 		bind:open={confirmDelete}

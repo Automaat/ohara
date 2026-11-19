@@ -17,6 +17,7 @@
 	import { page } from '$app/state';
 	import { request } from '#lib/api.js';
 	import BarcodeCamera from '#lib/components/BarcodeCamera.svelte';
+	import { queueDeletesSettled } from '#lib/queue-deletes.js';
 	import { outcomeLabels, outcomeTones, recentScans } from '#lib/recent.svelte.js';
 	import {
 		RepeatGuard,
@@ -42,6 +43,7 @@
 
 	async function countQueue() {
 		try {
+			await queueDeletesSettled();
 			queued = (await request<QueueEntry[]>(fetch, 'GET', '/api/scan-queue')).length;
 		} catch {
 			queued = null;

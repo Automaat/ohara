@@ -241,6 +241,7 @@ type CopyValue struct {
 	Format        *string   `json:"format"`
 	Barcode       *string   `json:"barcode"`
 	PriceCents    *int64    `json:"price_cents"`
+	CoverURL      *string   `json:"cover_url,omitempty"`
 	Floor         *Estimate `json:"floor"`
 	Mid           *Estimate `json:"mid"`
 	Ceiling       *Estimate `json:"ceiling"`

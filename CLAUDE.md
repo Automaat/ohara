@@ -146,6 +146,10 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   Vite, never loaded from a CDN. A keyboard-wedge scanner types into the
   focused barcode field. The flow lives in `src/lib/scan.ts`: existing
   edition → add a copy, lookup candidates → quick confirm, nothing → queue.
+- Kolekcja (`/`) lists copies. Its filter sheet's "Bez egzemplarzy"
+  (`?status=none`) lists titles without one instead, filtered in the client
+  from `GET /api/titles`; `/titles` redirects to `/`. `?add=copy` on a title
+  or edition page opens the form for its next copy.
 - `static/manifest.webmanifest` is linked with `crossorigin="use-credentials"`
   because Authelia guards every path.
 

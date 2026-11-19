@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { sortCopies, type CollectionSort } from './collection-sort';
+import { sortCopies, sortTitles, type CollectionSort } from './collection-sort';
 
 const copies = [
 	{ copy_id: 4, created_at_us: 2001, name: 'Żaba', price_cents: 500, purchased_on: '1990-01-01' },
@@ -28,5 +28,24 @@ describe('sortCopies', () => {
 	])('sorts by %s with deterministic ties', (sort, expected) => {
 		expect(sortCopies(copies, sort).map((copy) => copy.copy_id)).toEqual(expected);
 		expect(copies.map((copy) => copy.copy_id)).toEqual([4, 2, 3, 1]);
+	});
+});
+
+describe('sortTitles', () => {
+	const titles = [
+		{ id: 3, name: 'Żaba' },
+		{ id: 1, name: 'Łąka' },
+		{ id: 4, name: 'Lalka' },
+		{ id: 2, name: 'Lalka' }
+	];
+
+	it.each<[CollectionSort, number[]]>([
+		['newest', [4, 3, 2, 1]],
+		['title', [2, 4, 1, 3]],
+		['priceAsc', [2, 4, 1, 3]],
+		['priceDesc', [2, 4, 1, 3]]
+	])('sorts by %s without changing the input', (sort, expected) => {
+		expect(sortTitles(titles, sort).map((t) => t.id)).toEqual(expected);
+		expect(titles.map((t) => t.id)).toEqual([3, 1, 4, 2]);
 	});
 });

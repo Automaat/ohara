@@ -21,6 +21,7 @@
 	import SettingsSheet from '#lib/components/SettingsSheet.svelte';
 	import {
 		collectionSearch,
+		collectionStatusLabels,
 		collectionURL,
 		displayName,
 		editionSummary,
@@ -32,17 +33,27 @@
 		shelfSummary,
 		spentLabel,
 		statusLabels,
+		uncopiedTitles,
+		withoutCopies,
 		type CollectionFilter,
 		type CollectionItem,
 		type CollectionView,
 		type Kind,
+		type Title,
 		type Totals
 	} from '#lib/collection.js';
-	import { collectionSortLabels, sortCopies, type CollectionSort } from '#lib/collection-sort.js';
+	import {
+		collectionSortLabels,
+		sortCopies,
+		sortTitles,
+		type CollectionSort
+	} from '#lib/collection-sort.js';
 	import { purchaseDate, queuedCodes, resultCount } from '#lib/polish.js';
+	import { queueDeletesSettled } from '#lib/queue-deletes.js';
 	import type { QueueEntry } from '#lib/scan.js';
 	import CollectionFilterSheet from '#lib/components/CollectionFilterSheet.svelte';
 	import CollectionShelf from '#lib/components/CollectionShelf.svelte';
+	import TitleShelf from '#lib/components/TitleShelf.svelte';
 	import type { Snapshot } from './$types';
 
 	type Row = CollectionItem & Record<string, unknown>;
@@ -85,6 +96,8 @@
 	let filter = $state(untrack(() => readCollectionFilter(page.url.searchParams)));
 	let query = $state(untrack(() => filter.q));
 	let view = $state<CollectionView | null>(null);
+	/** Every title without a copy, from the last load that listed them. */
+	let uncopied = $state<Title[] | null>(null);
 	let overview = $state<Overview | null>(null);
 	let queued = $state(0);
 	let failure = $state<string | null>(null);
@@ -94,6 +107,7 @@
 	let restoreScroll: [number, number] | undefined;
 	let pendingOverview: Promise<void> | undefined;
 	let pendingQueue: Promise<void> | undefined;
+	let pendingUncopied: Promise<void> | undefined;
 
 	let results = $state<HTMLElement>();
 
@@ -124,7 +138,8 @@
 
 	/** Counts the scan queue once per visit; a failed count is asked again on the next load. */
 	function loadQueue() {
-		pendingQueue ??= request<QueueEntry[]>(fetch, 'GET', '/api/scan-queue')
+		pendingQueue ??= queueDeletesSettled()
+			.then(() => request<QueueEntry[]>(fetch, 'GET', '/api/scan-queue'))
 			.then((entries) => showQueue(entries.length))
 			.catch(() => {
 				pendingQueue = undefined;
@@ -145,17 +160,41 @@
 		if (scrolled > 0 && grown !== 0) window.scrollTo(window.scrollX, scrolled + grown);
 	}
 
+	/**
+	 * Counts the titles without a copy while the collection holds none, for the empty collection's
+	 * link to them; a failed count leaves the link without a number.
+	 */
+	function loadUncopied() {
+		pendingUncopied ??= request<Title[]>(fetch, 'GET', '/api/titles')
+			.then((titles) => {
+				uncopied ??= withoutCopies(titles);
+			})
+			.catch(() => undefined)
+			.finally(() => (pendingUncopied = undefined));
+	}
+
+	$effect(() => {
+		if (overview?.totals.copies === 0 && untrack(() => uncopied) === null) loadUncopied();
+	});
+
 	async function load() {
 		const mine = ++seq;
 		const url = collectionURL(filter);
+		const titles = filter.status === 'none';
 		loading = true;
 		const overviewReady = url === '/api/collection' ? undefined : loadOverview();
 		void loadQueue();
 		try {
-			const got = await request<CollectionView>(fetch, 'GET', url);
-			if (mine !== seq) return;
-			view = got;
-			if (url === '/api/collection') overview = overviewOf(got);
+			if (titles) {
+				const got = await request<Title[]>(fetch, 'GET', url);
+				if (mine !== seq) return;
+				uncopied = withoutCopies(got);
+			} else {
+				const got = await request<CollectionView>(fetch, 'GET', url);
+				if (mine !== seq) return;
+				view = got;
+				if (url === '/api/collection') overview = overviewOf(got);
+			}
 			failure = null;
 		} catch (err) {
 			if (mine === seq) failure = errorMessage(err);
@@ -224,22 +263,38 @@
 		{ value: 'music', label: 'Muzyka' }
 	];
 
+	/** A chip's count: copies of its kind, or titles without copies while those are listed. */
 	function kindCount(kind: CollectionFilter['kind']): number | undefined {
+		if (listsTitles) {
+			if (!uncopied) return undefined;
+			return kind ? uncopied.filter((t) => t.kind === kind).length : uncopied.length;
+		}
 		if (!overview) return undefined;
 		return kind ? overview.kinds[kind] : overview.totals.copies;
+	}
+
+	function setStatus(status: CollectionFilter['status']) {
+		// A title has no format, so listing titles without copies drops the format filter.
+		updateFilter({ ...filter, status, format: status === 'none' ? '' : filter.format });
 	}
 
 	// A no-break space keeps the line's height until the counts arrive, so nothing below moves.
 	const summary = $derived(overview ? shelfSummary(overview.totals) : '\u00a0');
 	const rows = $derived(sortCopies((view?.items ?? []) as Row[], sort));
-	const emptyShelf = $derived(!failure && overview?.totals.copies === 0 && rows.length === 0);
+	/** "Bez egzemplarzy": the view lists titles that have no copy instead of copies. */
+	const listsTitles = $derived(filter.status === 'none');
+	const titleRows = $derived(sortTitles(uncopiedTitles(uncopied ?? [], filter), sort));
+	const listed = $derived(listsTitles ? uncopied : view);
+	const emptyShelf = $derived(
+		!failure && !listsTitles && overview?.totals.copies === 0 && rows.length === 0
+	);
 	const activeFilters = $derived(
 		(
 			[
 				{ key: 'q', label: filter.q.trim() },
 				{ key: 'kind', label: filter.kind && kindLabels[filter.kind] },
 				{ key: 'format', label: filter.format && formatLabels[filter.format] },
-				{ key: 'status', label: filter.status && statusLabels[filter.status] }
+				{ key: 'status', label: filter.status && collectionStatusLabels[filter.status] }
 			] as const
 		).filter((entry) => entry.label)
 	);
@@ -261,9 +316,9 @@
 				label: formatLabels[filter.format],
 				remove: () => set('format', '')
 			},
-			filter.status === 'owned' && {
+			(filter.status === 'owned' || filter.status === 'none') && {
 				key: 'status',
-				label: statusLabels.owned,
+				label: collectionStatusLabels[filter.status],
 				remove: () => set('status', '')
 			}
 		].filter((choice) => choice !== false && choice !== '')
@@ -318,7 +373,7 @@
 		status={filter.status}
 		onsort={setSort}
 		onformat={(format) => set('format', format)}
-		onstatus={(status) => set('status', status)}
+		onstatus={setStatus}
 	/>
 </div>
 
@@ -330,7 +385,7 @@
 					class="search-field"
 					label="Szukaj w kolekcji"
 					hideLabel
-					placeholder="Tytuł, autor, sklep, kod"
+					placeholder={listsTitles ? 'Tytuł lub autor' : 'Tytuł, autor, sklep, kod'}
 					clearLabel="Wyczyść wyszukiwanie"
 					bind:value={query}
 					onclear={() => set('q', '')}
@@ -368,7 +423,7 @@
 					type="button"
 					class="chip"
 					aria-pressed={filter.status === 'wishlist'}
-					onclick={() => set('status', filter.status === 'wishlist' ? '' : 'wishlist')}
+					onclick={() => setStatus(filter.status === 'wishlist' ? '' : 'wishlist')}
 				>
 					<svg class="heart" viewBox="0 0 24 24" aria-hidden="true">
 						<path
@@ -380,14 +435,16 @@
 				</button>
 			</div>
 
-			<div class="desktop-only layout-switch">
-				<SegmentedControl
-					label="Widok kolekcji"
-					hideLabel
-					options={layoutOptions}
-					bind:value={() => layout, setLayout}
-				/>
-			</div>
+			{#if !listsTitles}
+				<div class="desktop-only layout-switch">
+					<SegmentedControl
+						label="Widok kolekcji"
+						hideLabel
+						options={layoutOptions}
+						bind:value={() => layout, setLayout}
+					/>
+				</div>
+			{/if}
 		</div>
 
 		{#if sheetChoices.length}
@@ -406,11 +463,15 @@
 		{@render queueNotice()}
 
 		<p class="metadata result-count" role="status">
-			{#if view && !loading && !failure}{resultCount(rows.length)}{/if}
+			{#if listed && !loading && !failure}
+				{resultCount(listsTitles ? titleRows.length : rows.length)}
+			{/if}
 		</p>
 
 		<div class="results" bind:this={results}>
-			{#if layout === 'shelf'}
+			{#if listsTitles}
+				<TitleShelf titles={titleRows} {loading} {failure} onretry={load} {empty} />
+			{:else if layout === 'shelf'}
 				<CollectionShelf {rows} {loading} {failure} onretry={load} {empty} />
 			{:else}
 				<div class="phone-only">
@@ -495,7 +556,33 @@
 				<div class="empty-actions">
 					<Button tone="signal" href="/scan">Zeskanuj pierwszy kod</Button>
 					<Button href="/titles/new">Dodaj ręcznie</Button>
+					<!-- Offered until the count is known to be zero, so a failed count can be asked again. -->
+					{#if uncopied === null || uncopied.length > 0}
+						<Button onclick={() => setStatus('none')}>
+							{uncopied
+								? `${collectionStatusLabels.none} (${uncopied.length})`
+								: collectionStatusLabels.none}
+						</Button>
+					{/if}
 				</div>
+			{/snippet}
+		</EmptyState>
+	{:else if listsTitles && uncopied?.length === 0}
+		<EmptyState
+			title="Każdy tytuł ma egzemplarz"
+			description="Tu pojawią się tytuły zapisane bez egzemplarza."
+		>
+			{#snippet action()}
+				<Button onclick={() => setStatus('')}>Pokaż egzemplarze</Button>
+			{/snippet}
+		</EmptyState>
+	{:else if listsTitles}
+		<EmptyState
+			title="Nic nie pasuje"
+			description="Żaden tytuł bez egzemplarzy nie spełnia filtrów."
+		>
+			{#snippet action()}
+				<Button onclick={clearFilters}>Wyczyść filtry</Button>
 			{/snippet}
 		</EmptyState>
 	{:else if activeFilters.length}

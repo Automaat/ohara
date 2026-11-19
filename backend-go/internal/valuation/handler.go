@@ -34,7 +34,8 @@ func (h *Handler) Mount(r chi.Router) {
 }
 
 // View is the GET /api/valuation body: every owned copy valued from the
-// prices in the window now, and the stored daily totals.
+// prices in the window now, the stored daily totals of the last year and
+// the day of the newest one, null before the first valuation.
 type View struct {
 	Status          Status         `json:"status"`
 	WindowDays      int            `json:"window_days"`
@@ -42,9 +43,13 @@ type View struct {
 	Summary         Summary        `json:"summary"`
 	Copies          []CopyValue    `json:"copies"`
 	History         []HistoryPoint `json:"history"`
+	LastValuation   *string        `json:"last_valuation"`
 }
 
 func (h *Handler) view(w http.ResponseWriter, r *http.Request) {
+	// The status comes first: a run that ends while the rows below are read
+	// then still shows as running, so the page asks again for its result.
+	status := h.runner.Status()
 	window := h.runner.Window()
 	copies, sum, err := h.store.Valued(r.Context(), window)
 	if err != nil {
@@ -56,13 +61,23 @@ func (h *Handler) view(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteInternal(w, h.logger, "valuation history", err)
 		return
 	}
+	latest, ok, err := h.store.Latest(r.Context())
+	if err != nil {
+		httpx.WriteInternal(w, h.logger, "valuation latest", err)
+		return
+	}
+	var last *string
+	if ok {
+		last = &latest.Day
+	}
 	httpx.WriteJSON(w, h.logger, http.StatusOK, View{
-		Status:          h.runner.Status(),
+		Status:          status,
 		WindowDays:      int(window.Hours() / 24),
 		MinObservations: MinObservations,
 		Summary:         sum,
 		Copies:          copies,
 		History:         history,
+		LastValuation:   last,
 	})
 }
 

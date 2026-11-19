@@ -426,6 +426,36 @@
 		font-variant-numeric: tabular-nums;
 	}
 
+	/* The collection's filters are chips: a pick is the brand's selected colour, not the
+	   raspberry accent, at rest, on hover and while pressed. The tools popover follows the
+	   toolbar and holds the type filter too once the bar folds it away. */
+	.content :global(.collection-toolbar .sui-list-toolbar-segments),
+	.content :global(.collection-toolbar + .sui-popover .sui-list-toolbar-panel) {
+		--sui-segment-thumb: var(--ohara-selected);
+		--sui-segment-thumb-ink: var(--ohara-on-selected);
+		--sui-brand-action-hover: var(--ohara-selected-hover);
+		--sui-brand-action-pressed: var(--ohara-selected-pressed);
+	}
+
+	/* SUI rings a focused pick inside its thumb in the thumb's ink, which on these chips is pink
+	   or green. The ring takes the raspberry focus colour instead, on the track just outside the
+	   thumb, where it stands out from the track rather than blending into the thumb. */
+	.content
+		:global(
+			.collection-toolbar .sui-list-toolbar-segments .selected .sui-segmented-input:focus-visible
+		),
+	.content
+		:global(
+			.collection-toolbar
+				+ .sui-popover
+				.sui-list-toolbar-panel
+				.selected
+				.sui-segmented-input:focus-visible
+		) {
+		outline-color: var(--sui-focus);
+		outline-offset: 0;
+	}
+
 	@media (max-width: 640px) {
 		.content :global(.desktop-results) {
 			display: none;

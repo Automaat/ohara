@@ -1,5 +1,6 @@
 <script lang="ts">
 	import '@smykla-skalski/sui/styles.css';
+	import '../app.css';
 	import {
 		AppShell,
 		ServiceWorkerStatus,
@@ -50,15 +51,12 @@
 />
 
 <style>
-	:global(:root) {
-		--sui-primitive-light-canvas: #f8f5ee;
-		--sui-primitive-light-inset: #eeeae1;
-	}
-
 	:global(body) {
 		background: var(--sui-canvas);
 		color: var(--sui-text-primary);
 		font: var(--sui-font-size-body) / var(--sui-leading-body) var(--sui-sans);
+		/* Years and prices in the app's own text use tabular figures. */
+		font-variant-numeric: tabular-nums;
 	}
 
 	:global(button),

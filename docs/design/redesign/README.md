@@ -18,7 +18,7 @@ marks actions (primary buttons, the scan button, badges, the wishlist heart) and
 | inset       | `#F1DAD6` | `#1E3029` | Search field, inputs, segmented control track, sidebar |
 | line        | `#E6CBC6` | `#2B4038` | Borders and separators                                 |
 | ink         | `#1F3B33` | `#F7E6E3` | Primary text                                           |
-| muted       | `#5E6964` | `#A9B3AE` | Secondary text                                         |
+| muted       | `#59635E` | `#A9B3AE` | Secondary text                                         |
 | heading     | `#1F3B33` | `#F4C6CC` | Large titles                                           |
 | brand       | `#1F3B33` | `#1F3B33` | Selected chips and nav items, the value hero card      |
 | brand-tint  | `#F4C6CC` | `#F4C6CC` | Text and marks on brand surfaces                       |
@@ -28,9 +28,10 @@ marks actions (primary buttons, the scan button, badges, the wishlist heart) and
 | success     | `#276B4E` | `#6FBF97` | Deal under limit, alert sent                           |
 | danger      | `#A3322A` | `#F08A7E` | Errors, delete                                         |
 
-Contrast against the canvas, light / dark: ink 10.3:1 / 14.6:1, muted 4.8:1 / 8.2:1, success
+Contrast against the canvas, light / dark: ink 10.3:1 / 14.6:1, muted 5.3:1 / 8.2:1, success
 5.4:1 / 8.1:1, danger 5.8:1 / 7.3:1. Accent with on-accent text: 6.3:1 / 6.7:1. Accent text on
-accent-soft: 4.6:1 / 5.5:1. Success on success-soft: 5.2:1 / 5.7:1.
+accent-soft: 4.6:1 / 5.5:1. Success on success-soft: 5.2:1 / 5.7:1. Muted text holds 4.7:1 /
+6.4:1 on inset, where SUI draws placeholders and the segmented control.
 
 ## Type
 

@@ -1,0 +1,194 @@
+/*
+ * Ohara's palette on SUI's tokens: powder pink, bottle green and a raspberry accent, from
+ * docs/design/redesign/README.md. The selectors repeat SUI's own theme selectors, so this file
+ * has to load after `@smykla-skalski/sui/styles.css`. A token set here for the light theme is set
+ * again for the dark one, because `:root` also matches a dark root.
+ */
+
+/* Fraunces for page titles, from the app's own origin. The variable font keeps the optical size
+   axis, so a title is drawn at its own size as in the mockups. */
+@font-face {
+	font-display: swap;
+	font-family: 'Fraunces';
+	font-style: normal;
+	font-weight: 100 900;
+	src: url('@fontsource-variable/fraunces/files/fraunces-latin-ext-opsz-normal.woff2')
+		format('woff2');
+	unicode-range:
+		U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329,
+		U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F,
+		U+A720-A7FF;
+}
+
+@font-face {
+	font-display: swap;
+	font-family: 'Fraunces';
+	font-style: normal;
+	font-weight: 100 900;
+	src: url('@fontsource-variable/fraunces/files/fraunces-latin-opsz-normal.woff2') format('woff2');
+	unicode-range:
+		U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+		U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+:root,
+[data-sui-theme='light'] {
+	--ohara-serif: 'Fraunces', Georgia, serif;
+
+	--sui-primitive-light-canvas: #f8e9e6;
+	--sui-primitive-light-surface: #fff7f5;
+	--sui-primitive-light-inset: #f1dad6;
+	--sui-primitive-light-text: #1f3b33;
+	--sui-primitive-light-secondary: #59635e;
+	--sui-primitive-light-muted: #59635e;
+	--sui-primitive-light-strong: #737d78;
+	--sui-primitive-dark-canvas: #0e1b17;
+	--sui-primitive-dark-surface: #16261f;
+	/* The README has no raised tier: SUI's light theme raises onto the surface, so the dark one
+	   does too, and an empty state or a callout is a card in both themes. */
+	--sui-primitive-dark-raised: #16261f;
+	--sui-primitive-dark-inset: #1e3029;
+	--sui-primitive-dark-code: #12201b;
+	--sui-primitive-dark-text: #f7e6e3;
+	--sui-primitive-dark-secondary: #a9b3ae;
+	--sui-primitive-dark-muted: #a9b3ae;
+	--sui-primitive-dark-strong: #6c7f77;
+	--sui-primitive-success-light: #276b4e;
+	--sui-primitive-success-light-tint: #d9ecdf;
+	--sui-primitive-success-dark: #6fbf97;
+	--sui-primitive-success-dark-tint: #183a2c;
+	--sui-primitive-danger-light: #a3322a;
+	--sui-primitive-danger-dark: #f08a7e;
+	--sui-primitive-info-light-tint: #f6d3de;
+	--sui-primitive-info-dark-tint: #3a2230;
+
+	--ohara-heading: #1f3b33;
+	/* A selected chip: bottle green in light, powder pink in dark, as the collection mockups
+	   draw them. */
+	--ohara-selected: #1f3b33;
+	--ohara-selected-hover: #2b4a41;
+	--ohara-selected-pressed: #172e28;
+	--ohara-on-selected: #f4c6cc;
+	--sui-border-subtle: #e6cbc6;
+	--sui-border-band: #e6cbc6;
+	/* Fields and segmented tracks sit on inset, as the README says. Hover lightens the field
+	   toward the surface, so a placeholder keeps its contrast. */
+	--sui-control-bg: var(--sui-surface-inset);
+	--sui-field-hover: color-mix(in srgb, var(--sui-surface-base) 35%, var(--sui-surface-inset));
+	--sui-field-danger-hover: color-mix(in srgb, var(--sui-danger) 4.5%, var(--sui-surface-inset));
+	--sui-segment-track: var(--sui-surface-inset);
+	--sui-segment-hover: color-mix(in srgb, var(--sui-surface-base) 60%, transparent);
+	/* A count's ground: SUI's hover veil over the canvas leaves muted digits under 4.5:1. */
+	--sui-local-count-ground: var(--sui-surface-inset);
+	--sui-brand-action: #b4245d;
+	--sui-brand-action-hover: #9e1f51;
+	--sui-brand-action-pressed: #8a1b47;
+	--sui-brand-action-tint: #f6d3de;
+	--sui-brand-action-text: #b4245d;
+	--sui-on-brand-action: #ffffff;
+	--sui-link: var(--sui-brand-action-text);
+	--sui-changed: var(--sui-link);
+	--sui-danger-hover: #8c2b24;
+	--sui-sidebar-bg: var(--sui-surface-inset);
+	--sui-sidebar-item-hover: color-mix(in srgb, var(--sui-surface-base) 50%, var(--sui-sidebar-bg));
+	--sui-sidebar-item-pressed: var(--sui-surface-base);
+	--sui-sidebar-active-bg: #1f3b33;
+	--sui-sidebar-active-ink: #f4c6cc;
+	--sui-chart-1: #1f3b33;
+}
+
+:root[data-theme='dark'],
+[data-sui-theme='dark'] {
+	--ohara-heading: #f4c6cc;
+	--ohara-selected: #f4c6cc;
+	--ohara-selected-hover: #f7d5d9;
+	--ohara-selected-pressed: #efb3bb;
+	--ohara-on-selected: #1f3b33;
+	--sui-border-subtle: #2b4038;
+	--sui-border-band: #2b4038;
+	--sui-control-bg: var(--sui-surface-inset);
+	--sui-field-hover: color-mix(in srgb, #ffffff 3.4%, var(--sui-surface-inset));
+	--sui-field-danger-hover: color-mix(in srgb, var(--sui-danger) 6%, var(--sui-surface-inset));
+	--sui-segment-track: var(--sui-surface-inset);
+	--sui-segment-hover: var(--sui-interactive-hover-layer);
+	--sui-local-count-ground: var(--sui-surface-inset);
+	--sui-brand-action: #f2779f;
+	--sui-brand-action-hover: #f48eaf;
+	--sui-brand-action-pressed: #f6a5c0;
+	--sui-brand-action-tint: #3a2230;
+	--sui-brand-action-text: #f2779f;
+	--sui-on-brand-action: #0e1b17;
+	--sui-link: var(--sui-brand-action-text);
+	--sui-changed: var(--sui-link);
+	--sui-danger-hover: #f3a197;
+	--sui-on-danger: #0e1b17;
+	--sui-sidebar-bg: var(--sui-surface-inset);
+	--sui-sidebar-item-hover: color-mix(in srgb, #ffffff 4%, var(--sui-sidebar-bg));
+	--sui-sidebar-item-pressed: color-mix(in srgb, #ffffff 8%, var(--sui-sidebar-bg));
+	--sui-sidebar-active-bg: #1f3b33;
+	--sui-sidebar-active-ink: #f4c6cc;
+	--sui-chart-1: #f4c6cc;
+}
+
+@media (prefers-color-scheme: dark) {
+	:root:not([data-theme], [data-sui-theme]) {
+		--ohara-heading: #f4c6cc;
+		--ohara-selected: #f4c6cc;
+		--ohara-selected-hover: #f7d5d9;
+		--ohara-selected-pressed: #efb3bb;
+		--ohara-on-selected: #1f3b33;
+		--sui-border-subtle: #2b4038;
+		--sui-border-band: #2b4038;
+		--sui-control-bg: var(--sui-surface-inset);
+		--sui-field-hover: color-mix(in srgb, #ffffff 3.4%, var(--sui-surface-inset));
+		--sui-field-danger-hover: color-mix(in srgb, var(--sui-danger) 6%, var(--sui-surface-inset));
+		--sui-segment-track: var(--sui-surface-inset);
+		--sui-segment-hover: var(--sui-interactive-hover-layer);
+		--sui-local-count-ground: var(--sui-surface-inset);
+		--sui-brand-action: #f2779f;
+		--sui-brand-action-hover: #f48eaf;
+		--sui-brand-action-pressed: #f6a5c0;
+		--sui-brand-action-tint: #3a2230;
+		--sui-brand-action-text: #f2779f;
+		--sui-on-brand-action: #0e1b17;
+		--sui-link: var(--sui-brand-action-text);
+		--sui-changed: var(--sui-link);
+		--sui-danger-hover: #f3a197;
+		--sui-on-danger: #0e1b17;
+		--sui-sidebar-bg: var(--sui-surface-inset);
+		--sui-sidebar-item-hover: color-mix(in srgb, #ffffff 4%, var(--sui-sidebar-bg));
+		--sui-sidebar-item-pressed: color-mix(in srgb, #ffffff 8%, var(--sui-sidebar-bg));
+		--sui-sidebar-active-bg: #1f3b33;
+		--sui-sidebar-active-ink: #f4c6cc;
+		--sui-chart-1: #f4c6cc;
+	}
+}
+
+/* Page titles, a detail page's title among them, in Fraunces. SUI scopes its own rule to the
+   component, so this one needs the extra `:root` to win. */
+:root .sui-page-header :is(.sui-page-header-title, .sui-page-header-heading) {
+	font-family: var(--ohara-serif);
+	font-weight: 600;
+}
+
+:root .sui-page-header .sui-page-header-title {
+	color: var(--ohara-heading);
+}
+
+/* The current nav item's plate is bottle green in both themes, so its focus ring takes the
+   raspberry focus colour where SUI would draw it in the row's own ink. */
+:root .sui-side-nav .sui-side-nav-row[aria-current='page']:focus-visible {
+	outline-color: var(--sui-sidebar-focus);
+}
+
+/* Years, prices and other numbers in facts, card notes and page descriptions line up in Plus
+   Jakarta Sans's tabular figures. SUI's `font` shorthands on that text reset the figures, so this
+   rule also needs to outrank them. */
+:root
+	:is(
+		.sui-fact-list .sui-fact-list-value,
+		.sui-card .sui-card-note,
+		.sui-page-header .sui-page-header-description
+	) {
+	font-variant-numeric: tabular-nums;
+}

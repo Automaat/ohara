@@ -160,7 +160,7 @@
 				layout="inline"
 				facts={[
 					{ label: 'Wydawca', value: d.publisher },
-					{ label: 'Rok wydania', value: d.year?.toString(), mono: true }
+					{ label: 'Rok wydania', value: d.year?.toString() }
 				].filter((fact) => fact.value)}
 			/>
 		{/snippet}

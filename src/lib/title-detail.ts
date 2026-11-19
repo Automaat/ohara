@@ -93,39 +93,40 @@ export function copyLine(c: Copy): string {
 }
 
 export type ValueCard = {
-	/** The used value, as `/valuation` writes it. */
+	/** Each bound as `/valuation` writes it, a dash without prices. */
 	used: string;
 	floor: string;
 	ceiling: string;
 	/** Where the used value and the price paid sit on the bar from buy-back to new, 0–100. */
-	usedAt: number;
+	usedAt: number | null;
 	paidAt: number | null;
 	/** The used value against the price paid in whole złoty, such as "−16 zł względem zakupu". */
 	delta: string | null;
 };
 
 /**
- * The "Wartość dziś" card of an owned copy, or null when the valuation has no used value for it.
- * The bar runs from the buy-back offer (0 without one) to the new price, or to the higher of the
- * used value and the price paid when no shop sells it new; marks outside it sit at its ends.
+ * The "Wartość dziś" card of an owned copy, or null when the valuation has no price for it. The
+ * bar runs from the buy-back offer (0 without one) to the new price, or to the higher of the used
+ * value and the price paid when no shop sells it new; marks outside it sit at its ends. Without a
+ * used value there is no used mark and no difference from the price paid.
  */
 export function valueCard(c: Copy, values: readonly CopyValue[]): ValueCard | null {
 	if (c.status !== 'owned') return null;
 	const v = values.find((value) => value.copy_id === c.id);
-	if (!v?.mid) return null;
-	const mid = v.mid.cents;
+	if (!v || (!v.floor && !v.mid && !v.ceiling)) return null;
+	const mid = v.mid?.cents ?? null;
 	const paid = c.price_cents;
 	const start = v.floor?.cents ?? 0;
-	const end = v.ceiling?.cents ?? Math.max(mid, paid ?? 0);
+	const end = v.ceiling?.cents ?? Math.max(mid ?? 0, paid ?? 0);
 	const at = (cents: number) =>
 		end > start ? Math.min(100, Math.max(0, ((cents - start) / (end - start)) * 100)) : 50;
 	return {
 		used: estimateValue(v.mid),
 		floor: estimateValue(v.floor),
 		ceiling: estimateValue(v.ceiling),
-		usedAt: at(mid),
+		usedAt: mid == null ? null : at(mid),
 		paidAt: paid == null ? null : at(paid),
-		delta: paid == null ? null : `${signedZl(mid - paid)} względem zakupu`
+		delta: paid == null || mid == null ? null : `${signedZl(mid - paid)} względem zakupu`
 	};
 }
 

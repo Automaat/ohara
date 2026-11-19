@@ -46,16 +46,23 @@
 		titleArtwork,
 		valueCard
 	} from '#lib/title-detail.js';
+	import { newRequestKey } from '#lib/scan.js';
 	import type { CopyValue, ValuationView } from '#lib/valuation.js';
 
-	/** The copy sheet edits a copy or adds one to an edition. */
-	type CopyTarget = { mode: 'edit'; copy: Copy } | { mode: 'add'; editionID: number };
+	/**
+	 * The copy sheet edits a copy or adds one to an edition. An add keeps one request key for every
+	 * attempt, so a retry after a lost answer returns the copy instead of adding a second one.
+	 */
+	type CopyTarget =
+		{ mode: 'edit'; copy: Copy } | { mode: 'add'; editionID: number; requestKey: string };
 
 	const id = $derived(Number(page.params.id));
 
 	let detail = $state<TitleDetail | null>(null);
 	let values = $state<CopyValue[]>([]);
 	let failure = $state<string | null>(null);
+	/** A failed refresh of the title already on the page, which stays in view. */
+	let refreshError = $state<string | null>(null);
 	let busy = $state(false);
 	/** Counts loads, so a slower answer for an earlier load never replaces a newer one. */
 	let loads = 0;
@@ -87,6 +94,10 @@
 	async function load(titleID: number) {
 		if (titleID !== requested) {
 			requested = titleID;
+			detail = null;
+			values = [];
+			failure = null;
+			refreshError = null;
 			titleSheet = false;
 			copySheet = false;
 			adding = false;
@@ -98,12 +109,17 @@
 		try {
 			const next = await request<TitleDetail>(fetch, 'GET', `/api/titles/${titleID}`);
 			if (current !== loads) return;
-			if (detail?.id !== next.id) values = [];
 			detail = next;
 			failure = null;
+			refreshError = null;
 			void loadValues(next, current);
 		} catch (err) {
-			if (current === loads) failure = errorMessage(err);
+			if (current !== loads) return;
+			if (detail?.id === titleID) {
+				refreshError = `Nie udało się odświeżyć tytułu: ${errorMessage(err)}`;
+			} else {
+				failure = errorMessage(err);
+			}
 		} finally {
 			if (current === loads) busy = false;
 		}
@@ -148,7 +164,8 @@
 		}
 		savingTitle = true;
 		try {
-			await request<Title>(fetch, 'PUT', `/api/titles/${id}`, parsed.value);
+			const saved = await request<Title>(fetch, 'PUT', `/api/titles/${id}`, parsed.value);
+			if (detail?.id === saved.id) Object.assign(detail, saved);
 			titleSheet = false;
 			await load(id);
 		} catch (err) {
@@ -156,6 +173,15 @@
 		} finally {
 			savingTitle = false;
 		}
+	}
+
+	/** Shows a saved copy at once, so it stays in view even when the refresh after it fails. */
+	function applyCopy(saved: Copy) {
+		const edition = detail?.editions.find((e) => e.id === saved.edition_id);
+		if (!edition) return;
+		const i = edition.copies.findIndex((c) => c.id === saved.id);
+		if (i === -1) edition.copies.push(saved);
+		else edition.copies[i] = saved;
 	}
 
 	function openCopy(target: CopyTarget) {
@@ -174,11 +200,14 @@
 		}
 		savingCopy = true;
 		try {
-			if (target.mode === 'edit') {
-				await request<Copy>(fetch, 'PUT', `/api/copies/${target.copy.id}`, parsed.value);
-			} else {
-				await request<Copy>(fetch, 'POST', '/api/copies', parsed.value);
-			}
+			const saved =
+				target.mode === 'edit'
+					? await request<Copy>(fetch, 'PUT', `/api/copies/${target.copy.id}`, parsed.value)
+					: await request<Copy>(fetch, 'POST', '/api/copies', {
+							...parsed.value,
+							request_key: target.requestKey
+						});
+			applyCopy(saved);
 			copySheet = false;
 			await load(id);
 		} catch (err) {
@@ -276,6 +305,7 @@
 	</TitleHero>
 
 	<div class="content">
+		<FormError message={refreshError} />
 		<FormError message={deleteError} />
 
 		{#if sole}
@@ -299,13 +329,19 @@
 			{#if value}
 				<Card title="Wartość dziś" level={2}>
 					<div class="worth">
-						<p class="used">≈ {value.used}</p>
+						{#if value.usedAt == null}
+							<p class="muted">Brak cen używanych egzemplarzy.</p>
+						{:else}
+							<p class="used">≈ {value.used}</p>
+						{/if}
 						{#if value.delta}
 							<p class="delta">{value.delta}</p>
 						{/if}
 					</div>
 					<div class="range" aria-hidden="true">
-						<span class="mark" style:inset-inline-start={`${value.usedAt}%`}></span>
+						{#if value.usedAt != null}
+							<span class="mark" style:inset-inline-start={`${value.usedAt}%`}></span>
+						{/if}
 						{#if value.paidAt != null}
 							<span class="paid" style:inset-inline-start={`${value.paidAt}%`}></span>
 						{/if}
@@ -329,7 +365,10 @@
 
 			{#if !adding}
 				<div class="quiet">
-					<Button onclick={() => openCopy({ mode: 'add', editionID: s.edition.id })}>
+					<Button
+						onclick={() =>
+							openCopy({ mode: 'add', editionID: s.edition.id, requestKey: newRequestKey() })}
+					>
 						{#snippet icon()}<Icon name="plus" />{/snippet}
 						Kolejny egzemplarz
 					</Button>

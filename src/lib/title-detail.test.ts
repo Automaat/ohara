@@ -260,8 +260,18 @@ describe('valueCard', () => {
 		expect(card?.paidAt).toBe(50);
 	});
 
-	it('is null for a copy without a used value, without a valuation or not owned', () => {
-		expect(valueCard(copy(), [valued({ mid: null })])).toBeNull();
+	it('shows the buy-back and new prices without a used value, with no used mark or difference', () => {
+		const card = valueCard(copy(), [valued({ mid: null })]);
+		expect(card?.used).toBe('—');
+		expect(nbsp(card?.floor)).toBe('16,00 zł');
+		expect(nbsp(card?.ceiling)).toBe('103,00 zł');
+		expect(card?.usedAt).toBeNull();
+		expect(card?.delta).toBeNull();
+		expect(card?.paidAt).toBeCloseTo(((8999 - 1600) / (10300 - 1600)) * 100);
+	});
+
+	it('is null for a copy without prices, without a valuation or not owned', () => {
+		expect(valueCard(copy(), [valued({ floor: null, mid: null, ceiling: null })])).toBeNull();
 		expect(valueCard(copy(), [valued({ copy_id: 99 })])).toBeNull();
 		expect(valueCard(copy(), [])).toBeNull();
 		expect(valueCard(copy({ status: 'wishlist' }), [valued()])).toBeNull();

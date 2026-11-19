@@ -134,6 +134,7 @@
 
 		.meta.wish {
 			white-space: normal;
+			overflow-wrap: anywhere;
 		}
 	}
 </style>

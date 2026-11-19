@@ -102,7 +102,6 @@
 	/* No artwork: the kind's icon on the inset colour, with the title under it when given. */
 	.blank {
 		grid-template-rows: minmax(0, 1fr);
-		padding: 9%;
 		background: var(--sui-surface-inset);
 	}
 
@@ -116,9 +115,12 @@
 		stroke-linejoin: round;
 	}
 
+	/* Fixed margins: a percentage would follow the containing block, which is a whole row where
+	   a small cover sits in a list. */
 	.name {
 		display: -webkit-box;
-		max-inline-size: 100%;
+		max-inline-size: calc(100% - 1rem);
+		margin: 0 0.5rem 0.625rem;
 		overflow: hidden;
 		color: var(--sui-text-primary);
 		font-family: var(--ohara-serif);

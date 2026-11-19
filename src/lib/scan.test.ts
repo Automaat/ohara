@@ -1,9 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ApiError } from './api';
+import { deleteQueueEntry } from './queue-deletes';
 import type { EditionDetail, Format } from './collection';
 import {
 	FormRejected,
 	LatestLoad,
+	barcodeGroups,
 	RepeatGuard,
 	barcodeInputError,
 	cameraErrorMessage,
@@ -207,6 +209,25 @@ describe('barcode input', () => {
 	});
 });
 
+describe('barcodeGroups', () => {
+	it.each([
+		['5901234123457', ['5', '901234', '123457']],
+		['0602445790098', ['0', '602445', '790098']],
+		['9788375780635', ['978', '8375', '780635']],
+		['9790260000438', ['979', '0260', '000438']],
+		['96385074', ['9638', '5074']],
+		['036000291452', ['0', '36000', '29145', '2']],
+		['10012345678902', ['1', '00', '12345', '67890', '2']]
+	])('groups %s like the digits under its bars', (code, groups) => {
+		expect(barcodeGroups(code)).toEqual(groups);
+		expect(barcodeGroups(code).join('')).toBe(code);
+	});
+
+	it.each(['123', '123456789X', ''])('keeps %j whole when it has no known shape', (code) => {
+		expect(barcodeGroups(code)).toEqual([code]);
+	});
+});
+
 describe('resolveScan', () => {
 	it('returns the edition that already carries the barcode', async () => {
 		const s = server({
@@ -275,6 +296,43 @@ describe('resolveScan', () => {
 		const got = await resolveScan(s.fetchFn, '5901234123457');
 		expect(got).toEqual({ kind: 'queued', barcode: '5901234123457', entry });
 		expect(s.calls.at(-1)?.body).toEqual(queued);
+	});
+
+	it('queues a rescanned barcode only after a queue removal on its way has settled', async () => {
+		let answer: () => void = () => {};
+		vi.stubGlobal(
+			'fetch',
+			() =>
+				new Promise<Response>(
+					(resolve) => (answer = () => resolve(new Response(null, { status: 204 })))
+				)
+		);
+		const removal = deleteQueueEntry(9, undefined);
+		vi.unstubAllGlobals();
+		const entry = {
+			id: 1,
+			barcode: '5901234123457',
+			reason: 'not_found',
+			detail: '',
+			scans: 1,
+			created_at: '',
+			last_scanned_at: ''
+		};
+		const s = server({
+			'GET /api/editions?barcode=5901234123457': [200, []],
+			'GET /api/lookup/5901234123457': [
+				200,
+				{ barcode: '5901234123457', candidates: [], errors: [] }
+			],
+			'POST /api/scan-queue': [201, entry]
+		});
+		const scan = resolveScan(s.fetchFn, '5901234123457');
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(s.paths()).not.toContain('POST /api/scan-queue');
+		answer();
+		await removal;
+		expect(await scan).toEqual({ kind: 'queued', barcode: '5901234123457', entry });
+		expect(s.paths().at(-1)).toBe('POST /api/scan-queue');
 	});
 
 	it('rejects a malformed barcode before any lookup', async () => {

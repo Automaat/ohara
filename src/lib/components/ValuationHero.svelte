@@ -40,7 +40,9 @@
 	{#if marks}
 		<div class="range" aria-hidden="true">
 			<span class="paid" style:left="{marks.spent}%"></span>
-			<span class="mark" style:left="{marks.mid}%"></span>
+			{#if marks.mid !== null}
+				<span class="mark" style:left="{marks.mid}%"></span>
+			{/if}
 		</div>
 	{/if}
 	<p class="labels">

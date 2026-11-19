@@ -214,6 +214,13 @@ describe('value hero', () => {
 		expect(rangeMarks(summary({ mid: { cents: 1000, copies: 1 } }))?.mid).toBe(0);
 	});
 
+	it('marks no used total without one', () => {
+		expect(rangeMarks(summary({ mid: { cents: 0, copies: 0 } }))).toEqual({
+			mid: null,
+			spent: expect.closeTo(84.88, 1)
+		});
+	});
+
 	it('starts the bar at 0 zł when no buy-back shop quotes the collection', () => {
 		const m = rangeMarks(
 			summary({
@@ -341,7 +348,26 @@ describe('history', () => {
 		});
 	});
 
-	it('breaks the lines and the band where a bound is missing', () => {
+	it('keeps the band over the estimates a day has', () => {
+		const movies = (day: string, base: number) => {
+			const p = point(day, base);
+			p.floor = { cents: 0, copies: 0 };
+			return p;
+		};
+
+		const paths = historyPaths(
+			[movies('2026-10-24', 1000), movies('2026-10-27', 1000)],
+			100,
+			100,
+			0
+		);
+
+		// Used 40 zł, new 80 zł and spent 100 zł with an 8% margin: y = (1 - (zł - 35.2) / 69.6) * 100.
+		expect(paths?.band).toBe('M0 35.6 L100 35.6 L100 93.1 L0 93.1 Z');
+		expect(paths?.mid).toBe('M0 93.1 L100 93.1');
+	});
+
+	it('breaks the lines where a bound is missing', () => {
 		const gap = point('2026-10-25', 1100);
 		gap.mid = { cents: 0, copies: 0 };
 		gap.ceiling = { cents: 0, copies: 0 };
@@ -356,7 +382,17 @@ describe('history', () => {
 
 		const xs = (d = '') => d.split(' ').filter((t) => /^[MLZ]/.test(t));
 		expect(xs(paths?.mid)).toEqual(['M0', 'L0', 'M200', 'L300']);
-		expect(xs(paths?.band)).toEqual(['M200', 'L300', 'L300', 'L200', 'Z']);
+		expect(xs(paths?.band)).toEqual([
+			'M0',
+			'L100',
+			'L200',
+			'L300',
+			'L300',
+			'L200',
+			'L100',
+			'L0',
+			'Z'
+		]);
 		expect(xs(paths?.spent)).toEqual(['M0', 'L100', 'L200', 'L300']);
 	});
 

@@ -38,7 +38,9 @@
 			<path class="spent" d={paths.spent} />
 		</svg>
 		<ul class="legend">
-			<li><i class="band"></i>Przedział</li>
+			{#if paths.band}
+				<li><i class="band"></i>Przedział</li>
+			{/if}
 			<li><i class="mid"></i>{boundLabels.mid}</li>
 			<li><i class="spent"></i>Wydano</li>
 		</ul>
@@ -124,9 +126,11 @@
 		stroke-linejoin: round;
 	}
 
+	/* The stroke keeps a day with a single estimate, a band of no height, in sight. */
 	path.band {
 		fill: var(--sui-brand-action-tint);
-		stroke: none;
+		stroke: var(--sui-brand-action-tint);
+		stroke-width: 2;
 	}
 
 	path.mid {

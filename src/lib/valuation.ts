@@ -230,15 +230,15 @@ function percentOf(value: number, low: number, high: number): number {
 /**
  * Where the used total and the amount spent stand on the bar from the buy-back total to the new
  * total, in percent of its width; a value past an end stays on that end. A collection that no
- * buy-back shop quotes starts the bar at 0 zł. Null without a new total above the start, as the
- * bar then has no length.
+ * buy-back shop quotes starts the bar at 0 zł, and one without a used total has no used mark.
+ * Null without a new total above the start, as the bar then has no length.
  */
-export function rangeMarks(summary: Summary): { mid: number; spent: number } | null {
+export function rangeMarks(summary: Summary): { mid: number | null; spent: number } | null {
 	const low = summary.floor.copies > 0 ? summary.floor.cents : 0;
 	const high = summary.ceiling.cents;
 	if (summary.ceiling.copies === 0 || high <= low) return null;
 	return {
-		mid: percentOf(summary.mid.cents, low, high),
+		mid: summary.mid.copies > 0 ? percentOf(summary.mid.cents, low, high) : null,
 		spent: percentOf(summary.spent_cents, low, high)
 	};
 }
@@ -351,11 +351,18 @@ function spread(rows: HistoryRow[]): HistoryRow[] {
 	return rows.length === 1 && only ? [only, { ...only, x: 1 }] : rows;
 }
 
+/** The band of one day: from its lowest to its highest estimate, null without any. */
+function bandOf(r: HistoryRow): { low: number; high: number } | null {
+	const known = [r.floor, r.mid, r.ceiling].filter((v): v is number => v !== null);
+	return known.length === 0 ? null : { low: Math.min(...known), high: Math.max(...known) };
+}
+
 /**
  * SVG paths of the history in a width × height box: the band from the buy-back to the new
- * total, the used total and the amount spent. Days without a bound leave a gap in its line, and
- * the band only covers days with both of its ends. The values fill the height less an inset and
- * an 8% margin, so the lines never touch the edges.
+ * total, the used total and the amount spent. A day that lacks a bound keeps the band over the
+ * estimates it has, so a collection no buy-back shop quotes still shows its new price, and its
+ * missing lines leave gaps. The values fill the height less an inset and an 8% margin, so the
+ * lines never touch the edges.
  */
 export function historyPaths(history: HistoryPoint[], width: number, height: number, inset = 4) {
 	const rows = spread(historyRows(history));
@@ -372,10 +379,7 @@ export function historyPaths(history: HistoryPoint[], width: number, height: num
 		runs(rows, pick)
 			.map((run) => line(run.map(([r, v]): Point => [s.x(r.x), s.y(v)])))
 			.join(' ');
-	const band = runs(rows, (r) =>
-		r.floor !== null && r.ceiling !== null ? { low: r.floor, high: r.ceiling } : null
-	)
-		.filter((run) => run.length > 1)
+	const band = runs(rows, bandOf)
 		.map((run) => {
 			const top = run.map(([r, v]): Point => [s.x(r.x), s.y(v.high)]);
 			const bottom = run.map(([r, v]): Point => [s.x(r.x), s.y(v.low)]).reverse();

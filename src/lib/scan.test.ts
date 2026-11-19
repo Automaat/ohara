@@ -19,6 +19,7 @@ import {
 	isInvalidBarcode,
 	loadSticky,
 	looksLikeBarcode,
+	newMade,
 	newRequestKey,
 	providerLabel,
 	queuedMessage,
@@ -578,7 +579,14 @@ describe('saveScan', () => {
 			}),
 			'k1'
 		);
-		expect(got).toEqual({ titleID: 9, titleName: 'Seksmisja', editionID: 21, copy });
+		expect(got).toEqual({
+			titleID: 9,
+			titleName: 'Seksmisja',
+			editionID: 21,
+			copy,
+			createdTitle: true,
+			createdEdition: true
+		});
 		expect(s.calls[2].body).toMatchObject({
 			title_id: 9,
 			barcode: '5901234123457',
@@ -640,7 +648,7 @@ describe('saveScan', () => {
 			form(),
 			'k1'
 		);
-		expect(got.titleID).toBe(3);
+		expect(got).toMatchObject({ titleID: 3, createdTitle: false, createdEdition: true });
 		expect(s.paths()).not.toContain('POST /api/titles');
 		expect(s.calls[1].body).toMatchObject({ title_id: 3 });
 	});
@@ -672,7 +680,14 @@ describe('saveScan', () => {
 			form({ price: '10' }),
 			'k1'
 		);
-		expect(got).toEqual({ titleID: 3, titleName: 'Rejs', editionID: 5, copy });
+		expect(got).toEqual({
+			titleID: 3,
+			titleName: 'Rejs',
+			editionID: 5,
+			copy,
+			createdTitle: false,
+			createdEdition: false
+		});
 		expect(s.calls[0].body).toMatchObject({ edition_id: 5, price_cents: 1000, request_key: 'k1' });
 	});
 
@@ -692,9 +707,90 @@ describe('saveScan', () => {
 			form(),
 			'k1'
 		);
-		expect(got).toMatchObject({ titleID: 4, editionID: 7 });
+		expect(got).toMatchObject({
+			titleID: 4,
+			editionID: 7,
+			createdTitle: false,
+			createdEdition: false
+		});
 		expect(s.paths()).toContain('DELETE /api/titles/9');
 		expect(s.calls.at(-1)?.body).toMatchObject({ edition_id: 7 });
+	});
+
+	it('counts a title and edition an earlier attempt of the same add created', async () => {
+		const made = newMade();
+		const s = server({
+			'GET /api/titles?tmdb_id=11202': [
+				[200, []],
+				[200, [title]]
+			],
+			'POST /api/titles': [201, title],
+			'POST /api/editions': [
+				[201, edition],
+				[409, { error: 'dup', field: 'barcode' }]
+			],
+			'POST /api/copies?cover=auto': [
+				[500, { error: 'boom' }],
+				[201, copy]
+			],
+			'GET /api/editions?barcode=5901234123457': [200, [edition]],
+			'GET /api/titles/9': [200, title]
+		});
+		const target = { kind: 'new', barcode: '5901234123457', candidate: movie } as const;
+		await expect(saveScan(s.fetchFn, target, form(), 'k1', made)).rejects.toBeInstanceOf(ApiError);
+		const got = await saveScan(s.fetchFn, target, form(), 'k1', made);
+		expect(got).toMatchObject({
+			titleID: 9,
+			editionID: 21,
+			createdTitle: true,
+			createdEdition: true
+		});
+		expect(made).toEqual({ titles: [9], editions: [21] });
+	});
+
+	it('keeps counting its first title when a retry made and removed another', async () => {
+		const made = newMade();
+		const s = server({
+			'POST /api/titles': [
+				[201, { id: 1, name: 'Lalka' }],
+				[201, { id: 3, name: 'Lalka' }]
+			],
+			'POST /api/editions': [
+				[201, { id: 2, title_id: 1 }],
+				[409, { error: 'dup', field: 'barcode' }]
+			],
+			'POST /api/copies?cover=auto': [
+				[500, { error: 'boom' }],
+				[201, copy]
+			],
+			'GET /api/editions?barcode=9788324000016': [200, [{ id: 2, title_id: 1 }]],
+			'DELETE /api/titles/3': [204, null],
+			'GET /api/titles/1': [200, { id: 1, name: 'Lalka' }]
+		});
+		const target = { kind: 'new', barcode: '9788324000016', candidate: null } as const;
+		const f = form({ kind: 'book', name: 'Lalka', format: '' });
+		await saveScan(s.fetchFn, target, f, 'k1', made).catch(() => null);
+		const got = await saveScan(s.fetchFn, target, f, 'k1', made);
+		expect(got).toMatchObject({ titleID: 1, createdTitle: true, createdEdition: true });
+		expect(made).toEqual({ titles: [1], editions: [2] });
+	});
+
+	it('still counts a title it failed to remove', async () => {
+		const made = newMade();
+		const s = server({
+			'GET /api/titles?tmdb_id=11202': [200, []],
+			'POST /api/titles': [201, title],
+			'POST /api/editions': [422, { error: 'bad', field: 'year' }],
+			'DELETE /api/titles/9': [500, { error: 'boom' }]
+		});
+		await saveScan(
+			s.fetchFn,
+			{ kind: 'new', barcode: '5901234123457', candidate: movie },
+			form(),
+			'k1',
+			made
+		).catch(() => null);
+		expect(made.titles).toEqual([9]);
 	});
 
 	it('keeps a reused title when the edition races', async () => {

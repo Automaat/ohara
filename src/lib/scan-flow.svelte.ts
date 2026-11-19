@@ -1,5 +1,5 @@
 import { ApiError, errorMessage, invalidBarcodeMessage } from './api';
-import { formatPLN, type FormIssue } from './collection';
+import { bindingLabels, formatLabels, formatPLN, type FormIssue } from './collection';
 import { logScan } from './recent.svelte';
 import {
 	FormRejected,
@@ -10,6 +10,7 @@ import {
 	isInvalidBarcode,
 	loadSticky,
 	looksLikeBarcode,
+	newMade,
 	newRequestKey,
 	quickForm,
 	resolveScan,
@@ -21,12 +22,15 @@ import {
 	type Candidate,
 	type KeyValueStore,
 	type LookupResult,
+	type Made,
 	type QueueEntry,
 	type QuickForm,
 	type Saved,
 	type SaveTarget,
 	type Sticky
 } from './scan';
+import { recordAdd, type SessionAdd } from './session.svelte';
+import { editionArtwork } from './title-detail';
 
 /** found and owned have candidates or the edition; missing is filled in by hand. */
 export type ItemStatus = 'found' | 'owned' | 'missing';
@@ -49,10 +53,31 @@ export type FlowItem = {
 	errors: LookupResult['errors'];
 	/** Logged in the recent scans, as added or not. */
 	logged: boolean;
+	/** What saves of this item created, kept across retries. */
+	made: Made;
 };
 
-/** A save that went through: the copy and, when a wedge scanner typed it, the next barcode. */
-export type Added = { saved: Saved; barcode: string; next: string | null };
+/**
+ * A save that went through: the copy, the visit's record of it and, when a wedge scanner typed
+ * it, the next barcode.
+ */
+export type Added = { saved: Saved; add: SessionAdd; barcode: string; next: string | null };
+
+/** The medium a save went in as: the edition's format or binding, else the form's. */
+function mediumOf(target: SaveTarget, f: QuickForm): string {
+	const e = target.kind === 'owned' ? target.edition : null;
+	const format = e ? e.format : f.format || null;
+	const binding = e ? e.binding : f.kind === 'book' ? f.binding || null : null;
+	if (format) return formatLabels[format];
+	return binding ? bindingLabels[binding] : '';
+}
+
+/** The artwork the sheet showed for what was saved. */
+function coverOf(target: SaveTarget, f: QuickForm): string | undefined {
+	if (target.kind === 'owned') return editionArtwork(target.edition, target.edition.title);
+	const c = target.candidate;
+	return c?.type === f.kind ? c.cover_url : undefined;
+}
 
 /**
  * What one visit carries from an add to the next: the purchase date. It lives in the module, so
@@ -122,7 +147,8 @@ export class ScanFlow {
 			candidates: [],
 			picked: null,
 			errors: [],
-			logged: false
+			logged: false,
+			made: newMade()
 		};
 	}
 
@@ -301,21 +327,36 @@ export class ScanFlow {
 		this.saving = true;
 		this.issue = null;
 		try {
-			const saved = await saveScan(this.#fetch, item.target, f, item.key);
+			const target = $state.snapshot(item.target);
+			const saved = await saveScan(this.#fetch, target, f, item.key, item.made);
 			const kept = { ...f, status: saved.copy.status ?? f.status };
 			if (kept.status === 'owned') visit.date = kept.purchased_on;
 			this.sticky = stickyAfter(this.sticky, kept);
 			saveSticky(this.#store, this.sticky);
 			const price = formatPLN(saved.copy.price_cents ?? saved.copy.max_price_cents);
 			const what = kept.status === 'owned' ? '' : ' · lista życzeń';
-			logScan(
+			const recentID = logScan(
 				item.barcode,
 				'added',
 				saved.titleName + (price ? ` · ${price}` : '') + what,
 				`/copies/${saved.copy.id}`
 			);
 			item.logged = true;
-			return current() ? { saved, barcode: item.barcode, next } : null;
+			const add = recordAdd({
+				copyID: saved.copy.id,
+				editionID: saved.editionID,
+				titleID: saved.titleID,
+				createdEdition: saved.createdEdition,
+				createdTitle: saved.createdTitle,
+				name: saved.titleName,
+				medium: mediumOf(target, kept),
+				kind: target.kind === 'owned' ? target.edition.title.kind : kept.kind,
+				cover: coverOf(target, kept),
+				status: kept.status,
+				priceCents: kept.status === 'owned' ? (saved.copy.price_cents ?? null) : null,
+				recentID
+			});
+			return current() ? { saved, add, barcode: item.barcode, next } : null;
 		} catch (err) {
 			if (!current()) return null;
 			this.issue =

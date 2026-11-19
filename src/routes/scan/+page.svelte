@@ -14,18 +14,26 @@
 		PageHeader,
 		Pill,
 		Section,
-		TextInput
+		TextInput,
+		Toaster,
+		dismiss,
+		toast
 	} from '@smykla-skalski/sui';
-	import { onMount, untrack } from 'svelte';
+	import { onDestroy, onMount, tick, untrack } from 'svelte';
 	import { MediaQuery } from 'svelte/reactivity';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
+	import { AddToasts } from '#lib/add-toast.js';
 	import { request } from '#lib/api.js';
+	import { formatPLN } from '#lib/collection.js';
 	import BarcodeCamera from '#lib/components/BarcodeCamera.svelte';
+	import CollectionCover from '#lib/components/CollectionCover.svelte';
 	import ScanItem from '#lib/components/ScanItem.svelte';
+	import SessionTray from '#lib/components/SessionTray.svelte';
 	import { queueDeletesSettled } from '#lib/queue-deletes.js';
 	import { outcomeLabels, outcomeTones, recentScans } from '#lib/recent.svelte.js';
 	import { ScanFlow, type Added } from '#lib/scan-flow.svelte.js';
+	import { session, sessionSpent, undoAdd, type SessionAdd } from '#lib/session.svelte.js';
 	import {
 		RepeatGuard,
 		barcodeInputError,
@@ -67,10 +75,26 @@
 	/** Where to go once the sheet's history entry is gone, as the add page for a code by hand. */
 	let afterClose: string | null = null;
 	let closing = 0;
+	/** An add whose toast waits for the sheet to close, so the page's toasts announce it. */
+	let addedOnClose: SessionAdd | null = null;
+	let listOpen = $state(false);
 	const guard = new RepeatGuard(repeatWindow);
 	const flow = new ScanFlow(fetch, storage());
+	const addToasts = new AddToasts(
+		{
+			toast,
+			dismiss,
+			holding: (id) => {
+				const el = document.querySelector(`[data-toast="${id}"]`);
+				return el !== null && (el.matches(':hover') || el.contains(document.activeElement));
+			}
+		},
+		(add) => undoAdd(fetch, add)
+	);
 
 	const sheet = $derived(page.state.scanSheet);
+	const trayShown = $derived(session.adds.length > 0);
+	const spent = $derived(formatPLN(sessionSpent(session.adds)));
 	const sheetTitle = $derived(titleFor());
 	const sheetStyle = $derived(
 		[
@@ -133,6 +157,19 @@
 		return true;
 	}
 
+	/**
+	 * Where focus goes when the sheet closes and the field that opened it is gone with the closed
+	 * manual entry: the code field, else the button that types a code. Never the toast's
+	 * "Cofnij", where a scanner's next Enter would undo the add.
+	 */
+	function sheetReturn(): HTMLElement | null {
+		const visible = (el: HTMLElement | null) => (el?.checkVisibility() ? el : null);
+		return (
+			visible(document.getElementById('scan-code')) ??
+			visible(document.querySelector<HTMLElement>('button[aria-label="Wpisz kod"]'))
+		);
+	}
+
 	function closeSheet() {
 		const s = page.state.scanSheet;
 		if (!s || closing === s.id) return;
@@ -155,10 +192,25 @@
 		open(code, true);
 	}
 
+	/**
+	 * After an add the sheet closes and the toast names what went in. A wedge scan's next code
+	 * keeps the sheet open, so its toast shows in the sheet.
+	 */
 	function added(a: Added) {
 		if (!page.state.scanSheet) return;
-		if (a.next) open(a.next, true);
-		else closeSheet();
+		if (a.next) {
+			open(a.next, true);
+			addToasts.show(a.add);
+		} else {
+			addedOnClose = a.add;
+			closeSheet();
+		}
+	}
+
+	/** Shows an add's toast once the closed sheet no longer hosts the page's toasts. */
+	async function toastAfterClose(add: SessionAdd) {
+		await tick();
+		if (!page.state.scanSheet) addToasts.show(add);
 	}
 
 	/**
@@ -191,6 +243,9 @@
 		sheetTop = null;
 		const next = afterClose;
 		afterClose = null;
+		const add = addedOnClose;
+		addedOnClose = null;
+		if (add) void toastAfterClose(add);
 		if (next) void goto(next);
 		else void countQueue();
 	}
@@ -233,6 +288,8 @@
 			at.scrollIntoView({ block: 'nearest' });
 		}
 	}
+
+	onDestroy(() => addToasts.destroy());
 
 	onMount(() => {
 		void countQueue();
@@ -306,6 +363,10 @@
 	{/if}
 {/snippet}
 
+{#snippet tray(glass: boolean)}
+	<SessionTray adds={session.adds} {glass} onopen={() => (listOpen = true)} />
+{/snippet}
+
 {#snippet message()}
 	{#if notice}
 		<Callout tone="warning" live>{notice}</Callout>
@@ -330,7 +391,7 @@
 <div class={['content', { phone: phone.current }]}>
 	<BarcodeCamera
 		full={phone.current}
-		paused={!!sheet || leaving || (phone.current && typing)}
+		paused={!!sheet || leaving || listOpen || (phone.current && typing)}
 		ondetect={fromCamera}
 		{queued}
 		ontype={() => (typing = true)}
@@ -340,9 +401,14 @@
 	</BarcodeCamera>
 	{#if !phone.current}
 		{@render manualEntry()}
+		{#if trayShown}{@render tray(false)}{/if}
 		{@render recent()}
 	{/if}
 </div>
+
+{#if phone.current && trayShown}
+	<div class="tray-dock" data-sui-theme="dark">{@render tray(true)}</div>
+{/if}
 
 {#if phone.current}
 	<Modal bind:open={typing} title="Wpisz kod" closeLabel="Zamknij">
@@ -353,12 +419,54 @@
 	</Modal>
 {/if}
 
+<Modal bind:open={listOpen} title="Ta sesja" closeLabel="Zamknij">
+	{#if trayShown}
+		<div class="session">
+			<p class="summary">Dodano: {session.adds.length} · Wydano {spent}</p>
+			<ObjectList>
+				{#each session.adds as add (add.id)}
+					<ObjectRow href={`/copies/${add.copyID}`}>
+						{#snippet main()}
+							<span class="added">
+								<CollectionCover kind={add.kind} url={add.cover} wish={add.status !== 'owned'} />
+								<span class="added-text">
+									<span class="added-name">{add.name}</span>
+									{#if add.medium}<span class="metadata">{add.medium}</span>{/if}
+								</span>
+							</span>
+						{/snippet}
+						{#snippet side()}
+							{#if add.status === 'owned'}
+								<span class="price">
+									{add.priceCents === null ? 'Bez ceny' : formatPLN(add.priceCents)}
+								</span>
+							{:else}
+								<Pill tone="neutral">Lista życzeń</Pill>
+							{/if}
+						{/snippet}
+					</ObjectRow>
+				{/each}
+			</ObjectList>
+		</div>
+	{:else}
+		<p class="summary">Nic tu już nie ma: każde dodanie zostało cofnięte.</p>
+	{/if}
+</Modal>
+
+<div
+	class={['scan-toasts', { 'over-tray': phone.current && trayShown }]}
+	data-sui-theme={phone.current ? 'dark' : undefined}
+>
+	<Toaster label="Powiadomienia" dismissLabel="Zamknij" />
+</div>
+
 <Modal
 	open={!!sheet}
 	class="scan-sheet"
 	title={sheetTitle}
 	closeLabel="Zamknij"
 	beforeClose={() => !flow.saving}
+	returnFocus={sheetReturn}
 	onclose={closeSheet}
 	style={sheetStyle}
 >
@@ -415,6 +523,109 @@
 
 	.grabber {
 		display: none;
+	}
+
+	.session {
+		display: grid;
+		gap: 0.75rem;
+	}
+
+	.summary {
+		color: var(--sui-text-secondary);
+		font-variant-numeric: tabular-nums;
+		margin: 0;
+	}
+
+	.added {
+		--collection-cover-width: 2.5rem;
+
+		align-items: center;
+		display: flex;
+		gap: 0.75rem;
+		min-inline-size: 0;
+	}
+
+	.added-text {
+		display: grid;
+		min-inline-size: 0;
+	}
+
+	.added-name {
+		font-weight: 600;
+	}
+
+	/* On a phone the tray floats over the camera just above the tab bar, where the camera's
+	   overlay keeps its foot clear, and hides with the tab bar under a dialog. */
+	.tray-dock {
+		--session-tray-height: 4.5rem;
+
+		inset-block-end: calc(4rem + 2 * max(env(safe-area-inset-bottom, 0px), 0.75rem));
+		inset-inline: max(env(safe-area-inset-left, 0px), 1rem)
+			max(env(safe-area-inset-right, 0px), 1rem);
+		position: fixed;
+		z-index: 1;
+	}
+
+	:global(:root:has(dialog:modal)) .tray-dock {
+		visibility: hidden;
+	}
+
+	/* The add toast: a success tile before the copy and "Cofnij" beside it, as the mockup
+	   draws it. A failure keeps SUI's own symbol and layout. */
+	.scan-toasts :global(.sui-toast-body:not(:has(.sui-toast-mark))::before) {
+		background: var(--sui-success)
+			url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12.5 10 17.5 19 7'/%3E%3C/svg%3E")
+			center / 1.25rem no-repeat;
+		block-size: 2.5rem;
+		border-radius: 50%;
+		content: '';
+		flex: none;
+		inline-size: 2.5rem;
+	}
+
+	.scan-toasts
+		:global(
+			.sui-toaster[data-sui-theme='dark'] .sui-toast-body:not(:has(.sui-toast-mark))::before
+		) {
+		background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230e1b17' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12.5 10 17.5 19 7'/%3E%3C/svg%3E");
+	}
+
+	.scan-toasts :global(.sui-toast-body:not(:has(.sui-toast-mark))) {
+		align-items: center;
+	}
+
+	.scan-toasts :global(.sui-toast-body:not(:has(.sui-toast-mark)) .sui-toast-main) {
+		align-items: center;
+		grid-template-columns: minmax(0, 1fr) auto;
+	}
+
+	/* On a phone the toast stands over the camera above the tab bar, and above the tray when the
+	   visit has one. */
+	@media (max-width: 47.9375rem) {
+		.scan-toasts {
+			--session-tray-height: 4.5rem;
+		}
+
+		/* The toast takes the width of the tray under it. */
+		.scan-toasts :global(.sui-toast) {
+			max-inline-size: none;
+		}
+
+		/* A popover is as wide as its content; between both screen edges it spans the screen. */
+		.scan-toasts :global(.sui-toaster) {
+			inline-size: auto;
+			inset-inline: 0;
+			inset-block-end: calc(
+				4rem + 2 * max(env(safe-area-inset-bottom, 0px), 0.75rem) - var(--sui-space-4)
+			);
+		}
+
+		.scan-toasts.over-tray :global(.sui-toaster) {
+			inset-block-end: calc(
+				4rem + 2 * max(env(safe-area-inset-bottom, 0px), 0.75rem) + var(--session-tray-height) +
+					0.75rem - var(--sui-space-4)
+			);
+		}
 	}
 
 	:global(.scan-sheet) {

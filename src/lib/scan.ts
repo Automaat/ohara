@@ -536,7 +536,28 @@ function must<T>(p: Parsed<T>): T {
 	return p.value;
 }
 
-export type Saved = { titleID: number; titleName: string; editionID: number; copy: Copy };
+/**
+ * What a save went through to: the copy, its edition and title, and whether this add created
+ * the edition or the title rather than finding them, so undoing it removes only what it made.
+ */
+export type Saved = {
+	titleID: number;
+	titleName: string;
+	editionID: number;
+	copy: Copy;
+	createdTitle: boolean;
+	createdEdition: boolean;
+};
+
+/**
+ * The titles and editions one add created and that still exist. A retried save passes the same
+ * record, so a title or edition an earlier attempt made counts as this add's own.
+ */
+export type Made = { titles: number[]; editions: number[] };
+
+export function newMade(): Made {
+	return { titles: [], editions: [] };
+}
 
 /** What a quick confirm saves: a copy of an owned edition, or a new item for a barcode. */
 export type SaveTarget =
@@ -558,12 +579,19 @@ async function editionByBarcode(fetchFn: typeof fetch, barcode: string): Promise
 	return found[0] ?? null;
 }
 
-async function discardTitle(fetchFn: typeof fetch, id: number) {
+/** Removes a title made for an edition that went elsewhere; true once it is gone. */
+async function discardTitle(fetchFn: typeof fetch, id: number): Promise<boolean> {
 	try {
 		await request<void>(fetchFn, 'DELETE', `/api/titles/${id}`);
-	} catch {
-		return;
+		return true;
+	} catch (err) {
+		return err instanceof ApiError && err.status === 404;
 	}
+}
+
+function forget(ids: number[], id: number) {
+	const at = ids.indexOf(id);
+	if (at !== -1) ids.splice(at, 1);
 }
 
 /**
@@ -571,14 +599,24 @@ async function discardTitle(fetchFn: typeof fetch, id: number) {
  * with the candidate's TMDB ID, then its edition; when another save created that edition in the
  * meantime, the copy joins it and a title made here is removed again. Every value is checked
  * before the first request, so a refused form changes nothing. Retry a failed save with the
- * same requestKey: a copy the failed attempt created is returned rather than added again.
+ * same requestKey and made: a copy the failed attempt created is returned rather than added
+ * again, and a title or edition it created still counts as created by this add.
  */
 export async function saveScan(
 	fetchFn: typeof fetch,
 	target: SaveTarget,
 	f: QuickForm,
-	requestKey: string
+	requestKey: string,
+	made: Made = newMade()
 ): Promise<Saved> {
+	const saved = (titleID: number, titleName: string, editionID: number, copy: Copy): Saved => ({
+		titleID,
+		titleName,
+		editionID,
+		copy,
+		createdTitle: made.titles.includes(titleID),
+		createdEdition: made.editions.includes(editionID)
+	});
 	if (target.kind === 'owned') {
 		const e = target.edition;
 		const copy = await request<Copy>(
@@ -587,7 +625,7 @@ export async function saveScan(
 			'/api/copies?cover=auto',
 			must(scanCopyPayload(f, e.id, requestKey))
 		);
-		return { titleID: e.title.id, titleName: e.title.name, editionID: e.id, copy };
+		return saved(e.title.id, e.title.name, e.id, copy);
 	}
 
 	const titleBody = must(scanTitlePayload(f, target.candidate));
@@ -596,6 +634,7 @@ export async function saveScan(
 
 	const reused = await existingTitle(fetchFn, titleBody.tmdb_id);
 	const title = reused ?? (await request<Title>(fetchFn, 'POST', '/api/titles', titleBody));
+	if (!reused) made.titles.push(title.id);
 	let edition: Edition;
 	let titleID = title.id;
 	let titleName = title.name;
@@ -606,10 +645,11 @@ export async function saveScan(
 			'/api/editions',
 			must(scanEditionPayload(f, target.candidate, target.barcode, title.id))
 		);
+		made.editions.push(edition.id);
 	} catch (err) {
 		const raced = err instanceof ApiError && err.status === 409 && err.field === 'barcode';
 		const existing = raced ? await editionByBarcode(fetchFn, target.barcode) : null;
-		if (!reused) await discardTitle(fetchFn, title.id);
+		if (!reused && (await discardTitle(fetchFn, title.id))) forget(made.titles, title.id);
 		if (!existing) throw err;
 		edition = existing;
 		const owner = await request<Title>(fetchFn, 'GET', `/api/titles/${existing.title_id}`);
@@ -622,7 +662,7 @@ export async function saveScan(
 		'/api/copies?cover=auto',
 		must(scanCopyPayload(f, edition.id, requestKey))
 	);
-	return { titleID, titleName, editionID: edition.id, copy };
+	return saved(titleID, titleName, edition.id, copy);
 }
 
 /**

@@ -3,6 +3,7 @@ import { invalidBarcodeMessage } from './api';
 import { formatPLN, type EditionDetail } from './collection';
 import { recentScans } from './recent.svelte';
 import { ScanFlow, resetVisit } from './scan-flow.svelte';
+import { resetSession, session } from './session.svelte';
 import type { Candidate, KeyValueStore } from './scan';
 
 type Reply = [number, unknown] | (() => Promise<[number, unknown]>);
@@ -95,6 +96,7 @@ function ownedRoutes(copies: Reply | Reply[] = copyReply()): Record<string, Repl
 
 beforeEach(() => {
 	resetVisit();
+	resetSession();
 	recentScans.list = [];
 });
 
@@ -430,6 +432,79 @@ describe('ScanFlow.save', () => {
 		expect(JSON.parse(store.data['ohara.scan.sticky']).shop).toBe('Empik');
 		await flow.load(code);
 		expect(flow.form.purchased_on).toBe('2026-11-18');
+	});
+
+	it('records an owned add of an edition it found for the session tray', async () => {
+		const s = server(ownedRoutes(copyReply({ price_cents: 5000 })));
+		const flow = new ScanFlow(s.fetchFn, memory());
+		await flow.load(code);
+		flow.form.price = '50';
+		const added = await flow.save();
+		expect(session.adds).toHaveLength(1);
+		expect(added?.add).toEqual(session.adds[0]);
+		expect(session.adds[0]).toMatchObject({
+			copyID: 40,
+			editionID: 5,
+			titleID: 3,
+			createdEdition: false,
+			createdTitle: false,
+			name: 'Rejs',
+			medium: 'DVD',
+			kind: 'movie',
+			status: 'owned',
+			priceCents: 5000,
+			recentID: recentScans.list[0].id
+		});
+	});
+
+	it('records a new item with what it created, its medium and cover', async () => {
+		const s = server({
+			...lookup([{ ...movie, cover_url: 'https://image.tmdb.org/t/p/w342/d.jpg' }], false),
+			'GET /api/titles?tmdb_id=1': [200, []],
+			'POST /api/titles': [201, { id: 9, name: 'Diuna: Część druga' }],
+			'POST /api/editions': [201, { id: 21, title_id: 9, barcode: code }],
+			'POST /api/copies?cover=auto': copyReply({ id: 41, edition_id: 21, price_cents: null })
+		});
+		const flow = new ScanFlow(s.fetchFn, memory());
+		await flow.load(code);
+		const added = await flow.save();
+		expect(added?.add).toMatchObject({
+			copyID: 41,
+			editionID: 21,
+			titleID: 9,
+			createdEdition: true,
+			createdTitle: true,
+			name: 'Diuna: Część druga',
+			medium: '4K UHD',
+			cover: 'https://image.tmdb.org/t/p/w342/d.jpg',
+			priceCents: null
+		});
+	});
+
+	it('records a book by its binding and a wish without a price', async () => {
+		const s = server({
+			...lookup([book], false),
+			'POST /api/titles': [201, { id: 1, name: 'Lalka' }],
+			'POST /api/editions': [201, { id: 2, title_id: 1, barcode: code }],
+			'POST /api/copies?cover=auto': copyReply({
+				id: 42,
+				edition_id: 2,
+				status: 'wishlist',
+				max_price_cents: 3000
+			})
+		});
+		const flow = new ScanFlow(s.fetchFn, memory());
+		await flow.load(code);
+		flow.wish(true);
+		flow.form.price = '30';
+		const added = await flow.save();
+		expect(added?.add).toMatchObject({
+			name: 'Lalka',
+			medium: 'Twarda oprawa',
+			kind: 'book',
+			status: 'wishlist',
+			priceCents: null
+		});
 	});
 
 	it('starts the next item when a wedge scanner typed a code into the price', async () => {

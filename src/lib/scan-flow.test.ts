@@ -567,6 +567,16 @@ describe('ScanFlow.save', () => {
 		expect(s.calls.at(-1)?.body).toMatchObject({ price_cents: null });
 	});
 
+	it('starts the next item when a wedge scanner typed an ISBN-10 ending in X', async () => {
+		const s = server(ownedRoutes());
+		const flow = new ScanFlow(s.fetchFn, memory());
+		await flow.load(code);
+		flow.form.price = '080442957x';
+		const added = await flow.save();
+		expect(added?.next).toBe('080442957X');
+		expect(s.calls.at(-1)?.body).toMatchObject({ price_cents: null });
+	});
+
 	it('shows why a save was refused and keeps the wedge code to scan again', async () => {
 		const s = server(lookup([movie], false));
 		const flow = new ScanFlow(s.fetchFn, memory());

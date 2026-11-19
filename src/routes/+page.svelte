@@ -159,8 +159,8 @@
 	}
 
 	/**
-	 * Asks which titles have no copy while the collection holds none, so the empty collection can
-	 * still lead to them; a failed request leaves that link out.
+	 * Counts the titles without a copy while the collection holds none, for the empty collection's
+	 * link to them; a failed count leaves the link without a number.
 	 */
 	function loadUncopied() {
 		pendingUncopied ??= request<Title[]>(fetch, 'GET', '/api/titles')
@@ -554,9 +554,12 @@
 				<div class="empty-actions">
 					<Button tone="signal" href="/scan">Zeskanuj pierwszy kod</Button>
 					<Button href="/titles/new">Dodaj ręcznie</Button>
-					{#if uncopied?.length}
+					<!-- Offered until the count is known to be zero, so a failed count can be asked again. -->
+					{#if uncopied === null || uncopied.length > 0}
 						<Button onclick={() => setStatus('none')}>
-							{collectionStatusLabels.none} ({uncopied.length})
+							{uncopied
+								? `${collectionStatusLabels.none} (${uncopied.length})`
+								: collectionStatusLabels.none}
 						</Button>
 					{/if}
 				</div>

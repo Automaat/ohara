@@ -5,6 +5,7 @@ import {
 	addCopyStart,
 	copyFacts,
 	copyLine,
+	copyRequest,
 	editionArtwork,
 	editionName,
 	editionsLine,
@@ -133,6 +134,29 @@ describe('adding a copy from a link', () => {
 
 	it.each(['', '?add=edition', '?add=', '?copy=add'])('ignores %j', (search) => {
 		expect(wantsCopy(new URLSearchParams(search))).toBe(false);
+	});
+
+	it('starts adding once per opened page, never on a refresh', () => {
+		const request = copyRequest();
+		request.open(5, new URLSearchParams('add=copy'));
+		expect(request.take(4)).toBe(false);
+		expect(request.take(5)).toBe(true);
+		expect(request.take(5)).toBe(false);
+	});
+
+	it('ignores a page opened without the request', () => {
+		const request = copyRequest();
+		request.open(5, new URLSearchParams('add=copy'));
+		request.open(6, new URLSearchParams(''));
+		expect(request.take(5)).toBe(false);
+		expect(request.take(6)).toBe(false);
+	});
+
+	it('drops the request when the page closes before its answer', () => {
+		const request = copyRequest();
+		request.open(5, new URLSearchParams('add=copy'));
+		request.close();
+		expect(request.take(5)).toBe(false);
 	});
 
 	it('starts with a new edition when the title has none', () => {

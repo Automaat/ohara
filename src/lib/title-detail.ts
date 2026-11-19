@@ -32,6 +32,31 @@ export function wantsCopy(params: Pick<URLSearchParams, 'get'>): boolean {
 }
 
 /**
+ * A page's request to add a copy, read once when the page opens an id and used by at most one
+ * answer for it. Refreshing the same id or an answer that arrives after the page closed starts
+ * nothing, since the address can still show the request after it was used.
+ */
+export function copyRequest() {
+	let pending: number | undefined;
+	return {
+		/** Notes whether the page opened for `id` was asked to add a copy. */
+		open(id: number, params: Pick<URLSearchParams, 'get'>) {
+			pending = wantsCopy(params) ? id : undefined;
+		},
+		/** Whether the answer for `id` starts adding a copy: true once per request. */
+		take(id: number): boolean {
+			if (pending !== id) return false;
+			pending = undefined;
+			return true;
+		},
+		/** Drops the request when the page closes. */
+		close() {
+			pending = undefined;
+		}
+	};
+}
+
+/**
  * Where adding a copy to a title starts: a new edition when it has none, the copy form of its only
  * edition, or null when the reader picks one of several editions.
  */

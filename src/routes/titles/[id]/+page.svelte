@@ -13,6 +13,7 @@
 		Section,
 		Skeleton
 	} from '@smykla-skalski/sui';
+	import { onDestroy } from 'svelte';
 	import { goto, replaceState } from '$app/navigation';
 	import { page } from '$app/state';
 	import { ApiError, errorMessage, request } from '#lib/api.js';
@@ -40,14 +41,14 @@
 		addCopyStart,
 		copyFacts,
 		copyLine,
+		copyRequest,
 		editionArtwork,
 		editionName,
 		editionsLine,
 		kindAndYear,
 		soleCopy,
 		titleArtwork,
-		valueCard,
-		wantsCopy
+		valueCard
 	} from '#lib/title-detail.js';
 	import { newRequestKey } from '#lib/scan.js';
 	import type { CopyValue, ValuationView } from '#lib/valuation.js';
@@ -84,8 +85,13 @@
 	let savingCopy = $state(false);
 
 	let adding = $state(false);
+	/** A link's request to add a copy, used by the first answer for the title it opened. */
+	const addRequest = copyRequest();
+	onDestroy(addRequest.close);
 	/** Set while a new edition is the first step of adding a copy, so its page opens the copy form. */
 	let copyAfterEdition = false;
+	/** Set when a request to add a copy leaves the choice among several editions to the reader. */
+	let pickEdition = $state(false);
 	let editionForm = $state(editionToForm(null));
 	let editionIssue = $state<FormIssue | null>(null);
 	let savingEdition = $state(false);
@@ -113,6 +119,8 @@
 			copySheet = false;
 			adding = false;
 			copyAfterEdition = false;
+			pickEdition = false;
+			addRequest.open(titleID, page.url.searchParams);
 			confirmDelete = false;
 			deleteError = null;
 		}
@@ -125,7 +133,7 @@
 			failure = null;
 			refreshError = null;
 			void loadValues(next, current);
-			if (wantsCopy(page.url.searchParams)) startCopyFromLink(next);
+			if (addRequest.take(titleID)) startCopyFromLink(next);
 		} catch (err) {
 			if (current !== loads) return;
 			if (detail?.id === titleID) {
@@ -238,8 +246,9 @@
 	}
 
 	/**
-	 * Opens what a link to add a copy asked for, once: the copy form of the only edition, or a new
-	 * edition first when there is none. The request leaves the address, so a reload does not repeat it.
+	 * Opens what a link to add a copy asked for: the copy form of the only edition, a new edition
+	 * first when there is none, or edition links that open their copy form. The request leaves the
+	 * address, so a reload does not repeat it.
 	 */
 	function startCopyFromLink(t: TitleDetail) {
 		const url = new URL(page.url.href);
@@ -251,6 +260,8 @@
 			copyAfterEdition = true;
 		} else if (start?.form === 'copy') {
 			openCopy({ mode: 'add', editionID: start.editionID, requestKey: newRequestKey() });
+		} else {
+			pickEdition = true;
 		}
 	}
 
@@ -422,6 +433,8 @@
 				{/snippet}
 				{#if t.editions.length === 0 && !adding}
 					<p class="muted">Brak wydań. Dodaj wydanie, aby zapisać egzemplarz.</p>
+				{:else if pickEdition}
+					<p class="muted">Wybierz wydanie nowego egzemplarza.</p>
 				{/if}
 				<div class="cards">
 					{#each t.editions as e (e.id)}
@@ -429,7 +442,7 @@
 							title={editionName(e)}
 							description={[e.publisher, e.year].filter(Boolean).join(' · ') || undefined}
 							level={3}
-							href={`/editions/${e.id}`}
+							href={pickEdition ? addCopyHref(`/editions/${e.id}`) : `/editions/${e.id}`}
 						>
 							<div class="edition">
 								<CollectionCover kind={t.kind} url={editionArtwork(e, t)} />

@@ -13,7 +13,8 @@
 		Section,
 		Skeleton
 	} from '@smykla-skalski/sui';
-	import { goto } from '$app/navigation';
+	import { onDestroy } from 'svelte';
+	import { goto, replaceState } from '$app/navigation';
 	import { page } from '$app/state';
 	import { ApiError, errorMessage, request } from '#lib/api.js';
 	import {
@@ -36,8 +37,11 @@
 	import TitleFormFields from '#lib/components/TitleFormFields.svelte';
 	import TitleHero from '#lib/components/TitleHero.svelte';
 	import {
+		addCopyHref,
+		addCopyStart,
 		copyFacts,
 		copyLine,
+		copyRequest,
 		editionArtwork,
 		editionName,
 		editionsLine,
@@ -81,6 +85,13 @@
 	let savingCopy = $state(false);
 
 	let adding = $state(false);
+	/** A link's request to add a copy, used by the first answer for the title it opened. */
+	const addRequest = copyRequest();
+	onDestroy(addRequest.close);
+	/** Set while a new edition is the first step of adding a copy, so its page opens the copy form. */
+	let copyAfterEdition = false;
+	/** Set when a request to add a copy leaves the choice among several editions to the reader. */
+	let pickEdition = $state(false);
 	let editionForm = $state(editionToForm(null));
 	let editionIssue = $state<FormIssue | null>(null);
 	let savingEdition = $state(false);
@@ -89,6 +100,12 @@
 	let deleteError = $state<string | null>(null);
 
 	const sole = $derived(detail ? soleCopy(detail) : null);
+	const copyEdition = $derived.by(() => {
+		const target = copyTarget;
+		if (!target) return undefined;
+		const editionID = target.mode === 'edit' ? target.copy.edition_id : target.editionID;
+		return detail?.editions.find((e) => e.id === editionID);
+	});
 	const value = $derived(sole ? valueCard(sole.copy, values) : null);
 
 	async function load(titleID: number) {
@@ -101,6 +118,9 @@
 			titleSheet = false;
 			copySheet = false;
 			adding = false;
+			copyAfterEdition = false;
+			pickEdition = false;
+			addRequest.open(titleID, page.url.searchParams);
 			confirmDelete = false;
 			deleteError = null;
 		}
@@ -113,6 +133,7 @@
 			failure = null;
 			refreshError = null;
 			void loadValues(next, current);
+			if (addRequest.take(titleID)) startCopyFromLink(next);
 		} catch (err) {
 			if (current !== loads) return;
 			if (detail?.id === titleID) {
@@ -220,7 +241,28 @@
 	function startEdition() {
 		editionForm = editionToForm(null);
 		editionIssue = null;
+		copyAfterEdition = false;
 		adding = true;
+	}
+
+	/**
+	 * Opens what a link to add a copy asked for: the copy form of the only edition, a new edition
+	 * first when there is none, or edition links that open their copy form. The request leaves the
+	 * address, so a reload does not repeat it.
+	 */
+	function startCopyFromLink(t: TitleDetail) {
+		const url = new URL(page.url.href);
+		url.searchParams.delete('add');
+		replaceState(url, page.state);
+		const start = addCopyStart(t);
+		if (start?.form === 'edition') {
+			startEdition();
+			copyAfterEdition = true;
+		} else if (start?.form === 'copy') {
+			openCopy({ mode: 'add', editionID: start.editionID, requestKey: newRequestKey() });
+		} else {
+			pickEdition = true;
+		}
 	}
 
 	async function addEdition(t: Title) {
@@ -232,7 +274,8 @@
 		savingEdition = true;
 		try {
 			const created = await request<Edition>(fetch, 'POST', '/api/editions', parsed.value);
-			await goto(`/editions/${created.id}`);
+			const edition = `/editions/${created.id}`;
+			await goto(copyAfterEdition ? addCopyHref(edition) : edition);
 		} catch (err) {
 			editionIssue = issueFrom(err);
 		} finally {
@@ -243,7 +286,7 @@
 	async function remove() {
 		try {
 			await request(fetch, 'DELETE', `/api/titles/${id}`);
-			await goto('/titles');
+			await goto('/');
 		} catch (err) {
 			deleteError = errorMessage(err);
 		}
@@ -281,8 +324,8 @@
 		byline={t.authors.length > 0 ? t.authors.join(', ') : undefined}
 		kind={t.kind}
 		artwork={titleArtwork(t)}
-		backHref="/titles"
-		backLabel="Tytuły"
+		backHref="/"
+		backLabel="Kolekcja"
 	>
 		{#snippet actions()}
 			<ActionMenu
@@ -390,6 +433,8 @@
 				{/snippet}
 				{#if t.editions.length === 0 && !adding}
 					<p class="muted">Brak wydań. Dodaj wydanie, aby zapisać egzemplarz.</p>
+				{:else if pickEdition}
+					<p class="muted">Wybierz wydanie nowego egzemplarza.</p>
 				{/if}
 				<div class="cards">
 					{#each t.editions as e (e.id)}
@@ -397,7 +442,7 @@
 							title={editionName(e)}
 							description={[e.publisher, e.year].filter(Boolean).join(' · ') || undefined}
 							level={3}
-							href={`/editions/${e.id}`}
+							href={pickEdition ? addCopyHref(`/editions/${e.id}`) : `/editions/${e.id}`}
 						>
 							<div class="edition">
 								<CollectionCover kind={t.kind} url={editionArtwork(e, t)} />
@@ -426,7 +471,7 @@
 					saving={savingEdition}
 					submitLabel="Zapisz wydanie"
 					onsubmit={() => addEdition(t)}
-					oncancel={() => (adding = false)}
+					oncancel={() => ((adding = false), (copyAfterEdition = false))}
 				/>
 			</Card>
 		{/if}
@@ -470,7 +515,7 @@
 	<Modal
 		bind:open={copySheet}
 		title={copyTarget?.mode === 'add' ? 'Nowy egzemplarz' : 'Edycja egzemplarza'}
-		description={sole ? editionName(sole.edition) : undefined}
+		description={copyEdition ? editionName(copyEdition) : undefined}
 		closeLabel="Zamknij"
 		busy={savingCopy}
 		size="inspector"

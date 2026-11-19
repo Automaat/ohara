@@ -40,7 +40,7 @@
 
 <PageHeader title="Nowy tytuł" description="Po zapisaniu tytułu możesz dodać wydanie i egzemplarz.">
 	{#snippet kicker()}
-		<BackLink href="/titles" label="Tytuły" />
+		<BackLink href="/" label="Kolekcja" />
 	{/snippet}
 </PageHeader>
 
@@ -52,7 +52,7 @@
 		collapseDetails
 		submitLabel="Zapisz tytuł"
 		onsubmit={save}
-		oncancel={() => goto('/titles')}
+		oncancel={() => goto('/')}
 	/>
 </div>
 

@@ -1,3 +1,5 @@
+import { editionCount } from './polish';
+
 export type Kind = 'movie' | 'book' | 'music';
 export type MovieFormat = 'dvd' | 'bluray' | 'uhd';
 export type MusicFormat = 'cd' | 'vinyl' | 'cassette';
@@ -250,23 +252,32 @@ export function editionSummary(e: {
 	return parts.filter(Boolean).join(' · ') || 'Wydanie bez opisu';
 }
 
+/** What the collection lists: copies of a status, or `none`, the titles that have no copy yet. */
+export type CollectionStatus = CopyStatus | 'none';
+export const collectionStatusLabels: Record<CollectionStatus, string> = {
+	...statusLabels,
+	none: 'Bez egzemplarzy'
+};
+
 export type CollectionFilter = {
 	kind: Kind | '';
 	format: Format | '';
-	status: CopyStatus | '';
+	status: CollectionStatus | '';
 	q: string;
 };
 
+/** The filter a collection address names. A title has no format, so `none` drops it. */
 export function readCollectionFilter(params: Pick<URLSearchParams, 'get'>): CollectionFilter {
 	function read<K extends string>(key: string, labels: Record<K, string>): K | '' {
 		const value = params.get(key);
 		return value && Object.hasOwn(labels, value) ? (value as K) : '';
 	}
 
+	const status = read('status', collectionStatusLabels);
 	return {
 		kind: read('kind', kindLabels),
-		format: read('format', formatLabels),
-		status: read('status', statusLabels),
+		format: status === 'none' ? '' : read('format', formatLabels),
+		status,
 		q: params.get('q') ?? ''
 	};
 }
@@ -281,9 +292,44 @@ export function collectionSearch(f: CollectionFilter): string {
 	return qs ? `?${qs}` : '';
 }
 
-/** The /api/collection URL for a filter; empty fields are left out. */
+/**
+ * The request for a filter: its copies from /api/collection, with empty fields left out, or for
+ * `none` every title, which `uncopiedTitles` narrows to the filter.
+ */
 export function collectionURL(f: CollectionFilter): string {
-	return `/api/collection${collectionSearch(f)}`;
+	return f.status === 'none' ? '/api/titles' : `/api/collection${collectionSearch(f)}`;
+}
+
+/** The titles that have no copy yet. */
+export function withoutCopies(titles: readonly Title[]): Title[] {
+	return titles.filter((t) => t.copy_count === 0);
+}
+
+/**
+ * The titles without a copy of the filter's kind whose names or authors contain its words, as the
+ * server searches titles.
+ */
+export function uncopiedTitles(
+	titles: readonly Title[],
+	f: Pick<CollectionFilter, 'kind' | 'q'>
+): Title[] {
+	const words = f.q.trim().toLocaleLowerCase('pl-PL');
+	return withoutCopies(titles).filter(
+		(t) =>
+			(!f.kind || t.kind === f.kind) &&
+			(!words ||
+				[t.name, t.original_title, t.polish_title, ...t.authors]
+					.filter(Boolean)
+					.join(' ')
+					.toLocaleLowerCase('pl-PL')
+					.includes(words))
+	);
+}
+
+/** A title tile's line under the name, such as "Stanisław Lem · Brak wydań" or "Film · 2 wydania". */
+export function uncopiedLine(t: Pick<Title, 'kind' | 'authors' | 'edition_count'>): string {
+	const who = t.authors.join(', ') || kindLabels[t.kind];
+	return `${who} · ${t.edition_count ? editionCount(t.edition_count) : 'Brak wydań'}`;
 }
 
 /** A form value failed a check before it reached the server. */

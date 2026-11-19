@@ -261,8 +261,10 @@ type Observation struct {
 	AlertAttempts   int       `json:"alert_attempts"`
 }
 
-// Recent returns the newest deal observations, at most limit.
-func (s *Store) Recent(ctx context.Context, limit int) ([]Observation, error) {
+// Recent returns the newest deal observations, at most limit. With underLimit it returns only
+// listings at or under the price limit of the wish they matched, before the limit applies, so
+// newer listings above the limit or for owned editions never push them out.
+func (s *Store) Recent(ctx context.Context, limit int, underLimit bool) ([]Observation, error) {
 	rows, err := s.pool.Query(ctx, `SELECT o.id, o.source, coalesce(o.external_id, ''), o.observed_at,
 			o.price_cents, o.acquired_as, o.url, coalesce(o.raw->>'title', ''), coalesce(e.title_id, o.title_id), t.name,
 			e.id, e.format, nullif(o.raw->>'photo_url', ''),
@@ -289,7 +291,8 @@ func (s *Store) Recent(ctx context.Context, limit int) ([]Observation, error) {
 		LEFT JOIN edition e ON e.id = coalesce(w.edition_id, o.edition_id)
 		LEFT JOIN title t ON t.id = coalesce(e.title_id, o.title_id)
 		WHERE o.source = ANY ($3)
-		ORDER BY o.observed_at DESC, o.id DESC LIMIT $1`, limit, MaxAttempts, sources)
+			AND (NOT $4 OR o.price_cents <= w.max_price_cents)
+		ORDER BY o.observed_at DESC, o.id DESC LIMIT $1`, limit, MaxAttempts, sources, underLimit)
 	if err != nil {
 		return nil, fmt.Errorf("recent observations: %w", err)
 	}

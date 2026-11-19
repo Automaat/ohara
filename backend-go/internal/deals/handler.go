@@ -87,7 +87,16 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = n
 	}
-	obs, err := h.store.Recent(r.Context(), limit)
+	underLimit := false
+	if raw := r.URL.Query().Get("under_limit"); raw != "" {
+		v, err := strconv.ParseBool(raw)
+		if err != nil {
+			httpx.WriteFieldError(w, h.logger, &httpx.FieldError{Field: "under_limit", Msg: "must be true or false"})
+			return
+		}
+		underLimit = v
+	}
+	obs, err := h.store.Recent(r.Context(), limit, underLimit)
 	if err != nil {
 		httpx.WriteInternal(w, h.logger, "recent deals", err)
 		return

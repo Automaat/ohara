@@ -18,6 +18,7 @@
 	import { afterNavigate, replaceState } from '$app/navigation';
 	import { page } from '$app/state';
 	import { errorMessage, request } from '#lib/api.js';
+	import SettingsSheet from '#lib/components/SettingsSheet.svelte';
 	import {
 		collectionSearch,
 		collectionURL,
@@ -286,16 +287,18 @@
 			{#if !emptyShelf}
 				<Button tone="signal" href="/titles/new">Dodaj tytuł</Button>
 			{/if}
+			<SettingsSheet />
 		{/snippet}
 	</PageHeader>
 
 	<header class="phone-head phone-only">
 		<h1>Kolekcja</h1>
-		{#if !emptyShelf}
-			<div class="phone-add">
+		<div class="phone-add">
+			{#if !emptyShelf}
 				<Button href="/titles/new">Dodaj tytuł</Button>
-			</div>
-		{/if}
+			{/if}
+			<SettingsSheet />
+		</div>
 		<p class="summary">{summary}</p>
 	</header>
 
@@ -751,6 +754,9 @@
 	}
 
 	.phone-add {
+		align-items: center;
+		display: flex;
+		gap: var(--sui-space-2);
 		grid-column: 2;
 		grid-row: 1;
 	}

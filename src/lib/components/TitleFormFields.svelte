@@ -105,7 +105,7 @@
 	<div class="actions">
 		<Button tone="signal" type="submit" loading={saving}>{submitLabel}</Button>
 		{#if oncancel}
-			<Button type="button" onclick={oncancel}>Anuluj</Button>
+			<Button type="button" onclick={oncancel} disabled={saving}>Anuluj</Button>
 		{/if}
 	</div>
 </form>

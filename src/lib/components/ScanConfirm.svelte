@@ -313,9 +313,10 @@
 		min-inline-size: 0;
 	}
 
-	/* The mockup's segments share the sheet's width, with the pick on a raised surface. */
+	/* The mockup's segments share the sheet's width, with the pick on a raised surface. The
+	   track's 2px inset each side leaves every segment 44px tall. */
 	.confirm :global(.seg) {
-		--sui-local-control-height: 2.75rem;
+		--sui-local-control-height: 3rem;
 		--sui-segment-thumb: var(--sui-surface-base);
 		--sui-segment-thumb-ink: var(--sui-text-primary);
 

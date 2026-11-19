@@ -62,6 +62,8 @@
 	let keyboard = $state(0);
 	let viewport = $state<number | null>(null);
 	let shown: Sheet | null = null;
+	/** Every code the open sheet has shown, a wedge scan's next codes included. */
+	let handled: string[] = [];
 	let closing = 0;
 	const guard = new RepeatGuard(repeatWindow);
 	const flow = new ScanFlow(fetch, storage());
@@ -169,11 +171,14 @@
 	function sheetOpened(s: Sheet) {
 		if (shown?.id === s.id) return;
 		shown = s;
+		if (!handled.includes(s.barcode)) handled.push(s.barcode);
 		void flow.load(s.barcode);
 	}
 
-	function sheetClosed(s: Sheet) {
-		guard.remember(s.barcode, performance.now());
+	function sheetClosed() {
+		const now = performance.now();
+		for (const barcode of handled) guard.remember(barcode, now);
+		handled = [];
 		flow.dismiss();
 		shown = null;
 		closing = 0;
@@ -185,7 +190,7 @@
 		const s = sheet;
 		untrack(() => {
 			if (s) sheetOpened(s);
-			else if (shown) sheetClosed(shown);
+			else if (shown) sheetClosed();
 		});
 	});
 

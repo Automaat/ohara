@@ -233,15 +233,28 @@ describe('ScanFlow picks', () => {
 		expect(flow.candidate).toEqual(book);
 	});
 
-	it('keeps the toggled packaging when the same kind has none to offer', async () => {
+	it('takes the packaging of the picked candidate, never of one not picked', async () => {
 		const bare: Candidate = { ...movie, edition: { barcode: code, format: 'dvd' } };
-		const s = server(lookup([movie, bare], true));
+		const s = server({
+			...lookup([movie, bare], true),
+			'GET /api/titles?tmdb_id=1': [200, []],
+			'POST /api/titles': [201, { id: 9, name: 'Diuna: Część druga' }],
+			'POST /api/editions': [201, { id: 21, title_id: 9, barcode: code }],
+			'POST /api/copies?cover=auto': copyReply()
+		});
 		const flow = new ScanFlow(s.fetchFn, memory());
 		await flow.load(code);
+		expect(flow.form).toMatchObject({ format: '', packaging: [] });
+		flow.pick(1);
+		expect(flow.form).toMatchObject({ format: 'dvd', packaging: [] });
+		await flow.save();
+		const edition = s.calls.find((c) => c.url === '/api/editions');
+		expect(edition?.body).toMatchObject({ format: 'dvd', packaging: [] });
+
 		flow.pick(0);
 		flow.form.packaging = ['digipak'];
 		flow.pick(1);
-		expect(flow.form).toMatchObject({ format: 'dvd', packaging: ['digipak'] });
+		expect(flow.form.packaging).toEqual([]);
 	});
 
 	it('does nothing on an owned edition', async () => {
@@ -292,6 +305,27 @@ describe('ScanFlow.search', () => {
 		await flow.search();
 		expect(flow.notice).toBe('Źródło nie odpowiada, spróbuj za chwilę.');
 		expect(flow.searching).toBe(false);
+	});
+
+	it('drops a search answer that arrives after the user picked a candidate', async () => {
+		let release: (r: [number, unknown]) => void = () => {};
+		const held = new Promise<[number, unknown]>((resolve) => (release = resolve));
+		const s = server({
+			...lookup([movie, book], true),
+			'GET /api/search?kind=movie&q=Diuna&barcode=5901234123457': () => held
+		});
+		const flow = new ScanFlow(s.fetchFn, memory());
+		await flow.load(code);
+		flow.query = 'Diuna';
+		const searching = flow.search();
+		expect(flow.searching).toBe(true);
+		flow.pick(1);
+		expect(flow.searching).toBe(false);
+		release([200, { candidates: [{ ...movie, title: { name: 'Search result' } }] }]);
+		await searching;
+		expect(flow.candidate).toEqual(book);
+		expect(flow.form.name).toBe('Lalka');
+		expect(flow.item?.candidates).toHaveLength(2);
 	});
 
 	it('ignores a blank query', async () => {
@@ -375,6 +409,27 @@ describe('ScanFlow.save', () => {
 		expect(recentScans.list[0].label).toBe(`Rejs · ${formatPLN(6000)} · lista życzeń`);
 		flow.wish(false);
 		expect(flow.form.status).toBe('owned');
+	});
+
+	it('logs the copy the server kept when a retry after a lost answer changed the form', async () => {
+		const lost = (): Promise<[number, unknown]> => Promise.reject(new TypeError('lost'));
+		const store = memory();
+		const s = server(ownedRoutes([lost, copyReply({ status: 'owned', price_cents: 1000 })]));
+		const flow = new ScanFlow(s.fetchFn, store);
+		await flow.load(code);
+		Object.assign(flow.form, { price: '10', shop: 'Empik', purchased_on: '2026-11-18' });
+		expect(await flow.save()).toBeNull();
+		flow.wish(true);
+		expect(await flow.save()).not.toBeNull();
+		const keys = s.calls.filter((c) => c.method === 'POST').map((c) => c.body);
+		expect(keys).toMatchObject([
+			{ status: 'owned', request_key: flow.item?.key },
+			{ status: 'wishlist', request_key: flow.item?.key }
+		]);
+		expect(recentScans.list[0].label).toBe(`Rejs · ${formatPLN(1000)}`);
+		expect(JSON.parse(store.data['ohara.scan.sticky']).shop).toBe('Empik');
+		await flow.load(code);
+		expect(flow.form.purchased_on).toBe('2026-11-18');
 	});
 
 	it('starts the next item when a wedge scanner typed a code into the price', async () => {

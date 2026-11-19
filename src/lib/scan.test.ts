@@ -21,6 +21,7 @@ import {
 	looksLikeBarcode,
 	newRequestKey,
 	providerLabel,
+	queuedMessage,
 	quickForm,
 	rememberShop,
 	resolveScan,
@@ -842,6 +843,16 @@ describe('RepeatGuard', () => {
 		expect(g.accepts('5901234123457', 3800)).toBe(false);
 	});
 
+	it('keeps every remembered barcode guarded', () => {
+		const g = new RepeatGuard(3000);
+		g.remember('5901234123457', 0);
+		g.remember('9788324000012', 0);
+		expect(g.accepts('5901234123457', 2000)).toBe(false);
+		expect(g.accepts('9788324000012', 2500)).toBe(false);
+		expect(g.accepts('5901234123457', 4900)).toBe(false);
+		expect(g.accepts('9788324000012', 5600)).toBe(true);
+	});
+
 	it('takes the same barcode again once it was out of view for the window', () => {
 		const g = new RepeatGuard(1500);
 		g.remember('5901234123457', 0);
@@ -1061,6 +1072,29 @@ describe('copy payload', () => {
 		expect(used.ok && used.value.condition).toBe('good');
 		const fresh = scanCopyPayload(form({ acquired_as: 'new', condition: 'good' }), 1, 'k');
 		expect(fresh.ok && fresh.value.condition).toBeNull();
+	});
+});
+
+describe('queuedMessage', () => {
+	it.each([
+		[
+			'not_found',
+			'',
+			'Kod trafił do kolejki do uzupełnienia. Dodaj go ręcznie teraz albo później.'
+		],
+		[
+			'lookup_failed',
+			'Serwer zwrócił błąd 503.',
+			'Nie udało się sprawdzić kodu (Serwer zwrócił błąd 503). Kod trafił do kolejki do uzupełnienia.'
+		],
+		[
+			'lookup_failed',
+			'bn: timeout; tmdb: 503',
+			'Nie udało się sprawdzić kodu (bn: timeout; tmdb: 503). Kod trafił do kolejki do uzupełnienia.'
+		],
+		['lookup_failed', ' ', 'Nie udało się sprawdzić kodu. Kod trafił do kolejki do uzupełnienia.']
+	] as const)('explains %s with detail %j', (reason, detail, want) => {
+		expect(queuedMessage({ reason, detail })).toBe(want);
 	});
 });
 

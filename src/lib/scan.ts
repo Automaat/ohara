@@ -186,6 +186,21 @@ export const reasonLabels: Record<QueueReason, string> = {
 };
 
 /**
+ * What the quick confirm says about a barcode it sent to the queue: why no source answered,
+ * with the providers' errors when the lookup failed.
+ */
+export function queuedMessage(entry: Pick<QueueEntry, 'reason' | 'detail'>): string {
+	if (entry.reason === 'not_found') {
+		return 'Kod trafił do kolejki do uzupełnienia. Dodaj go ręcznie teraz albo później.';
+	}
+	const detail = entry.detail.trim().replace(/\.$/, '');
+	const why = detail
+		? `Nie udało się sprawdzić kodu (${detail}).`
+		: 'Nie udało się sprawdzić kodu.';
+	return `${why} Kod trafił do kolejki do uzupełnienia.`;
+}
+
+/**
  * A stored barcode cut into the groups a reader compares with the digits under the bars:
  * 1-6-6 for an EAN-13, 3-4-6 for a book's 978 or 979 code, 4-4 for an EAN-8, 1-5-5-1 for a
  * UPC-A and 1-2-5-5-1 for a GTIN-14. Anything else stays one group.
@@ -611,29 +626,28 @@ export async function saveScan(
 }
 
 /**
- * Ignores the barcode just handled while it stays in front of the camera, so one box is not
- * added twice. Each sighting of that barcode within windowMs of the last one extends the wait;
+ * Ignores the barcodes just handled while they stay in front of the camera, so one box is not
+ * added twice. Each sighting of such a barcode within windowMs of the last one extends its wait;
  * another barcode, or the same one after windowMs out of view, goes through.
  */
 export class RepeatGuard {
-	#code = '';
-	#seen = -Infinity;
+	readonly #seen = new Map<string, number>();
 
 	constructor(readonly windowMs: number) {}
 
 	/** Marks code as handled at now. */
 	remember(code: string, now: number) {
-		this.#code = code;
-		this.#seen = now;
+		this.#seen.set(code, now);
 	}
 
 	/** Whether code read at now is a new scan; a repeat counts as still in view. */
 	accepts(code: string, now: number): boolean {
-		if (code === this.#code && now - this.#seen < this.windowMs) {
-			this.#seen = now;
-			return false;
+		for (const [seen, at] of this.#seen) {
+			if (now - at >= this.windowMs) this.#seen.delete(seen);
 		}
-		return true;
+		if (!this.#seen.has(code)) return true;
+		this.#seen.set(code, now);
+		return false;
 	}
 }
 

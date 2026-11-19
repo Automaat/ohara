@@ -9,6 +9,7 @@
 		barcodeGroups,
 		candidateParts,
 		providerLabel,
+		queuedMessage,
 		reasonLabels,
 		searchHints,
 		type Candidate
@@ -277,11 +278,16 @@
 			<Button onclick={close}>Skanuj dalej</Button>
 		</div>
 	{:else if flow.phase.kind === 'queued'}
-		<Callout tone="warning" live>
-			Kod trafił do kolejki do uzupełnienia. Dodaj go ręcznie teraz albo później.
-		</Callout>
+		<Callout tone="warning" live>{queuedMessage(flow.phase.entry)}</Callout>
 		<div class="ways">
-			<Button id="scan-way-on" tone="signal" onclick={onmanual}>Uzupełnij ręcznie</Button>
+			{#if flow.phase.entry.reason === 'lookup_failed'}
+				<Button id="scan-way-on" tone="signal" onclick={() => void flow.load(flow.code)}>
+					Spróbuj ponownie
+				</Button>
+				<Button onclick={onmanual}>Uzupełnij ręcznie</Button>
+			{:else}
+				<Button id="scan-way-on" tone="signal" onclick={onmanual}>Uzupełnij ręcznie</Button>
+			{/if}
 			<Button onclick={close}>Skanuj dalej</Button>
 		</div>
 	{:else if item}

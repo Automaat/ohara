@@ -84,6 +84,8 @@ export class ScanFlow {
 	sticky = $state<Sticky>({ ...emptySticky, shops: [] });
 	readonly #loads = new LatestLoad();
 	#current: () => boolean = () => false;
+	/** Numbers title searches; a pick or a newer search makes an older answer stale. */
+	#search = 0;
 	readonly #fetch: typeof fetch;
 	readonly #store: KeyValueStore | undefined;
 
@@ -175,7 +177,8 @@ export class ScanFlow {
 					picked,
 					errors: r.errors
 				};
-				this.form = quickForm(first, this.sticky, r.barcode, visit.date);
+				this.form = quickForm(picked === null ? null : first, this.sticky, r.barcode, visit.date);
+				if (first) this.form.kind = first.type;
 				this.phase = { kind: 'ready', status: 'found' };
 			} else {
 				this.item = this.#blank(r.entry.barcode, false);
@@ -189,11 +192,15 @@ export class ScanFlow {
 		}
 	}
 
-	/** Fills the form from a candidate, keeping what the user typed about the purchase. */
+	/**
+	 * Fills the form from a candidate, keeping what the user typed about the purchase. The
+	 * packaging is the candidate's own, so one edition's steelbook never carries to another.
+	 */
 	pick(index: number) {
 		const item = this.item;
 		const candidate = item?.candidates[index];
 		if (!item || item.target.kind !== 'new' || !candidate) return;
+		this.#settleSearch();
 		item.picked = index;
 		item.target = { kind: 'new', barcode: item.barcode, candidate };
 		const next = quickForm(candidate, this.sticky, item.barcode);
@@ -203,7 +210,6 @@ export class ScanFlow {
 			...next,
 			format: next.format || (sameKind ? f.format : ''),
 			binding: next.binding || (sameKind ? f.binding : ''),
-			packaging: next.packaging.length > 0 || !sameKind ? next.packaging : f.packaging,
 			status: f.status,
 			price: f.price,
 			purchased_on: f.purchased_on,
@@ -218,9 +224,16 @@ export class ScanFlow {
 	choose() {
 		const item = this.item;
 		if (!item || item.target.kind !== 'new' || item.candidates.length === 0) return;
+		this.#settleSearch();
 		item.picked = null;
 		item.target = { kind: 'new', barcode: item.barcode, candidate: null };
 		this.issue = null;
+	}
+
+	/** Drops the answer of a title search still on its way. */
+	#settleSearch() {
+		this.#search++;
+		this.searching = false;
 	}
 
 	/** Switches between adding an owned copy and a wish; the typed price stays. */
@@ -243,6 +256,8 @@ export class ScanFlow {
 		const query = this.query.trim();
 		if (!item || item.target.kind !== 'new' || this.searching || !query) return;
 		const current = this.#current;
+		const search = ++this.#search;
+		const fresh = () => current() && search === this.#search;
 		this.searching = true;
 		try {
 			const found = await searchTitles(
@@ -252,7 +267,7 @@ export class ScanFlow {
 				item.barcode,
 				this.form.format
 			);
-			if (!current()) return;
+			if (!fresh()) return;
 			if (found.length === 0) {
 				this.notice = `Nic nie znaleziono dla „${query}”.`;
 				return;
@@ -264,15 +279,17 @@ export class ScanFlow {
 			if (found.length === 1) this.pick(0);
 			else this.choose();
 		} catch (err) {
-			if (current()) this.notice = errorMessage(err);
+			if (fresh()) this.notice = errorMessage(err);
 		} finally {
-			if (current()) this.searching = false;
+			if (fresh()) this.searching = false;
 		}
 	}
 
 	/**
 	 * Saves the form. A copy that went through is logged and its shop, new or used and date
 	 * carry over even when the user has moved on; only the barcode still shown gets the result.
+	 * The copy the server returns decides what is logged: a retry of a save whose answer was
+	 * lost returns the copy the first attempt made, even when the form changed in between.
 	 */
 	async save(): Promise<Added | null> {
 		const item = this.item;
@@ -285,11 +302,12 @@ export class ScanFlow {
 		this.issue = null;
 		try {
 			const saved = await saveScan(this.#fetch, item.target, f, item.key);
-			if (f.status === 'owned') visit.date = f.purchased_on;
-			this.sticky = stickyAfter(this.sticky, f);
+			const kept = { ...f, status: saved.copy.status ?? f.status };
+			if (kept.status === 'owned') visit.date = kept.purchased_on;
+			this.sticky = stickyAfter(this.sticky, kept);
 			saveSticky(this.#store, this.sticky);
 			const price = formatPLN(saved.copy.price_cents ?? saved.copy.max_price_cents);
-			const what = f.status === 'owned' ? '' : ' · lista życzeń';
+			const what = kept.status === 'owned' ? '' : ' · lista życzeń';
 			logScan(
 				item.barcode,
 				'added',

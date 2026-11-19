@@ -1,6 +1,11 @@
 <script lang="ts">
 	import { Button, Field, Modal, SegmentedControl, Select } from '@smykla-skalski/sui';
-	import { formatLabels, options, type CollectionFilter } from '#lib/collection.js';
+	import {
+		collectionStatusLabels,
+		formatLabels,
+		options,
+		type CollectionFilter
+	} from '#lib/collection.js';
 	import { collectionSortOptions, type CollectionSort } from '#lib/collection-sort.js';
 
 	let {
@@ -23,11 +28,8 @@
 
 	const all = 'all';
 	const formatOptions = [{ value: all, label: 'Każdy' }, ...options(formatLabels)];
-	const statusOptions = [
-		{ value: all, label: 'Każdy' },
-		{ value: 'owned', label: 'Na półce' },
-		{ value: 'wishlist', label: 'Lista życzeń' }
-	];
+	// "Bez egzemplarzy" lists titles instead of copies, and a title has no format of its own.
+	const statusOptions = [{ value: all, label: 'Każdy' }, ...options(collectionStatusLabels)];
 </script>
 
 <Modal bind:open class="collection-filter-sheet" title="Sortowanie i filtry" closeLabel="Zamknij">
@@ -41,10 +43,14 @@
 				/>
 			{/snippet}
 		</Field>
-		<Field label="Nośnik">
+		<Field
+			label="Nośnik"
+			hint={status === 'none' ? 'Nośnik mają egzemplarze, nie tytuły.' : undefined}
+		>
 			{#snippet control(c)}
 				<Select
 					{...c}
+					disabled={status === 'none'}
 					options={formatOptions}
 					bind:value={
 						() => format || all,

@@ -11,7 +11,8 @@
 		Section,
 		Skeleton
 	} from '@smykla-skalski/sui';
-	import { goto } from '$app/navigation';
+	import { onDestroy } from 'svelte';
+	import { goto, replaceState } from '$app/navigation';
 	import { page } from '$app/state';
 	import { ApiError, errorMessage, request } from '#lib/api.js';
 	import {
@@ -36,6 +37,7 @@
 	import EditionFormFields from '#lib/components/EditionFormFields.svelte';
 	import EditionCoverForm from '#lib/components/EditionCoverForm.svelte';
 	import { purchaseDate } from '#lib/polish.js';
+	import { copyRequest } from '#lib/title-detail.js';
 
 	const id = $derived(Number(page.params.id));
 
@@ -56,11 +58,21 @@
 	let confirmDelete = $state(false);
 	let deleteError = $state<string | null>(null);
 
+	/** The edition the page was last asked for, and a link's request to add a copy to it. */
+	let requested: number | undefined;
+	const addRequest = copyRequest();
+	onDestroy(addRequest.close);
+
 	async function load(editionID: number) {
+		if (editionID !== requested) {
+			requested = editionID;
+			addRequest.open(editionID, page.url.searchParams);
+		}
 		busy = true;
 		try {
 			detail = await request<EditionDetail>(fetch, 'GET', `/api/editions/${editionID}`);
 			failure = null;
+			if (addRequest.take(editionID)) startCopyFromLink();
 		} catch (err) {
 			failure = errorMessage(err);
 		} finally {
@@ -71,6 +83,20 @@
 	$effect(() => {
 		void load(id);
 	});
+
+	function startCopy() {
+		copyForm = copyToForm(null);
+		copyIssue = null;
+		adding = true;
+	}
+
+	/** Opens the copy form a link asked for; the request leaves the address. */
+	function startCopyFromLink() {
+		const url = new URL(page.url.href);
+		url.searchParams.delete('add');
+		replaceState(url, page.state);
+		startCopy();
+	}
 
 	function issueFrom(err: unknown): FormIssue {
 		return { field: err instanceof ApiError ? (err.field ?? '') : '', message: errorMessage(err) };
@@ -187,12 +213,7 @@
 		>
 			{#snippet actions()}
 				{#if !adding}
-					<Button
-						tone="add"
-						onclick={() => ((copyForm = copyToForm(null)), (copyIssue = null), (adding = true))}
-					>
-						Dodaj egzemplarz
-					</Button>
+					<Button tone="add" onclick={startCopy}>Dodaj egzemplarz</Button>
 				{/if}
 			{/snippet}
 			{#if adding}

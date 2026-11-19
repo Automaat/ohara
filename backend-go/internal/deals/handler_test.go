@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -186,6 +187,13 @@ func TestDealsViewAndManualRun(t *testing.T) {
 			t.Errorf("GET deals?limit=%s = %d, want 422", bad, code)
 		}
 	}
+	if code := call(t, http.MethodGet, srv.URL+"/api/deals?under_limit=true", nil, &view); code != http.StatusOK ||
+		len(view.Observations) != 1 || view.Observations[0].PriceCents > *view.Observations[0].MaxPriceCents {
+		t.Fatalf("GET deals?under_limit=true = %d, %+v", code, view.Observations)
+	}
+	if code := call(t, http.MethodGet, srv.URL+"/api/deals?under_limit=maybe", nil, nil); code != http.StatusUnprocessableEntity {
+		t.Errorf("GET deals?under_limit=maybe = %d, want 422", code)
+	}
 }
 
 func TestTelegramSend(t *testing.T) {
@@ -268,7 +276,7 @@ func TestRecentUsesMatchedWishAfterValuation(t *testing.T) {
 		}
 	}
 
-	observations, err := store.Recent(ctx, 10)
+	observations, err := store.Recent(ctx, 10, false)
 	if err != nil || len(observations) != 2 {
 		t.Fatalf("recent = %v, %v", observations, err)
 	}
@@ -282,6 +290,55 @@ func TestRecentUsesMatchedWishAfterValuation(t *testing.T) {
 		if err := pool.QueryRow(ctx, "SELECT edition_id FROM price_observation WHERE id = $1", got.ID).Scan(&storedEdition); err != nil || storedEdition != ownedEdition {
 			t.Fatalf("valuation edition = %d, %v", storedEdition, err)
 		}
+	}
+}
+
+func TestRecentUnderLimitKeepsOlderListings(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	wishlist(t, pool, wantBluray(new(int64(4000))))
+	wants, err := store.Wants(ctx)
+	if err != nil || len(wants) != 1 {
+		t.Fatalf("wants = %v, %v", wants, err)
+	}
+	wanted := &wants[0]
+	var ownedEdition int64
+	if err := pool.QueryRow(ctx, `INSERT INTO edition (title_id, format) VALUES ($1, 'bluray') RETURNING id`,
+		wanted.TitleID).Scan(&ownedEdition); err != nil {
+		t.Fatal(err)
+	}
+	owned := &Want{EditionID: ownedEdition, TitleID: wanted.TitleID}
+	for _, tc := range []struct {
+		id    string
+		price int64
+		want  *Want
+	}{
+		{id: "under", price: 3500, want: wanted},
+		{id: "over-1", price: 5500, want: wanted},
+		{id: "over-2", price: 5500, want: wanted},
+		{id: "owned", price: 1000, want: owned},
+	} {
+		listing := Listing{Source: "olx", ExternalID: tc.id, Title: "Blade Runner Blu-ray", PriceCents: tc.price}
+		if _, _, err := store.Record(ctx, &listing, tc.want, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ids := func(obs []Observation) []string {
+		out := make([]string, 0, len(obs))
+		for _, o := range obs {
+			out = append(out, o.ExternalID)
+		}
+		return out
+	}
+	newest, err := store.Recent(ctx, 2, false)
+	if err != nil || !slices.Equal(ids(newest), []string{"owned", "over-2"}) {
+		t.Fatalf("recent = %v, %v", ids(newest), err)
+	}
+	under, err := store.Recent(ctx, 2, true)
+	if err != nil || !slices.Equal(ids(under), []string{"under"}) {
+		t.Fatalf("recent under limit = %v, %v", ids(under), err)
 	}
 }
 
@@ -304,7 +361,7 @@ func TestRecentClearsPhotoOnRepeatObservation(t *testing.T) {
 		if created, _, err := store.Record(ctx, &listing, &wants[0], false); err != nil || created {
 			t.Fatalf("record photo %q: created=%t err=%v", photo, created, err)
 		}
-		got, err := store.Recent(ctx, 10)
+		got, err := store.Recent(ctx, 10, false)
 		if err != nil || len(got) != 1 {
 			t.Fatalf("recent = %v, %v", got, err)
 		}

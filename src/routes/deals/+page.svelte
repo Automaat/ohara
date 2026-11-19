@@ -19,6 +19,7 @@
 	} from '@smykla-skalski/sui';
 	import { onMount, tick } from 'svelte';
 	import { ApiError, errorMessage, request } from '#lib/api.js';
+	import { refreshDealBadge } from '#lib/deal-badge.svelte.js';
 	import {
 		acquiredLabels,
 		collectionURL,
@@ -70,6 +71,7 @@
 		loading = true;
 		try {
 			const next = await request<DealsView>(fetch, 'GET', '/api/deals');
+			if (view?.status.running && !next.status.running) void refreshDealBadge(fetch);
 			const restoreFocus = emptySearch !== null && document.activeElement === emptySearch;
 			view = next;
 			failure = null;

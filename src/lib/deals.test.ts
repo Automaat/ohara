@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
 	intervalLabel,
+	isUnderLimit,
 	keywordPayload,
 	keywordsOf,
 	lastRunSummary,
 	limitComparison,
+	underLimitCount,
+	underLimitLabel,
 	type HunterStatus,
 	type Keyword,
 	type RunResult
@@ -101,5 +104,43 @@ describe('limitComparison', () => {
 		[0, 0, 'W limicie']
 	] as const)('compares %s grosze against %s', (price, limit, expected) => {
 		expect(limitComparison(price, limit)).toBe(expected);
+	});
+});
+
+describe('underLimitCount', () => {
+	it('counts listings at or under the wish limit', () => {
+		// One wish limited to 40 zł, listings at 35 zł and 55 zł, one owned-edition listing.
+		expect(
+			underLimitCount([
+				{ price_cents: 3500, max_price_cents: 4000 },
+				{ price_cents: 5500, max_price_cents: 4000 },
+				{ price_cents: 1000, max_price_cents: null }
+			])
+		).toBe(1);
+	});
+
+	it.each([
+		[4000, 4000, true],
+		[4001, 4000, false],
+		[0, 0, true],
+		[100, null, false]
+	] as const)('%s grosze against limit %s → %s', (price, limit, expected) => {
+		expect(isUnderLimit({ price_cents: price, max_price_cents: limit })).toBe(expected);
+	});
+
+	it('is zero without listings', () => {
+		expect(underLimitCount([])).toBe(0);
+	});
+});
+
+describe('underLimitLabel', () => {
+	it.each([
+		[1, '1 oferta pod limitem'],
+		[3, '3 oferty pod limitem'],
+		[5, '5 ofert pod limitem'],
+		[12, '12 ofert pod limitem'],
+		[22, '22 oferty pod limitem']
+	] as const)('%s → %s', (count, expected) => {
+		expect(underLimitLabel(count)).toBe(expected);
 	});
 });

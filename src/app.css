@@ -69,6 +69,7 @@
 	--ohara-selected-hover: #2b4a41;
 	--ohara-selected-pressed: #172e28;
 	--ohara-on-selected: #f4c6cc;
+	--ohara-bar-shadow: rgb(31 59 51 / 35%);
 	--sui-border-subtle: #e6cbc6;
 	--sui-border-band: #e6cbc6;
 	/* Fields and segmented tracks sit on inset, as the README says. Hover lightens the field
@@ -104,6 +105,7 @@
 	--ohara-selected-hover: #f7d5d9;
 	--ohara-selected-pressed: #efb3bb;
 	--ohara-on-selected: #1f3b33;
+	--ohara-bar-shadow: rgb(0 0 0 / 55%);
 	--sui-border-subtle: #2b4038;
 	--sui-border-band: #2b4038;
 	--sui-control-bg: var(--sui-surface-inset);
@@ -137,6 +139,7 @@
 		--ohara-selected-hover: #f7d5d9;
 		--ohara-selected-pressed: #efb3bb;
 		--ohara-on-selected: #1f3b33;
+		--ohara-bar-shadow: rgb(0 0 0 / 55%);
 		--sui-border-subtle: #2b4038;
 		--sui-border-band: #2b4038;
 		--sui-control-bg: var(--sui-surface-inset);

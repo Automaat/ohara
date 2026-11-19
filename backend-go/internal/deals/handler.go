@@ -113,7 +113,7 @@ func recentFilter(r *http.Request) (RecentFilter, *httpx.FieldError) {
 	for _, flag := range []struct {
 		name string
 		dst  *bool
-	}{{"matched", &f.Matched}, {"under_limit", &f.UnderLimit}} {
+	}{{"matched", &f.Matched}, {"under_limit", &f.UnderLimit}, {"sent", &f.Sent}} {
 		raw := q.Get(flag.name)
 		if raw == "" {
 			continue

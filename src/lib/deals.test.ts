@@ -3,7 +3,6 @@ import {
 	dealPrice,
 	dealsSummary,
 	intervalLabel,
-	isSent,
 	isUnderLimit,
 	keywordPayload,
 	keywordsOf,
@@ -174,17 +173,6 @@ describe('wishLimit', () => {
 });
 
 describe('segments', () => {
-	const matched = [
-		{ price_cents: 3500, max_price_cents: 4000, alert: 'sent' },
-		{ price_cents: 5500, max_price_cents: 4000, alert: 'none' },
-		{ price_cents: 2000, max_price_cents: null, alert: 'sent' }
-	] as const;
-
-	it('keeps a listing alerted before its wish lost the limit out of Wysłane', () => {
-		expect(matched.filter(isSent)).toEqual([matched[0]]);
-		expect(matched.filter(isUnderLimit)).toEqual([matched[0]]);
-	});
-
 	it('labels a segment with its count', () => {
 		expect(segmentLabel('under', 3)).toBe('Pod limitem · 3');
 		expect(segmentLabel('all', 0)).toBe('Wszystkie · 0');

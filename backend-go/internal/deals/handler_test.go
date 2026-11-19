@@ -364,21 +364,40 @@ func TestDealsMatchedListings(t *testing.T) {
 	if _, err := pool.Exec(ctx, `INSERT INTO copy (edition_id, status) VALUES ($1, 'owned')`, ownedEdition); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := pool.Exec(ctx, `INSERT INTO copy (edition_id, status) VALUES ($1, 'owned')`, limited.EditionID); err != nil {
+		t.Fatal(err)
+	}
 	owned := &Want{EditionID: ownedEdition, TitleID: limited.TitleID}
+	wishedAndOwned := &Want{EditionID: limited.EditionID, TitleID: limited.TitleID}
+	ids := map[string]int64{}
 	for _, tc := range []struct {
 		id    string
 		price int64
 		want  *Want
+		alert bool
 	}{
-		{id: "under", price: 3500, want: limited},
+		{id: "under", price: 3500, want: limited, alert: true},
 		{id: "over", price: 5500, want: limited},
 		{id: "no-limit", price: 2000, want: unlimited},
 		{id: "owned", price: 1000, want: owned},
+		{id: "valuation-wished", price: 3000, want: wishedAndOwned},
 	} {
 		listing := Listing{Source: "olx", ExternalID: tc.id, Title: "Blade Runner", PriceCents: tc.price}
-		if _, _, err := store.Record(ctx, &listing, tc.want, false); err != nil {
+		if _, _, err := store.Record(ctx, &listing, tc.want, tc.alert); err != nil {
 			t.Fatal(err)
 		}
+		var id int64
+		if err := pool.QueryRow(ctx, `SELECT id FROM price_observation WHERE external_id = $1`, tc.id).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		ids[tc.id] = id
+	}
+	if err := store.MarkSent(ctx, ids["under"]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO deal_alert (observation_id, copy_id, sent_at, attempts) VALUES ($1, $2, now(), 1)`,
+		ids["no-limit"], unlimited.CopyID); err != nil {
+		t.Fatal(err)
 	}
 	srv := httptest.NewServer(server.New(server.Config{}, logger, server.Deps{
 		DB: pool, API: []server.Mounter{NewHandler(store, NewHunter(store, nil, nil, Config{}, logger), logger)},
@@ -389,12 +408,14 @@ func TestDealsMatchedListings(t *testing.T) {
 		query string
 		want  []string
 	}{
-		{query: "", want: []string{"owned", "no-limit", "over", "under"}},
+		{query: "", want: []string{"valuation-wished", "owned", "no-limit", "over", "under"}},
 		{query: "?matched=true", want: []string{"no-limit", "over", "under"}},
 		{query: "?matched=true&limit=2", want: []string{"no-limit", "over"}},
-		{query: "?matched=false&limit=2", want: []string{"owned", "no-limit"}},
+		{query: "?matched=false&limit=2", want: []string{"valuation-wished", "owned"}},
 		{query: "?under_limit=true", want: []string{"under"}},
 		{query: "?matched=true&under_limit=true", want: []string{"under"}},
+		{query: "?sent=true", want: []string{"under"}},
+		{query: "?sent=true&limit=1", want: []string{"under"}},
 	} {
 		var view View
 		if code := call(t, http.MethodGet, srv.URL+"/api/deals"+tc.query, nil, &view); code != http.StatusOK ||
@@ -409,8 +430,10 @@ func TestDealsMatchedListings(t *testing.T) {
 			}
 		}
 	}
-	if code := call(t, http.MethodGet, srv.URL+"/api/deals?matched=maybe", nil, nil); code != http.StatusUnprocessableEntity {
-		t.Errorf("GET deals?matched=maybe = %d, want 422", code)
+	for _, param := range []string{"matched", "sent"} {
+		if code := call(t, http.MethodGet, srv.URL+"/api/deals?"+param+"=maybe", nil, nil); code != http.StatusUnprocessableEntity {
+			t.Errorf("GET deals?%s=maybe = %d, want 422", param, code)
+		}
 	}
 }
 

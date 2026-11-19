@@ -56,11 +56,6 @@ export function wishLimit(limit: number | null): string {
 	return limit == null ? 'bez limitu' : `limit ${dealPrice(limit)}`;
 }
 
-/** A listing whose Telegram alert went out, for a wish that still has a limit. */
-export function isSent(o: Pick<Observation, 'alert' | 'max_price_cents'>): boolean {
-	return o.alert === 'sent' && o.max_price_cents != null;
-}
-
 /** A listing at or under the price limit of the wish it matched. */
 export function isUnderLimit(o: Pick<Observation, 'price_cents' | 'max_price_cents'>): boolean {
 	return o.max_price_cents != null && o.price_cents <= o.max_price_cents;
@@ -112,6 +107,9 @@ export type DealsView = { status: HunterStatus; wishes: number; observations: Ob
  * row limit, so listings for owned editions never push them out.
  */
 export const matchedPath = '/api/deals?matched=true&limit=500';
+
+/** The listings whose Telegram alert went out for a wish that still has a limit. */
+export const sentPath = '/api/deals?sent=true&limit=500';
 
 export type DealSegment = 'under' | 'all' | 'sent';
 

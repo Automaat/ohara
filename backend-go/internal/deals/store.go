@@ -261,14 +261,17 @@ type Observation struct {
 	AlertAttempts   int       `json:"alert_attempts"`
 }
 
-// RecentFilter narrows Recent to at most Limit listings. Matched keeps the listings matched to a
-// wish, with or without a price limit; UnderLimit keeps those at or under the matched wish's
-// limit. Both apply before the row limit, so newer listings that fail them, such as listings
-// for owned editions, never push older ones out.
+// RecentFilter narrows Recent to at most Limit listings. A listing matches the wishlist copy the
+// hunter recorded it for, or its alert's copy; a valuation listing of an edition that is also
+// wished for is not matched. Matched keeps the matched listings, with or without a price limit;
+// UnderLimit keeps those at or under the matched wish's limit; Sent keeps those whose alert was
+// sent for a wish that still has a limit. Filters apply before the row limit, so newer listings
+// that fail them, such as listings for owned editions, never push older ones out.
 type RecentFilter struct {
 	Limit      int
 	Matched    bool
 	UnderLimit bool
+	Sent       bool
 }
 
 // Recent returns the newest deal observations that pass f.
@@ -286,22 +289,16 @@ func (s *Store) Recent(ctx context.Context, f RecentFilter) ([]Observation, erro
 			coalesce(a.last_error, ''), coalesce(a.attempts, 0)
 		FROM price_observation o
 		LEFT JOIN deal_alert a ON a.observation_id = o.id
-		LEFT JOIN LATERAL (
-			SELECT coalesce((o.raw->>'wishlist_copy_id')::bigint, a.copy_id) AS copy_id
-		) matched ON true
-		LEFT JOIN LATERAL (
-			SELECT c.edition_id, c.max_price_cents FROM copy c
-			WHERE c.status = 'wishlist'
-				AND (c.id = matched.copy_id OR (matched.copy_id IS NULL AND c.edition_id = o.edition_id))
-			ORDER BY coalesce(c.max_price_cents >= o.price_cents, false) DESC, c.id
-			LIMIT 1
-		) w ON true
+		LEFT JOIN copy w ON w.status = 'wishlist'
+			AND w.id = coalesce((o.raw->>'wishlist_copy_id')::bigint, a.copy_id)
 		LEFT JOIN edition e ON e.id = coalesce(w.edition_id, o.edition_id)
 		LEFT JOIN title t ON t.id = coalesce(e.title_id, o.title_id)
 		WHERE o.source = ANY ($3)
 			AND (NOT $4 OR o.price_cents <= w.max_price_cents)
-			AND (NOT $5 OR w.edition_id IS NOT NULL)
-		ORDER BY o.observed_at DESC, o.id DESC LIMIT $1`, f.Limit, MaxAttempts, sources, f.UnderLimit, f.Matched)
+			AND (NOT $5 OR w.id IS NOT NULL)
+			AND (NOT $6 OR a.sent_at IS NOT NULL AND w.max_price_cents IS NOT NULL)
+		ORDER BY o.observed_at DESC, o.id DESC LIMIT $1`,
+		f.Limit, MaxAttempts, sources, f.UnderLimit, f.Matched, f.Sent)
 	if err != nil {
 		return nil, fmt.Errorf("recent observations: %w", err)
 	}

@@ -14,13 +14,12 @@
 	} from '@smykla-skalski/sui';
 	import { onMount } from 'svelte';
 	import { ApiError, errorMessage, request } from '#lib/api.js';
-	import { badgePath, refreshDealBadge } from '#lib/deal-badge.svelte.js';
+	import { loadUnderLimit } from '#lib/deal-badge.svelte.js';
 	import { options, type FormIssue } from '#lib/collection.js';
 	import DealCard from '#lib/components/DealCard.svelte';
 	import {
 		dealsSummary,
 		intervalLabel,
-		isSent,
 		keywordKindLabels,
 		keywordPayload,
 		keywordsOf,
@@ -28,6 +27,7 @@
 		matchedPath,
 		searchedFor,
 		segmentLabel,
+		sentPath,
 		type DealSegment,
 		type DealsView,
 		type HunterStatus,
@@ -39,11 +39,11 @@
 	type Deals = {
 		status: HunterStatus;
 		wishes: number;
-		under: Observation[];
-		matched: Observation[];
+		lists: Record<DealSegment, Observation[]>;
 	};
 
 	let deals = $state<Deals | null>(null);
+	let now = $state(new Date());
 	let segment = $state<DealSegment>('under');
 	let failure = $state<string | null>(null);
 	let loading = $state(true);
@@ -61,25 +61,25 @@
 	let issued = 0;
 
 	/**
-	 * "Pod limitem" asks the badge's own query, so the segment and the Okazje badge count the
-	 * same listings. An answer that arrives after a later request's answer is dropped.
+	 * "Pod limitem" comes from the request that also counts the Okazje badge, so the segment and
+	 * the badge always show the same answer. An answer that arrives after a later request's
+	 * answer is dropped. The search counts as running while any of the three answers says so.
 	 */
 	async function load() {
 		const ticket = ++issued;
 		loading = true;
 		try {
-			const [under, matched] = await Promise.all([
-				request<DealsView>(fetch, 'GET', badgePath),
-				request<DealsView>(fetch, 'GET', matchedPath)
+			const [under, all, sent] = await Promise.all([
+				loadUnderLimit(fetch),
+				request<DealsView>(fetch, 'GET', matchedPath),
+				request<DealsView>(fetch, 'GET', sentPath)
 			]);
 			if (ticket !== issued) return;
-			const status = under.status.running ? under.status : matched.status;
-			if (deals?.status.running && !status.running) void refreshDealBadge(fetch);
+			now = new Date();
 			deals = {
-				status,
-				wishes: matched.wishes,
-				under: under.observations,
-				matched: matched.observations
+				status: [under, all, sent].find((v) => v.status.running)?.status ?? all.status,
+				wishes: all.wishes,
+				lists: { under: under.observations, all: all.observations, sent: sent.observations }
 			};
 			failure = null;
 		} catch (err) {
@@ -103,7 +103,11 @@
 	onMount(() => {
 		void load();
 		void loadKeywords();
-		return () => clearTimeout(poll);
+		const clock = setInterval(() => (now = new Date()), 30_000);
+		return () => {
+			clearTimeout(poll);
+			clearInterval(clock);
+		};
 	});
 
 	async function runNow() {
@@ -151,11 +155,9 @@
 	}
 
 	const status = $derived(deals?.status);
-	const lists = $derived<Record<DealSegment, Observation[]>>({
-		under: deals?.under ?? [],
-		all: deals?.matched ?? [],
-		sent: (deals?.matched ?? []).filter(isSent)
-	});
+	const lists = $derived<Record<DealSegment, Observation[]>>(
+		deals?.lists ?? { under: [], all: [], sent: [] }
+	);
 	const segments = $derived(
 		(['under', 'all', 'sent'] as const).map((value) => ({
 			value,
@@ -163,10 +165,8 @@
 		}))
 	);
 	const shown = $derived(lists[segment]);
-	const summary = $derived(
-		deals ? dealsSummary(deals.wishes, deals.status, new Date()) : undefined
-	);
-	const searched = $derived(deals ? searchedFor(deals.wishes, deals.status, new Date()) : '');
+	const summary = $derived(deals ? dealsSummary(deals.wishes, deals.status, now) : undefined);
+	const searched = $derived(deals ? searchedFor(deals.wishes, deals.status, now) : '');
 	const runSummary = $derived(lastRunSummary(status?.last_result ?? null));
 	const sourceErrors = $derived(status?.last_result?.errors ?? []);
 	const busy = $derived(starting || !!status?.running);

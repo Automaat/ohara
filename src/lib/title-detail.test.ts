@@ -10,6 +10,8 @@ import {
 	editionName,
 	editionsLine,
 	kindAndYear,
+	openedFromCollection,
+	plainClick,
 	soleCopy,
 	titleArtwork,
 	valueCard,
@@ -331,5 +333,45 @@ describe('valueCard', () => {
 		expect(valueCard(copy(), [valued({ copy_id: 99 })])).toBeNull();
 		expect(valueCard(copy(), [])).toBeNull();
 		expect(valueCard(copy({ status: 'wishlist' }), [valued()])).toBeNull();
+	});
+});
+
+describe('the way back to the collection', () => {
+	const from = (path: string) => ({ url: new URL(path, 'https://ohara.test') });
+
+	it.each([
+		['link', from('/'), true],
+		['link', from('/?kind=movie&status=none'), true],
+		['link', from('/scan'), false],
+		['link', from('/titles/3'), false],
+		['popstate', from('/'), false],
+		['goto', from('/'), false],
+		['enter', null, false]
+	] as const)('a %s navigation from %o opened from the collection: %s', (type, origin, want) => {
+		expect(openedFromCollection({ type, from: origin })).toBe(want);
+	});
+
+	const click = {
+		button: 0,
+		metaKey: false,
+		ctrlKey: false,
+		shiftKey: false,
+		altKey: false,
+		defaultPrevented: false
+	};
+
+	it('handles a plain click itself', () => {
+		expect(plainClick(click)).toBe(true);
+	});
+
+	it.each([
+		{ button: 1 },
+		{ metaKey: true },
+		{ ctrlKey: true },
+		{ shiftKey: true },
+		{ altKey: true },
+		{ defaultPrevented: true }
+	])('leaves %o to the browser', (change) => {
+		expect(plainClick({ ...click, ...change })).toBe(false);
 	});
 });

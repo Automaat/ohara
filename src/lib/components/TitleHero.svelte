@@ -15,6 +15,7 @@
 		backHref,
 		backLabel,
 		coverTitle,
+		onback,
 		actions
 	}: {
 		title: string;
@@ -30,6 +31,8 @@
 		backLabel: string;
 		/** The title whose cover a tap in the collection carries into this hero, and back. */
 		coverTitle?: number;
+		/** Handles a click on the back link before it follows `backHref`. */
+		onback?: (event: MouseEvent) => void;
 		/** Controls at the top end of the hero, such as a menu. */
 		actions?: Snippet;
 	} = $props();
@@ -52,7 +55,7 @@
 		{/if}
 	</div>
 	<div class="bar">
-		<span class="plate"><BackLink href={backHref} label={backLabel} /></span>
+		<span class="plate"><BackLink href={backHref} label={backLabel} onclick={onback} /></span>
 		{#if actions}
 			<span class="plate round">{@render actions()}</span>
 		{/if}

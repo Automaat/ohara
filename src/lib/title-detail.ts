@@ -68,6 +68,34 @@ export function addCopyStart(
 	return t.editions.length === 1 ? { form: 'copy', editionID: only.id } : null;
 }
 
+/**
+ * Whether a navigation opened a title page from the collection, so the page's way back can step
+ * back in history and find the collection as the reader left it.
+ */
+export function openedFromCollection(navigation: {
+	type: string;
+	from: { url: URL } | null;
+}): boolean {
+	return navigation.type === 'link' && navigation.from?.url.pathname === '/';
+}
+
+/** Whether a click is a plain primary click, not one that opens a link in a new tab or window. */
+export function plainClick(
+	event: Pick<
+		MouseEvent,
+		'button' | 'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey' | 'defaultPrevented'
+	>
+): boolean {
+	return (
+		!event.defaultPrevented &&
+		event.button === 0 &&
+		!event.metaKey &&
+		!event.ctrlKey &&
+		!event.shiftKey &&
+		!event.altKey
+	);
+}
+
 /** An edition's artwork: its own photo, then its catalog cover, then the title's. */
 export function editionArtwork(
 	e: { cover_override_url?: string; cover_url?: string },

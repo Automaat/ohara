@@ -1,6 +1,6 @@
 import { options, type CollectionItem } from './collection';
 
-const collectionSortLabels = {
+export const collectionSortLabels = {
 	newest: 'Ostatnio dodane',
 	title: 'Tytuł A–Z',
 	priceAsc: 'Cena zakupu rosnąco',

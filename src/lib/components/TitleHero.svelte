@@ -157,6 +157,7 @@
 	}
 
 	.art :global(.cover) {
+		box-sizing: border-box;
 		box-shadow:
 			0 2px 4px rgb(0 0 0 / 18%),
 			0 22px 40px -16px rgb(0 0 0 / 60%);
@@ -171,6 +172,7 @@
 
 	.text p {
 		margin: 0;
+		overflow-wrap: anywhere;
 	}
 
 	.overline {

@@ -641,6 +641,7 @@
 	}
 	.copies a {
 		display: block;
+		overflow-wrap: anywhere;
 		padding: 0.375rem 0.5rem;
 		border-radius: var(--sui-radius-control);
 		color: var(--sui-link);

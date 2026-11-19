@@ -25,7 +25,12 @@
 
 	const uid = $props.id();
 	const captionID = `${uid}-cover`;
-	let failedCover = $state<string>();
+	/** The cover that failed to load. A change of cover clears it, so a cover shown again later,
+	 * such as a provider cover restored after a personal photo, gets another try. */
+	let failedCover = $derived.by((): string | undefined => {
+		void cover;
+		return undefined;
+	});
 	const shown = $derived(cover && cover !== failedCover ? cover : undefined);
 </script>
 

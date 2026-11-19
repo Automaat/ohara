@@ -79,6 +79,10 @@ func scanTitle(row pgx.Row) (Title, error) {
 const editionCoverOverrideURL = `CASE WHEN e.cover_photo IS NOT NULL
 	THEN '/api/editions/' || e.id || '/cover?v=' || extract(epoch FROM e.updated_at) END`
 
+// CoverURL selects the cover a copy shows from edition e and title t: the
+// edition's own photo, then the edition's cover, then the title's.
+const CoverURL = `COALESCE(` + editionCoverOverrideURL + `, e.cover_url, t.cover_url)`
+
 const editionColumns = `e.id, e.title_id, e.barcode, e.label, e.publisher, e.year, e.format,
 	e.pl_subtitles, e.pl_voiceover, e.packaging, e.binding, e.discogs_release_id, e.notes, e.cover_url,
 	e.created_at, e.updated_at, (SELECT count(*) FROM copy c WHERE c.edition_id = e.id), ` + editionCoverOverrideURL
@@ -490,7 +494,7 @@ func (s *Store) Collection(ctx context.Context, f Filter) ([]Item, error) {
 	rows, err := s.pool.Query(ctx, `SELECT c.id, c.created_at, c.status, c.price_cents, c.purchased_on, c.shop,
 			c.acquired_as, c.condition, e.id, e.barcode, e.label, e.format, e.binding,
 			t.id, t.kind, t.name, t.original_title, t.polish_title, t.year,
-			COALESCE(`+editionCoverOverrideURL+`, e.cover_url, t.cover_url), t.authors
+			`+CoverURL+`, t.authors
 		FROM copy c JOIN edition e ON e.id = c.edition_id JOIN title t ON t.id = e.title_id
 		WHERE ($1 = '' OR t.kind = $1) AND ($2 = '' OR e.format = $2) AND ($3 = '' OR c.status = $3)
 		  AND ($4 = '' OR e.barcode = $4 OR strpos(lower(concat_ws(' ', t.name, t.original_title,

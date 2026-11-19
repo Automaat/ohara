@@ -366,6 +366,9 @@ func TestValuationAPI(t *testing.T) {
 	h := NewHandler(store, runner, logger)
 	srv := httptest.NewServer(server.New(server.Config{}, logger, server.Deps{DB: pool, API: []server.Mounter{h}}))
 	t.Cleanup(srv.Close)
+	exec(t, pool, `UPDATE title SET cover_url = 'https://covers.test/katedra.jpg' WHERE id = 1`)
+	exec(t, pool, `UPDATE title SET cover_url = 'https://covers.test/diuna.jpg' WHERE id = 2`)
+	exec(t, pool, `UPDATE edition SET cover_url = 'https://covers.test/diuna-bluray.jpg' WHERE id = 20`)
 
 	var view View
 	if code := get(t, srv.URL+"/api/valuation", &view); code != http.StatusOK {
@@ -378,6 +381,15 @@ func TestValuationAPI(t *testing.T) {
 	}
 	if view.Copies[0].TitleName != "Diuna" || view.Copies[2].TitleName != "Katedra" || !view.Copies[0].LowConfidence {
 		t.Fatalf("copies = %+v", view.Copies)
+	}
+	for i, want := range []string{
+		"https://covers.test/diuna-bluray.jpg",
+		"https://covers.test/diuna-bluray.jpg",
+		"https://covers.test/katedra.jpg",
+	} {
+		if got := view.Copies[i].CoverURL; got == nil || *got != want {
+			t.Fatalf("copy %d cover = %v, want %s", i, got, want)
+		}
 	}
 
 	if code := post(t, srv.URL+"/api/valuation/run"); code != http.StatusAccepted {

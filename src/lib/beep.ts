@@ -51,8 +51,9 @@ export function createBeeper(make: () => Tone | null) {
 
 	/**
 	 * Starts audio, true when it runs within startWait. It calls resume at once, so it works
-	 * inside a tap's handler; audio that starts later counts as unlocked, and sleeps again when
-	 * it was rested meanwhile.
+	 * inside a tap's handler. Audio that does not start counts as locked again, so the page can
+	 * ask for a tap; audio that starts later counts as unlocked, and sleeps again when it was
+	 * rested meanwhile.
 	 */
 	function started(c: Tone): Promise<boolean> {
 		awake = true;
@@ -68,7 +69,10 @@ export function createBeeper(make: () => Tone | null) {
 			},
 			() => false
 		);
-		return Promise.race([resumed, after(startWait)]);
+		return Promise.race([resumed, after(startWait)]).then((ok) => {
+			if (!ok && !running(c)) unlocked = false;
+			return ok;
+		});
 	}
 
 	/** Starts audio and keeps it on; call it from a tap or key press. True once a beep can sound. */

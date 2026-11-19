@@ -137,6 +137,20 @@ describe('createBeeper', () => {
 		expect(fake.resumes).toBe(2);
 	});
 
+	it('counts audio as locked again when it stops starting', async () => {
+		vi.useFakeTimers();
+		const fake = fakeAudio('suspended');
+		const { unlock, rest, beep, sound } = beeper(fake);
+		await expect(unlock()).resolves.toBe(true);
+		rest();
+		fake.resume = () => new Promise<void>(() => undefined);
+		const playing = beep();
+		await vi.advanceTimersByTimeAsync(250);
+		await expect(playing).resolves.toBe(false);
+		expect(fake.tones).toEqual([]);
+		expect(sound()).toBe('locked');
+	});
+
 	it('reports audio that is not allowed to start yet as locked', async () => {
 		vi.useFakeTimers();
 		const fake = fakeAudio('suspended', 'never');

@@ -35,6 +35,8 @@
 	const autoStartKey = 'ohara.scan.camera';
 	const frameGap = 120;
 	const flashLength = 700;
+	/** How long audio unlocked by a tap waits for the camera to start before it rests. */
+	const idleRest = 1500;
 
 	let video = $state<HTMLVideoElement>();
 	let band = $state<HTMLElement>();
@@ -46,10 +48,12 @@
 	let torchWanted = $state(false);
 	let sound = $state<Sound>('locked');
 	let torchOn = false;
-	let torchBusy = false;
+	/** The track a torch constraint is in flight on; a new stream's track starts its own. */
+	let torchTrack: MediaStreamTrack | null = null;
 	let wanted = false;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let flashTimer: ReturnType<typeof setTimeout> | undefined;
+	let restTimer: ReturnType<typeof setTimeout> | undefined;
 	const canvas = document.createElement('canvas');
 
 	function remember(on: boolean) {
@@ -128,7 +132,7 @@
 	/** Flips the wanted torch state at once; the light follows one constraint at a time. */
 	function toggleTorch() {
 		torchWanted = !torchWanted;
-		if (!torchBusy) void syncTorch();
+		if (torchTrack !== stream?.getVideoTracks()[0]) void syncTorch();
 	}
 
 	/** Sends one torch constraint at a time until the light matches the last tap. */
@@ -137,19 +141,21 @@
 		if (!torch || !track || torchOn === torchWanted) return;
 		const on = torchWanted;
 		const constraints: TorchConstraints = { advanced: [{ torch: on }] };
-		torchBusy = true;
+		torchTrack = track;
 		try {
 			await track.applyConstraints(constraints);
-			if (stream?.getVideoTracks()[0] !== track) return;
-			torchOn = on;
 		} catch {
-			torch = false;
-			torchOn = false;
-			torchWanted = false;
+			if (stream?.getVideoTracks()[0] === track) {
+				torch = false;
+				torchOn = false;
+				torchWanted = false;
+			}
 			return;
 		} finally {
-			torchBusy = false;
+			if (torchTrack === track) torchTrack = null;
 		}
+		if (stream?.getVideoTracks()[0] !== track) return;
+		torchOn = on;
 		await syncTorch();
 	}
 
@@ -157,8 +163,14 @@
 	function unlockSound() {
 		void unlockBeep().then(() => {
 			sound = beepSound();
-			if (!stream) restBeep();
+			clearTimeout(restTimer);
+			if (!stream) restTimer = setTimeout(restIdle, idleRest);
 		});
+	}
+
+	/** Rests audio a tap unlocked when no camera started after it, as when the tap was elsewhere. */
+	function restIdle() {
+		if (!stream && !starting) restBeep();
 	}
 
 	function halt() {
@@ -249,6 +261,7 @@
 			document.removeEventListener('pointerdown', unlockSound, true);
 			document.removeEventListener('keydown', unlockSound, true);
 			clearTimeout(flashTimer);
+			clearTimeout(restTimer);
 			wanted = false;
 			halt();
 		};

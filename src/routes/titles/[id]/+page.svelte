@@ -326,6 +326,7 @@
 		artwork={titleArtwork(t)}
 		backHref="/"
 		backLabel="Kolekcja"
+		coverTitle={t.id}
 	>
 		{#snippet actions()}
 			<ActionMenu

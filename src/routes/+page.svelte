@@ -48,6 +48,7 @@
 		sortTitles,
 		type CollectionSort
 	} from '#lib/collection-sort.js';
+	import { coversPlaced } from '#lib/cover-transition.js';
 	import { purchaseDate, queuedCodes, resultCount } from '#lib/polish.js';
 	import { queueDeletesSettled } from '#lib/queue-deletes.js';
 	import type { QueueEntry } from '#lib/scan.js';
@@ -177,6 +178,10 @@
 		if (overview?.totals.copies === 0 && untrack(() => uncopied) === null) loadUncopied();
 	});
 
+	/**
+	 * Loads the copies or titles the filter lists. The covers count as placed only after the
+	 * restored scroll moves them, so a cover carried back from a title lands on its tile.
+	 */
 	async function load() {
 		const mine = ++seq;
 		const url = collectionURL(filter);
@@ -212,6 +217,8 @@
 				restoreScroll = undefined;
 			}
 		}
+		await tick();
+		if (mine === seq) coversPlaced();
 	}
 
 	afterNavigate(() => {

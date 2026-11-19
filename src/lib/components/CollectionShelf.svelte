@@ -8,6 +8,7 @@
 		type CollectionItem
 	} from '#lib/collection.js';
 	import CollectionCover from './CollectionCover.svelte';
+	import ShelfSkeleton from './ShelfSkeleton.svelte';
 
 	let {
 		rows,
@@ -36,12 +37,16 @@
 	/>
 {/if}
 {#if loading && !failure}
-	<p role="status">{rows.length ? 'Odświeżanie…' : 'Wczytywanie kolekcji…'}</p>
+	{#if rows.length}
+		<p role="status">Odświeżanie…</p>
+	{:else}
+		<ShelfSkeleton label="Wczytywanie kolekcji…" />
+	{/if}
 {/if}
 {#if rows.length}
 	<ul class="shelf" role="list" aria-label="Egzemplarze w kolekcji" aria-busy={loading}>
 		{#each rows as row (row.copy_id)}
-			<li>
+			<li data-cover-title={row.title_id}>
 				<div class="artwork">
 					<CollectionCover kind={row.kind} url={row.cover_url} large />
 				</div>

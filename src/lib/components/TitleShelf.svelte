@@ -4,6 +4,7 @@
 	import { displayName, uncopiedLine, type Title } from '#lib/collection.js';
 	import { addCopyHref } from '#lib/title-detail.js';
 	import CollectionCover from './CollectionCover.svelte';
+	import ShelfSkeleton from './ShelfSkeleton.svelte';
 
 	let {
 		titles,
@@ -32,13 +33,17 @@
 	/>
 {/if}
 {#if loading && !failure}
-	<p role="status">{titles.length ? 'Odświeżanie…' : 'Wczytywanie tytułów…'}</p>
+	{#if titles.length}
+		<p role="status">Odświeżanie…</p>
+	{:else}
+		<ShelfSkeleton label="Wczytywanie tytułów…" />
+	{/if}
 {/if}
 {#if titles.length}
 	<ul class="shelf" role="list" aria-label="Tytuły bez egzemplarzy" aria-busy={loading}>
 		{#each titles as t (t.id)}
 			{@const name = displayName(t)}
-			<li>
+			<li data-cover-title={t.id}>
 				<div class="artwork">
 					<CollectionCover kind={t.kind} url={t.cover_url} large {name} />
 				</div>

@@ -14,7 +14,7 @@
 		Skeleton
 	} from '@smykla-skalski/sui';
 	import { onDestroy } from 'svelte';
-	import { goto, replaceState } from '$app/navigation';
+	import { afterNavigate, goto, replaceState } from '$app/navigation';
 	import { page } from '$app/state';
 	import { ApiError, errorMessage, request } from '#lib/api.js';
 	import {
@@ -46,6 +46,8 @@
 		editionName,
 		editionsLine,
 		kindAndYear,
+		openedFromCollection,
+		plainClick,
 		soleCopy,
 		titleArtwork,
 		valueCard
@@ -166,6 +168,23 @@
 	$effect(() => {
 		void load(id);
 	});
+
+	afterNavigate((navigation) => {
+		if (openedFromCollection(navigation) && !page.state.fromCollection) {
+			replaceState('', { ...page.state, fromCollection: true });
+		}
+	});
+
+	/**
+	 * Goes back to the collection by stepping back in history when the collection opened this
+	 * page, so it returns filtered and scrolled as the reader left it and the cover lands on its
+	 * tile. Otherwise, and for a click that opens a new tab, the link goes to `/` as usual.
+	 */
+	function backToCollection(event: MouseEvent) {
+		if (!page.state.fromCollection || !plainClick(event)) return;
+		event.preventDefault();
+		history.back();
+	}
 
 	function issueFrom(err: unknown): FormIssue {
 		return { field: err instanceof ApiError ? (err.field ?? '') : '', message: errorMessage(err) };
@@ -326,6 +345,8 @@
 		artwork={titleArtwork(t)}
 		backHref="/"
 		backLabel="Kolekcja"
+		coverTitle={t.id}
+		onback={backToCollection}
 	>
 		{#snippet actions()}
 			<ActionMenu

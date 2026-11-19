@@ -199,3 +199,30 @@
 	) {
 	font-variant-numeric: tabular-nums;
 }
+
+/* A cover carried between the collection and a title page (src/lib/cover-transition.ts). Every
+   group keeps its landed box, so nothing animates its size: the page cross-fades, and the cover
+   cross-fades while a transform carries it from where it started. */
+::view-transition-group(*),
+::view-transition-image-pair(*),
+::view-transition-old(*),
+::view-transition-new(*) {
+	animation-duration: 280ms;
+	animation-timing-function: ease-out;
+}
+
+::view-transition-group(*) {
+	animation-name: none;
+}
+
+::view-transition-image-pair(ohara-cover) {
+	transform-origin: 0 0;
+	transform: var(--ohara-cover-start, none);
+	animation-name: ohara-cover-land;
+}
+
+@keyframes ohara-cover-land {
+	to {
+		transform: none;
+	}
+}

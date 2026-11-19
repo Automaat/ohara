@@ -3,6 +3,7 @@
 	import type { Snippet } from 'svelte';
 	import type { Kind } from '#lib/collection.js';
 	import CollectionCover from '#lib/components/CollectionCover.svelte';
+	import { coversPlaced } from '#lib/cover-transition.js';
 
 	let {
 		title,
@@ -13,6 +14,8 @@
 		artwork,
 		backHref,
 		backLabel,
+		coverTitle,
+		onback,
 		actions
 	}: {
 		title: string;
@@ -26,15 +29,23 @@
 		artwork?: string;
 		backHref: string;
 		backLabel: string;
+		/** The title whose cover a tap in the collection carries into this hero, and back. */
+		coverTitle?: number;
+		/** Handles a click on the back link before it follows `backHref`. */
+		onback?: (event: MouseEvent) => void;
 		/** Controls at the top end of the hero, such as a menu. */
 		actions?: Snippet;
 	} = $props();
+
+	$effect(() => {
+		if (coverTitle !== undefined) coversPlaced();
+	});
 
 	let failedArtwork = $state<string>();
 	const backdrop = $derived(artwork && artwork !== failedArtwork ? artwork : undefined);
 </script>
 
-<header class="hero" class:flat={!backdrop}>
+<header class="hero" class:flat={!backdrop} data-cover-title={coverTitle}>
 	<div class="backdrop" aria-hidden="true">
 		{#if backdrop}
 			{@const url = backdrop}
@@ -44,7 +55,7 @@
 		{/if}
 	</div>
 	<div class="bar">
-		<span class="plate"><BackLink href={backHref} label={backLabel} /></span>
+		<span class="plate"><BackLink href={backHref} label={backLabel} onclick={onback} /></span>
 		{#if actions}
 			<span class="plate round">{@render actions()}</span>
 		{/if}

@@ -216,3 +216,65 @@ func TestStoreCount(t *testing.T) {
 		t.Fatalf("count = %d, %v; want 2 distinct barcodes", n, err)
 	}
 }
+
+func TestUndoneEditionRequeuesItsEntry(t *testing.T) {
+	a := newAPI(t)
+	const code = "5901234123457"
+	a.mustDo(http.MethodPost, "/api/scan-queue", obj{"barcode": code, "reason": "not_found"}, nil, http.StatusCreated)
+	var before scanqueue.Entry
+	a.mustDo(http.MethodPost, "/api/scan-queue", obj{"barcode": code, "reason": "lookup_failed", "detail": "bn: timeout"}, &before, http.StatusOK)
+
+	var movie collection.Title
+	a.mustDo(http.MethodPost, "/api/titles", obj{"kind": "movie", "name": "Rejs"}, &movie, http.StatusCreated)
+	var e collection.Edition
+	a.mustDo(http.MethodPost, "/api/editions", obj{"title_id": movie.ID, "barcode": code, "format": "dvd"}, &e, http.StatusCreated)
+	var c collection.Copy
+	a.mustDo(http.MethodPost, "/api/copies", obj{"edition_id": e.ID, "status": "owned"}, &c, http.StatusCreated)
+	if got := a.queue(); len(got) != 0 {
+		t.Fatalf("queue with the edition = %v", got)
+	}
+
+	path := "/api/editions/" + strconv.FormatInt(e.ID, 10) + "?requeue=1"
+	a.mustDo(http.MethodDelete, path, nil, nil, http.StatusConflict)
+	a.mustDo(http.MethodDelete, "/api/copies/"+strconv.FormatInt(c.ID, 10), nil, nil, http.StatusNoContent)
+	a.mustDo(http.MethodDelete, path, nil, nil, http.StatusNoContent)
+	a.mustDo(http.MethodDelete, path, nil, nil, http.StatusNotFound)
+
+	got := a.queue()
+	if len(got) != 1 {
+		t.Fatalf("queue after undo = %v", got)
+	}
+	back := got[0]
+	if back.Barcode != code || back.Scans != 2 || back.Reason != "lookup_failed" || back.Detail != "bn: timeout" ||
+		!back.CreatedAt.Equal(before.CreatedAt) || !back.LastScannedAt.Equal(before.LastScannedAt) {
+		t.Fatalf("requeued = %+v, want %+v", back, before)
+	}
+}
+
+func TestDeletedEditionStaysOutOfTheQueue(t *testing.T) {
+	a := newAPI(t)
+	const code = "5901234123457"
+	a.mustDo(http.MethodPost, "/api/scan-queue", obj{"barcode": code, "reason": "not_found"}, nil, http.StatusCreated)
+	var movie collection.Title
+	a.mustDo(http.MethodPost, "/api/titles", obj{"kind": "movie", "name": "Rejs"}, &movie, http.StatusCreated)
+	var e collection.Edition
+	a.mustDo(http.MethodPost, "/api/editions", obj{"title_id": movie.ID, "barcode": code, "format": "dvd"}, &e, http.StatusCreated)
+
+	a.mustDo(http.MethodDelete, "/api/editions/"+strconv.FormatInt(e.ID, 10), nil, nil, http.StatusNoContent)
+	if got := a.queue(); len(got) != 0 {
+		t.Fatalf("queue after a plain delete = %v", got)
+	}
+}
+
+func TestRequeueSkipsAnEditionWithoutAQueuedBarcode(t *testing.T) {
+	a := newAPI(t)
+	var movie collection.Title
+	a.mustDo(http.MethodPost, "/api/titles", obj{"kind": "movie", "name": "Rejs"}, &movie, http.StatusCreated)
+	var e collection.Edition
+	a.mustDo(http.MethodPost, "/api/editions", obj{"title_id": movie.ID, "barcode": "5901234123457", "format": "dvd"}, &e, http.StatusCreated)
+
+	a.mustDo(http.MethodDelete, "/api/editions/"+strconv.FormatInt(e.ID, 10)+"?requeue=1", nil, nil, http.StatusNoContent)
+	if got := a.queue(); len(got) != 0 {
+		t.Fatalf("queue after undoing an unqueued barcode = %v", got)
+	}
+}

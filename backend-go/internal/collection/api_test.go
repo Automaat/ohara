@@ -638,7 +638,7 @@ func TestKindChangeWaitsForConcurrentEdition(t *testing.T) {
 	if fe := in.Normalize(); fe != nil {
 		t.Fatalf("normalize: %v", fe)
 	}
-	title, err := store.CreateTitle(ctx, &in)
+	title, _, err := store.CreateTitle(ctx, &in)
 	if err != nil {
 		t.Fatalf("create title: %v", err)
 	}
@@ -714,4 +714,55 @@ func TestCopyRequestKeyMakesCreateRetrySafe(t *testing.T) {
 	}
 
 	a.fails(http.MethodPost, "/api/copies", obj{"edition_id": edition, "status": "owned", "request_key": strings.Repeat("k", 101)}, http.StatusUnprocessableEntity, "request_key")
+}
+
+func TestTitleRequestKeyMakesCreateRetrySafe(t *testing.T) {
+	a := newAPI(t)
+	body := obj{"kind": "movie", "name": "Rejs", "tmdb_id": 41187, "request_key": " scan-1 "}
+
+	var first, retry collection.Title
+	a.mustDo(http.MethodPost, "/api/titles", body, &first, http.StatusCreated)
+	a.mustDo(http.MethodPost, "/api/titles", body, &retry, http.StatusOK)
+	if retry.ID != first.ID || retry.RequestKey != nil {
+		t.Fatalf("retry = %+v, first %+v", retry, first)
+	}
+
+	a.fails(http.MethodPost, "/api/titles", obj{"kind": "movie", "name": "Rejs", "tmdb_id": 41187, "request_key": "scan-2"},
+		http.StatusConflict, "tmdb_id")
+	a.mustDo(http.MethodPost, "/api/titles", obj{"kind": "book", "name": "Lalka", "request_key": "scan-3"}, nil, http.StatusCreated)
+	a.mustDo(http.MethodPost, "/api/titles", obj{"kind": "book", "name": "Lalka", "request_key": "  "}, nil, http.StatusCreated)
+	var titles []collection.Title
+	a.mustDo(http.MethodGet, "/api/titles", nil, &titles, http.StatusOK)
+	if len(titles) != 3 {
+		t.Fatalf("titles = %d, want 3 (one per distinct or absent key)", len(titles))
+	}
+
+	a.fails(http.MethodPost, "/api/titles", obj{"kind": "book", "name": "Lalka", "request_key": strings.Repeat("k", 101)},
+		http.StatusUnprocessableEntity, "request_key")
+}
+
+func TestEditionRequestKeyMakesCreateRetrySafe(t *testing.T) {
+	a := newAPI(t)
+	movie := a.title("movie", "Rejs")
+	body := obj{"title_id": movie, "barcode": "5901234123457", "format": "dvd", "request_key": "scan-1"}
+
+	var first, retry collection.Edition
+	a.mustDo(http.MethodPost, "/api/editions", body, &first, http.StatusCreated)
+	a.mustDo(http.MethodPost, "/api/editions", body, &retry, http.StatusOK)
+	if retry.ID != first.ID || retry.RequestKey != nil {
+		t.Fatalf("retry = %+v, first %+v", retry, first)
+	}
+
+	a.fails(http.MethodPost, "/api/editions", obj{"title_id": movie, "barcode": "5901234123457", "format": "dvd", "request_key": "scan-2"},
+		http.StatusConflict, "barcode")
+	a.mustDo(http.MethodPost, "/api/editions", obj{"title_id": movie, "format": "bluray", "request_key": "scan-3"}, nil, http.StatusCreated)
+	a.mustDo(http.MethodPost, "/api/editions", obj{"title_id": movie, "format": "uhd"}, nil, http.StatusCreated)
+	var detail collection.TitleDetail
+	a.mustDo(http.MethodGet, fmt.Sprintf("/api/titles/%d", movie), nil, &detail, http.StatusOK)
+	if len(detail.Editions) != 3 {
+		t.Fatalf("editions = %d, want 3 (one per distinct or absent key)", len(detail.Editions))
+	}
+
+	a.fails(http.MethodPost, "/api/editions", obj{"title_id": movie, "format": "dvd", "request_key": strings.Repeat("k", 101)},
+		http.StatusUnprocessableEntity, "request_key")
 }

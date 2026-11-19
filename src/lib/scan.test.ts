@@ -19,6 +19,7 @@ import {
 	isInvalidBarcode,
 	loadSticky,
 	looksLikeBarcode,
+	newMade,
 	newRequestKey,
 	providerLabel,
 	queuedMessage,
@@ -104,7 +105,8 @@ const ownedEdition = {
 	id: 5,
 	title_id: 3,
 	barcode: '5901234123457',
-	title: { id: 3, name: 'Rejs' },
+	format: 'dvd',
+	title: { id: 3, name: 'Rejs', kind: 'movie' },
 	copies: []
 } as unknown as EditionDetail;
 
@@ -553,9 +555,17 @@ describe('scan payloads', () => {
 });
 
 describe('saveScan', () => {
-	const title = { id: 9, name: 'Seksmisja' };
-	const edition = { id: 21, title_id: 9, barcode: '5901234123457' };
+	const title = { id: 9, name: 'Seksmisja', kind: 'movie' };
+	const edition = { id: 21, title_id: 9, barcode: '5901234123457', format: 'uhd', binding: null };
 	const copy = { id: 40, edition_id: 21 };
+	const lost = (): [number, unknown] => {
+		throw new TypeError('network connection was lost');
+	};
+
+	/** The body of the first request to "METHOD /path". */
+	function bodyOf(s: ReturnType<typeof server>, path: string): unknown {
+		return s.calls.find((c) => `${c.method} ${c.url}` === path)?.body;
+	}
 
 	it('creates title, edition and copy for a new barcode', async () => {
 		const s = server({
@@ -578,14 +588,26 @@ describe('saveScan', () => {
 			}),
 			'k1'
 		);
-		expect(got).toEqual({ titleID: 9, titleName: 'Seksmisja', editionID: 21, copy });
-		expect(s.calls[2].body).toMatchObject({
+		expect(got).toEqual({
+			titleID: 9,
+			titleName: 'Seksmisja',
+			kind: 'movie',
+			editionID: 21,
+			edition,
+			cover: undefined,
+			copy,
+			createdTitle: true,
+			createdEdition: true
+		});
+		expect(bodyOf(s, 'POST /api/titles')).toMatchObject({ tmdb_id: 11202, request_key: 'k1' });
+		expect(bodyOf(s, 'POST /api/editions')).toMatchObject({
 			title_id: 9,
 			barcode: '5901234123457',
 			format: 'uhd',
-			packaging: ['steelbook', 'slipcover']
+			packaging: ['steelbook', 'slipcover'],
+			request_key: 'k1'
 		});
-		expect(s.calls[3].body).toEqual({
+		expect(bodyOf(s, 'POST /api/copies?cover=auto')).toEqual({
 			edition_id: 21,
 			status: 'owned',
 			price_cents: 4999,
@@ -640,9 +662,9 @@ describe('saveScan', () => {
 			form(),
 			'k1'
 		);
-		expect(got.titleID).toBe(3);
+		expect(got).toMatchObject({ titleID: 3, createdTitle: false, createdEdition: true });
 		expect(s.paths()).not.toContain('POST /api/titles');
-		expect(s.calls[1].body).toMatchObject({ title_id: 3 });
+		expect(bodyOf(s, 'POST /api/editions')).toMatchObject({ title_id: 3 });
 	});
 
 	it('does not look up a TMDB ID that is not there', async () => {
@@ -672,7 +694,17 @@ describe('saveScan', () => {
 			form({ price: '10' }),
 			'k1'
 		);
-		expect(got).toEqual({ titleID: 3, titleName: 'Rejs', editionID: 5, copy });
+		expect(got).toMatchObject({
+			titleID: 3,
+			titleName: 'Rejs',
+			kind: 'movie',
+			editionID: 5,
+			edition: { id: 5, format: 'dvd' },
+			copy,
+			createdTitle: false,
+			createdEdition: false
+		});
+		expect(s.paths()).toEqual(['POST /api/copies?cover=auto']);
 		expect(s.calls[0].body).toMatchObject({ edition_id: 5, price_cents: 1000, request_key: 'k1' });
 	});
 
@@ -692,9 +724,97 @@ describe('saveScan', () => {
 			form(),
 			'k1'
 		);
-		expect(got).toMatchObject({ titleID: 4, editionID: 7 });
+		expect(got).toMatchObject({
+			titleID: 4,
+			editionID: 7,
+			createdTitle: false,
+			createdEdition: false
+		});
 		expect(s.paths()).toContain('DELETE /api/titles/9');
 		expect(s.calls.at(-1)?.body).toMatchObject({ edition_id: 7 });
+	});
+
+	it('counts the edition an attempt whose answer was lost created', async () => {
+		const made = newMade();
+		const s = server({
+			'GET /api/titles?tmdb_id=11202': [
+				[200, []],
+				[200, [title]]
+			],
+			'POST /api/titles': [201, title],
+			'POST /api/editions': [lost, [200, edition]],
+			'POST /api/copies?cover=auto': [201, copy]
+		});
+		const target = { kind: 'new', barcode: '5901234123457', candidate: movie } as const;
+		await expect(saveScan(s.fetchFn, target, form(), 'k1', made)).rejects.toBeInstanceOf(ApiError);
+		const got = await saveScan(s.fetchFn, target, form(), 'k1', made);
+		expect(got).toMatchObject({
+			titleID: 9,
+			editionID: 21,
+			createdTitle: true,
+			createdEdition: true
+		});
+		expect(made).toMatchObject({ titles: [9], editions: [21], titleUnanswered: false });
+		expect(s.calls.filter((c) => c.url === '/api/editions').map((c) => c.body)).toMatchObject([
+			{ request_key: 'k1' },
+			{ request_key: 'k1' }
+		]);
+	});
+
+	it('asks the key, not the TMDB ID, after a title request whose answer was lost', async () => {
+		const made = newMade();
+		const s = server({
+			'GET /api/titles?tmdb_id=11202': [200, []],
+			'POST /api/titles': [lost, [200, title]],
+			'POST /api/editions': [201, edition],
+			'POST /api/copies?cover=auto': [201, copy]
+		});
+		const target = { kind: 'new', barcode: '5901234123457', candidate: movie } as const;
+		await saveScan(s.fetchFn, target, form(), 'k1', made).catch(() => null);
+		expect(made.titleUnanswered).toBe(true);
+		const got = await saveScan(s.fetchFn, target, form(), 'k1', made);
+		expect(got).toMatchObject({ titleID: 9, createdTitle: true, createdEdition: true });
+		expect(s.paths().filter((p) => p.startsWith('GET /api/titles?'))).toHaveLength(1);
+		expect(s.calls.filter((c) => c.url === '/api/titles').map((c) => c.body)).toMatchObject([
+			{ request_key: 'k1' },
+			{ request_key: 'k1' }
+		]);
+	});
+
+	it('reuses a title another add made with the same TMDB ID after a lost answer', async () => {
+		const made = newMade();
+		const s = server({
+			'GET /api/titles?tmdb_id=11202': [
+				[200, []],
+				[200, [{ ...title, id: 3 }]]
+			],
+			'POST /api/titles': [lost, [409, { error: 'dup', field: 'tmdb_id' }]],
+			'POST /api/editions': [201, { ...edition, title_id: 3 }],
+			'POST /api/copies?cover=auto': [201, copy]
+		});
+		const target = { kind: 'new', barcode: '5901234123457', candidate: movie } as const;
+		await saveScan(s.fetchFn, target, form(), 'k1', made).catch(() => null);
+		const got = await saveScan(s.fetchFn, target, form(), 'k1', made);
+		expect(got).toMatchObject({ titleID: 3, createdTitle: false, createdEdition: true });
+		expect(made).toMatchObject({ titles: [], editions: [21], titleUnanswered: false });
+	});
+
+	it('still counts a title it failed to remove', async () => {
+		const made = newMade();
+		const s = server({
+			'GET /api/titles?tmdb_id=11202': [200, []],
+			'POST /api/titles': [201, title],
+			'POST /api/editions': [422, { error: 'bad', field: 'year' }],
+			'DELETE /api/titles/9': [500, { error: 'boom' }]
+		});
+		await saveScan(
+			s.fetchFn,
+			{ kind: 'new', barcode: '5901234123457', candidate: movie },
+			form(),
+			'k1',
+			made
+		).catch(() => null);
+		expect(made.titles).toEqual([9]);
 	});
 
 	it('keeps a reused title when the edition races', async () => {
@@ -763,9 +883,6 @@ describe('saveScan', () => {
 	});
 
 	it('sends the same request key when a save is retried after a lost response', async () => {
-		const lost = (): [number, unknown] => {
-			throw new TypeError('network connection was lost');
-		};
 		const s = server({
 			'POST /api/titles': [
 				[201, title],

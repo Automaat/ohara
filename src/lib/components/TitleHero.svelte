@@ -162,8 +162,11 @@
 		margin-block-start: 5.5rem;
 	}
 
+	/* The cover keeps its place however tall the text beside it grows, so a cover carried in from
+	   the collection stays where it landed when the title's lines arrive. */
 	.art {
 		flex: none;
+		align-self: flex-start;
 		--collection-cover-width: 8.25rem;
 	}
 

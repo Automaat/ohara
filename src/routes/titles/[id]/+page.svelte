@@ -148,6 +148,7 @@
 				refreshError = `Nie udało się odświeżyć tytułu: ${errorMessage(err)}`;
 			} else {
 				failure = errorMessage(err);
+				preview = null;
 			}
 		} finally {
 			if (current === loads) busy = false;

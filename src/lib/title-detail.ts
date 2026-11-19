@@ -161,7 +161,7 @@ export function titleHero(t: TitleDetail): Hero {
 
 /**
  * The hero of a title still loading, as the collection showed it. A no-break space holds the
- * editions line's height until the title arrives, so the cover stays where it landed.
+ * editions line's height until the title arrives, so the lines beside the cover stay put.
  */
 export function previewHero(p: TitlePreview): Hero {
 	return {

@@ -14,7 +14,7 @@
 		SegmentedControl,
 		type DataTableColumn
 	} from '@smykla-skalski/sui';
-	import { onMount, tick, untrack } from 'svelte';
+	import { onDestroy, onMount, tick, untrack } from 'svelte';
 	import { afterNavigate, replaceState } from '$app/navigation';
 	import { page } from '$app/state';
 	import { errorMessage, request } from '#lib/api.js';
@@ -109,6 +109,8 @@
 	let loading = $state(true);
 	let sheetOpen = $state(false);
 	let seq = 0;
+	/** Counts the overviews shown, so an answer asked for before a newer one never replaces it. */
+	let overviews = 0;
 	let restoreScroll: [number, number] | undefined;
 	let pendingOverview: Promise<void> | undefined;
 	let pendingQueue: Promise<void> | undefined;
@@ -132,20 +134,29 @@
 
 	function showOverview(next: Overview) {
 		overview = next;
+		overviews += 1;
 		keepOverview(next);
 	}
 
 	/** Loads the whole collection's counts once, or again when `again` asks for fresh ones. */
 	function loadOverview(again = false) {
 		if (overview && !again) return;
+		const asked = overviews;
 		pendingOverview ??= request<CollectionView>(fetch, 'GET', '/api/collection')
 			.catch(() => null)
 			.then((full) => {
-				if (full && (again || !overview)) showOverview(overviewOf(full));
+				if (full && overviews === asked) showOverview(overviewOf(full));
 				pendingOverview = undefined;
 			});
 		return pendingOverview;
 	}
+
+	// A collection the reader has left never keeps what it loads late, which would replace what
+	// a newer visit to the collection kept.
+	onDestroy(() => {
+		seq += 1;
+		overviews += 1;
+	});
 
 	/** Counts the scan queue once per visit; a failed count is asked again on the next load. */
 	function loadQueue() {

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { Copy, TitleDetail } from './collection';
 import {
+	addCopyHref,
+	addCopyStart,
 	copyFacts,
 	copyLine,
 	editionArtwork,
@@ -10,6 +12,7 @@ import {
 	soleCopy,
 	titleArtwork,
 	valueCard,
+	wantsCopy,
 	type TitleEdition
 } from './title-detail';
 import type { CopyValue, Estimate } from './valuation';
@@ -117,6 +120,35 @@ describe('soleCopy', () => {
 		['two editions', title({ editions: [edition(), edition({ id: 4 })] })]
 	])('is null with %s', (_, t) => {
 		expect(soleCopy(t)).toBeNull();
+	});
+});
+
+describe('adding a copy from a link', () => {
+	it('links to the page with the add request', () => {
+		expect(addCopyHref('/titles/12')).toBe('/titles/12?add=copy');
+		const url = new URL(addCopyHref('/editions/4'), 'https://ohara.test');
+		expect(url.pathname).toBe('/editions/4');
+		expect(wantsCopy(url.searchParams)).toBe(true);
+	});
+
+	it.each(['', '?add=edition', '?add=', '?copy=add'])('ignores %j', (search) => {
+		expect(wantsCopy(new URLSearchParams(search))).toBe(false);
+	});
+
+	it('starts with a new edition when the title has none', () => {
+		expect(addCopyStart(title({ editions: [] }))).toEqual({ form: 'edition' });
+	});
+
+	it('opens the copy form of the only edition, with or without copies', () => {
+		expect(addCopyStart(title({ editions: [edition({ id: 5, copies: [] })] }))).toEqual({
+			form: 'copy',
+			editionID: 5
+		});
+		expect(addCopyStart(title())).toEqual({ form: 'copy', editionID: 3 });
+	});
+
+	it('leaves the choice to the reader among several editions', () => {
+		expect(addCopyStart(title({ editions: [edition(), edition({ id: 4 })] }))).toBeNull();
 	});
 });
 

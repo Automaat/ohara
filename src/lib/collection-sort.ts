@@ -1,4 +1,4 @@
-import { options, type CollectionItem } from './collection';
+import { options, type CollectionItem, type Title } from './collection';
 
 export const collectionSortLabels = {
 	newest: 'Ostatnio dodane',
@@ -42,4 +42,17 @@ export function sortCopies<T extends SortableCopy>(items: readonly T[], sort: Co
 				return comparePrice(a.price_cents, b.price_cents, sort === 'priceDesc') || tie;
 		}
 	});
+}
+
+/**
+ * Titles in a collection order: newest first by id, else A–Z. A title without copies has no price,
+ * so both price orders tie and fall back to A–Z.
+ */
+export function sortTitles<T extends Pick<Title, 'id' | 'name'>>(
+	items: readonly T[],
+	sort: CollectionSort
+): T[] {
+	return [...items].sort((a, b) =>
+		sort === 'newest' ? b.id - a.id : titleOrder.compare(a.name, b.name) || a.id - b.id
+	);
 }

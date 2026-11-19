@@ -11,7 +11,7 @@
 		Section,
 		Skeleton
 	} from '@smykla-skalski/sui';
-	import { goto } from '$app/navigation';
+	import { goto, replaceState } from '$app/navigation';
 	import { page } from '$app/state';
 	import { ApiError, errorMessage, request } from '#lib/api.js';
 	import {
@@ -36,6 +36,7 @@
 	import EditionFormFields from '#lib/components/EditionFormFields.svelte';
 	import EditionCoverForm from '#lib/components/EditionCoverForm.svelte';
 	import { purchaseDate } from '#lib/polish.js';
+	import { wantsCopy } from '#lib/title-detail.js';
 
 	const id = $derived(Number(page.params.id));
 
@@ -61,6 +62,7 @@
 		try {
 			detail = await request<EditionDetail>(fetch, 'GET', `/api/editions/${editionID}`);
 			failure = null;
+			if (wantsCopy(page.url.searchParams)) startCopyFromLink();
 		} catch (err) {
 			failure = errorMessage(err);
 		} finally {
@@ -71,6 +73,20 @@
 	$effect(() => {
 		void load(id);
 	});
+
+	function startCopy() {
+		copyForm = copyToForm(null);
+		copyIssue = null;
+		adding = true;
+	}
+
+	/** Opens the copy form a link asked for, once; the request leaves the address. */
+	function startCopyFromLink() {
+		const url = new URL(page.url.href);
+		url.searchParams.delete('add');
+		replaceState(url, page.state);
+		startCopy();
+	}
 
 	function issueFrom(err: unknown): FormIssue {
 		return { field: err instanceof ApiError ? (err.field ?? '') : '', message: errorMessage(err) };
@@ -187,12 +203,7 @@
 		>
 			{#snippet actions()}
 				{#if !adding}
-					<Button
-						tone="add"
-						onclick={() => ((copyForm = copyToForm(null)), (copyIssue = null), (adding = true))}
-					>
-						Dodaj egzemplarz
-					</Button>
+					<Button tone="add" onclick={startCopy}>Dodaj egzemplarz</Button>
 				{/if}
 			{/snippet}
 			{#if adding}

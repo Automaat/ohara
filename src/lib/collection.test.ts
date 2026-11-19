@@ -22,6 +22,9 @@ import {
 	titleToForm,
 	type Edition,
 	spentLabel,
+	uncopiedLine,
+	uncopiedTitles,
+	withoutCopies,
 	type Title
 } from './collection';
 
@@ -108,7 +111,8 @@ describe('collectionURL', () => {
 			{ kind: 'movie', format: 'uhd', status: 'owned', q: ' lem ' },
 			'/api/collection?kind=movie&format=uhd&status=owned&q=lem'
 		],
-		[{ kind: '', format: '', status: 'wishlist', q: '' }, '/api/collection?status=wishlist']
+		[{ kind: '', format: '', status: 'wishlist', q: '' }, '/api/collection?status=wishlist'],
+		[{ kind: 'book', format: '', status: 'none', q: 'lem' }, '/api/titles']
 	] as const)('%j → %s', (filter, url) => {
 		expect(collectionURL(filter)).toBe(url);
 	});
@@ -132,6 +136,18 @@ describe('collection search links', () => {
 			)
 		).toEqual({ kind: '', format: '', status: 'owned', q: 'Solaris' });
 	});
+
+	it('keeps titles without copies in the address, with no format', () => {
+		const filter = { kind: 'book', format: '', status: 'none', q: 'Lem' } as const;
+		expect(collectionSearch(filter)).toBe('?kind=book&status=none&q=Lem');
+		expect(readCollectionFilter(new URLSearchParams(collectionSearch(filter)))).toEqual(filter);
+		expect(readCollectionFilter(new URLSearchParams('status=none&format=dvd'))).toEqual({
+			kind: '',
+			format: '',
+			status: 'none',
+			q: ''
+		});
+	});
 });
 
 const title: Title = {
@@ -151,6 +167,53 @@ const title: Title = {
 	created_at: '',
 	updated_at: ''
 };
+
+describe('titles without copies', () => {
+	const catalog: Title[] = [
+		{ ...title, id: 1 },
+		{ ...title, id: 2, name: 'Lalka', authors: ['Bolesław Prus'], copy_count: 1 },
+		{
+			...title,
+			id: 3,
+			kind: 'movie',
+			name: 'Seksmisja',
+			polish_title: null,
+			original_title: 'Sexmission',
+			authors: [],
+			edition_count: 2
+		},
+		{ ...title, id: 4, kind: 'music', name: 'Kind of Blue', authors: ['Miles Davis'] }
+	];
+	const ids = (titles: Title[]) => titles.map((t) => t.id);
+
+	it('keeps only titles with no copy', () => {
+		expect(ids(withoutCopies(catalog))).toEqual([1, 3, 4]);
+	});
+
+	it.each([
+		[{ kind: '', q: '' }, [1, 3, 4]],
+		[{ kind: 'movie', q: '' }, [3]],
+		[{ kind: 'book', q: '' }, [1]],
+		[{ kind: '', q: '  LEM ' }, [1]],
+		[{ kind: '', q: 'sexmission' }, [3]],
+		[{ kind: '', q: 'solaris stanisław' }, [1]],
+		[{ kind: '', q: 'prus' }, []],
+		[{ kind: 'movie', q: 'miles' }, []]
+	] as const)('narrows to %j', (filter, want) => {
+		expect(ids(uncopiedTitles(catalog, filter))).toEqual(want);
+	});
+
+	it.each([
+		[
+			{ kind: 'book', authors: ['Stanisław Lem', 'Ktoś'], edition_count: 0 },
+			'Stanisław Lem, Ktoś · Brak wydań'
+		],
+		[{ kind: 'movie', authors: [], edition_count: 2 }, 'Film · 2 wydania'],
+		[{ kind: 'music', authors: ['Miles Davis'], edition_count: 1 }, 'Miles Davis · 1 wydanie']
+	] as const)('describes %j as %s', (t, want) => {
+		expect(uncopiedLine({ ...t, authors: [...t.authors] })).toBe(want);
+	});
+});
 
 describe('title form', () => {
 	it('round-trips a title', () => {

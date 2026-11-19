@@ -21,6 +21,28 @@ export function soleCopy(t: TitleDetail): { edition: TitleEdition; copy: Copy } 
 	return copy ? { edition, copy } : null;
 }
 
+/** A link to a title or edition page that opens the form for adding a copy once it loads. */
+export function addCopyHref(path: string): string {
+	return `${path}?add=copy`;
+}
+
+/** Whether a page was opened to add a copy, as `addCopyHref` asks. */
+export function wantsCopy(params: Pick<URLSearchParams, 'get'>): boolean {
+	return params.get('add') === 'copy';
+}
+
+/**
+ * Where adding a copy to a title starts: a new edition when it has none, the copy form of its only
+ * edition, or null when the reader picks one of several editions.
+ */
+export function addCopyStart(
+	t: Pick<TitleDetail, 'editions'>
+): { form: 'edition' } | { form: 'copy'; editionID: number } | null {
+	const [only] = t.editions;
+	if (!only) return { form: 'edition' };
+	return t.editions.length === 1 ? { form: 'copy', editionID: only.id } : null;
+}
+
 /** An edition's artwork: its own photo, then its catalog cover, then the title's. */
 export function editionArtwork(
 	e: { cover_override_url?: string; cover_url?: string },

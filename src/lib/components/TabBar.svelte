@@ -3,6 +3,7 @@
 	import { onMount } from 'svelte';
 	import { afterNavigate } from '$app/navigation';
 	import { page } from '$app/state';
+	import { primeBeep } from '#lib/beep.js';
 	import { dealBadge, refreshDealBadge } from '#lib/deal-badge.svelte.js';
 	import { underLimitLabel } from '#lib/deals.js';
 	import { currentTab, scanHref, tabs, type TabIcon } from '#lib/nav.js';
@@ -86,6 +87,7 @@
 		aria-label="Skanuj"
 		aria-current={current === scanHref ? 'page' : undefined}
 		data-sveltekit-preload-data="tap"
+		onclick={primeBeep}
 	>
 		{@render glyph('scan', 28, 2)}
 	</a>
@@ -118,6 +120,16 @@
 	   keeps its space, so the page under the dialog does not move. */
 	:global(:root:has(dialog:modal)) .tab-bar {
 		visibility: hidden;
+	}
+
+	/* Over the full-screen camera the bar is dark glass in both themes, as the scan mockup draws it. */
+	:global(:root:has(.ohara-full-camera)) .pill {
+		background: rgb(20 24 22 / 55%);
+		border-color: rgb(255 255 255 / 12%);
+	}
+
+	:global(:root:has(.ohara-full-camera)) .tab {
+		color: rgb(255 255 255 / 78%);
 	}
 
 	.pill {

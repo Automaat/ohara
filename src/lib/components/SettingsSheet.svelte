@@ -3,6 +3,7 @@
 	import { morePages, sections } from '#lib/nav.js';
 
 	let open = $state(false);
+	const id = $props.id();
 
 	const pages = morePages(sections).map((item) => ({ href: item.href, label: item.label }));
 </script>
@@ -14,7 +15,7 @@
 <Modal bind:open title="Ustawienia" closeLabel="Zamknij">
 	<div class="settings">
 		<ThemeSwitch
-			name="ohara-settings-theme"
+			name={`ohara-settings-theme-${id}`}
 			label="Motyw"
 			hideLabel={false}
 			lightLabel="Jasny"

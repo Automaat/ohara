@@ -109,6 +109,8 @@
 	let loading = $state(true);
 	let sheetOpen = $state(false);
 	let seq = 0;
+	/** The listing on screen, kept under the filter the reader leaves the collection with. */
+	let shown: Listing | null = null;
 	/** Counts the overviews shown, so an answer asked for before a newer one never replaces it. */
 	let overviews = 0;
 	let restoreScroll: [number, number] | undefined;
@@ -151,11 +153,15 @@
 		return pendingOverview;
 	}
 
-	// A collection the reader has left never keeps what it loads late, which would replace what
-	// a newer visit to the collection kept.
+	// Going back draws the collection as the reader left it, rows still waiting for a new
+	// filter's answer included. Loads it left pending never keep what they bring, which would
+	// replace what a newer visit kept.
 	onDestroy(() => {
 		seq += 1;
 		overviews += 1;
+		if (shown && 'titles' in shown === listsTitles) {
+			keepListing({ ...shown, url: collectionURL(filter), pending: loading });
+		}
 	});
 
 	/** Counts the scan queue once per visit; a failed count is asked again on the next load. */
@@ -205,8 +211,11 @@
 			uncopied = listing.titles;
 		} else {
 			view = listing.view;
-			if (listing.url === '/api/collection') showOverview(overviewOf(listing.view));
+			if (listing.url === '/api/collection' && !listing.pending) {
+				showOverview(overviewOf(listing.view));
+			}
 		}
+		shown = listing;
 		keepListing(listing);
 	}
 
@@ -234,7 +243,7 @@
 		show(kept);
 		overview ??= keptOverview();
 		failure = null;
-		loading = false;
+		loading = kept.pending ?? false;
 		// SvelteKit hands the page its snapshot only after the navigation's callbacks have run.
 		await new Promise((resolve) => setTimeout(resolve));
 		await restore(mine);

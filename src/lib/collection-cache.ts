@@ -9,8 +9,13 @@ import type { CollectionItem, CollectionView, Kind, Title, Totals } from '#lib/c
 /** The whole collection's counts, whatever the filter. */
 export type Overview = { totals: Totals; kinds: Record<Kind, number> };
 
-/** One answer the collection showed: the copies or the titles without copies the URL lists. */
-export type Listing = { url: string; view: CollectionView } | { url: string; titles: Title[] };
+/**
+ * What the collection showed for the filter of `url`: the copies or the titles without copies.
+ * `pending` marks rows the reader left on screen while the answer for `url` was still loading.
+ */
+export type Listing = ({ url: string; view: CollectionView } | { url: string; titles: Title[] }) & {
+	pending?: boolean;
+};
 
 /** What the collection shows of a title: enough for its hero before the title loads. */
 export type TitlePreview = Pick<

@@ -80,6 +80,13 @@ describe('kept listing', () => {
 		expect(cache.keptListing('/api/collection')).toBeNull();
 	});
 
+	it('keeps rows left on screen under the filter they were waiting for', () => {
+		const left = { url: '/api/collection?kind=movie', view: view([item()]), pending: true };
+		cache.keepListing(left);
+		expect(cache.keptListing('/api/collection?kind=movie')).toEqual(left);
+		expect(cache.titlePreview(7, '100')?.name).toBe('Interstellar');
+	});
+
 	it('keeps only the latest listing', () => {
 		cache.keepListing({ url: '/api/collection', view: view([item()]) });
 		const titles = { url: '/api/titles', titles: [title()] };

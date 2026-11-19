@@ -47,8 +47,13 @@
 
 	/** The phone layout, where the camera fills the screen and manual entry opens over it. */
 	const phone = new MediaQuery(phoneLayout);
-	/** A screen too short for the tray above the tab bar, which then stands beside it. */
+	/** A screen too short for the add toasts to grow taller than one line of each. */
 	const short = new MediaQuery(shortScreen);
+	/**
+	 * A short screen wide enough for the tray beside the tab bar, which leaves the band its height;
+	 * a narrower one keeps the tray above the bar.
+	 */
+	const beside = new MediaQuery(`${shortScreen} and (min-width: 600px)`);
 	/** How long a code must stay out of view before the camera takes it again. */
 	const repeatWindow = 3000;
 	/** How much of the scan band stays in view above the sheet. */
@@ -430,7 +435,7 @@
 </div>
 
 {#if phone.current && trayShown}
-	<div class={['tray-dock', { beside: short.current }]} data-sui-theme="dark">
+	<div class={['tray-dock', { beside: beside.current }]} data-sui-theme="dark">
 		{@render tray(true)}
 	</div>
 {/if}
@@ -481,7 +486,7 @@
 <div
 	class={[
 		'scan-toasts',
-		{ 'over-tray': phone.current && trayShown && !short.current, short: short.current }
+		{ 'over-tray': phone.current && trayShown && !beside.current, short: short.current }
 	]}
 	data-sui-theme={phone.current ? 'dark' : undefined}
 >
@@ -595,7 +600,8 @@
 	}
 
 	/* On a short screen, as a phone held sideways, the tray stands beside a narrower tab bar, so
-	   the scan band keeps the height between the camera's bar and the tab bar. */
+	   the scan band keeps the height between the camera's bar and the tab bar. Its two lines stay
+	   one line each, cut short when a large sum does not fit. */
 	:global(:root:has(.tray-dock.beside)) {
 		--tray-beside-width: min(20rem, 40vw);
 	}
@@ -606,6 +612,13 @@
 		inline-size: var(--tray-beside-width);
 		inset-block-end: max(env(safe-area-inset-bottom, 0px), 0.75rem);
 		inset-inline-start: auto;
+	}
+
+	.tray-dock.beside :global(:is(.count, .spent)) {
+		min-inline-size: 0;
+		overflow-x: clip;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 
 	:global(:root:has(.tray-dock.beside) .ohara-phone .tab-bar) {
@@ -679,6 +692,19 @@
 		inline-size: auto;
 		max-inline-size: 24rem;
 		min-inline-size: 0;
+	}
+
+	/* A narrow toast keeps one line of title and one of description, cut short, so it never grows
+	   up over the band; its live region still reads the whole text. */
+	:global(.ohara-phone) .scan-toasts.short :global(.sui-toast-body) {
+		flex-wrap: nowrap;
+	}
+
+	:global(.ohara-phone) .scan-toasts.short :global(:is(.sui-toast-title, .sui-toast-description)) {
+		min-inline-size: 0;
+		overflow-x: clip;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 
 	:global(.ohara-phone) .scan-toasts.over-tray :global(.sui-toaster) {

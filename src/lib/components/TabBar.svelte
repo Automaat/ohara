@@ -98,22 +98,23 @@
 		display: none;
 	}
 
-	/* The bar takes the place of SUI's phone bar, so it answers to the same container query on the
-	   shell's width that shows the shell's menu button. */
-	@container sui-shell (max-width: 47.9375rem) {
-		.tab-bar {
-			--tab-bar-gap: max(env(safe-area-inset-bottom, 0px), 0.75rem);
+	/* The bar takes the place of SUI's phone bar and side navigation wherever the root layout marks
+	   the shell for the phone layout. Held sideways, a phone's notch and rounded corners sit at
+	   the bar's ends. */
+	:global(.ohara-phone) .tab-bar {
+		--tab-bar-gap: max(env(safe-area-inset-bottom, 0px), 0.75rem);
 
-			align-items: center;
-			box-sizing: border-box;
-			display: flex;
-			gap: 0.625rem;
-			inset-block-end: var(--tab-bar-gap);
-			margin: auto 1rem var(--tab-bar-gap);
-			pointer-events: none;
-			position: sticky;
-			z-index: var(--sui-layer-top-bar);
-		}
+		align-items: center;
+		box-sizing: border-box;
+		display: flex;
+		gap: 0.625rem;
+		inset-block-end: var(--tab-bar-gap);
+		margin-block: auto var(--tab-bar-gap);
+		margin-inline: max(env(safe-area-inset-left, 0px), 1rem)
+			max(env(safe-area-inset-right, 0px), 1rem);
+		pointer-events: none;
+		position: sticky;
+		z-index: var(--sui-layer-top-bar);
 	}
 
 	/* A dialog or sheet covers the page, and the bar would show through its scrim. Hiding it
@@ -250,7 +251,7 @@
 	   with the content instead (WCAG 1.4.10), as SUI's own bars do. The bar and its gap are about
 	   4.75rem, a quarter of 19rem. */
 	@media (max-height: 19rem) {
-		.tab-bar {
+		:global(.ohara-phone) .tab-bar {
 			position: relative;
 			inset-block-end: auto;
 		}

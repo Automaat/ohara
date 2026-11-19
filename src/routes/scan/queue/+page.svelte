@@ -170,9 +170,7 @@
 	}
 
 	/* On a phone the undo toast stands above the floating tab bar instead of covering it. */
-	@media (max-width: 47.9375rem) {
-		.toasts :global(.sui-toaster) {
-			inset-block-end: calc(4rem + max(env(safe-area-inset-bottom, 0px), 0.75rem));
-		}
+	:global(.ohara-phone) .toasts :global(.sui-toaster) {
+		inset-block-end: calc(4rem + max(env(safe-area-inset-bottom, 0px), 0.75rem));
 	}
 </style>

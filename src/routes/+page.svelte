@@ -94,8 +94,15 @@
 	let pendingOverview: Promise<void> | undefined;
 	let pendingQueue: Promise<void> | undefined;
 
+	let results = $state<HTMLElement>();
+
+	/** Where the copies start on the page, so a position kept from them survives what loads above. */
+	function resultsTop(): number {
+		return results ? results.getBoundingClientRect().top + window.scrollY : 0;
+	}
+
 	export const snapshot: Snapshot<[number, number]> = {
-		capture: () => [window.scrollX, window.scrollY],
+		capture: () => [window.scrollX, window.scrollY - resultsTop()],
 		restore: (position) => (restoreScroll = position)
 	};
 
@@ -114,16 +121,27 @@
 		return pendingOverview;
 	}
 
-	/** Counts the scan queue once per visit; a failed count hides the notice. */
+	/** Counts the scan queue once per visit; a failed count is asked again on the next load. */
 	function loadQueue() {
 		pendingQueue ??= request<QueueEntry[]>(fetch, 'GET', '/api/scan-queue')
-			.then((entries) => {
-				queued = entries.length;
-			})
+			.then((entries) => showQueue(entries.length))
 			.catch(() => {
-				queued = 0;
+				pendingQueue = undefined;
 			});
 		return pendingQueue;
+	}
+
+	/**
+	 * Shows the queue count. A notice that appears above a scrolled view pushes the view down by
+	 * its height, so the copies on screen stay where the reader left them.
+	 */
+	async function showQueue(count: number) {
+		const scrolled = window.scrollY;
+		const before = document.documentElement.scrollHeight;
+		queued = count;
+		await tick();
+		const grown = document.documentElement.scrollHeight - before;
+		if (scrolled > 0 && grown !== 0) window.scrollTo(window.scrollX, scrolled + grown);
 	}
 
 	async function load() {
@@ -131,7 +149,7 @@
 		const url = collectionURL(filter);
 		loading = true;
 		const overviewReady = url === '/api/collection' ? undefined : loadOverview();
-		const queueReady = loadQueue();
+		void loadQueue();
 		try {
 			const got = await request<CollectionView>(fetch, 'GET', url);
 			if (mine !== seq) return;
@@ -144,11 +162,13 @@
 			if (mine === seq) loading = false;
 		}
 		if (mine === seq && !failure && restoreScroll) {
-			// The header's counts and the queue notice change the height above the copies.
-			await Promise.all([overviewReady, queueReady]);
+			// The position is kept from the copies' top, so the header's counts and a queue notice
+			// that arrives later cannot move the restored row.
+			await overviewReady;
 			await tick();
 			if (mine === seq && restoreScroll) {
-				window.scrollTo(...restoreScroll);
+				const [x, fromResults] = restoreScroll;
+				window.scrollTo(x, resultsTop() + fromResults);
 				restoreScroll = undefined;
 			}
 		}
@@ -270,17 +290,18 @@
 	</PageHeader>
 
 	<header class="phone-head phone-only">
-		<div>
-			<h1>Kolekcja</h1>
-			<p class="summary">{summary}</p>
-		</div>
+		<h1>Kolekcja</h1>
 		{#if !emptyShelf}
-			<Button href="/titles/new">Dodaj tytuł</Button>
+			<div class="phone-add">
+				<Button href="/titles/new">Dodaj tytuł</Button>
+			</div>
 		{/if}
+		<p class="summary">{summary}</p>
 	</header>
 
 	{#if emptyShelf}
 		<div class="content">
+			{@render queueNotice()}
 			{@render empty()}
 		</div>
 	{:else}
@@ -379,83 +400,89 @@
 			</div>
 		{/if}
 
-		{#if queued > 0}
-			<a class="queue-notice" href="/scan/queue">
-				<span class="queue-mark" aria-hidden="true">
-					<svg viewBox="0 0 24 24">
-						<path d="M4 6v12M7 6v12M10 6v12M14 6v12M16.5 6v12M20 6v12" />
-					</svg>
-				</span>
-				<span class="queue-text">{queuedCodes(queued)}</span>
-				<span class="queue-go" aria-hidden="true"><Icon name="chevron-right" /></span>
-			</a>
-		{/if}
+		{@render queueNotice()}
 
 		<p class="metadata result-count" role="status">
 			{#if view && !loading && !failure}{resultCount(rows.length)}{/if}
 		</p>
 
-		{#if layout === 'shelf'}
-			<CollectionShelf {rows} {loading} {failure} onretry={load} {empty} />
-		{:else}
-			<div class="phone-only">
+		<div class="results" bind:this={results}>
+			{#if layout === 'shelf'}
 				<CollectionShelf {rows} {loading} {failure} onretry={load} {empty} />
-			</div>
-			<DataTable
-				class="desktop-only"
-				aria-label="Egzemplarze w kolekcji"
-				{columns}
-				{rows}
-				rowHeader
-				rowKey={(r) => r.copy_id}
-				loading={loading && !view}
-				refreshing={loading && !!view}
-				error={failure}
-				onretry={load}
-				retryLabel="Spróbuj ponownie"
-				loadingLabel="Wczytywanie kolekcji…"
-				refreshingLabel="Odświeżanie…"
-				emptyLabel="Brak pozycji"
-				scrollHint="Przewiń tabelę w bok"
-				{empty}
-			>
-				{#snippet cell(row, column)}
-					{#if column.key === 'name'}
-						<div class="title-details">
-							<Link href={`/titles/${row.title_id}`}>{displayName(row)}</Link>
-							<span class="metadata">
-								{[row.authors?.join(', '), kindLabels[row.kind]].filter(Boolean).join(' · ')}
-								·
-								<Link href={`/editions/${row.edition_id}`}>
-									{editionSummary({ ...row, barcode: null })}
-								</Link>
-							</span>
-						</div>
-					{:else if column.key === 'status'}
-						<Link href={`/copies/${row.copy_id}`}>
-							<Pill tone={row.status === 'owned' ? 'success' : 'neutral'}>
-								{statusLabels[row.status]}
-							</Pill>
-						</Link>
-					{:else if column.key === 'price_cents'}
-						{#if row.status === 'owned'}
-							<span class="price">
-								{row.price_cents === null ? 'Nieznana' : formatPLN(row.price_cents)}
-							</span>
+			{:else}
+				<div class="phone-only">
+					<CollectionShelf {rows} {loading} {failure} onretry={load} {empty} />
+				</div>
+				<DataTable
+					class="desktop-only"
+					aria-label="Egzemplarze w kolekcji"
+					{columns}
+					{rows}
+					rowHeader
+					rowKey={(r) => r.copy_id}
+					loading={loading && !view}
+					refreshing={loading && !!view}
+					error={failure}
+					onretry={load}
+					retryLabel="Spróbuj ponownie"
+					loadingLabel="Wczytywanie kolekcji…"
+					refreshingLabel="Odświeżanie…"
+					emptyLabel="Brak pozycji"
+					scrollHint="Przewiń tabelę w bok"
+					{empty}
+				>
+					{#snippet cell(row, column)}
+						{#if column.key === 'name'}
+							<div class="title-details">
+								<Link href={`/titles/${row.title_id}`}>{displayName(row)}</Link>
+								<span class="metadata">
+									{[row.authors?.join(', '), kindLabels[row.kind]].filter(Boolean).join(' · ')}
+									·
+									<Link href={`/editions/${row.edition_id}`}>
+										{editionSummary({ ...row, barcode: null })}
+									</Link>
+								</span>
+							</div>
+						{:else if column.key === 'status'}
+							<Link href={`/copies/${row.copy_id}`}>
+								<Pill tone={row.status === 'owned' ? 'success' : 'neutral'}>
+									{statusLabels[row.status]}
+								</Pill>
+							</Link>
+						{:else if column.key === 'price_cents'}
+							{#if row.status === 'owned'}
+								<span class="price">
+									{row.price_cents === null ? 'Nieznana' : formatPLN(row.price_cents)}
+								</span>
+							{/if}
+						{:else if column.key === 'shop'}
+							{row.shop}
+						{:else if column.key === 'purchased_on'}
+							{#if row.purchased_on}
+								<time class="metadata" datetime={row.purchased_on}>
+									{purchaseDate(row.purchased_on)}
+								</time>
+							{/if}
 						{/if}
-					{:else if column.key === 'shop'}
-						{row.shop}
-					{:else if column.key === 'purchased_on'}
-						{#if row.purchased_on}
-							<time class="metadata" datetime={row.purchased_on}>
-								{purchaseDate(row.purchased_on)}
-							</time>
-						{/if}
-					{/if}
-				{/snippet}
-			</DataTable>
-		{/if}
+					{/snippet}
+				</DataTable>
+			{/if}
+		</div>
 	</div>
+{/snippet}
+
+{#snippet queueNotice()}
+	{#if queued > 0}
+		<a class="queue-notice" href="/scan/queue">
+			<span class="queue-mark" aria-hidden="true">
+				<svg viewBox="0 0 24 24">
+					<path d="M4 6v12M7 6v12M10 6v12M14 6v12M16.5 6v12M20 6v12" />
+				</svg>
+			</span>
+			<span class="queue-text">{queuedCodes(queued)}</span>
+			<span class="queue-go" aria-hidden="true"><Icon name="chevron-right" /></span>
+		</a>
+	{/if}
 {/snippet}
 
 {#snippet empty()}
@@ -513,8 +540,14 @@
 		min-width: 0;
 	}
 
-	.search :global(.search-field input) {
-		padding-inline-end: 3rem;
+	/* The sheet's button takes the field's end, so the clear button and the typed text stop
+	   short of it, touch targets included. */
+	.search :global(.sui-search-field-box > .search-input) {
+		padding-inline-end: 5.5rem;
+	}
+
+	.search :global(.sui-search-field-box .sui-search-field-clear) {
+		margin-inline-end: 3.25rem;
 	}
 
 	.sheet-button {
@@ -694,15 +727,32 @@
 		margin: 0;
 	}
 
+	.results {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr);
+		gap: inherit;
+	}
+
+	/* The queue notice keeps the view in place itself, so the browser's own scroll anchoring
+	   would move it twice. */
+	.collection-page {
+		overflow-anchor: none;
+	}
+
 	.collection-page :global(.phone-only) {
 		display: none;
 	}
 
 	.phone-head {
-		align-items: flex-end;
-		justify-content: space-between;
-		gap: var(--sui-space-3);
+		grid-template-columns: minmax(0, 1fr) auto;
+		align-items: center;
+		column-gap: var(--sui-space-3);
 		padding: var(--sui-space-3) var(--sui-space-4) 0;
+	}
+
+	.phone-add {
+		grid-column: 2;
+		grid-row: 1;
 	}
 
 	.phone-head h1 {
@@ -716,6 +766,7 @@
 	}
 
 	.summary {
+		grid-column: 1 / -1;
 		margin: 0.25rem 0 0;
 		color: var(--sui-text-secondary);
 		font-size: 0.875rem;
@@ -754,7 +805,7 @@
 		}
 
 		.collection-page .phone-head {
-			display: flex;
+			display: grid;
 		}
 
 		.search {

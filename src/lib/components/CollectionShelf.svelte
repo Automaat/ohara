@@ -1,7 +1,12 @@
 <script lang="ts">
 	import { ErrorState, Link } from '@smykla-skalski/sui';
 	import type { Snippet } from 'svelte';
-	import { displayName, editionSummary, type CollectionItem } from '#lib/collection.js';
+	import {
+		displayName,
+		editionSummary,
+		statusLabels,
+		type CollectionItem
+	} from '#lib/collection.js';
 	import CollectionCover from './CollectionCover.svelte';
 
 	let {
@@ -42,7 +47,8 @@
 				</div>
 				<Link href={`/titles/${row.title_id}`}>{displayName(row)}</Link>
 				<span class="meta">
-					{[row.authors?.join(', '), editionSummary({ ...row, barcode: null })]
+					{#if row.status === 'wishlist'}<span class="wish">{statusLabels.wishlist}</span> ·
+					{/if}{[row.authors?.join(', '), editionSummary({ ...row, barcode: null })]
 						.filter(Boolean)
 						.join(' · ')}
 				</span>
@@ -88,6 +94,11 @@
 	.meta {
 		color: var(--sui-text-secondary);
 		font-size: var(--sui-font-size-meta);
+	}
+
+	.wish {
+		color: var(--sui-brand-action-text);
+		font-weight: var(--sui-weight-semibold);
 	}
 
 	/* Phones: three covers a row, a title of at most two lines and one line of details. */

@@ -54,11 +54,12 @@
 	 * a narrower one keeps the tray above the bar.
 	 */
 	const beside = new MediaQuery(`${shortScreen} and (min-width: 600px)`);
+	const sideways = new MediaQuery('(orientation: landscape)');
 	/**
-	 * A short phone screen too narrow for the tray beside the tab bar, where the tray and one toast
-	 * at a time share the room between the band and the tab bar.
+	 * A phone held sideways on a short screen too narrow for the tray beside the tab bar, where the
+	 * tray and one toast at a time share the room between the band and the tab bar.
 	 */
-	const cramped = $derived(phone.current && short.current && !beside.current);
+	const cramped = $derived(phone.current && short.current && !beside.current && sideways.current);
 	/** How long a code must stay out of view before the camera takes it again. */
 	const repeatWindow = 3000;
 	/** How much of the scan band stays in view above the sheet. */
@@ -539,7 +540,11 @@
 <div
 	class={[
 		'scan-toasts',
-		{ 'over-tray': phone.current && trayShown && !short.current, short: short.current, cramped }
+		{
+			'over-tray': phone.current && trayShown && !beside.current && !cramped,
+			short: short.current,
+			cramped
+		}
 	]}
 	style:--band-foot={bandFoot === null ? undefined : `${bandFoot}px`}
 	data-sui-theme={phone.current ? 'dark' : undefined}

@@ -257,13 +257,32 @@ describe('AddToasts where one toast fits', () => {
 		expect(undo).not.toHaveBeenCalled();
 	});
 
-	it('leaves out of the list an add whose toast the reader closed', () => {
+	it('lists an add whose toast the reader closed, for the rest of its window', async () => {
 		const h = single();
+		const undo = vi.fn(async () => {});
+		const toasts = new AddToasts(h, undo);
+		toasts.show(dune);
+		vi.advanceTimersByTime(1000);
+		toasts.show(solaris);
+		h.dismiss(2, 'dismissed');
+		expect(h.shown.size).toBe(0);
+		expect([...toasts.listed]).toEqual([1, 2]);
+		vi.advanceTimersByTime(addToastMs - 1000);
+		expect([...toasts.listed]).toEqual([2]);
+		toasts.undo(solaris);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(undo).toHaveBeenCalledWith(solaris);
+		vi.advanceTimersByTime(1000);
+		expect([...toasts.listed]).toEqual([]);
+	});
+
+	it('ends the undo of a toast the reader closed where more toasts fit', () => {
+		const h = host();
 		const toasts = new AddToasts(h, async () => {});
 		toasts.show(dune);
 		h.dismiss(1, 'dismissed');
-		toasts.show(solaris);
 		expect([...toasts.listed]).toEqual([]);
+		expect(vi.getTimerCount()).toBe(0);
 	});
 
 	it('puts a failed undo back in line behind the newest add toast', async () => {

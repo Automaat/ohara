@@ -41,8 +41,8 @@ type Offer = {
  * "Cofnij" undoes the add and says so; a failed undo stays as a failure with "Spróbuj ponownie".
  *
  * Where only one toast fits, the newest add's toast takes the place: an add whose toast gave way
- * stays in `listed`, undoable from the visit's list, for the rest of its window, and any other
- * toast waits its turn until the place is free.
+ * or was closed stays in `listed`, undoable from the visit's list, for the rest of its window,
+ * and any other toast waits its turn until the place is free.
  */
 export class AddToasts {
 	readonly #host: ToastHost;
@@ -131,7 +131,12 @@ export class AddToasts {
 			ondismiss: (reason) => {
 				this.#up.delete(id);
 				options.ondismiss?.(reason);
-				if (add && this.#offers.get(add.id)?.toast === id) this.#end(add);
+				const offer = add && this.#offers.get(add.id);
+				if (add && offer && offer.toast === id) {
+					// Closed where one toast fits, its add stays undoable from the list.
+					if (reason === 'dismissed' && this.#host.single()) this.#list(add, offer);
+					else this.#end(add);
+				}
 				if (!this.#yielding) this.#next();
 			}
 		});
@@ -159,8 +164,7 @@ export class AddToasts {
 			const pending = this.#up.get(id);
 			const offer = pending?.add && this.#offers.get(pending.add.id);
 			if (pending?.add && offer && offer.toast === id) {
-				offer.toast = null;
-				this.#listed.add(pending.add.id);
+				this.#list(pending.add, offer);
 			} else if (pending) {
 				back.push(pending);
 			}
@@ -168,6 +172,12 @@ export class AddToasts {
 		}
 		this.#yielding = false;
 		this.#waiting = [...back, ...this.#waiting];
+	}
+
+	/** Moves an add from its toast to the list, with what is left of its window. */
+	#list(add: SessionAdd, offer: Offer): void {
+		offer.toast = null;
+		this.#listed.add(add.id);
 	}
 
 	/** Starts an add's window on its toast; once the toast gives way, the list offers it. */

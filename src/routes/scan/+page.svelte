@@ -34,7 +34,7 @@
 	import { queueDeletesSettled } from '#lib/queue-deletes.js';
 	import { outcomeLabels, outcomeTones, recentScans } from '#lib/recent.svelte.js';
 	import { ScanFlow, type Added } from '#lib/scan-flow.svelte.js';
-	import { session, sessionSpent, undoAdd, type SessionAdd } from '#lib/session.svelte.js';
+	import { addLine, session, sessionSpent, undoAdd, type SessionAdd } from '#lib/session.svelte.js';
 	import {
 		RepeatGuard,
 		barcodeInputError,
@@ -54,6 +54,11 @@
 	 * a narrower one keeps the tray above the bar.
 	 */
 	const beside = new MediaQuery(`${shortScreen} and (min-width: 600px)`);
+	/**
+	 * A short phone screen too narrow for the tray beside the tab bar, where the tray and one toast
+	 * at a time share the room between the band and the tab bar.
+	 */
+	const cramped = $derived(phone.current && short.current && !beside.current);
 	/** How long a code must stay out of view before the camera takes it again. */
 	const repeatWindow = 3000;
 	/** How much of the scan band stays in view above the sheet. */
@@ -95,7 +100,9 @@
 			holding: (id) => {
 				const el = document.querySelector(`[data-toast="${id}"]`);
 				return el !== null && (el.matches(':hover') || el.contains(document.activeElement));
-			}
+			},
+			single: () => cramped,
+			listing: () => listOpen
 		},
 		(add) => undoAdd(fetch, add)
 	);
@@ -275,6 +282,11 @@
 		if (flow.phase.kind === 'queued') untrack(() => void countQueue());
 	});
 
+	/* Turning the phone onto a screen with room for one toast leaves only the newest up. */
+	$effect(() => {
+		if (cramped) untrack(() => addToasts.collapse());
+	});
+
 	$effect(() => {
 		const vv = window.visualViewport;
 		if (!sheet || !phone.current || !vv) return;
@@ -438,7 +450,7 @@
 </div>
 
 {#if phone.current && trayShown}
-	<div class={['tray-dock', { beside: beside.current }]} data-sui-theme="dark">
+	<div class={['tray-dock', { beside: beside.current, cramped }]} data-sui-theme="dark">
 		{@render tray(true)}
 	</div>
 {/if}
@@ -476,6 +488,11 @@
 							{:else}
 								<Pill tone="neutral">Lista życzeń</Pill>
 							{/if}
+							{#if addToasts.listed.has(add.id)}
+								<Button aria-label={`Cofnij: ${addLine(add)}`} onclick={() => addToasts.undo(add)}>
+									Cofnij
+								</Button>
+							{/if}
 						{/snippet}
 					</ObjectRow>
 				{/each}
@@ -489,7 +506,7 @@
 <div
 	class={[
 		'scan-toasts',
-		{ 'over-tray': phone.current && trayShown && !beside.current, short: short.current }
+		{ 'over-tray': phone.current && trayShown && !short.current, short: short.current, cramped }
 	]}
 	data-sui-theme={phone.current ? 'dark' : undefined}
 >
@@ -630,7 +647,15 @@
 		);
 	}
 
-	:global(:root:has(dialog:modal)) .tray-dock {
+	/* Narrower, the tray and the toasts take turns in one slot between the band and the tab bar,
+	   low enough to leave the band clear: while a toast is up, the tray gives it its place. */
+	.tray-dock.cramped,
+	:global(.ohara-phone) .scan-toasts.cramped {
+		--session-tray-height: 3.5rem;
+	}
+
+	:global(:root:has(dialog:modal)) .tray-dock,
+	:global(:root:has(.scan-toasts.cramped .sui-toast)) .tray-dock {
 		visibility: hidden;
 	}
 
@@ -708,6 +733,44 @@
 		overflow-x: clip;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+	}
+
+	/* In the tray's slot a toast is one line as tall as the tray: its copy cut short, then its
+	   action and Dismiss. Every toast takes that one place, so one leaving fades under the next
+	   rather than pushing it up over the band. */
+	:global(.ohara-phone) .scan-toasts.cramped :global(.sui-toaster:popover-open) {
+		display: grid;
+	}
+
+	:global(.ohara-phone) .scan-toasts.cramped :global(.sui-toast) {
+		align-items: center;
+		block-size: var(--session-tray-height);
+		grid-area: 1 / 1;
+		max-inline-size: none;
+		padding-block: 0;
+	}
+
+	:global(.ohara-phone) .scan-toasts.cramped :global(.sui-toast-body) {
+		align-items: center;
+	}
+
+	:global(.ohara-phone) .scan-toasts.cramped :global(.sui-toast-main) {
+		align-items: center;
+		grid-template-columns: minmax(0, 1fr) auto;
+	}
+
+	:global(.ohara-phone) .scan-toasts.cramped :global(.sui-toast-copy) {
+		align-items: center;
+		display: flex;
+		gap: 0.5rem;
+	}
+
+	:global(.ohara-phone) .scan-toasts.cramped :global(.sui-toast-description) {
+		flex: 1 1 0;
+	}
+
+	:global(.ohara-phone) .scan-toasts.cramped :global(.sui-toast-dismiss) {
+		margin-block-start: 0;
 	}
 
 	:global(.ohara-phone) .scan-toasts.over-tray :global(.sui-toaster) {

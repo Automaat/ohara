@@ -9,6 +9,7 @@ function host() {
 	const shown = new Map<number, ToastOptions>();
 	const ended: [string, ToastEnd][] = [];
 	const held = new Set<number>();
+	const screen = { single: false, listing: false };
 	let last = 0;
 	const dismiss = (id: number, reason: ToastEnd) => {
 		const t = shown.get(id);
@@ -21,12 +22,15 @@ function host() {
 		shown,
 		ended,
 		held,
+		screen,
 		toast(options: ToastOptions) {
 			shown.set(++last, options);
 			return last;
 		},
 		dismiss,
 		holding: (id: number) => held.has(id),
+		single: () => screen.single,
+		listing: () => screen.listing,
 		/** Runs a toast's action the way the Toaster does: close it, then act. */
 		act(id: number) {
 			const t = shown.get(id);
@@ -34,6 +38,7 @@ function host() {
 			t?.action?.run();
 		},
 		titles: () => [...shown.values()].map((t) => t.title),
+		descriptions: () => [...shown.values()].map((t) => t.description),
 		idOf: (title: string) => [...shown].find(([, t]) => t.title === title)?.[0] ?? -1
 	};
 }
@@ -164,5 +169,124 @@ describe('AddToasts', () => {
 		await vi.runAllTimersAsync();
 		toasts.show(dune);
 		expect(h.shown.size).toBe(0);
+	});
+});
+
+describe('AddToasts where one toast fits', () => {
+	const solaris: SessionAdd = { ...dune, id: 2, copyID: 41, name: 'Solaris', medium: '' };
+
+	function single() {
+		const h = host();
+		h.screen.single = true;
+		return h;
+	}
+
+	it('shows only the newest add and lists the one before for the rest of its window', () => {
+		const h = single();
+		const toasts = new AddToasts(h, async () => {});
+		toasts.show(dune);
+		vi.advanceTimersByTime(1000);
+		toasts.show(solaris);
+		expect(h.descriptions()).toEqual(['Solaris']);
+		expect(h.ended).toEqual([['Dodano do kolekcji', 'withdrawn']]);
+		expect([...toasts.listed]).toEqual([1]);
+		vi.advanceTimersByTime(addToastMs - 1000 - 250);
+		expect([...toasts.listed]).toEqual([1]);
+		vi.advanceTimersByTime(250);
+		expect([...toasts.listed]).toEqual([]);
+		expect(h.descriptions()).toEqual(['Solaris']);
+		vi.advanceTimersByTime(1000);
+		expect(h.shown.size).toBe(0);
+	});
+
+	it('undoes a listed add from the list and says so in the one toast', async () => {
+		const h = single();
+		const undo = vi.fn(async () => {});
+		const toasts = new AddToasts(h, undo);
+		toasts.show(dune);
+		toasts.show(solaris);
+		toasts.undo(dune);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(undo).toHaveBeenCalledWith(dune);
+		expect(h.titles()).toEqual(['Cofnięto dodanie']);
+		expect([...toasts.listed]).toEqual([2]);
+	});
+
+	it('keeps a listed add while the list is open, then restarts its window in full', () => {
+		const h = single();
+		const toasts = new AddToasts(h, async () => {});
+		toasts.show(dune);
+		toasts.show(solaris);
+		h.screen.listing = true;
+		vi.advanceTimersByTime(20_000);
+		expect([...toasts.listed]).toEqual([1]);
+		h.screen.listing = false;
+		vi.advanceTimersByTime(addToastMs - 250);
+		expect([...toasts.listed]).toEqual([1]);
+		vi.advanceTimersByTime(250);
+		expect([...toasts.listed]).toEqual([]);
+	});
+
+	it('takes no Cofnij from the list for an add that is not listed', async () => {
+		const h = single();
+		const undo = vi.fn(async () => {});
+		const toasts = new AddToasts(h, undo);
+		toasts.show(dune);
+		toasts.undo(dune);
+		toasts.show(solaris);
+		vi.advanceTimersByTime(addToastMs);
+		toasts.undo(dune);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(undo).not.toHaveBeenCalled();
+	});
+
+	it('leaves out of the list an add whose toast the reader closed', () => {
+		const h = single();
+		const toasts = new AddToasts(h, async () => {});
+		toasts.show(dune);
+		h.dismiss(1, 'dismissed');
+		toasts.show(solaris);
+		expect([...toasts.listed]).toEqual([]);
+	});
+
+	it('lists a failed undo that gives way, for a new window', async () => {
+		const h = single();
+		const undo = vi
+			.fn<(add: SessionAdd) => Promise<void>>()
+			.mockRejectedValueOnce(new ApiError('Serwer nie odpowiada.', 0))
+			.mockResolvedValueOnce(undefined);
+		const toasts = new AddToasts(h, undo);
+		toasts.show(dune);
+		h.act(1);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.titles()).toEqual(['Nie udało się cofnąć: Diuna: Część druga · 4K UHD']);
+		toasts.show(solaris);
+		expect(h.descriptions()).toEqual(['Solaris']);
+		expect([...toasts.listed]).toEqual([1]);
+		toasts.undo(dune);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(undo).toHaveBeenCalledTimes(2);
+		expect(h.titles()).toEqual(['Cofnięto dodanie']);
+	});
+
+	it('leaves only the newest toast up when the screen turns too small', () => {
+		const h = host();
+		const toasts = new AddToasts(h, async () => {});
+		toasts.show(dune);
+		toasts.show(solaris);
+		toasts.collapse();
+		expect(h.descriptions()).toEqual(['Solaris']);
+		expect([...toasts.listed]).toEqual([1]);
+	});
+
+	it('forgets the list when the page goes', () => {
+		const h = single();
+		const toasts = new AddToasts(h, async () => {});
+		toasts.show(dune);
+		toasts.show(solaris);
+		toasts.destroy();
+		expect(h.shown.size).toBe(0);
+		expect([...toasts.listed]).toEqual([]);
+		expect(vi.getTimerCount()).toBe(0);
 	});
 });

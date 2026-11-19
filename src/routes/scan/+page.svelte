@@ -289,7 +289,10 @@
 		}
 	}
 
-	onDestroy(() => addToasts.destroy());
+	onDestroy(() => {
+		flow.detach();
+		addToasts.destroy();
+	});
 
 	onMount(() => {
 		void countQueue();

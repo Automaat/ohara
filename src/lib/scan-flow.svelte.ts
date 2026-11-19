@@ -304,7 +304,9 @@ export class ScanFlow {
 	 * Saves the form. A copy that went through is logged and its shop, new or used and date
 	 * carry over even when the user has moved on; only the barcode still shown gets the result.
 	 * The copy the server returns decides what is logged: a retry of a save whose answer was
-	 * lost returns the copy the first attempt made, even when the form changed in between.
+	 * lost returns the copy the first attempt made, even when the form changed in between. An
+	 * owned copy's shop joins the ones stored when it answers, so another page's save that
+	 * answered meanwhile keeps its shop.
 	 */
 	async save(): Promise<Added | null> {
 		const item = this.item;
@@ -318,9 +320,11 @@ export class ScanFlow {
 		try {
 			const saved = await saveScan(this.#fetch, item.target, f, item.key, item.made);
 			const kept = { ...f, status: saved.copy.status ?? f.status };
-			if (kept.status === 'owned') visit.date = kept.purchased_on;
-			this.sticky = stickyAfter(this.sticky, kept);
-			saveSticky(this.#store, this.sticky);
+			if (kept.status === 'owned') {
+				visit.date = kept.purchased_on;
+				this.sticky = stickyAfter(this.#store ? loadSticky(this.#store) : this.sticky, kept);
+				saveSticky(this.#store, this.sticky);
+			}
 			const price = formatPLN(saved.copy.price_cents ?? saved.copy.max_price_cents);
 			const what = kept.status === 'owned' ? '' : ' · lista życzeń';
 			const recentID = logScan(
@@ -359,6 +363,14 @@ export class ScanFlow {
 		} finally {
 			if (current()) this.saving = false;
 		}
+	}
+
+	/**
+	 * Drops every answer still on its way, as a newer barcode does, once the page that shows the
+	 * flow is gone. A save still running is logged and keeps its shop, but reports nothing.
+	 */
+	detach() {
+		this.#loads.start();
 	}
 
 	/**

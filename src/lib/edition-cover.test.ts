@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { coverUndo, maxCoverBytes, photoProblem } from './edition-cover';
+import { request } from './api';
+import { coverUndo, maxCoverBytes, photoProblem, withDeadline } from './edition-cover';
 
 describe('coverUndo', () => {
 	const own = '/api/editions/3/cover?v=1700000000';
@@ -61,5 +62,32 @@ describe('photoProblem', () => {
 
 	it('takes the limit the server enforces', () => {
 		expect(maxCoverBytes).toBe(8 * 1024 * 1024);
+	});
+});
+
+describe('withDeadline', () => {
+	it('gives up on a request that never answers', async () => {
+		const stalled: typeof fetch = (_input, init) =>
+			new Promise((_resolve, reject) => {
+				const signal = init?.signal;
+				signal?.addEventListener('abort', () => reject(signal.reason));
+			});
+		await expect(
+			request(withDeadline(stalled, 5), 'PUT', '/api/editions/3/cover', new Blob(['x']))
+		).rejects.toMatchObject({ status: 0, message: 'Serwer nie odpowiada.' });
+	});
+
+	it('sends the request as given', async () => {
+		const seen: RequestInit[] = [];
+		const answered: typeof fetch = async (_input, init) => {
+			seen.push(init ?? {});
+			return new Response(null, { status: 204 });
+		};
+		await expect(
+			request(withDeadline(answered, 1000), 'DELETE', '/api/editions/3/cover')
+		).resolves.toBeUndefined();
+		expect(seen).toHaveLength(1);
+		expect(seen[0].method).toBe('DELETE');
+		expect(seen[0].signal?.aborted).toBe(false);
 	});
 });

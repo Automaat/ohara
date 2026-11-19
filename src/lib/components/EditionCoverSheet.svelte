@@ -1,7 +1,12 @@
 <script lang="ts">
 	import { Button, Modal } from '@smykla-skalski/sui';
 	import { errorMessage, request } from '#lib/api.js';
-	import { photoProblem, type CoverUndo } from '#lib/edition-cover.js';
+	import {
+		coverDeadlineMs,
+		photoProblem,
+		withDeadline,
+		type CoverUndo
+	} from '#lib/edition-cover.js';
 
 	let {
 		open = $bindable(false),
@@ -13,7 +18,7 @@
 		editionID: number;
 		/** How the sheet drops a personal photo, or null when the edition has none. */
 		undo: CoverUndo | null;
-		/** Shows the changed cover; the sheet closes once it has. */
+		/** Shows the changed cover, after the sheet has closed. */
 		onchange: () => Promise<void>;
 	} = $props();
 
@@ -24,18 +29,27 @@
 	let pending = $state<Action | null>(null);
 	let failure = $state<string>();
 
+	/** Sends one change at a time: a second one started while the first is unanswered could land
+	 * first and be overwritten by it. */
 	async function save(action: Action, photo?: File) {
+		if (pending) return;
 		pending = action;
 		failure = undefined;
 		try {
-			await request(fetch, photo ? 'PUT' : 'DELETE', `/api/editions/${editionID}/cover`, photo);
-			await onchange();
-			open = false;
+			await request(
+				withDeadline(fetch, coverDeadlineMs),
+				photo ? 'PUT' : 'DELETE',
+				`/api/editions/${editionID}/cover`,
+				photo
+			);
 		} catch (err) {
 			failure = errorMessage(err);
+			return;
 		} finally {
 			pending = null;
 		}
+		open = false;
+		await onchange();
 	}
 
 	/** Uploads the chosen photo at once. The input is emptied first: an input keeps its file, and
@@ -47,6 +61,10 @@
 		const problem = photoProblem(photo);
 		if (problem) failure = problem;
 		else void save(action, photo);
+	}
+
+	function choose(input: HTMLInputElement | undefined) {
+		if (!pending) input?.click();
 	}
 </script>
 
@@ -60,14 +78,25 @@
 	onclose={() => (failure = undefined)}
 >
 	<div class="choices">
-		<Button loading={pending === 'camera'} onclick={() => camera?.click()}>Zrób zdjęcie</Button>
-		<Button loading={pending === 'library'} onclick={() => library?.click()}>
+		<Button
+			loading={pending === 'camera'}
+			disabled={pending !== null && pending !== 'camera'}
+			onclick={() => choose(camera)}
+		>
+			Zrób zdjęcie
+		</Button>
+		<Button
+			loading={pending === 'library'}
+			disabled={pending !== null && pending !== 'library'}
+			onclick={() => choose(library)}
+		>
 			Wybierz z biblioteki
 		</Button>
 		{#if undo}
 			<Button
 				tone={undo === 'remove' ? 'stop-quiet' : 'ghost'}
 				loading={pending === 'undo'}
+				disabled={pending !== null && pending !== 'undo'}
 				onclick={() => save('undo')}
 			>
 				{undo === 'remove' ? 'Usuń zdjęcie' : 'Przywróć okładkę'}

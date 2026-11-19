@@ -1,12 +1,7 @@
 <script lang="ts">
 	import { ErrorState, Link } from '@smykla-skalski/sui';
 	import type { Snippet } from 'svelte';
-	import {
-		displayName,
-		editionSummary,
-		statusLabels,
-		type CollectionItem
-	} from '#lib/collection.js';
+	import { displayName, shelfLine, type CollectionItem } from '#lib/collection.js';
 	import CollectionCover from './CollectionCover.svelte';
 
 	let {
@@ -41,17 +36,14 @@
 {#if rows.length}
 	<ul class="shelf" role="list" aria-label="Egzemplarze w kolekcji" aria-busy={loading}>
 		{#each rows as row (row.copy_id)}
+			{@const name = displayName(row)}
+			{@const wish = row.status === 'wishlist'}
 			<li>
 				<div class="artwork">
-					<CollectionCover kind={row.kind} url={row.cover_url} large />
+					<CollectionCover kind={row.kind} url={row.cover_url} large {name} {wish} />
 				</div>
-				<Link href={`/titles/${row.title_id}`}>{displayName(row)}</Link>
-				<span class="meta">
-					{#if row.status === 'wishlist'}<span class="wish">{statusLabels.wishlist}</span> ·
-					{/if}{[row.authors?.join(', '), editionSummary({ ...row, barcode: null })]
-						.filter(Boolean)
-						.join(' · ')}
-				</span>
+				<Link href={`/titles/${row.title_id}`}>{name}</Link>
+				<span class="meta" class:wish>{shelfLine(row)}</span>
 			</li>
 		{/each}
 	</ul>
@@ -96,12 +88,15 @@
 		font-size: var(--sui-font-size-meta);
 	}
 
-	.wish {
+	/* A wish's line, "Lista życzeń · do 80 zł", in the accent colour. */
+	.meta.wish {
 		color: var(--sui-brand-action-text);
 		font-weight: var(--sui-weight-semibold);
+		font-variant-numeric: tabular-nums;
 	}
 
-	/* Phones: three covers a row, a title of at most two lines and one line of details. */
+	/* Phones: three covers a row, a title of at most two lines and one line of details, two for
+	   a wish and its limit. */
 	@media (max-width: 640px) {
 		.shelf {
 			grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -135,6 +130,10 @@
 			font-size: 0.75rem;
 			text-overflow: ellipsis;
 			white-space: nowrap;
+		}
+
+		.meta.wish {
+			white-space: normal;
 		}
 	}
 </style>

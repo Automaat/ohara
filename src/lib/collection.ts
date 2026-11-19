@@ -80,6 +80,8 @@ export type CollectionItem = {
 	created_at_us: number;
 	status: CopyStatus;
 	price_cents: number | null;
+	/** The most a wish may cost; null for owned copies and wishes without a limit. */
+	max_price_cents: number | null;
 	purchased_on: string | null;
 	shop: string;
 	acquired_as: AcquiredAs | null;
@@ -250,6 +252,38 @@ export function editionSummary(e: {
 		e.barcode
 	];
 	return parts.filter(Boolean).join(' · ') || 'Wydanie bez opisu';
+}
+
+const wholePLN = new Intl.NumberFormat('pl-PL', {
+	style: 'currency',
+	currency: 'PLN',
+	minimumFractionDigits: 0
+});
+
+/**
+ * A wish's line under its name, such as "Lista życzeń · do 80 zł" or "Lista życzeń". A no-break
+ * space keeps "do 80 zł" on one line when the line wraps.
+ */
+export function wishLine(limitCents: number | null): string {
+	if (limitCents == null) return statusLabels.wishlist;
+	const limit = limitCents % 100 === 0 ? wholePLN.format(limitCents / 100) : formatPLN(limitCents);
+	return `${statusLabels.wishlist} · do\u00a0${limit}`;
+}
+
+/**
+ * A shelf tile's line under the name: the wish and its limit for a wishlist copy, otherwise the
+ * creators and the edition, such as "Stanisław Lem · Twarda oprawa".
+ */
+export function shelfLine(
+	item: Pick<
+		CollectionItem,
+		'status' | 'max_price_cents' | 'authors' | 'format' | 'binding' | 'label'
+	>
+): string {
+	if (item.status === 'wishlist') return wishLine(item.max_price_cents);
+	return [item.authors?.join(', '), editionSummary({ ...item, barcode: null })]
+		.filter(Boolean)
+		.join(' · ');
 }
 
 /** What the collection lists: copies of a status, or `none`, the titles that have no copy yet. */

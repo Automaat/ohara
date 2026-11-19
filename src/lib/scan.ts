@@ -1,4 +1,5 @@
 import { ApiError, errorMessage, invalidBarcodeMessage, request } from './api';
+import { queueDeletesSettled } from './queue-deletes';
 import {
 	copyPayload,
 	displayName,
@@ -281,6 +282,7 @@ export async function resolveScan(fetchFn: typeof fetch, raw: string): Promise<R
 	}
 	const barcode = lookup?.barcode ?? code;
 	const failed = !lookup || lookup.errors.length > 0;
+	await queueDeletesSettled();
 	const entry = await request<QueueEntry>(fetchFn, 'POST', '/api/scan-queue', {
 		barcode,
 		reason: failed ? 'lookup_failed' : 'not_found',

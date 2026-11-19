@@ -13,6 +13,7 @@
 	import { onDestroy, onMount, tick } from 'svelte';
 	import QueueRow from '#lib/components/QueueRow.svelte';
 	import { errorMessage, request } from '#lib/api.js';
+	import { queueDeletesSettled } from '#lib/queue-deletes.js';
 	import { QueueRemovals } from '#lib/queue.svelte.js';
 	import type { QueueEntry } from '#lib/scan.js';
 
@@ -40,6 +41,7 @@
 
 	async function load() {
 		try {
+			await queueDeletesSettled();
 			entries = await request<QueueEntry[]>(fetch, 'GET', '/api/scan-queue');
 			failure = null;
 		} catch (err) {

@@ -1,6 +1,7 @@
 import type { ToastEnd, ToastOptions } from '@smykla-skalski/sui';
 import { SvelteSet } from 'svelte/reactivity';
 import { ApiError, errorMessage } from './api.js';
+import { trackDelete } from './queue-deletes.js';
 import type { QueueEntry } from './scan.js';
 
 /** How long "Cofnij" stays on offer before a removal goes to the server. */
@@ -126,7 +127,7 @@ export class QueueRemovals {
 
 	async #commit(entry: QueueEntry): Promise<void> {
 		try {
-			await this.#host.send(entry);
+			await trackDelete(this.#host.send(entry));
 		} catch (err) {
 			if (!alreadyGone(err)) {
 				this.hidden.delete(entry.id);

@@ -198,17 +198,17 @@ and "Usuń" wait in the "…" menu. On a touch screen a swipe to the left slides
 		min-inline-size: 0;
 	}
 
+	/* The groups wrap as whole groups when a long code meets a narrow row, never under the
+	   button. */
 	.code {
+		display: flex;
+		flex-wrap: wrap;
+		column-gap: 1ch;
 		color: var(--sui-text-primary);
 		font-family: var(--sui-mono);
 		font-size: 0.9375rem;
 		font-weight: 500;
 		letter-spacing: 0.02em;
-		white-space: nowrap;
-	}
-
-	.code > span + span {
-		margin-inline-start: 1ch;
 	}
 
 	.meta,

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ApiError } from './api';
+import { trackDelete } from './queue-deletes';
 import type { EditionDetail, Format } from './collection';
 import {
 	FormRejected,
@@ -295,6 +296,34 @@ describe('resolveScan', () => {
 		const got = await resolveScan(s.fetchFn, '5901234123457');
 		expect(got).toEqual({ kind: 'queued', barcode: '5901234123457', entry });
 		expect(s.calls.at(-1)?.body).toEqual(queued);
+	});
+
+	it('queues a rescanned barcode only after a queue removal on its way has settled', async () => {
+		let answer: () => void = () => {};
+		void trackDelete(new Promise<void>((resolve) => (answer = resolve)));
+		const entry = {
+			id: 1,
+			barcode: '5901234123457',
+			reason: 'not_found',
+			detail: '',
+			scans: 1,
+			created_at: '',
+			last_scanned_at: ''
+		};
+		const s = server({
+			'GET /api/editions?barcode=5901234123457': [200, []],
+			'GET /api/lookup/5901234123457': [
+				200,
+				{ barcode: '5901234123457', candidates: [], errors: [] }
+			],
+			'POST /api/scan-queue': [201, entry]
+		});
+		const scan = resolveScan(s.fetchFn, '5901234123457');
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(s.paths()).not.toContain('POST /api/scan-queue');
+		answer();
+		expect(await scan).toEqual({ kind: 'queued', barcode: '5901234123457', entry });
+		expect(s.paths().at(-1)).toBe('POST /api/scan-queue');
 	});
 
 	it('rejects a malformed barcode before any lookup', async () => {

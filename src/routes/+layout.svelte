@@ -55,6 +55,8 @@
 		background: var(--sui-canvas);
 		color: var(--sui-text-primary);
 		font: var(--sui-font-size-body) / var(--sui-leading-body) var(--sui-sans);
+		/* Years and prices in the app's own text use tabular figures. */
+		font-variant-numeric: tabular-nums;
 	}
 
 	:global(button),

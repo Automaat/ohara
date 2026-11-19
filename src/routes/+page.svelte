@@ -437,6 +437,25 @@
 		--sui-brand-action-pressed: var(--ohara-selected-pressed);
 	}
 
+	/* SUI rings a focused pick inside its thumb in the thumb's ink, which on these chips is pink
+	   or green. The ring takes the raspberry focus colour instead, on the track just outside the
+	   thumb, where it stands out from the track rather than blending into the thumb. */
+	.content
+		:global(
+			.collection-toolbar .sui-list-toolbar-segments .selected .sui-segmented-input:focus-visible
+		),
+	.content
+		:global(
+			.collection-toolbar
+				+ .sui-popover
+				.sui-list-toolbar-panel
+				.selected
+				.sui-segmented-input:focus-visible
+		) {
+		outline-color: var(--sui-focus);
+		outline-offset: 0;
+	}
+
 	@media (max-width: 640px) {
 		.content :global(.desktop-results) {
 			display: none;

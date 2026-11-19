@@ -391,6 +391,8 @@
 		display: grid;
 		gap: 0.5rem;
 		overflow-wrap: anywhere;
+		/* The table cell's `font` resets the figures; the price and limit lines take them back. */
+		font-variant-numeric: tabular-nums;
 	}
 	.artwork {
 		display: grid;

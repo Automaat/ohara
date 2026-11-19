@@ -44,7 +44,9 @@
 	--sui-primitive-light-strong: #737d78;
 	--sui-primitive-dark-canvas: #0e1b17;
 	--sui-primitive-dark-surface: #16261f;
-	--sui-primitive-dark-raised: #1a2b24;
+	/* The README has no raised tier: SUI's light theme raises onto the surface, so the dark one
+	   does too, and an empty state or a callout is a card in both themes. */
+	--sui-primitive-dark-raised: #16261f;
 	--sui-primitive-dark-inset: #1e3029;
 	--sui-primitive-dark-code: #12201b;
 	--sui-primitive-dark-text: #f7e6e3;
@@ -179,8 +181,14 @@
 	outline-color: var(--sui-sidebar-focus);
 }
 
-/* Years, prices and other numbers in facts line up in Plus Jakarta Sans's tabular figures. SUI's
-   `font` shorthand on the value resets the figures, so this rule also needs to outrank it. */
-:root .sui-fact-list .sui-fact-list-value {
+/* Years, prices and other numbers in facts, card notes and page descriptions line up in Plus
+   Jakarta Sans's tabular figures. SUI's `font` shorthands on that text reset the figures, so this
+   rule also needs to outrank them. */
+:root
+	:is(
+		.sui-fact-list .sui-fact-list-value,
+		.sui-card .sui-card-note,
+		.sui-page-header .sui-page-header-description
+	) {
 	font-variant-numeric: tabular-nums;
 }

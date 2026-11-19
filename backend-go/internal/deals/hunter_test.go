@@ -179,7 +179,7 @@ func TestRunRetriesFailedAlerts(t *testing.T) {
 	if res := mustRun(t, h); res.Alerts != 1 || res.Sent != 0 {
 		t.Fatalf("failing run = %+v", res)
 	}
-	obs, err := h.store.Recent(context.Background(), 10, false)
+	obs, err := h.store.Recent(context.Background(), RecentFilter{Limit: 10})
 	if err != nil {
 		t.Fatalf("recent: %v", err)
 	}
@@ -214,7 +214,7 @@ func TestRunGivesUpAfterMaxAttempts(t *testing.T) {
 	if notifier.fail != 1 || len(notifier.messages()) != 0 {
 		t.Fatalf("notifier tried %d times past the limit", MaxAttempts+1-notifier.fail)
 	}
-	obs, err := h.store.Recent(context.Background(), 10, false)
+	obs, err := h.store.Recent(context.Background(), RecentFilter{Limit: 10})
 	if err != nil {
 		t.Fatalf("recent: %v", err)
 	}

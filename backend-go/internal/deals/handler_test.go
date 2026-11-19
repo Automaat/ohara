@@ -276,7 +276,7 @@ func TestRecentUsesMatchedWishAfterValuation(t *testing.T) {
 		}
 	}
 
-	observations, err := store.Recent(ctx, 10, false)
+	observations, err := store.Recent(ctx, RecentFilter{Limit: 10})
 	if err != nil || len(observations) != 2 {
 		t.Fatalf("recent = %v, %v", observations, err)
 	}
@@ -325,20 +325,92 @@ func TestRecentUnderLimitKeepsOlderListings(t *testing.T) {
 		}
 	}
 
-	ids := func(obs []Observation) []string {
-		out := make([]string, 0, len(obs))
-		for _, o := range obs {
-			out = append(out, o.ExternalID)
+	newest, err := store.Recent(ctx, RecentFilter{Limit: 2})
+	if err != nil || !slices.Equal(externalIDs(newest), []string{"owned", "over-2"}) {
+		t.Fatalf("recent = %v, %v", externalIDs(newest), err)
+	}
+	under, err := store.Recent(ctx, RecentFilter{Limit: 2, UnderLimit: true})
+	if err != nil || !slices.Equal(externalIDs(under), []string{"under"}) {
+		t.Fatalf("recent under limit = %v, %v", externalIDs(under), err)
+	}
+}
+
+func externalIDs(obs []Observation) []string {
+	out := make([]string, 0, len(obs))
+	for i := range obs {
+		out = append(out, obs[i].ExternalID)
+	}
+	return out
+}
+
+func TestDealsMatchedListings(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	logger := slog.New(slog.DiscardHandler)
+	store := NewStore(pool)
+	ctx := context.Background()
+	wishlist(t, pool, wantBluray(new(int64(4000))))
+	noLimit := bladeRunner("dvd")
+	wishlist(t, pool, &noLimit)
+	wants, err := store.Wants(ctx)
+	if err != nil || len(wants) != 2 {
+		t.Fatalf("wants = %v, %v", wants, err)
+	}
+	limited, unlimited := &wants[0], &wants[1]
+	var ownedEdition int64
+	if err := pool.QueryRow(ctx, `INSERT INTO edition (title_id, format) VALUES ($1, 'uhd') RETURNING id`,
+		limited.TitleID).Scan(&ownedEdition); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO copy (edition_id, status) VALUES ($1, 'owned')`, ownedEdition); err != nil {
+		t.Fatal(err)
+	}
+	owned := &Want{EditionID: ownedEdition, TitleID: limited.TitleID}
+	for _, tc := range []struct {
+		id    string
+		price int64
+		want  *Want
+	}{
+		{id: "under", price: 3500, want: limited},
+		{id: "over", price: 5500, want: limited},
+		{id: "no-limit", price: 2000, want: unlimited},
+		{id: "owned", price: 1000, want: owned},
+	} {
+		listing := Listing{Source: "olx", ExternalID: tc.id, Title: "Blade Runner", PriceCents: tc.price}
+		if _, _, err := store.Record(ctx, &listing, tc.want, false); err != nil {
+			t.Fatal(err)
 		}
-		return out
 	}
-	newest, err := store.Recent(ctx, 2, false)
-	if err != nil || !slices.Equal(ids(newest), []string{"owned", "over-2"}) {
-		t.Fatalf("recent = %v, %v", ids(newest), err)
+	srv := httptest.NewServer(server.New(server.Config{}, logger, server.Deps{
+		DB: pool, API: []server.Mounter{NewHandler(store, NewHunter(store, nil, nil, Config{}, logger), logger)},
+	}))
+	t.Cleanup(srv.Close)
+
+	for _, tc := range []struct {
+		query string
+		want  []string
+	}{
+		{query: "", want: []string{"owned", "no-limit", "over", "under"}},
+		{query: "?matched=true", want: []string{"no-limit", "over", "under"}},
+		{query: "?matched=true&limit=2", want: []string{"no-limit", "over"}},
+		{query: "?matched=false&limit=2", want: []string{"owned", "no-limit"}},
+		{query: "?under_limit=true", want: []string{"under"}},
+		{query: "?matched=true&under_limit=true", want: []string{"under"}},
+	} {
+		var view View
+		if code := call(t, http.MethodGet, srv.URL+"/api/deals"+tc.query, nil, &view); code != http.StatusOK ||
+			view.Wishes != 2 || !slices.Equal(externalIDs(view.Observations), tc.want) {
+			t.Errorf("GET deals%s = %d, %d wishes, %v; want 2 wishes, %v",
+				tc.query, code, view.Wishes, externalIDs(view.Observations), tc.want)
+		}
+		for i := range view.Observations {
+			o := &view.Observations[i]
+			if o.ExternalID == "no-limit" && (o.MaxPriceCents != nil || o.EditionID == nil || *o.EditionID != unlimited.EditionID) {
+				t.Errorf("no-limit listing = %+v, want the unlimited wish's edition and no limit", o)
+			}
+		}
 	}
-	under, err := store.Recent(ctx, 2, true)
-	if err != nil || !slices.Equal(ids(under), []string{"under"}) {
-		t.Fatalf("recent under limit = %v, %v", ids(under), err)
+	if code := call(t, http.MethodGet, srv.URL+"/api/deals?matched=maybe", nil, nil); code != http.StatusUnprocessableEntity {
+		t.Errorf("GET deals?matched=maybe = %d, want 422", code)
 	}
 }
 
@@ -361,7 +433,7 @@ func TestRecentClearsPhotoOnRepeatObservation(t *testing.T) {
 		if created, _, err := store.Record(ctx, &listing, &wants[0], false); err != nil || created {
 			t.Fatalf("record photo %q: created=%t err=%v", photo, created, err)
 		}
-		got, err := store.Recent(ctx, 10, false)
+		got, err := store.Recent(ctx, RecentFilter{Limit: 10})
 		if err != nil || len(got) != 1 {
 			t.Fatalf("recent = %v, %v", got, err)
 		}

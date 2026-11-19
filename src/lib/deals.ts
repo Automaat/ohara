@@ -31,19 +31,34 @@ export type Observation = {
 	alert_attempts: number;
 };
 
-const priceDifference = new Intl.NumberFormat('pl-PL', {
+const wholePLN = new Intl.NumberFormat('pl-PL', {
 	style: 'currency',
 	currency: 'PLN',
 	minimumFractionDigits: 0
 });
 
+/** A listing price as "79 zł", with grosze only when it has them: "79,99 zł". */
+export function dealPrice(cents: number): string {
+	return cents % 100 === 0 ? wholePLN.format(cents / 100) : formatPLN(cents);
+}
+
+/** How a price stands against the wish's limit, as "5 zł pod limitem" or "Brak limitu". */
 export function limitComparison(price: number, limit: number | null): string {
 	if (limit == null) return 'Brak limitu';
 	const difference = limit - price;
 	if (difference === 0) return 'W limicie';
-	const cents = Math.abs(difference);
-	const amount = cents % 100 === 0 ? priceDifference.format(cents / 100) : formatPLN(cents);
-	return difference > 0 ? `${amount} poniżej limitu` : `${amount} powyżej limitu`;
+	const amount = dealPrice(Math.abs(difference));
+	return difference > 0 ? `${amount} pod limitem` : `${amount} ponad limit`;
+}
+
+/** The wish's limit as "limit 40 zł", or "bez limitu". */
+export function wishLimit(limit: number | null): string {
+	return limit == null ? 'bez limitu' : `limit ${dealPrice(limit)}`;
+}
+
+/** A listing whose Telegram alert went out, for a wish that still has a limit. */
+export function isSent(o: Pick<Observation, 'alert' | 'max_price_cents'>): boolean {
+	return o.alert === 'sent' && o.max_price_cents != null;
 }
 
 /** A listing at or under the price limit of the wish it matched. */
@@ -89,7 +104,53 @@ export type HunterStatus = {
 	last_result: RunResult | null;
 };
 
-export type DealsView = { status: HunterStatus; observations: Observation[] };
+/** GET /api/deals: the hunter, how many copies are on the wishlist and the listings asked for. */
+export type DealsView = { status: HunterStatus; wishes: number; observations: Observation[] };
+
+/**
+ * Every listing matched to a wish, with or without a limit, filtered by the server before its
+ * row limit, so listings for owned editions never push them out.
+ */
+export const matchedPath = '/api/deals?matched=true&limit=500';
+
+export type DealSegment = 'under' | 'all' | 'sent';
+
+export const segmentLabels: Record<DealSegment, string> = {
+	under: 'Pod limitem',
+	all: 'Wszystkie',
+	sent: 'Wysłane'
+};
+
+/** A segment's label with its count, as "Pod limitem · 3". */
+export function segmentLabel(segment: DealSegment, count: number): string {
+	return `${segmentLabels[segment]} · ${count}`;
+}
+
+const relative = new Intl.RelativeTimeFormat('pl', { numeric: 'auto', style: 'short' });
+
+/** How long ago instant was: "przed chwilą", "5 min temu", "2 godz. temu", "wczoraj". */
+export function timeAgo(instant: string, now: Date): string {
+	const seconds = (now.getTime() - Date.parse(instant)) / 1000;
+	if (seconds < 60) return 'przed chwilą';
+	if (seconds < 3600) return relative.format(-Math.floor(seconds / 60), 'minute');
+	if (seconds < 86_400) return relative.format(-Math.floor(seconds / 3600), 'hour');
+	return relative.format(-Math.floor(seconds / 86_400), 'day');
+}
+
+/** The page's line under its title: "4 na liście życzeń · sprawdzono 2 godz. temu". */
+export function dealsSummary(wishes: number, status: HunterStatus, now: Date): string {
+	const parts = [`${wishes} na liście życzeń`];
+	if (status.last_finished_at) parts.push(`sprawdzono ${timeAgo(status.last_finished_at, now)}`);
+	return parts.join(' · ');
+}
+
+/** Why a segment is empty: how many wishes the hunter searches for and when it last ran. */
+export function searchedFor(wishes: number, status: HunterStatus, now: Date): string {
+	const last = status.last_finished_at
+		? `Ostatnie wyszukiwanie: ${timeAgo(status.last_finished_at, now)}.`
+		: 'Od uruchomienia serwera nie było wyszukiwania.';
+	return `Szukamy ofert dla ${wishes} pozycji z listy życzeń. ${last}`;
+}
 
 export type Keyword = { id: number; kind: KeywordKind; phrase: string; created_at: string };
 export type KeywordPayload = { kind: KeywordKind; phrase: string };

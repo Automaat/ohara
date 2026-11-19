@@ -261,10 +261,18 @@ type Observation struct {
 	AlertAttempts   int       `json:"alert_attempts"`
 }
 
-// Recent returns the newest deal observations, at most limit. With underLimit it returns only
-// listings at or under the price limit of the wish they matched, before the limit applies, so
-// newer listings above the limit or for owned editions never push them out.
-func (s *Store) Recent(ctx context.Context, limit int, underLimit bool) ([]Observation, error) {
+// RecentFilter narrows Recent to at most Limit listings. Matched keeps the listings matched to a
+// wish, with or without a price limit; UnderLimit keeps those at or under the matched wish's
+// limit. Both apply before the row limit, so newer listings that fail them, such as listings
+// for owned editions, never push older ones out.
+type RecentFilter struct {
+	Limit      int
+	Matched    bool
+	UnderLimit bool
+}
+
+// Recent returns the newest deal observations that pass f.
+func (s *Store) Recent(ctx context.Context, f RecentFilter) ([]Observation, error) {
 	rows, err := s.pool.Query(ctx, `SELECT o.id, o.source, coalesce(o.external_id, ''), o.observed_at,
 			o.price_cents, o.acquired_as, o.url, coalesce(o.raw->>'title', ''), coalesce(e.title_id, o.title_id), t.name,
 			e.id, e.format, nullif(o.raw->>'photo_url', ''),
@@ -292,9 +300,19 @@ func (s *Store) Recent(ctx context.Context, limit int, underLimit bool) ([]Obser
 		LEFT JOIN title t ON t.id = coalesce(e.title_id, o.title_id)
 		WHERE o.source = ANY ($3)
 			AND (NOT $4 OR o.price_cents <= w.max_price_cents)
-		ORDER BY o.observed_at DESC, o.id DESC LIMIT $1`, limit, MaxAttempts, sources, underLimit)
+			AND (NOT $5 OR w.edition_id IS NOT NULL)
+		ORDER BY o.observed_at DESC, o.id DESC LIMIT $1`, f.Limit, MaxAttempts, sources, f.UnderLimit, f.Matched)
 	if err != nil {
 		return nil, fmt.Errorf("recent observations: %w", err)
 	}
 	return pgx.CollectRows(rows, pgx.RowToStructByPos[Observation])
+}
+
+// WishCount returns how many copies are on the wishlist.
+func (s *Store) WishCount(ctx context.Context) (int, error) {
+	var n int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM copy WHERE status = 'wishlist'`).Scan(&n); err != nil {
+		return 0, fmt.Errorf("wish count: %w", err)
+	}
+	return n, nil
 }

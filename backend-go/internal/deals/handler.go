@@ -71,37 +71,60 @@ func (h *Handler) Mount(r chi.Router) {
 	r.Delete("/deals/keywords/{id}", h.deleteKeyword)
 }
 
-// View is the GET /api/deals body.
+// View is the GET /api/deals body. Wishes counts the copies on the wishlist.
 type View struct {
 	Status       Status        `json:"status"`
+	Wishes       int           `json:"wishes"`
 	Observations []Observation `json:"observations"`
 }
 
+// list reads the hunter status before the listings, so a run that ends mid-request still reads
+// as running and the page asks again for the listings it stored.
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
-	limit := defaultRecent
-	if raw := r.URL.Query().Get("limit"); raw != "" {
-		n, err := strconv.Atoi(raw)
-		if err != nil || n <= 0 || n > maxRecent {
-			httpx.WriteFieldError(w, h.logger, &httpx.FieldError{Field: "limit", Msg: "must be between 1 and 500"})
-			return
-		}
-		limit = n
+	filter, fe := recentFilter(r)
+	if fe != nil {
+		httpx.WriteFieldError(w, h.logger, fe)
+		return
 	}
-	underLimit := false
-	if raw := r.URL.Query().Get("under_limit"); raw != "" {
-		v, err := strconv.ParseBool(raw)
-		if err != nil {
-			httpx.WriteFieldError(w, h.logger, &httpx.FieldError{Field: "under_limit", Msg: "must be true or false"})
-			return
-		}
-		underLimit = v
-	}
-	obs, err := h.store.Recent(r.Context(), limit, underLimit)
+	status := h.hunter.Status()
+	obs, err := h.store.Recent(r.Context(), filter)
 	if err != nil {
 		httpx.WriteInternal(w, h.logger, "recent deals", err)
 		return
 	}
-	httpx.WriteJSON(w, h.logger, http.StatusOK, View{Status: h.hunter.Status(), Observations: obs})
+	wishes, err := h.store.WishCount(r.Context())
+	if err != nil {
+		httpx.WriteInternal(w, h.logger, "wish count", err)
+		return
+	}
+	httpx.WriteJSON(w, h.logger, http.StatusOK, View{Status: status, Wishes: wishes, Observations: obs})
+}
+
+func recentFilter(r *http.Request) (RecentFilter, *httpx.FieldError) {
+	q := r.URL.Query()
+	f := RecentFilter{Limit: defaultRecent}
+	if raw := q.Get("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 || n > maxRecent {
+			return f, &httpx.FieldError{Field: "limit", Msg: "must be between 1 and 500"}
+		}
+		f.Limit = n
+	}
+	for _, flag := range []struct {
+		name string
+		dst  *bool
+	}{{"matched", &f.Matched}, {"under_limit", &f.UnderLimit}} {
+		raw := q.Get(flag.name)
+		if raw == "" {
+			continue
+		}
+		v, err := strconv.ParseBool(raw)
+		if err != nil {
+			return f, &httpx.FieldError{Field: flag.name, Msg: "must be true or false"}
+		}
+		*flag.dst = v
+	}
+	return f, nil
 }
 
 func (h *Handler) run(w http.ResponseWriter, _ *http.Request) {

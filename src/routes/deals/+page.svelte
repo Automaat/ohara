@@ -3,42 +3,32 @@
 		Button,
 		Callout,
 		Chip,
-		DataTable,
 		Disclosure,
 		EmptyState,
+		ErrorState,
 		Field,
 		FormError,
-		Link,
 		PageHeader,
-		Pill,
-		RelativeTime,
 		Section,
-		SegmentedControl,
-		type DataTableColumn,
-		type PillTone
+		SegmentedControl
 	} from '@smykla-skalski/sui';
-	import { onMount, tick } from 'svelte';
+	import { onMount } from 'svelte';
 	import { ApiError, errorMessage, request } from '#lib/api.js';
-	import { refreshDealBadge } from '#lib/deal-badge.svelte.js';
+	import { badgePath, refreshDealBadge } from '#lib/deal-badge.svelte.js';
+	import { options, type FormIssue } from '#lib/collection.js';
+	import DealCard from '#lib/components/DealCard.svelte';
 	import {
-		acquiredLabels,
-		collectionURL,
-		formatLabels,
-		formatPLN,
-		options,
-		type CollectionView,
-		type FormIssue
-	} from '#lib/collection.js';
-	import {
-		alertLabels,
+		dealsSummary,
 		intervalLabel,
+		isSent,
 		keywordKindLabels,
 		keywordPayload,
 		keywordsOf,
 		lastRunSummary,
-		limitComparison,
-		sourceLabels,
-		type AlertState,
+		matchedPath,
+		searchedFor,
+		segmentLabel,
+		type DealSegment,
 		type DealsView,
 		type HunterStatus,
 		type Keyword,
@@ -46,13 +36,15 @@
 		type Observation
 	} from '#lib/deals.js';
 
-	type Row = Observation & Record<string, unknown>;
+	type Deals = {
+		status: HunterStatus;
+		wishes: number;
+		under: Observation[];
+		matched: Observation[];
+	};
 
-	let view = $state<DealsView | null>(null);
-	let hasWishlist = $state<boolean | null>(null);
-	let wishlistFailure = $state<string | null>(null);
-	let emptySearch = $state<HTMLButtonElement | HTMLAnchorElement | null>(null);
-	let headerSearch = $state<HTMLButtonElement | HTMLAnchorElement | null>(null);
+	let deals = $state<Deals | null>(null);
+	let segment = $state<DealSegment>('under');
 	let failure = $state<string | null>(null);
 	let loading = $state(true);
 	let runError = $state<string | null>(null);
@@ -66,42 +58,37 @@
 	let adding = $state(false);
 
 	let poll: ReturnType<typeof setTimeout> | undefined;
+	let issued = 0;
 
+	/**
+	 * "Pod limitem" asks the badge's own query, so the segment and the Okazje badge count the
+	 * same listings. An answer that arrives after a later request's answer is dropped.
+	 */
 	async function load() {
+		const ticket = ++issued;
 		loading = true;
 		try {
-			const next = await request<DealsView>(fetch, 'GET', '/api/deals');
-			if (view?.status.running && !next.status.running) void refreshDealBadge(fetch);
-			const restoreFocus = emptySearch !== null && document.activeElement === emptySearch;
-			view = next;
+			const [under, matched] = await Promise.all([
+				request<DealsView>(fetch, 'GET', badgePath),
+				request<DealsView>(fetch, 'GET', matchedPath)
+			]);
+			if (ticket !== issued) return;
+			const status = under.status.running ? under.status : matched.status;
+			if (deals?.status.running && !status.running) void refreshDealBadge(fetch);
+			deals = {
+				status,
+				wishes: matched.wishes,
+				under: under.observations,
+				matched: matched.observations
+			};
 			failure = null;
-			if (next.observations.length === 0) {
-				await loadWishlist();
-			} else if (restoreFocus) {
-				await tick();
-				if (document.activeElement === document.body) headerSearch?.focus();
-			}
 		} catch (err) {
+			if (ticket !== issued) return;
 			failure = errorMessage(err);
-		} finally {
-			loading = false;
 		}
+		loading = false;
 		clearTimeout(poll);
-		if (view?.status.running) poll = setTimeout(load, 3000);
-	}
-
-	async function loadWishlist() {
-		try {
-			const wishlist = await request<CollectionView>(
-				fetch,
-				'GET',
-				collectionURL({ kind: '', format: '', status: 'wishlist', q: '' })
-			);
-			hasWishlist = wishlist.totals.wishlist > 0;
-			wishlistFailure = null;
-		} catch (err) {
-			wishlistFailure = errorMessage(err);
-		}
+		if (deals?.status.running) poll = setTimeout(load, 3000);
 	}
 
 	async function loadKeywords() {
@@ -163,178 +150,138 @@
 		await loadKeywords();
 	}
 
-	const alertTones: Record<AlertState, PillTone> = {
-		none: 'neutral',
-		pending: 'info',
-		sent: 'success',
-		failed: 'danger'
-	};
-
-	const columns: DataTableColumn<Row>[] = [
-		{ key: 'listing_title', label: 'Oferta' },
-		{ key: 'alert', label: 'Powiadomienie' },
-		{ key: 'observed_at', label: 'Znaleziono' }
-	];
-	const rows = $derived((view?.observations ?? []) as Row[]);
-	const status = $derived(view?.status);
-	const summary = $derived(lastRunSummary(status?.last_result ?? null));
+	const status = $derived(deals?.status);
+	const lists = $derived<Record<DealSegment, Observation[]>>({
+		under: deals?.under ?? [],
+		all: deals?.matched ?? [],
+		sent: (deals?.matched ?? []).filter(isSent)
+	});
+	const segments = $derived(
+		(['under', 'all', 'sent'] as const).map((value) => ({
+			value,
+			label: segmentLabel(value, lists[value].length)
+		}))
+	);
+	const shown = $derived(lists[segment]);
+	const summary = $derived(
+		deals ? dealsSummary(deals.wishes, deals.status, new Date()) : undefined
+	);
+	const searched = $derived(deals ? searchedFor(deals.wishes, deals.status, new Date()) : '');
+	const runSummary = $derived(lastRunSummary(status?.last_result ?? null));
 	const sourceErrors = $derived(status?.last_result?.errors ?? []);
+	const busy = $derived(starting || !!status?.running);
+	const nextSearch = $derived(
+		status?.scheduled
+			? `Kolejne wyszukiwanie ${intervalLabel(status)}.`
+			: 'Wyszukaj oferty przyciskiem „Szukaj teraz”.'
+	);
 </script>
 
 <svelte:head>
 	<title>Okazje · Ohara</title>
 </svelte:head>
 
+{#snippet searchButton()}
+	<Button tone="signal" loading={busy} onclick={runNow}>
+		{status?.running ? 'Szukam…' : 'Szukaj teraz'}
+	</Button>
+{/snippet}
+
 <PageHeader
 	title="Okazje"
-	description="Oferty z OLX, Vinted, Pepper i Ceneo pasujące do pozycji z listy życzeń."
->
-	{#snippet actions()}
-		{#if rows.length > 0}
-			<Button
-				bind:element={headerSearch}
-				tone="signal"
-				loading={starting || !!status?.running}
-				onclick={runNow}
-			>
-				{status?.running ? 'Szukam…' : 'Szukaj teraz'}
-			</Button>
-		{/if}
-	{/snippet}
-</PageHeader>
+	description={summary}
+	actions={deals && deals.wishes > 0 ? searchButton : undefined}
+/>
 
 <div class="content">
 	<FormError message={runError} />
-	{#if status}
-		<p class="status metadata" role="status">
-			{#if status.scheduled}
-				Szukamy ofert {intervalLabel(status)}.
-			{:else}
-				Oferty wyszukujesz ręcznie.
-			{/if}
-			{#if !status.telegram}
-				Powiadomienia Telegram wyłączone.
-			{/if}
-			{#if status.last_finished_at}
-				Ostatnio: <RelativeTime value={status.last_finished_at} locale="pl" />.
-			{/if}
-			{#if summary}
-				{summary}.
-			{/if}
-		</p>
-		{#if sourceErrors.length > 0}
-			<Callout tone="warning" title="Niektóre źródła nie odpowiedziały">
-				<ul>
-					{#each sourceErrors as e, i (i)}
-						<li>{e}</li>
+	{#if !deals}
+		{#if failure}
+			<ErrorState
+				title="Nie udało się wczytać ofert"
+				description={failure}
+				onretry={load}
+				busy={loading}
+				retryLabel="Spróbuj ponownie"
+				retryingLabel="Ponawianie…"
+			/>
+		{:else}
+			<p role="status">Wczytywanie ofert…</p>
+		{/if}
+	{:else}
+		{#if failure}
+			<ErrorState
+				title="Nie udało się odświeżyć ofert"
+				description={failure}
+				onretry={load}
+				busy={loading}
+				overContent
+				retryLabel="Spróbuj ponownie"
+				retryingLabel="Ponawianie…"
+			/>
+		{/if}
+		{#if deals.wishes === 0}
+			<EmptyState
+				title="Lista życzeń jest pusta"
+				description="Okazji szukamy dla pozycji z listy życzeń."
+			>
+				{#snippet action()}
+					<Button tone="signal" href="/titles/new">Dodaj pozycję</Button>
+				{/snippet}
+			</EmptyState>
+		{:else}
+			<SegmentedControl label="Oferty" hideLabel options={segments} bind:value={segment} />
+			{#if shown.length > 0}
+				<ul class="deals" aria-label={segmentLabel(segment, shown.length)}>
+					{#each shown as deal (deal.id)}
+						<li><DealCard {deal} /></li>
 					{/each}
 				</ul>
-			</Callout>
+			{:else if segment === 'under' && lists.all.length > 0}
+				<EmptyState title="Brak ofert pod limitem" description={searched}>
+					{#snippet action()}
+						<Button onclick={() => (segment = 'all')}>Pokaż wszystkie</Button>
+					{/snippet}
+				</EmptyState>
+			{:else if segment === 'under'}
+				<EmptyState title="Brak ofert pod limitem" description={searched} step={nextSearch} />
+			{:else if segment === 'all'}
+				<EmptyState title="Brak ofert z listy życzeń" description={searched} step={nextSearch} />
+			{:else}
+				<EmptyState
+					title="Brak wysłanych powiadomień"
+					description={status?.telegram
+						? 'Powiadomienie wysyłamy, gdy oferta spadnie do limitu pozycji z listy życzeń.'
+						: 'Powiadomienia Telegram są wyłączone.'}
+					step="Ustaw limit ceny w pozycji z listy życzeń."
+				/>
+			{/if}
 		{/if}
-	{/if}
 
-	{#if view && !failure && rows.length === 0}
-		{#if wishlistFailure}
-			<Callout tone="warning" title="Nie udało się sprawdzić listy życzeń">
-				<p>{wishlistFailure}</p>
-				<Button {loading} onclick={load}>Spróbuj ponownie</Button>
-			</Callout>
+		{#if status}
+			<p class="status metadata" role="status">
+				{#if status.scheduled}
+					Szukamy ofert {intervalLabel(status)}.
+				{:else}
+					Oferty wyszukujesz ręcznie.
+				{/if}
+				{#if !status.telegram}
+					Powiadomienia Telegram wyłączone.
+				{/if}
+				{#if runSummary}
+					{runSummary}.
+				{/if}
+			</p>
+			{#if sourceErrors.length > 0}
+				<Callout tone="warning" title="Niektóre źródła nie odpowiedziały">
+					<ul>
+						{#each sourceErrors as e, i (i)}
+							<li>{e}</li>
+						{/each}
+					</ul>
+				</Callout>
+			{/if}
 		{/if}
-		<EmptyState
-			title={hasWishlist === false ? 'Lista życzeń jest pusta' : 'Brak pasujących ofert'}
-			description={hasWishlist === null
-				? ''
-				: hasWishlist
-					? 'Uruchom wyszukiwanie, aby sprawdzić, czy pojawiły się nowe oferty.'
-					: 'Dodaj pozycję do listy życzeń, aby szukać pasujących ofert.'}
-		>
-			{#snippet action()}
-				{#if hasWishlist}
-					<Button
-						bind:element={emptySearch}
-						tone="signal"
-						loading={starting || !!status?.running}
-						onclick={runNow}
-					>
-						{status?.running ? 'Szukam…' : 'Szukaj teraz'}
-					</Button>
-				{:else if hasWishlist === false}
-					<Button tone="signal" href="/titles/new">Dodaj pozycję</Button>
-				{/if}
-			{/snippet}
-		</EmptyState>
-	{:else}
-		<DataTable
-			aria-label="Znalezione oferty"
-			{columns}
-			{rows}
-			rowKey={(r) => r.id}
-			loading={loading && !view}
-			refreshing={loading && !!view}
-			error={failure}
-			onretry={load}
-			retryLabel="Spróbuj ponownie"
-			loadingLabel="Wczytywanie ofert…"
-			refreshingLabel="Odświeżanie…"
-			emptyLabel="Brak ofert"
-			scrollHint="Przewiń tabelę w bok"
-		>
-			{#snippet cell(row, column)}
-				{#if column.key === 'listing_title'}
-					<div class="offer">
-						<div>
-							<Link href={row.url} external externalLabel="otwiera się w nowej karcie">
-								{row.listing_title || row.url}
-							</Link>
-							<div class="metadata">
-								{sourceLabels[row.source]}{row.acquired_as
-									? ` · ${acquiredLabels[row.acquired_as]}`
-									: ''}
-							</div>
-						</div>
-						<div>
-							<strong class="price">{formatPLN(row.price_cents)}</strong>
-							<div>{limitComparison(row.price_cents, row.max_price_cents)}</div>
-							{#if row.max_price_cents != null}
-								<div class="metadata">Limit {formatPLN(row.max_price_cents)}</div>
-							{/if}
-						</div>
-						<div>
-							{#if row.title_id}
-								<Link
-									href={row.edition_id ? `/editions/${row.edition_id}` : `/titles/${row.title_id}`}
-								>
-									{row.title_name ?? 'Tytuł'}
-								</Link>
-							{:else}
-								Usunięty tytuł
-							{/if}
-							{#if row.format}
-								<span class="metadata"> · {formatLabels[row.format]}</span>
-							{/if}
-						</div>
-						{#if row.listing_photo_url || row.cover_url}
-							<div class="artwork">
-								{#each [{ url: row.listing_photo_url, label: 'Zdjęcie oferty' }, { url: row.cover_url, label: 'Okładka wydania' }] as image (image.label)}
-									{#if image.url}
-										<figure>
-											<img src={image.url} alt="" loading="lazy" referrerpolicy="no-referrer" />
-											<figcaption>{image.label}</figcaption>
-										</figure>
-									{/if}
-								{/each}
-							</div>
-						{/if}
-					</div>
-				{:else if column.key === 'alert'}
-					<Pill tone={alertTones[row.alert]} title={row.alert_error || undefined}>
-						{alertLabels[row.alert]}
-					</Pill>
-				{:else if column.key === 'observed_at'}
-					<RelativeTime value={row.observed_at} locale="pl" />
-				{/if}
-			{/snippet}
-		</DataTable>
 	{/if}
 
 	<Disclosure summary="Ustawienia wyszukiwania">
@@ -386,31 +333,16 @@
 <style>
 	.content {
 		display: grid;
-		gap: 1.5rem;
+		gap: 0.75rem;
 		padding: var(--sui-pane-gutter, 1.5rem);
 	}
-	.offer {
+	.deals {
 		display: grid;
-		gap: 0.5rem;
-		overflow-wrap: anywhere;
-		/* The table cell's `font` resets the figures; the price and limit lines take them back. */
-		font-variant-numeric: tabular-nums;
-	}
-	.artwork {
-		display: grid;
-		grid-template-columns: repeat(2, minmax(0, 6rem));
-		gap: 0.5rem;
-	}
-	.artwork figure {
+		grid-template-columns: repeat(auto-fill, minmax(min(100%, 24rem), 1fr));
+		gap: 0.75rem;
 		margin: 0;
-		font-size: 0.75rem;
-	}
-	.artwork img {
-		display: block;
-		width: 100%;
-		aspect-ratio: 1;
-		object-fit: contain;
-		object-position: center;
+		padding: 0;
+		list-style: none;
 	}
 	.status {
 		margin: 0;

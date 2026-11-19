@@ -122,7 +122,6 @@
 
 	.pill {
 		backdrop-filter: blur(24px) saturate(1.6);
-		-webkit-backdrop-filter: blur(24px) saturate(1.6);
 		background: color-mix(in srgb, var(--sui-surface-base) 72%, transparent);
 		border: 1px solid color-mix(in srgb, var(--sui-text-primary) 10%, transparent);
 		border-radius: 2rem;
@@ -248,7 +247,6 @@
 	@media (prefers-reduced-transparency: reduce) {
 		.pill {
 			backdrop-filter: none;
-			-webkit-backdrop-filter: none;
 			background: var(--sui-surface-base);
 		}
 	}

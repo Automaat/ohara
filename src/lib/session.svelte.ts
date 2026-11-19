@@ -1,6 +1,7 @@
 import { ApiError, request } from './api';
 import type { CopyStatus, Kind } from './collection';
 import { retractScan } from './recent.svelte';
+import type { QueueEntry } from './scan';
 
 /** One copy this visit added from the scanner, with what undoing it has to remove. */
 export type SessionAdd = {
@@ -12,6 +13,8 @@ export type SessionAdd = {
 	createdEdition: boolean;
 	/** The add created the title as well. */
 	createdTitle: boolean;
+	/** The scan queue entry the add's new edition took out of the queue, put back on undo. */
+	queued: QueueEntry | null;
 	name: string;
 	/** The medium, such as "4K UHD" or "Twarda oprawa"; empty when unknown. */
 	medium: string;
@@ -84,16 +87,39 @@ async function deleteUnused(fetchFn: typeof fetch, path: string): Promise<boolea
 }
 
 /**
+ * Puts back the scan queue entry an edition took out, with its scans and times. A barcode
+ * another edition carries by now stays out of the queue.
+ */
+async function requeue(fetchFn: typeof fetch, entry: QueueEntry) {
+	try {
+		await request<QueueEntry>(fetchFn, 'POST', '/api/scan-queue', {
+			barcode: entry.barcode,
+			reason: entry.reason,
+			detail: entry.detail,
+			restore: {
+				scans: entry.scans,
+				created_at: entry.created_at,
+				last_scanned_at: entry.last_scanned_at
+			}
+		});
+	} catch (err) {
+		if (status(err) !== 409) throw err;
+	}
+}
+
+/**
  * Undoes an add: deletes its copy, then the edition when the add created it and nothing else
- * uses it, then the title on the same terms. An edition or a title the add found is never
- * touched. The add leaves the visit and its recent scan reads as undone. A failure leaves the
- * add in place; trying again picks up where the last attempt stopped.
+ * uses it, then the title on the same terms, and puts back the scan queue entry the edition
+ * took out. An edition or a title the add found is never touched. The add leaves the visit and
+ * its recent scan reads as undone. A failure leaves the add in place; trying again picks up
+ * where the last attempt stopped.
  */
 export async function undoAdd(fetchFn: typeof fetch, add: SessionAdd): Promise<void> {
 	await deleteCopy(fetchFn, add.copyID);
 	if (add.createdEdition) {
 		const gone = await deleteUnused(fetchFn, `/api/editions/${add.editionID}`);
 		if (gone && add.createdTitle) await deleteUnused(fetchFn, `/api/titles/${add.titleID}`);
+		if (gone && add.queued) await requeue(fetchFn, add.queued);
 	}
 	session.adds = session.adds.filter((a) => a.id !== add.id);
 	retractScan(add.recentID);

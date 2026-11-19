@@ -244,6 +244,15 @@ func (h *Handler) decodeTitle(w http.ResponseWriter, r *http.Request) (*TitleInp
 	return &in, true
 }
 
+// createdStatus answers a create: 201 for a new row, 200 for the row an
+// earlier request with the same request key created.
+func createdStatus(created bool) int {
+	if created {
+		return http.StatusCreated
+	}
+	return http.StatusOK
+}
+
 func (h *Handler) createTitle(w http.ResponseWriter, r *http.Request) {
 	in, ok := h.decodeTitle(w, r)
 	if !ok {
@@ -252,12 +261,12 @@ func (h *Handler) createTitle(w http.ResponseWriter, r *http.Request) {
 	if h.covers != nil && emptyCover(in.CoverURL) {
 		in.CoverURL = h.titleCover(r.Context(), in)
 	}
-	t, err := h.store.CreateTitle(r.Context(), in)
+	t, created, err := h.store.CreateTitle(r.Context(), in)
 	if err != nil {
 		h.writeErr(w, "create title", err)
 		return
 	}
-	httpx.WriteJSON(w, h.logger, http.StatusCreated, t)
+	httpx.WriteJSON(w, h.logger, createdStatus(created), t)
 }
 
 func (h *Handler) updateTitle(w http.ResponseWriter, r *http.Request) {
@@ -364,12 +373,12 @@ func (h *Handler) createEdition(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	e, err := h.store.CreateEdition(r.Context(), in)
+	e, created, err := h.store.CreateEdition(r.Context(), in)
 	if err != nil {
 		h.writeErr(w, "create edition", parentErr(err, ErrTitleNotFound, "title_id"))
 		return
 	}
-	httpx.WriteJSON(w, h.logger, http.StatusCreated, e)
+	httpx.WriteJSON(w, h.logger, createdStatus(created), e)
 }
 
 func (h *Handler) updateEdition(w http.ResponseWriter, r *http.Request) {
@@ -454,14 +463,10 @@ func (h *Handler) createCopy(w http.ResponseWriter, r *http.Request) {
 		h.writeErr(w, "create copy", parentErr(err, ErrEditionNotFound, "edition_id"))
 		return
 	}
-	status := http.StatusOK
-	if created {
-		status = http.StatusCreated
-	}
 	if h.covers != nil && r.URL.Query().Get("cover") == "auto" {
 		h.fillScannedCover(r.Context(), c.EditionID)
 	}
-	httpx.WriteJSON(w, h.logger, status, c)
+	httpx.WriteJSON(w, h.logger, createdStatus(created), c)
 }
 
 func (h *Handler) updateCopy(w http.ResponseWriter, r *http.Request) {

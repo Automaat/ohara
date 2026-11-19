@@ -89,12 +89,37 @@ func (s *Store) List(ctx context.Context) ([]Entry, error) {
 	return out, nil
 }
 
+// History is what a queued barcode has been through: how often it was
+// scanned and when it was first and last scanned.
+type History struct {
+	Scans         int
+	CreatedAt     time.Time
+	LastScannedAt time.Time
+}
+
 // Add queues a normalized barcode, or records another scan of one already
 // queued with the latest reason and detail. The bool reports a new entry. A
 // barcode an edition already carries is ErrInCollection. The per-barcode lock
 // it shares with the edition trigger orders it against a concurrent edition
 // insert, so the edition check never misses an uncommitted edition.
 func (s *Store) Add(ctx context.Context, code, reason, detail string) (Entry, bool, error) {
+	return s.upsert(ctx, code, reason, detail, nil)
+}
+
+// Restore puts back an entry an edition took out of the queue, as when the
+// add that created the edition is undone, with its scans and times. Should
+// the barcode be queued again by then, the two merge: scans add up and the
+// entry keeps the earliest and latest scan. Errors are those of Add.
+func (s *Store) Restore(ctx context.Context, code, reason, detail string, h History) (Entry, bool, error) {
+	return s.upsert(ctx, code, reason, detail, &h)
+}
+
+func (s *Store) upsert(ctx context.Context, code, reason, detail string, h *History) (Entry, bool, error) {
+	var scans *int
+	var createdAt, lastScannedAt *time.Time
+	if h != nil {
+		scans, createdAt, lastScannedAt = &h.Scans, &h.CreatedAt, &h.LastScannedAt
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return Entry{}, false, fmt.Errorf("add to scan queue: begin: %w", err)
@@ -103,15 +128,18 @@ func (s *Store) Add(ctx context.Context, code, reason, detail string) (Entry, bo
 	if _, err := tx.Exec(ctx, `SELECT scan_queue_lock($1)`, code); err != nil {
 		return Entry{}, false, fmt.Errorf("add to scan queue: lock: %w", err)
 	}
-	row := tx.QueryRow(ctx, `INSERT INTO scan_queue AS q (barcode, reason, detail)
-		SELECT $1, $2, $3
+	row := tx.QueryRow(ctx, `INSERT INTO scan_queue AS q
+			(barcode, reason, detail, scans, created_at, last_scanned_at)
+		SELECT $1, $2, $3, COALESCE($4::integer, 1), COALESCE($5::timestamptz, now()),
+			COALESCE($6::timestamptz, now())
 		WHERE NOT EXISTS (SELECT 1 FROM edition WHERE barcode = $1)
 		ON CONFLICT (barcode) DO UPDATE SET
 			reason = EXCLUDED.reason,
 			detail = EXCLUDED.detail,
-			scans = q.scans + 1,
-			last_scanned_at = now()
-		RETURNING `+columns+`, (xmax = 0)`, code, reason, detail)
+			scans = q.scans + EXCLUDED.scans,
+			created_at = LEAST(q.created_at, EXCLUDED.created_at),
+			last_scanned_at = GREATEST(q.last_scanned_at, EXCLUDED.last_scanned_at)
+		RETURNING `+columns+`, (xmax = 0)`, code, reason, detail, scans, createdAt, lastScannedAt)
 	var entry Entry
 	var created bool
 	err = row.Scan(&entry.ID, &entry.Barcode, &entry.Reason, &entry.Detail, &entry.Scans,

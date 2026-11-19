@@ -12,20 +12,23 @@ import {
 } from './session.svelte';
 
 type Reply = [number, unknown];
+type Call = { key: string; body: unknown };
 
 /** A fetch that answers "METHOD /path" from routes, in order when a route has several replies. */
 function server(routes: Record<string, Reply | Reply[]>) {
 	const calls: string[] = [];
+	const sent: Call[] = [];
 	const fetchFn: typeof fetch = async (input, init) => {
 		const key = `${init?.method ?? 'GET'} ${String(input)}`;
 		calls.push(key);
+		sent.push({ key, body: init?.body ? JSON.parse(String(init.body)) : undefined });
 		const route = routes[key];
 		const reply = Array.isArray(route?.[0]) ? (route as Reply[]).shift() : (route as Reply);
 		if (!reply) throw new TypeError(`unexpected ${key}`);
 		const [status, body] = reply;
 		return new Response(body === null ? null : JSON.stringify(body), { status });
 	};
-	return { fetchFn, calls };
+	return { fetchFn, calls, sent };
 }
 
 function add(over: Partial<Omit<SessionAdd, 'id' | 'recentID'>> = {}): SessionAdd {
@@ -36,6 +39,7 @@ function add(over: Partial<Omit<SessionAdd, 'id' | 'recentID'>> = {}): SessionAd
 		titleID: 9,
 		createdEdition: false,
 		createdTitle: false,
+		queued: null,
 		name: 'Diuna: Część druga',
 		medium: '4K UHD',
 		kind: 'movie',
@@ -152,5 +156,70 @@ describe('undoAdd', () => {
 			'DELETE /api/titles/9'
 		]);
 		expect(session.adds).toEqual([]);
+	});
+
+	describe('with a scan queue entry the edition took out', () => {
+		const queued = {
+			id: 3,
+			barcode: '5901234123457',
+			reason: 'lookup_failed' as const,
+			detail: 'bn: timeout',
+			scans: 2,
+			created_at: '2026-11-01T10:00:00Z',
+			last_scanned_at: '2026-11-02T10:00:00Z'
+		};
+
+		it('puts the entry back with its scans and times once the edition is gone', async () => {
+			const s = server({
+				'DELETE /api/copies/40': gone,
+				'DELETE /api/editions/21': gone,
+				'DELETE /api/titles/9': gone,
+				'POST /api/scan-queue': [201, queued]
+			});
+			await undoAdd(s.fetchFn, add({ createdEdition: true, createdTitle: true, queued }));
+			expect(s.calls.at(-1)).toBe('POST /api/scan-queue');
+			expect(s.sent.at(-1)?.body).toEqual({
+				barcode: '5901234123457',
+				reason: 'lookup_failed',
+				detail: 'bn: timeout',
+				restore: {
+					scans: 2,
+					created_at: '2026-11-01T10:00:00Z',
+					last_scanned_at: '2026-11-02T10:00:00Z'
+				}
+			});
+			expect(session.adds).toEqual([]);
+		});
+
+		it('leaves the queue alone while another copy keeps the edition', async () => {
+			const s = server({
+				'DELETE /api/copies/40': gone,
+				'DELETE /api/editions/21': [409, { error: 'edition still has copies' }]
+			});
+			await undoAdd(s.fetchFn, add({ createdEdition: true, queued }));
+			expect(s.calls).not.toContain('POST /api/scan-queue');
+		});
+
+		it('accepts a barcode another edition carries by now', async () => {
+			const s = server({
+				'DELETE /api/copies/40': gone,
+				'DELETE /api/editions/21': gone,
+				'POST /api/scan-queue': [409, { error: 'in collection', field: 'barcode' }]
+			});
+			await undoAdd(s.fetchFn, add({ createdEdition: true, queued }));
+			expect(session.adds).toEqual([]);
+		});
+
+		it('keeps the add when the queue does not answer', async () => {
+			const s = server({
+				'DELETE /api/copies/40': gone,
+				'DELETE /api/editions/21': gone,
+				'POST /api/scan-queue': [500, { error: 'boom' }]
+			});
+			await expect(
+				undoAdd(s.fetchFn, add({ createdEdition: true, queued }))
+			).rejects.toBeInstanceOf(ApiError);
+			expect(session.adds).toHaveLength(1);
+		});
 	});
 });

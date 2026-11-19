@@ -45,6 +45,7 @@ const dune: SessionAdd = {
 	titleID: 9,
 	createdEdition: true,
 	createdTitle: true,
+	queued: null,
 	name: 'Diuna: Część druga',
 	medium: '4K UHD',
 	kind: 'movie',
@@ -99,15 +100,24 @@ describe('AddToasts', () => {
 		expect(h.shown.size).toBe(0);
 	});
 
-	it('replaces the last add toast with the next one', () => {
+	it('keeps each add toast for its own six seconds', () => {
 		const h = host();
 		const toasts = new AddToasts(h, async () => {});
 		toasts.show(dune);
+		vi.advanceTimersByTime(1000);
 		toasts.show({ ...dune, id: 2, name: 'Solaris', medium: '' });
+		expect([...h.shown.values()].map((t) => t.description)).toEqual([
+			'Diuna: Część druga · 4K UHD',
+			'Solaris'
+		]);
+		vi.advanceTimersByTime(addToastMs - 1000);
 		expect([...h.shown.values()].map((t) => t.description)).toEqual(['Solaris']);
-		expect(h.ended).toEqual([['Dodano do kolekcji', 'withdrawn']]);
-		vi.advanceTimersByTime(addToastMs);
+		vi.advanceTimersByTime(1000);
 		expect(h.shown.size).toBe(0);
+		expect(h.ended).toEqual([
+			['Dodano do kolekcji', 'expired'],
+			['Dodano do kolekcji', 'expired']
+		]);
 	});
 
 	it('undoes the add from Cofnij and says so', async () => {

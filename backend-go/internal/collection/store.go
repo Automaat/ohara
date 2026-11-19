@@ -153,18 +153,30 @@ func (s *Store) GetTitle(ctx context.Context, id int64) (Title, error) {
 	return t, mapErr(err, ErrTitleNotFound, "get title")
 }
 
-// CreateTitle inserts a normalized title.
-func (s *Store) CreateTitle(ctx context.Context, in *TitleInput) (Title, error) {
+// CreateTitle inserts a normalized title. With a request key already used,
+// it returns that key's title and false instead of inserting another.
+func (s *Store) CreateTitle(ctx context.Context, in *TitleInput) (Title, bool, error) {
 	var id int64
 	err := s.pool.QueryRow(ctx, `INSERT INTO title
-		(kind, name, original_title, polish_title, year, tmdb_id, authors, bn_id, openlibrary_id, notes, cover_url)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, '')) RETURNING id`,
+		(kind, name, original_title, polish_title, year, tmdb_id, authors, bn_id, openlibrary_id, notes,
+		cover_url, request_key)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, ''), $12)
+		ON CONFLICT (request_key) DO NOTHING RETURNING id`,
 		in.Kind, in.Name, in.OriginalTitle, in.PolishTitle, in.Year, in.TMDBID, in.Authors,
-		in.BNID, in.OpenLibraryID, in.Notes, in.CoverURL).Scan(&id)
-	if err != nil {
-		return Title{}, mapErr(err, ErrTitleNotFound, "create title")
+		in.BNID, in.OpenLibraryID, in.Notes, in.CoverURL, in.RequestKey).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) && in.RequestKey != nil {
+		err = s.pool.QueryRow(ctx, `SELECT id FROM title WHERE request_key = $1`, *in.RequestKey).Scan(&id)
+		if err != nil {
+			return Title{}, false, mapErr(err, ErrTitleNotFound, "replay title")
+		}
+		t, err := s.GetTitle(ctx, id)
+		return t, false, err
 	}
-	return s.GetTitle(ctx, id)
+	if err != nil {
+		return Title{}, false, mapErr(err, ErrTitleNotFound, "create title")
+	}
+	t, err := s.GetTitle(ctx, id)
+	return t, true, err
 }
 
 // UpdateTitle replaces a title. The kind cannot change while editions exist,
@@ -258,24 +270,36 @@ func lockTitleKind(ctx context.Context, tx pgx.Tx, in *EditionInput) (string, er
 }
 
 // CreateEdition inserts a normalized edition. Errors: ErrTitleNotFound,
-// ErrDuplicateBarcode or a *httpx.FieldError for kind-specific fields.
-func (s *Store) CreateEdition(ctx context.Context, in *EditionInput) (Edition, error) {
+// ErrDuplicateBarcode or a *httpx.FieldError for kind-specific fields. With a
+// request key already used, it returns that key's edition and false instead
+// of inserting another.
+func (s *Store) CreateEdition(ctx context.Context, in *EditionInput) (Edition, bool, error) {
 	var id int64
+	created := true
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
 		if _, err := lockTitleKind(ctx, tx, in); err != nil {
 			return err
 		}
 		err := tx.QueryRow(ctx, `INSERT INTO edition (title_id, barcode, label, publisher, year,
-			format, pl_subtitles, pl_voiceover, packaging, binding, discogs_release_id, notes, cover_url)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NULLIF($13, '')) RETURNING id`,
+			format, pl_subtitles, pl_voiceover, packaging, binding, discogs_release_id, notes, cover_url,
+			request_key)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NULLIF($13, ''), $14)
+			ON CONFLICT (request_key) DO NOTHING RETURNING id`,
 			in.TitleID, in.Barcode, in.Label, in.Publisher, in.Year, in.Format, in.PLSubtitles,
-			in.PLVoiceover, in.Packaging, in.Binding, in.DiscogsReleaseID, in.Notes, in.CoverURL).Scan(&id)
+			in.PLVoiceover, in.Packaging, in.Binding, in.DiscogsReleaseID, in.Notes, in.CoverURL,
+			in.RequestKey).Scan(&id)
+		if errors.Is(err, pgx.ErrNoRows) && in.RequestKey != nil {
+			created = false
+			err = tx.QueryRow(ctx, `SELECT id FROM edition WHERE request_key = $1`, *in.RequestKey).Scan(&id)
+			return mapErr(err, ErrEditionNotFound, "replay edition")
+		}
 		return mapErr(err, ErrEditionNotFound, "create edition")
 	})
 	if err != nil {
-		return Edition{}, err
+		return Edition{}, false, err
 	}
-	return s.GetEdition(ctx, id)
+	e, err := s.GetEdition(ctx, id)
+	return e, created, err
 }
 
 // UpdateEdition replaces an edition, which may move to another title of the

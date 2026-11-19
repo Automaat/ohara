@@ -1,5 +1,5 @@
 import { ApiError, errorMessage, invalidBarcodeMessage } from './api';
-import { bindingLabels, formatLabels, formatPLN, type FormIssue } from './collection';
+import { bindingLabels, formatLabels, formatPLN, type Edition, type FormIssue } from './collection';
 import { logScan } from './recent.svelte';
 import {
 	FormRejected,
@@ -30,7 +30,6 @@ import {
 	type Sticky
 } from './scan';
 import { recordAdd, type SessionAdd } from './session.svelte';
-import { editionArtwork } from './title-detail';
 
 /** found and owned have candidates or the edition; missing is filled in by hand. */
 export type ItemStatus = 'found' | 'owned' | 'missing';
@@ -63,20 +62,10 @@ export type FlowItem = {
  */
 export type Added = { saved: Saved; add: SessionAdd; barcode: string; next: string | null };
 
-/** The medium a save went in as: the edition's format or binding, else the form's. */
-function mediumOf(target: SaveTarget, f: QuickForm): string {
-	const e = target.kind === 'owned' ? target.edition : null;
-	const format = e ? e.format : f.format || null;
-	const binding = e ? e.binding : f.kind === 'book' ? f.binding || null : null;
-	if (format) return formatLabels[format];
-	return binding ? bindingLabels[binding] : '';
-}
-
-/** The artwork the sheet showed for what was saved. */
-function coverOf(target: SaveTarget, f: QuickForm): string | undefined {
-	if (target.kind === 'owned') return editionArtwork(target.edition, target.edition.title);
-	const c = target.candidate;
-	return c?.type === f.kind ? c.cover_url : undefined;
+/** The medium of the edition a save joined: its format or binding. */
+function mediumOf(e: Pick<Edition, 'format' | 'binding'>): string {
+	if (e.format) return formatLabels[e.format];
+	return e.binding ? bindingLabels[e.binding] : '';
 }
 
 /**
@@ -327,8 +316,7 @@ export class ScanFlow {
 		this.saving = true;
 		this.issue = null;
 		try {
-			const target = $state.snapshot(item.target);
-			const saved = await saveScan(this.#fetch, target, f, item.key, item.made);
+			const saved = await saveScan(this.#fetch, item.target, f, item.key, item.made);
 			const kept = { ...f, status: saved.copy.status ?? f.status };
 			if (kept.status === 'owned') visit.date = kept.purchased_on;
 			this.sticky = stickyAfter(this.sticky, kept);
@@ -348,10 +336,11 @@ export class ScanFlow {
 				titleID: saved.titleID,
 				createdEdition: saved.createdEdition,
 				createdTitle: saved.createdTitle,
+				queued: saved.queued,
 				name: saved.titleName,
-				medium: mediumOf(target, kept),
-				kind: target.kind === 'owned' ? target.edition.title.kind : kept.kind,
-				cover: coverOf(target, kept),
+				medium: mediumOf(saved.edition),
+				kind: saved.kind,
+				cover: saved.cover,
 				status: kept.status,
 				priceCents: kept.status === 'owned' ? (saved.copy.price_cents ?? null) : null,
 				recentID

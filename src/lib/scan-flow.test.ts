@@ -10,13 +10,18 @@ type Reply = [number, unknown] | (() => Promise<[number, unknown]>);
 type Call = { method: string; url: string; body: unknown };
 
 /** A fetch that answers "METHOD /path" from routes, in order when a route has several replies. */
+/** The scan queue a save reads before it creates an edition: empty unless a test says otherwise. */
+function emptyQueue(method: string, url: string): Reply | undefined {
+	return method === 'GET' && url === '/api/scan-queue' ? [200, []] : undefined;
+}
+
 function server(routes: Record<string, Reply | Reply[]>) {
 	const calls: Call[] = [];
 	const fetchFn: typeof fetch = async (input, init) => {
 		const method = init?.method ?? 'GET';
 		const url = String(input);
 		calls.push({ method, url, body: init?.body ? JSON.parse(String(init.body)) : undefined });
-		const route = routes[`${method} ${url}`];
+		const route = routes[`${method} ${url}`] ?? emptyQueue(method, url);
 		const queued =
 			Array.isArray(route) && (Array.isArray(route[0]) || typeof route[0] === 'function');
 		const reply = queued ? (route as Reply[]).shift() : (route as Reply | undefined);
@@ -240,8 +245,18 @@ describe('ScanFlow picks', () => {
 		const s = server({
 			...lookup([movie, bare], true),
 			'GET /api/titles?tmdb_id=1': [200, []],
-			'POST /api/titles': [201, { id: 9, name: 'Diuna: Część druga' }],
-			'POST /api/editions': [201, { id: 21, title_id: 9, barcode: code }],
+			'POST /api/titles': [201, { id: 9, name: 'Diuna: Część druga', kind: 'movie' }],
+			'POST /api/editions': [
+				201,
+				{
+					id: 21,
+					title_id: 9,
+					barcode: code,
+					format: 'uhd',
+					binding: null,
+					cover_url: 'https://image.tmdb.org/t/p/w342/d.jpg'
+				}
+			],
 			'POST /api/copies?cover=auto': copyReply()
 		});
 		const flow = new ScanFlow(s.fetchFn, memory());
@@ -461,8 +476,18 @@ describe('ScanFlow.save', () => {
 		const s = server({
 			...lookup([{ ...movie, cover_url: 'https://image.tmdb.org/t/p/w342/d.jpg' }], false),
 			'GET /api/titles?tmdb_id=1': [200, []],
-			'POST /api/titles': [201, { id: 9, name: 'Diuna: Część druga' }],
-			'POST /api/editions': [201, { id: 21, title_id: 9, barcode: code }],
+			'POST /api/titles': [201, { id: 9, name: 'Diuna: Część druga', kind: 'movie' }],
+			'POST /api/editions': [
+				201,
+				{
+					id: 21,
+					title_id: 9,
+					barcode: code,
+					format: 'uhd',
+					binding: null,
+					cover_url: 'https://image.tmdb.org/t/p/w342/d.jpg'
+				}
+			],
 			'POST /api/copies?cover=auto': copyReply({ id: 41, edition_id: 21, price_cents: null })
 		});
 		const flow = new ScanFlow(s.fetchFn, memory());
@@ -484,8 +509,11 @@ describe('ScanFlow.save', () => {
 	it('records a book by its binding and a wish without a price', async () => {
 		const s = server({
 			...lookup([book], false),
-			'POST /api/titles': [201, { id: 1, name: 'Lalka' }],
-			'POST /api/editions': [201, { id: 2, title_id: 1, barcode: code }],
+			'POST /api/titles': [201, { id: 1, name: 'Lalka', kind: 'book' }],
+			'POST /api/editions': [
+				201,
+				{ id: 2, title_id: 1, barcode: code, format: null, binding: 'hardcover' }
+			],
 			'POST /api/copies?cover=auto': copyReply({
 				id: 42,
 				edition_id: 2,
@@ -505,6 +533,57 @@ describe('ScanFlow.save', () => {
 			status: 'wishlist',
 			priceCents: null
 		});
+	});
+
+	it('names the medium of the edition another sheet created, not the one it asked for', async () => {
+		const s = server({
+			...lookup([movie], false),
+			'GET /api/titles?tmdb_id=1': [200, []],
+			'POST /api/titles': [201, { id: 9, name: 'Diuna: Część druga', kind: 'movie' }],
+			'POST /api/editions': [409, { error: 'dup', field: 'barcode' }],
+			[`GET /api/editions?barcode=${code}`]: [
+				[200, []],
+				[200, [{ id: 7, title_id: 4, barcode: code, format: 'bluray', binding: null }]]
+			],
+			'DELETE /api/titles/9': [204, null],
+			'GET /api/titles/4': [200, { id: 4, name: 'Diuna: Część druga', kind: 'movie' }],
+			'POST /api/copies?cover=auto': copyReply({ id: 43, edition_id: 7 })
+		});
+		const flow = new ScanFlow(s.fetchFn, memory());
+		await flow.load(code);
+		expect(flow.form.format).toBe('uhd');
+		const added = await flow.save();
+		expect(added?.add).toMatchObject({
+			editionID: 7,
+			titleID: 4,
+			createdEdition: false,
+			createdTitle: false,
+			medium: 'Blu-ray'
+		});
+	});
+
+	it('keeps the scan queue entry the new edition takes out, for undo', async () => {
+		const entry = {
+			id: 3,
+			barcode: code,
+			reason: 'lookup_failed',
+			detail: 'bn: timeout',
+			scans: 2,
+			created_at: '2026-11-01T10:00:00Z',
+			last_scanned_at: '2026-11-02T10:00:00Z'
+		};
+		const s = server({
+			...lookup([movie], false),
+			'GET /api/scan-queue': [200, [{ ...entry, id: 2, barcode: other }, entry]],
+			'GET /api/titles?tmdb_id=1': [200, []],
+			'POST /api/titles': [201, { id: 9, name: 'Diuna: Część druga', kind: 'movie' }],
+			'POST /api/editions': [201, { id: 21, title_id: 9, barcode: code, format: 'uhd' }],
+			'POST /api/copies?cover=auto': copyReply({ id: 41, edition_id: 21 })
+		});
+		const flow = new ScanFlow(s.fetchFn, memory());
+		await flow.load(code);
+		const added = await flow.save();
+		expect(added?.add.queued).toEqual(entry);
 	});
 
 	it('starts the next item when a wedge scanner typed a code into the price', async () => {

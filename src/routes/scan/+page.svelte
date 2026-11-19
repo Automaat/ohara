@@ -428,7 +428,7 @@
 					<ObjectRow href={`/copies/${add.copyID}`}>
 						{#snippet main()}
 							<span class="added">
-								<CollectionCover kind={add.kind} url={add.cover} wish={add.status !== 'owned'} />
+								<CollectionCover kind={add.kind} url={add.cover} />
 								<span class="added-text">
 									<span class="added-name">{add.name}</span>
 									{#if add.medium}<span class="metadata">{add.medium}</span>{/if}

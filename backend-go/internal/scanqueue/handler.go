@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -49,6 +50,31 @@ type AddInput struct {
 	Barcode string `json:"barcode"`
 	Reason  string `json:"reason"`
 	Detail  string `json:"detail"`
+	// Restore puts back an entry with its history instead of recording a
+	// new scan: the scanner sends it when it undoes an add whose edition
+	// took the barcode out of the queue.
+	Restore *RestoreInput `json:"restore,omitempty"`
+}
+
+// RestoreInput is the history of an entry being put back.
+type RestoreInput struct {
+	Scans         int       `json:"scans"`
+	CreatedAt     time.Time `json:"created_at"`
+	LastScannedAt time.Time `json:"last_scanned_at"`
+}
+
+// history checks a restored entry's history: at least one scan, the first
+// scan no later than the last, and neither in the future.
+func (in *RestoreInput) history(now time.Time) (History, *httpx.FieldError) {
+	switch {
+	case in.Scans < 1:
+		return History{}, &httpx.FieldError{Field: "restore.scans", Msg: "must be at least 1"}
+	case in.CreatedAt.IsZero() || in.CreatedAt.After(in.LastScannedAt):
+		return History{}, &httpx.FieldError{Field: "restore.created_at", Msg: "must be set and not after last_scanned_at"}
+	case in.LastScannedAt.After(now):
+		return History{}, &httpx.FieldError{Field: "restore.last_scanned_at", Msg: "must not be in the future"}
+	}
+	return History{Scans: in.Scans, CreatedAt: in.CreatedAt, LastScannedAt: in.LastScannedAt}, nil
 }
 
 func (h *Handler) add(w http.ResponseWriter, r *http.Request) {
@@ -65,7 +91,19 @@ func (h *Handler) add(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteFieldError(w, h.logger, &httpx.FieldError{Field: "reason", Msg: "unknown value"})
 		return
 	}
-	entry, created, err := h.store.Add(r.Context(), code, in.Reason, truncate(strings.TrimSpace(in.Detail), maxDetail))
+	detail := truncate(strings.TrimSpace(in.Detail), maxDetail)
+	var entry Entry
+	var created bool
+	if in.Restore != nil {
+		history, fe := in.Restore.history(time.Now())
+		if fe != nil {
+			httpx.WriteFieldError(w, h.logger, fe)
+			return
+		}
+		entry, created, err = h.store.Restore(r.Context(), code, in.Reason, detail, history)
+	} else {
+		entry, created, err = h.store.Add(r.Context(), code, in.Reason, detail)
+	}
 	switch {
 	case errors.Is(err, ErrInCollection):
 		httpx.WriteJSON(w, h.logger, http.StatusConflict, httpx.Error{Error: err.Error(), Field: "barcode"})

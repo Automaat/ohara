@@ -58,6 +58,10 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
 - Money is integer grosze (`price_cents`). Barcodes are stored normalized
   (`barcode.Normalize`: EAN-8, EAN-13 or GTIN-14; a UPC-A becomes its
   EAN-13 with a leading 0, ISBN-10 becomes ISBN-13), one edition per barcode.
+- `POST /api/titles`, `/api/editions` and `/api/copies` take an optional
+  `request_key`: a repeat with the same key answers 200 with the row the
+  first request created. The scanner sends one key per add, so a retry
+  after a lost answer knows what the add made and undo removes only that.
 - Lookup providers implement `lookup.Provider` (`Fetch` returns raw JSON,
   `Parse` turns raw JSON into candidates) and register in `cmd/api` with a
   cache TTL. Candidate `title`/`edition` fields match the POST bodies of
@@ -132,7 +136,9 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   quote, so movie discs have no floor.
 - A barcode no provider resolves goes to `scan_queue`; a trigger on `edition`
   removes it once an edition carries that barcode. `ohara_scan_queue_size`
-  counts it on each scrape.
+  counts it on each scrape. `POST /api/scan-queue` with `restore` (`scans`,
+  `created_at`, `last_scanned_at`) puts an entry back with its history, as
+  the scanner does when it undoes an add whose new edition took it out.
 
 ### Frontend
 

@@ -89,6 +89,9 @@ type TitleInput struct {
 	OpenLibraryID *string  `json:"openlibrary_id"`
 	Notes         string   `json:"notes"`
 	CoverURL      *string  `json:"cover_url,omitempty"`
+	// RequestKey makes a create safe to retry: a second create with the
+	// same key returns the first title. Updates ignore it.
+	RequestKey *string `json:"request_key,omitempty"`
 }
 
 // Title is a work: a film, a book or an album.
@@ -121,6 +124,9 @@ type EditionInput struct {
 	DiscogsReleaseID *int64  `json:"discogs_release_id"`
 	Notes            string  `json:"notes"`
 	CoverURL         *string `json:"cover_url,omitempty"`
+	// RequestKey makes a create safe to retry: a second create with the
+	// same key returns the first edition. Updates ignore it.
+	RequestKey *string `json:"request_key,omitempty"`
 }
 
 // Edition is a concrete release of a title.
@@ -152,8 +158,17 @@ type CopyInput struct {
 	RequestKey *string `json:"request_key,omitempty"`
 }
 
-// maxRequestKey caps CopyInput.RequestKey, in bytes.
+// maxRequestKey caps a create's RequestKey, in bytes.
 const maxRequestKey = 100
+
+// normalizeRequestKey trims a create's request key; blank is none.
+func normalizeRequestKey(key *string) (*string, *httpx.FieldError) {
+	trimmed := trimOpt(key)
+	if trimmed != nil && len(*trimmed) > maxRequestKey {
+		return nil, fieldErr("request_key", "is too long")
+	}
+	return trimmed, nil
+}
 
 // Copy is one physical item, owned or wanted.
 type Copy struct {
@@ -218,6 +233,11 @@ func (in *TitleInput) Normalize() *httpx.FieldError {
 	in.PolishTitle = trimOpt(in.PolishTitle)
 	in.BNID = trimOpt(in.BNID)
 	in.OpenLibraryID = trimOpt(in.OpenLibraryID)
+	key, fe := normalizeRequestKey(in.RequestKey)
+	if fe != nil {
+		return fe
+	}
+	in.RequestKey = key
 	authors := make([]string, 0, len(in.Authors))
 	for _, a := range in.Authors {
 		if a = strings.TrimSpace(a); a != "" {
@@ -282,6 +302,11 @@ func (in *EditionInput) Normalize() *httpx.FieldError {
 	in.Binding = trimOpt(in.Binding)
 	in.PLSubtitles = defaultTri(in.PLSubtitles)
 	in.PLVoiceover = defaultTri(in.PLVoiceover)
+	key, fe := normalizeRequestKey(in.RequestKey)
+	if fe != nil {
+		return fe
+	}
+	in.RequestKey = key
 	if in.TitleID <= 0 {
 		return fieldErr("title_id", "is required")
 	}
@@ -392,10 +417,11 @@ func (in *CopyInput) Normalize() *httpx.FieldError {
 	in.Notes = strings.TrimSpace(in.Notes)
 	in.AcquiredAs = trimOpt(in.AcquiredAs)
 	in.Condition = trimOpt(in.Condition)
-	in.RequestKey = trimOpt(in.RequestKey)
-	if in.RequestKey != nil && len(*in.RequestKey) > maxRequestKey {
-		return fieldErr("request_key", "is too long")
+	key, fe := normalizeRequestKey(in.RequestKey)
+	if fe != nil {
+		return fe
 	}
+	in.RequestKey = key
 	if in.EditionID <= 0 {
 		return fieldErr("edition_id", "is required")
 	}

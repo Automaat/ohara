@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/Automaat/ohara/backend-go/internal/collection"
@@ -146,6 +147,22 @@ func TestQueueRejectsBadInput(t *testing.T) {
 		{"unknown reason", obj{"barcode": "5901234123457", "reason": "bored"}, "reason"},
 		{"missing reason", obj{"barcode": "5901234123457"}, "reason"},
 		{"not an object", "nope", "body"},
+		{"restore without scans", obj{
+			"barcode": "5901234123457", "reason": "not_found",
+			"restore": obj{"scans": 0, "created_at": "2026-11-01T10:00:00Z", "last_scanned_at": "2026-11-02T10:00:00Z"},
+		}, "restore.scans"},
+		{"restore first after last", obj{
+			"barcode": "5901234123457", "reason": "not_found",
+			"restore": obj{"scans": 2, "created_at": "2026-11-03T10:00:00Z", "last_scanned_at": "2026-11-02T10:00:00Z"},
+		}, "restore.created_at"},
+		{"restore without times", obj{
+			"barcode": "5901234123457", "reason": "not_found",
+			"restore": obj{"scans": 2},
+		}, "restore.created_at"},
+		{"restore in the future", obj{
+			"barcode": "5901234123457", "reason": "not_found",
+			"restore": obj{"scans": 2, "created_at": "2026-11-01T10:00:00Z", "last_scanned_at": "2999-01-01T00:00:00Z"},
+		}, "restore.last_scanned_at"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -214,5 +231,42 @@ func TestStoreCount(t *testing.T) {
 	}
 	if n, err := store.Count(ctx); err != nil || n != 2 {
 		t.Fatalf("count = %d, %v; want 2 distinct barcodes", n, err)
+	}
+}
+
+func TestRestorePutsBackAnUndoneEntry(t *testing.T) {
+	a := newAPI(t)
+	first := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
+	last := time.Date(2026, 11, 2, 18, 30, 0, 0, time.UTC)
+	restore := obj{
+		"barcode": "5901234123457", "reason": "lookup_failed", "detail": "bn: timeout",
+		"restore": obj{"scans": 3, "created_at": first, "last_scanned_at": last},
+	}
+
+	var e scanqueue.Entry
+	a.mustDo(http.MethodPost, "/api/scan-queue", restore, &e, http.StatusCreated)
+	if e.Scans != 3 || !e.CreatedAt.Equal(first) || !e.LastScannedAt.Equal(last) || e.Reason != "lookup_failed" || e.Detail != "bn: timeout" {
+		t.Fatalf("restored = %+v", e)
+	}
+
+	a.mustDo(http.MethodPost, "/api/scan-queue", obj{"barcode": "5901234123457", "reason": "not_found"}, &e, http.StatusOK)
+	if e.Scans != 4 || !e.CreatedAt.Equal(first) || !e.LastScannedAt.After(last) {
+		t.Fatalf("scanned again after restore = %+v", e)
+	}
+
+	a.mustDo(http.MethodPost, "/api/scan-queue", restore, &e, http.StatusOK)
+	if e.Scans != 7 || !e.CreatedAt.Equal(first) || !e.LastScannedAt.After(last) {
+		t.Fatalf("restored over a queued entry = %+v", e)
+	}
+
+	var movie collection.Title
+	a.mustDo(http.MethodPost, "/api/titles", obj{"kind": "movie", "name": "Rejs"}, &movie, http.StatusCreated)
+	a.mustDo(http.MethodPost, "/api/editions",
+		obj{"title_id": movie.ID, "barcode": "5901234123457", "format": "dvd"}, nil, http.StatusCreated)
+	var conflict struct {
+		Field string `json:"field"`
+	}
+	if got := a.do(http.MethodPost, "/api/scan-queue", restore, &conflict); got != http.StatusConflict || conflict.Field != "barcode" {
+		t.Fatalf("restoring a barcode in the collection = %d %+v, want 409 on barcode", got, conflict)
 	}
 }

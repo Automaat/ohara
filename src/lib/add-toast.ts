@@ -20,16 +20,16 @@ export type ToastHost = {
 
 /**
  * The toast after each add from the scanner: what went in and "Cofnij", for `addToastMs` away
- * from the toast, the clock restarting in full each time the reader comes back to it. A newer
- * add replaces it, so it never stacks over the camera. "Cofnij" undoes the add and says so; a
- * failed undo stays as a failure with "Spróbuj ponownie".
+ * from the toast, the clock restarting in full each time the reader comes back to it. Each add
+ * keeps its own toast and clock, so a quick next add never cuts the last one's window short.
+ * "Cofnij" undoes the add and says so; a failed undo stays as a failure with "Spróbuj ponownie".
  */
 export class AddToasts {
 	readonly #host: ToastHost;
 	readonly #undo: (add: SessionAdd) => Promise<void>;
 	readonly #window: number;
-	/** The add toast on show and its clock. */
-	#shown: { id: number; timer: ReturnType<typeof setInterval> } | null = null;
+	/** The clock of each add toast on show, by toast id. */
+	readonly #clocks = new Map<number, ReturnType<typeof setInterval>>();
 	/** Every toast still up, withdrawn when the page goes away. */
 	readonly #up = new Set<number>();
 	#live = true;
@@ -44,10 +44,9 @@ export class AddToasts {
 		this.#window = window;
 	}
 
-	/** Shows what the add put in, with "Cofnij", in place of the last add's toast. */
+	/** Shows what the add put in, with "Cofnij". */
 	show(add: SessionAdd): void {
 		if (!this.#live) return;
-		if (this.#shown) this.#host.dismiss(this.#shown.id, 'withdrawn');
 		const id = this.#raise({
 			title: add.status === 'owned' ? 'Dodano do kolekcji' : 'Dodano do listy życzeń',
 			description: addLine(add),
@@ -63,7 +62,7 @@ export class AddToasts {
 			left -= holdCheckMs;
 			if (left <= 0) this.#host.dismiss(id, 'expired');
 		}, holdCheckMs);
-		this.#shown = { id, timer };
+		this.#clocks.set(id, timer);
 	}
 
 	/** Takes every toast back and stops reporting, for a page that is gone. */
@@ -85,9 +84,8 @@ export class AddToasts {
 	}
 
 	#settle(id: number): void {
-		if (this.#shown?.id !== id) return;
-		clearInterval(this.#shown.timer);
-		this.#shown = null;
+		clearInterval(this.#clocks.get(id));
+		this.#clocks.delete(id);
 	}
 
 	async #revert(add: SessionAdd): Promise<void> {

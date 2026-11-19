@@ -2,6 +2,7 @@
 	import { Disclosure } from '@smykla-skalski/sui';
 	import {
 		boundLabels,
+		dayLabel,
 		formatZl,
 		historyPaths,
 		historyRows,
@@ -9,13 +10,15 @@
 		type HistoryPoint
 	} from '#lib/valuation.js';
 
-	let { history }: { history: HistoryPoint[] } = $props();
+	let { history, lastValuation }: { history: HistoryPoint[]; lastValuation: string | null } =
+		$props();
 
 	const width = 326;
 	const height = 128;
 	const paths = $derived(historyPaths(history, width, height));
 	const rows = $derived(historyRows(history));
 	const span = $derived(historySpan(history));
+	const amount = (v: number | null) => (v === null ? '—' : formatZl(v));
 </script>
 
 <section class="history" aria-labelledby="valuation-history-title">
@@ -31,42 +34,50 @@
 			aria-label="Przedział od skupu do nowych, wartość używanych i kwota wydana w każdej wycenie"
 		>
 			<path class="band" d={paths.band} />
-			<path class="spent" d={paths.spent} />
 			<path class="mid" d={paths.mid} />
+			<path class="spent" d={paths.spent} />
 		</svg>
-	{/if}
-	<ul class="legend">
-		<li><i class="band"></i>Przedział</li>
-		<li><i class="mid"></i>{boundLabels.mid}</li>
-		<li><i class="spent"></i>Wydano</li>
-	</ul>
-	<Disclosure summary="Pokaż dane">
-		<div class="table">
-			<table>
-				<caption>Wartość kolekcji w czasie</caption>
-				<thead>
-					<tr>
-						<th scope="col">Dzień</th>
-						<th scope="col">{boundLabels.floor}</th>
-						<th scope="col">{boundLabels.mid}</th>
-						<th scope="col">{boundLabels.ceiling}</th>
-						<th scope="col">Wydano</th>
-					</tr>
-				</thead>
-				<tbody>
-					{#each rows as r (r.x)}
+		<ul class="legend">
+			<li><i class="band"></i>Przedział</li>
+			<li><i class="mid"></i>{boundLabels.mid}</li>
+			<li><i class="spent"></i>Wydano</li>
+		</ul>
+		<Disclosure summary="Pokaż dane">
+			<div class="table">
+				<table>
+					<caption>Wartość kolekcji w czasie</caption>
+					<thead>
 						<tr>
-							<th scope="row">{r.day}</th>
-							<td>{formatZl(r.floor)}</td>
-							<td>{formatZl(r.mid)}</td>
-							<td>{formatZl(r.ceiling)}</td>
-							<td>{formatZl(r.spent)}</td>
+							<th scope="col">Dzień</th>
+							<th scope="col">{boundLabels.floor}</th>
+							<th scope="col">{boundLabels.mid}</th>
+							<th scope="col">{boundLabels.ceiling}</th>
+							<th scope="col">Wydano</th>
 						</tr>
-					{/each}
-				</tbody>
-			</table>
-		</div>
-	</Disclosure>
+					</thead>
+					<tbody>
+						{#each rows as r (r.x)}
+							<tr>
+								<th scope="row">{r.day}</th>
+								<td>{amount(r.floor)}</td>
+								<td>{amount(r.mid)}</td>
+								<td>{amount(r.ceiling)}</td>
+								<td>{amount(r.spent)}</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		</Disclosure>
+	{:else}
+		<p class="none">
+			Brak wycen z ostatnich 90 dni.
+			{#if lastValuation}
+				Ostatnia wycena: {dayLabel(lastValuation)}.
+			{/if}
+			Nowa wycena doda pierwszy punkt.
+		</p>
+	{/if}
 </section>
 
 <style>
@@ -171,8 +182,13 @@
 	table {
 		inline-size: 100%;
 		border-collapse: collapse;
-		font-size: var(--sui-font-size-meta, 0.875rem);
+		font-size: 0.8125rem;
 		font-variant-numeric: tabular-nums;
+	}
+
+	.none {
+		margin: 0;
+		color: var(--sui-text-muted);
 	}
 
 	caption {
@@ -186,9 +202,13 @@
 
 	th,
 	td {
-		padding: 0.25rem 0.5rem;
+		padding: 0.25rem 0.375rem;
 		text-align: end;
-		white-space: nowrap;
+		vertical-align: top;
+	}
+
+	th[scope='col'] {
+		font-size: 0.75rem;
 	}
 
 	th[scope='row'],

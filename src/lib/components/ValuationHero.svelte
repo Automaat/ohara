@@ -37,10 +37,12 @@
 			<span class="delta">{figures.delta}</span>
 		{/if}
 	</p>
-	<div class="range" aria-hidden="true">
-		<span class="paid" style:left="{marks.spent}%"></span>
-		<span class="mark" style:left="{marks.mid}%"></span>
-	</div>
+	{#if marks}
+		<div class="range" aria-hidden="true">
+			<span class="paid" style:left="{marks.spent}%"></span>
+			<span class="mark" style:left="{marks.mid}%"></span>
+		</div>
+	{/if}
 	<p class="labels">
 		{#each boundKeys as k (k)}
 			<span>{boundLine(k, summary[k])}</span>

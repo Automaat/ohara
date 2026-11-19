@@ -173,11 +173,22 @@ describe('value hero', () => {
 		expect(nbsp(f.delta ?? '')).toBe('−325 zł · −28%');
 	});
 
-	it('signs a gain and rounds to the amounts shown', () => {
+	it('signs a gain and rounds it from grosze', () => {
 		const f = heroFigures(summary({ mid: { cents: 1234560, copies: 3 }, spent_cents: 1000040 }));
 
 		expect(nbsp(f.value ?? '')).toBe('12 346');
-		expect(nbsp(f.delta ?? '')).toBe('+2346 zł · +23%');
+		expect(nbsp(f.delta ?? '')).toBe('+2345 zł · +23%');
+	});
+
+	it('does not round a grosz apart into whole złoty and percent', () => {
+		const f = heroFigures(summary({ mid: { cents: 1050, copies: 1 }, spent_cents: 1049 }));
+
+		expect(f.value).toBe('11');
+		expect(nbsp(f.spent)).toBe('10 zł');
+		expect(nbsp(f.delta ?? '')).toBe('0 zł · 0%');
+		expect(
+			nbsp(heroFigures(summary({ mid: { cents: 1000, copies: 1 }, spent_cents: 1049 })).delta ?? '')
+		).toBe('0 zł · −5%');
 	});
 
 	it('leaves the difference out when nothing was spent or valued', () => {
@@ -194,19 +205,39 @@ describe('value hero', () => {
 	it('places the used total and the amount spent between buy-back and new', () => {
 		const m = rangeMarks(summary());
 
-		expect(m.mid).toBeCloseTo(60.55, 1);
-		expect(m.spent).toBeCloseTo(84.88, 1);
+		expect(m?.mid).toBeCloseTo(60.55, 1);
+		expect(m?.spent).toBeCloseTo(84.88, 1);
 	});
 
 	it('keeps marks past either end on that end', () => {
-		expect(rangeMarks(summary({ spent_cents: 500000 })).spent).toBe(100);
-		expect(rangeMarks(summary({ mid: { cents: 1000, copies: 1 } })).mid).toBe(0);
+		expect(rangeMarks(summary({ spent_cents: 500000 }))?.spent).toBe(100);
+		expect(rangeMarks(summary({ mid: { cents: 1000, copies: 1 } }))?.mid).toBe(0);
+	});
+
+	it('starts the bar at 0 zł when no buy-back shop quotes the collection', () => {
+		const m = rangeMarks(
+			summary({
+				floor: { cents: 0, copies: 0 },
+				mid: { cents: 8000, copies: 1 },
+				ceiling: { cents: 16000, copies: 1 },
+				spent_cents: 10000
+			})
+		);
+
+		expect(m).toEqual({ mid: 50, spent: 62.5 });
+	});
+
+	it('draws no bar without a new total above its start', () => {
+		const unpriced = { cents: 0, copies: 0 };
+		const movie = { mid: { cents: 8000, copies: 1 }, spent_cents: 10000 };
+
+		expect(rangeMarks(summary({ ...movie, floor: unpriced, ceiling: unpriced }))).toBeNull();
+		expect(rangeMarks(summary({ ...movie, ceiling: unpriced }))).toBeNull();
 		expect(
-			rangeMarks(summary({ floor: { cents: 0, copies: 0 }, ceiling: { cents: 0, copies: 0 } }))
-		).toEqual({
-			mid: 50,
-			spent: 50
-		});
+			rangeMarks(
+				summary({ floor: { cents: 5000, copies: 1 }, ceiling: { cents: 5000, copies: 1 } })
+			)
+		).toBeNull();
 	});
 
 	it('labels each bound total, or a dash when no copy has it', () => {
@@ -243,7 +274,8 @@ describe('page summary', () => {
 			min_observations: 3,
 			summary: s,
 			copies: [],
-			history: [point('2026-11-18', 1000)]
+			history: [],
+			last_valuation: '2026-11-18'
 		});
 		const now = new Date(2026, 10, 19, 9);
 
@@ -255,20 +287,27 @@ describe('page summary', () => {
 });
 
 describe('history', () => {
-	it('keeps the last 90 days counted back from the latest valuation', () => {
+	it('keeps the last 90 days up to today', () => {
 		const history = [
 			point('2026-08-21', 1),
 			point('2026-08-22', 2),
 			point('2026-10-01', 3),
 			point('2026-11-19', 4)
 		];
+		const now = new Date(2026, 10, 19, 23, 30);
 
-		expect(recentHistory(history).map((p) => p.day)).toEqual([
+		expect(recentHistory(history, now).map((p) => p.day)).toEqual([
 			'2026-08-22',
 			'2026-10-01',
 			'2026-11-19'
 		]);
-		expect(recentHistory([])).toEqual([]);
+		expect(recentHistory([], now)).toEqual([]);
+	});
+
+	it('leaves out valuations older than 90 days even when they are the latest', () => {
+		const history = [point('2026-07-01', 1), point('2026-08-01', 2)];
+
+		expect(recentHistory(history, new Date(2026, 10, 19, 9))).toEqual([]);
 	});
 
 	it('names the days it spans', () => {
@@ -284,6 +323,41 @@ describe('history', () => {
 			{ x: 0, day: '24 paź', floor: 10, mid: 40, ceiling: 80, spent: 100 },
 			{ x: 3, day: '27 paź', floor: 11, mid: 44, ceiling: 88, spent: 100 }
 		]);
+	});
+
+	it('leaves bounds no copy had as gaps, keeping quotes of 0 zł', () => {
+		const unpriced = point('2026-10-25', 1000);
+		unpriced.mid = { cents: 0, copies: 0 };
+		unpriced.floor = { cents: 0, copies: 2 };
+		unpriced.ceiling = { cents: 0, copies: 0 };
+
+		expect(historyRows([unpriced])[0]).toEqual({
+			x: 0,
+			day: '25 paź',
+			floor: 0,
+			mid: null,
+			ceiling: null,
+			spent: 100
+		});
+	});
+
+	it('breaks the lines and the band where a bound is missing', () => {
+		const gap = point('2026-10-25', 1100);
+		gap.mid = { cents: 0, copies: 0 };
+		gap.ceiling = { cents: 0, copies: 0 };
+		const history = [
+			point('2026-10-24', 1000),
+			gap,
+			point('2026-10-26', 1000),
+			point('2026-10-27', 1000)
+		];
+
+		const paths = historyPaths(history, 300, 100, 0);
+
+		const xs = (d = '') => d.split(' ').filter((t) => /^[MLZ]/.test(t));
+		expect(xs(paths?.mid)).toEqual(['M0', 'L0', 'M200', 'L300']);
+		expect(xs(paths?.band)).toEqual(['M200', 'L300', 'L300', 'L200', 'Z']);
+		expect(xs(paths?.spent)).toEqual(['M0', 'L100', 'L200', 'L300']);
 	});
 
 	it('draws the band from buy-back to new, the used line and the spent line', () => {
@@ -302,6 +376,22 @@ describe('history', () => {
 		expect(paths?.mid).toMatch(/^M0 (\S+) L100 \1$/);
 		expect(paths?.spent).toMatch(/^M0 (\S+) L100 \1$/);
 		expect(historyPaths([], 100, 50)).toBeNull();
+	});
+
+	it('leaves days without a used total out of the sparkline', () => {
+		const gap = point('2026-11-11', 1000);
+		gap.mid = { cents: 0, copies: 0 };
+		const last = point('2026-11-18', 1000);
+		last.mid = { cents: 0, copies: 0 };
+
+		expect(sparkline([point('2026-11-01', 1000), gap, last], 92, 36)).toBeNull();
+
+		const spark = sparkline(
+			[point('2026-11-01', 1000), gap, point('2026-11-17', 2000), last],
+			92,
+			36
+		);
+		expect(spark).toEqual({ path: 'M4 32 L4 32 M88 4 L88 4', end: { x: 88, y: 4 } });
 	});
 
 	it('draws the used total as a sparkline ending on the latest value', () => {

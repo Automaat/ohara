@@ -391,6 +391,27 @@ func TestValuationAPI(t *testing.T) {
 			t.Fatalf("copy %d cover = %v, want %s", i, got, want)
 		}
 	}
+	if view.LastValuation != nil {
+		t.Fatalf("last valuation before any = %q, want null", *view.LastValuation)
+	}
+
+	// A valuation older than the history the view returns still counts as
+	// the last one.
+	exec(t, pool, `INSERT INTO valuation_history (day, copies, spent_cents, floor_cents, floor_copies,
+			mid_cents, mid_copies, ceiling_cents, ceiling_copies, low_confidence)
+		VALUES (current_date - 400, 3, 8000, 0, 0, 5000, 2, 0, 0, 1)`)
+	var old View
+	if code := get(t, srv.URL+"/api/valuation", &old); code != http.StatusOK {
+		t.Fatalf("GET = %d", code)
+	}
+	var oldDay string
+	if err := pool.QueryRow(context.Background(),
+		`SELECT to_char(current_date - 400, 'YYYY-MM-DD')`).Scan(&oldDay); err != nil {
+		t.Fatal(err)
+	}
+	if len(old.History) != 0 || old.LastValuation == nil || *old.LastValuation != oldDay {
+		t.Fatalf("old valuation: history %+v, last %v, want %s", old.History, old.LastValuation, oldDay)
+	}
 
 	if code := post(t, srv.URL+"/api/valuation/run"); code != http.StatusAccepted {
 		t.Fatalf("POST run = %d", code)
@@ -410,6 +431,9 @@ func TestValuationAPI(t *testing.T) {
 	}
 	if view.Status.LastResult == nil || view.Status.LastResult.Failure != "" || len(view.History) != 1 {
 		t.Fatalf("after run: status %+v history %+v", view.Status, view.History)
+	}
+	if view.LastValuation == nil || *view.LastValuation != view.History[0].Day {
+		t.Fatalf("after run: last valuation %v, history %+v", view.LastValuation, view.History)
 	}
 }
 

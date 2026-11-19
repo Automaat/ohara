@@ -61,6 +61,7 @@ export type ValuationView = {
 	summary: Summary;
 	copies: CopyValue[];
 	history: HistoryPoint[];
+	last_valuation: string | null;
 };
 
 export const boundKeys: BoundKey[] = ['floor', 'mid', 'ceiling'];
@@ -172,10 +173,18 @@ export function copiesLabel(count: number): string {
 
 const relativeDays = new Intl.RelativeTimeFormat('pl', { numeric: 'auto' });
 
+function today(now: Date): number {
+	return Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+}
+
 /** How long ago day was, in the reader's calendar: "dzisiaj", "wczoraj", "3 dni temu". */
 export function daysAgo(day: string, now: Date): string {
-	const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
-	return relativeDays.format(Math.round((dayTimestamp(day) - today) / dayMilliseconds), 'day');
+	return relativeDays.format(Math.round((dayTimestamp(day) - today(now)) / dayMilliseconds), 'day');
+}
+
+/** A valuation day as "17 lis". */
+export function dayLabel(day: string): string {
+	return dayFormat.format(new Date(dayTimestamp(day)));
 }
 
 /** The page's one line under its title: copies, how many have no used value, and when. */
@@ -184,8 +193,7 @@ export function pageSummary(view: ValuationView, now: Date): string {
 	const parts = [copiesLabel(summary.copies)];
 	const unvalued = summary.copies - summary.mid.copies;
 	if (unvalued > 0) parts.push(`${unvalued} bez wyceny`);
-	const last = view.history.at(-1);
-	if (last) parts.push(`wycena ${daysAgo(last.day, now)}`);
+	if (view.last_valuation) parts.push(`wycena ${daysAgo(view.last_valuation, now)}`);
 	return parts.join(' · ');
 }
 
@@ -197,36 +205,38 @@ function signed(value: number, text: string): string {
 
 /**
  * The value hero's figures: the used total in whole złoty, what was spent, and how far apart
- * they are in złoty and percent. The difference is taken between the rounded amounts shown.
+ * they are in złoty and percent, both taken from the amounts in grosze.
  */
 export function heroFigures(summary: Summary) {
-	const value = summary.mid.copies > 0 ? Math.round(summary.mid.cents / 100) : null;
-	const spent = Math.round(summary.spent_cents / 100);
+	const value = summary.mid.copies > 0 ? summary.mid.cents : null;
 	let delta: string | null = null;
-	if (value !== null && spent > 0) {
-		const diff = value - spent;
-		const percent = Math.round((diff / spent) * 100);
+	if (value !== null && summary.spent_cents > 0) {
+		const diffCents = value - summary.spent_cents;
+		const diff = Math.round(diffCents / 100) || 0;
+		const percent = Math.round((diffCents / summary.spent_cents) * 100) || 0;
 		delta = `${signed(diff, formatZl(Math.abs(diff)))} · ${signed(percent, `${Math.abs(percent)}%`)}`;
 	}
 	return {
-		value: value === null ? null : zl.format(value),
-		spent: formatZl(spent),
+		value: value === null ? null : zl.format(value / 100),
+		spent: wholeZl(summary.spent_cents),
 		delta
 	};
 }
 
 function percentOf(value: number, low: number, high: number): number {
-	if (high <= low) return 50;
 	return Math.min(100, Math.max(0, ((value - low) / (high - low)) * 100));
 }
 
 /**
  * Where the used total and the amount spent stand on the bar from the buy-back total to the new
- * total, in percent of its width. A value past an end stays on that end.
+ * total, in percent of its width; a value past an end stays on that end. A collection that no
+ * buy-back shop quotes starts the bar at 0 zł. Null without a new total above the start, as the
+ * bar then has no length.
  */
-export function rangeMarks(summary: Summary): { mid: number; spent: number } {
-	const low = summary.floor.cents;
+export function rangeMarks(summary: Summary): { mid: number; spent: number } | null {
+	const low = summary.floor.copies > 0 ? summary.floor.cents : 0;
 	const high = summary.ceiling.cents;
+	if (summary.ceiling.copies === 0 || high <= low) return null;
 	return {
 		mid: percentOf(summary.mid.cents, low, high),
 		spent: percentOf(summary.spent_cents, low, high)
@@ -238,11 +248,9 @@ export function boundLine(key: BoundKey, b: Bound): string {
 	return `${boundLabels[key]} ${b.copies === 0 ? '—' : wholeZl(b.cents)}`;
 }
 
-/** The valuations from the last days, counted back from the latest one. */
-export function recentHistory(history: HistoryPoint[], days = 90): HistoryPoint[] {
-	const last = history.at(-1);
-	if (!last) return [];
-	const from = dayTimestamp(last.day) - (days - 1) * dayMilliseconds;
+/** The valuations from the last days up to today in the reader's calendar. */
+export function recentHistory(history: HistoryPoint[], now: Date, days = 90): HistoryPoint[] {
+	const from = today(now) - (days - 1) * dayMilliseconds;
 	return history.filter((p) => dayTimestamp(p.day) >= from);
 }
 
@@ -251,39 +259,52 @@ export function historySpan(history: HistoryPoint[]): string {
 	const first = history[0];
 	const last = history.at(-1);
 	if (!first || !last) return '';
-	const start = dayFormat.format(new Date(dayTimestamp(first.day)));
-	const end = dayFormat.format(new Date(dayTimestamp(last.day)));
+	const start = dayLabel(first.day);
+	const end = dayLabel(last.day);
 	return start === end ? end : `${start} – ${end}`;
 }
 
-/** One valuation day in złoty, x counted in days from the first valuation shown. */
+/**
+ * One valuation day in złoty, x counted in days from the first valuation shown. A bound no copy
+ * had that day is null, while a bound of 0 zł was quoted at 0 zł.
+ */
 export type HistoryRow = {
 	x: number;
 	day: string;
-	floor: number;
-	mid: number;
-	ceiling: number;
+	floor: number | null;
+	mid: number | null;
+	ceiling: number | null;
 	spent: number;
 };
+
+const boundZl = (b: Bound): number | null => (b.copies > 0 ? b.cents / 100 : null);
 
 /** The history as rows of złoty, x in days from its first day. */
 export function historyRows(history: HistoryPoint[]): HistoryRow[] {
 	const start = history[0] ? dayTimestamp(history[0].day) : 0;
 	return history.map((p) => ({
 		x: (dayTimestamp(p.day) - start) / dayMilliseconds,
-		day: dayFormat.format(new Date(dayTimestamp(p.day))),
-		floor: p.floor.cents / 100,
-		mid: p.mid.cents / 100,
-		ceiling: p.ceiling.cents / 100,
+		day: dayLabel(p.day),
+		floor: boundZl(p.floor),
+		mid: boundZl(p.mid),
+		ceiling: boundZl(p.ceiling),
 		spent: p.spent_cents / 100
 	}));
 }
 
-type Plot = { x: (x: number) => number; y: (y: number) => number };
+type Point = [number, number];
 
-function plot(rows: HistoryRow[], width: number, height: number, inset: number): Plot {
-	const xs = rows.map((r) => r.x);
-	const ys = rows.flatMap((r) => [r.floor, r.mid, r.ceiling, r.spent]);
+const round = (v: number) => Math.round(v * 10) / 10;
+
+/**
+ * A scale from the values to a width × height box, xInset and yInset from its edges, with a
+ * margin of pad times the value range above and below.
+ */
+function scale(
+	xs: number[],
+	ys: number[],
+	box: { width: number; height: number; xInset: number; yInset: number; pad: number }
+) {
 	const xMax = Math.max(...xs);
 	let yMin = Math.min(...ys);
 	let yMax = Math.max(...ys);
@@ -291,17 +312,36 @@ function plot(rows: HistoryRow[], width: number, height: number, inset: number):
 		yMin -= 1;
 		yMax += 1;
 	}
-	const pad = (yMax - yMin) * 0.08;
-	yMin -= pad;
-	yMax += pad;
-	const round = (v: number) => Math.round(v * 10) / 10;
+	const margin = (yMax - yMin) * box.pad;
+	yMin -= margin;
+	yMax += margin;
+	const w = box.width - 2 * box.xInset;
+	const h = box.height - 2 * box.yInset;
 	return {
-		x: (x) => round(xMax === 0 ? (x === 0 ? 0 : width) : (x / xMax) * width),
-		y: (y) => round(inset + (1 - (y - yMin) / (yMax - yMin)) * (height - 2 * inset))
+		x: (x: number) => round(box.xInset + (xMax === 0 ? 0 : x / xMax) * w),
+		y: (y: number) => round(box.yInset + (1 - (y - yMin) / (yMax - yMin)) * h)
 	};
 }
 
-function line(points: [number, number][]): string {
+/** Runs of consecutive rows where pick has a value. */
+function runs<T>(rows: HistoryRow[], pick: (r: HistoryRow) => T | null): [HistoryRow, T][][] {
+	const out: [HistoryRow, T][][] = [];
+	let run: [HistoryRow, T][] = [];
+	for (const r of rows) {
+		const v = pick(r);
+		if (v === null) {
+			if (run.length > 0) out.push(run);
+			run = [];
+		} else run.push([r, v]);
+	}
+	if (run.length > 0) out.push(run);
+	return out;
+}
+
+/** A line through points; a lone point draws as a dot under a round cap. */
+function line(points: Point[]): string {
+	const [first] = points;
+	if (points.length === 1 && first) return `M${first[0]} ${first[1]} L${first[0]} ${first[1]}`;
 	return points.map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${x} ${y}`).join(' ');
 }
 
@@ -313,43 +353,56 @@ function spread(rows: HistoryRow[]): HistoryRow[] {
 
 /**
  * SVG paths of the history in a width × height box: the band from the buy-back to the new
- * total, the used total and the amount spent. The values fill the height less an inset and an
- * 8% margin, so the lines never touch the edges.
+ * total, the used total and the amount spent. Days without a bound leave a gap in its line, and
+ * the band only covers days with both of its ends. The values fill the height less an inset and
+ * an 8% margin, so the lines never touch the edges.
  */
 export function historyPaths(history: HistoryPoint[], width: number, height: number, inset = 4) {
 	const rows = spread(historyRows(history));
 	if (rows.length === 0) return null;
-	const p = plot(rows, width, height, inset);
-	const at = (pick: (r: HistoryRow) => number) =>
-		rows.map((r): [number, number] => [p.x(r.x), p.y(pick(r))]);
-	const top = at((r) => r.ceiling);
-	const bottom = at((r) => r.floor).reverse();
-	return {
-		band: `${line(top)} ${line(bottom).replace(/^M/, 'L')} Z`,
-		mid: line(at((r) => r.mid)),
-		spent: line(at((r) => r.spent))
-	};
+	const ys = rows.flatMap((r) =>
+		[r.floor, r.mid, r.ceiling, r.spent].filter((v): v is number => v !== null)
+	);
+	const s = scale(
+		rows.map((r) => r.x),
+		ys,
+		{ width, height, xInset: 0, yInset: inset, pad: 0.08 }
+	);
+	const lines = (pick: (r: HistoryRow) => number | null) =>
+		runs(rows, pick)
+			.map((run) => line(run.map(([r, v]): Point => [s.x(r.x), s.y(v)])))
+			.join(' ');
+	const band = runs(rows, (r) =>
+		r.floor !== null && r.ceiling !== null ? { low: r.floor, high: r.ceiling } : null
+	)
+		.filter((run) => run.length > 1)
+		.map((run) => {
+			const top = run.map(([r, v]): Point => [s.x(r.x), s.y(v.high)]);
+			const bottom = run.map(([r, v]): Point => [s.x(r.x), s.y(v.low)]).reverse();
+			return `${line(top)} ${line(bottom).replace(/^M/, 'L')} Z`;
+		})
+		.join(' ');
+	return { band, mid: lines((r) => r.mid), spent: lines((r) => r.spent) };
 }
 
-/** A sparkline of the used total in a width × height box, with its last point; null under two days. */
+/**
+ * A sparkline of the used total in a width × height box, with its last point; days without a
+ * used total leave a gap. Null under two days with one.
+ */
 export function sparkline(history: HistoryPoint[], width: number, height: number, inset = 4) {
-	if (history.length < 2) return null;
 	const rows = historyRows(history);
-	const ys = rows.map((r) => r.mid);
-	const xMax = Math.max(...rows.map((r) => r.x));
-	let yMin = Math.min(...ys);
-	let yMax = Math.max(...ys);
-	if (yMax === yMin) {
-		yMin -= 1;
-		yMax += 1;
-	}
-	const round = (v: number) => Math.round(v * 10) / 10;
-	const points = rows.map((r): [number, number] => [
-		round(inset + (xMax === 0 ? 0 : r.x / xMax) * (width - 2 * inset)),
-		round(inset + (1 - (r.mid - yMin) / (yMax - yMin)) * (height - 2 * inset))
-	]);
-	const [x, y] = points[points.length - 1] ?? [0, 0];
-	return { path: line(points), end: { x, y } };
+	const valued = rows.filter((r) => r.mid !== null);
+	if (valued.length < 2) return null;
+	const s = scale(
+		valued.map((r) => r.x),
+		valued.map((r) => r.mid ?? 0),
+		{ width, height, xInset: inset, yInset: inset, pad: 0 }
+	);
+	const path = runs(rows, (r) => r.mid)
+		.map((run) => line(run.map(([r, v]): Point => [s.x(r.x), s.y(v)])))
+		.join(' ');
+	const last = valued.at(-1);
+	return { path, end: { x: s.x(last?.x ?? 0), y: s.y(last?.mid ?? 0) } };
 }
 
 /** Copies by used value, highest first; copies without one keep their order at the end. */

@@ -10,6 +10,7 @@
 		Link,
 		PageHeader,
 		Pill,
+		RelativeTime,
 		type DataTableColumn
 	} from '@smykla-skalski/sui';
 	import { onMount } from 'svelte';
@@ -68,7 +69,10 @@
 		starting = true;
 		runError = null;
 		try {
-			await request<RunnerStatus>(fetch, 'POST', '/api/valuation/run');
+			const started = await request<RunnerStatus>(fetch, 'POST', '/api/valuation/run');
+			// The accepted run's status stands until a refresh succeeds, so a failed refresh
+			// keeps polling for its result.
+			if (view) view = { ...view, status: started };
 		} catch (err) {
 			runError =
 				err instanceof ApiError && err.status === 409 ? 'Wycena już trwa.' : errorMessage(err);
@@ -89,8 +93,8 @@
 	const copies = $derived(byValue(view?.copies ?? []));
 	const rows = $derived(copies as Row[]);
 	const status = $derived(view?.status);
-	const valued = $derived(!!view && view.history.length > 0);
-	const recent = $derived(recentHistory(view?.history ?? []));
+	const valued = $derived(!!view?.last_valuation);
+	const recent = $derived(view ? recentHistory(view.history, new Date()) : []);
 	const description = $derived(view && valued ? pageSummary(view, new Date()) : undefined);
 	const runSummary = $derived(lastRunSummary(status?.last_result ?? null));
 	const sourceErrors = $derived(status?.last_result?.errors ?? []);
@@ -114,6 +118,13 @@
 				Automatyczna wycena {intervalLabel(status)}.
 			{:else}
 				Automatyczna wycena wyłączona.
+			{/if}
+			{#if status.last_finished_at}
+				Ostatni przebieg: <RelativeTime
+					value={status.last_finished_at}
+					locale="pl"
+					exactLabel={(time) => `dokładnie ${time}`}
+				/>.
 			{/if}
 			{#if runSummary}
 				{runSummary}.
@@ -148,7 +159,18 @@
 		{:else}
 			<p role="status">Wczytywanie wyceny…</p>
 		{/if}
-	{:else if !valued}
+	{:else if failure}
+		<ErrorState
+			title="Nie udało się odświeżyć wyceny"
+			description={failure}
+			onretry={load}
+			busy={loading}
+			overContent
+			retryLabel="Spróbuj ponownie"
+			retryingLabel="Ponawianie…"
+		/>
+	{/if}
+	{#if view && !valued}
 		<EmptyState
 			title="Kolekcja nie ma jeszcze wyceny"
 			description="Wycena sprawdza ceny posiadanych egzemplarzy w skupie, w ogłoszeniach z OLX i Vinted oraz w sklepach z Ceneo."
@@ -157,20 +179,9 @@
 		{#if status?.last_result}
 			{@render runStatus()}
 		{/if}
-	{:else}
-		{#if failure}
-			<ErrorState
-				title="Nie udało się odświeżyć wyceny"
-				description={failure}
-				onretry={load}
-				busy={loading}
-				overContent
-				retryLabel="Spróbuj ponownie"
-				retryingLabel="Ponawianie…"
-			/>
-		{/if}
+	{:else if view}
 		<ValuationHero summary={view.summary} history={recent} />
-		<ValuationHistory history={recent} />
+		<ValuationHistory history={recent} lastValuation={view.last_valuation} />
 
 		{#if copies.length === 0}
 			<p class="status">Brak posiadanych egzemplarzy.</p>

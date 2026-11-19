@@ -89,17 +89,30 @@ function holders(titleID: number): string {
 	return `[data-cover-title="${titleID}"]`;
 }
 
+/** What tells apart two tiles of one title, such as two copies: their `data-cover-key`. */
+function coverKey(cover: HTMLElement, titleID: number): string | null {
+	return cover.closest(holders(titleID))?.getAttribute('data-cover-key') ?? null;
+}
+
 function shows(cover: HTMLElement, view: View): boolean {
 	return inView(cover.getBoundingClientRect(), view.innerWidth, view.innerHeight);
 }
 
-/** The first cover of the title the reader can see. */
-function shownCover(doc: Document, view: View, titleID: number): HTMLElement | null {
+/** The cover of the title the reader can see: the tile with `key` if it shows, else the first. */
+function shownCover(
+	doc: Document,
+	view: View,
+	titleID: number,
+	key: string | null = null
+): HTMLElement | null {
+	let first: HTMLElement | null = null;
 	for (const holder of doc.querySelectorAll(holders(titleID))) {
 		const cover = coverIn(holder);
-		if (cover && shows(cover, view)) return cover;
+		if (!cover || !shows(cover, view)) continue;
+		if (key === null || holder.getAttribute('data-cover-key') === key) return cover;
+		first ??= cover;
 	}
-	return null;
+	return first;
 }
 
 /** The cover of the title in the tile or hero the reader clicked. */
@@ -135,27 +148,50 @@ function artworkShown(cover: HTMLElement, view: View, deadline: number): Promise
 	});
 }
 
+/** Where the new page should land a carried cover: the title, and the tile it left, if known. */
+type Landing = { titleID: number; key: string | null };
+
 /** The cover the new page places for the title, once it shows, or null by the deadline. */
 async function placedCover(
 	doc: Document,
 	view: View,
-	titleID: number,
+	landing: Landing,
 	seen: number,
 	deadline: number
 ): Promise<HTMLElement | null> {
 	await placement(seen, deadline - Date.now());
 	const placed = placements;
-	const cover = shownCover(doc, view, titleID);
+	const cover = shownCover(doc, view, landing.titleID, landing.key);
 	if (cover) {
 		await artworkShown(cover, view, deadline);
 		return cover;
 	}
 	if (Date.now() >= deadline) return null;
-	return placedCover(doc, view, titleID, placed, deadline);
+	return placedCover(doc, view, landing, placed, deadline);
 }
+
+/** Counts navigations, so one that a newer navigation overtook never commits its page. */
+let navigations = 0;
 
 /** Counts started transitions, so an older one never clears a newer one's start. */
 let carried = 0;
+
+/** The transition that last named each element; only that one clears the name. */
+const namedBy = new WeakMap<HTMLElement, number>();
+
+/** The tile each title was last opened from, so going back lands on that tile. */
+const openedFrom = new Map<number, string>();
+
+function name(cover: HTMLElement, turn: number) {
+	cover.style.viewTransitionName = coverName;
+	namedBy.set(cover, turn);
+}
+
+function unname(cover: HTMLElement | null, turn: number) {
+	if (!cover || namedBy.get(cover) !== turn) return;
+	cover.style.viewTransitionName = '';
+	namedBy.delete(cover);
+}
 
 /**
  * Carries the cover a navigation moves, for `onNavigate`. A link carries the cover the reader
@@ -163,50 +199,62 @@ let carried = 0;
  * Transitions, after the browser's own swipe transition, or when no cover is in view.
  *
  * The returned promise holds the navigation until the browser has captured the old page, and
- * the transition's update then waits, at most `placementWait`, for the new page's cover.
+ * the transition's update then waits, at most `placementWait`, for the new page's cover. A
+ * navigation that a newer one reached first stays held: SvelteKit would otherwise render its
+ * page over the newer one.
  */
 export function carryCover(
 	navigation: OnNavigate,
 	doc: Document = document
 ): Promise<void> | undefined {
+	const mine = ++navigations;
 	const view = doc.defaultView;
 	const { from, to } = navigation;
 	if (!view || !from || !to || !('startViewTransition' in doc)) return;
 	if (view.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
 	const titleID = coverTitle(from.url, to.url);
 	if (titleID === null) return;
+	const opening = from.url.pathname === '/';
 	let source: HTMLElement | null = null;
 	if (navigation.type === 'link') {
 		const click: Event | undefined = navigation.event;
 		source = clickedCover(click?.target ?? null, view, titleID);
 	} else if (navigation.type === 'popstate') {
 		const pop: PopStateEvent | undefined = navigation.event;
-		if (pop?.hasUAVisualTransition !== true) source = shownCover(doc, view, titleID);
+		const key = opening ? (openedFrom.get(titleID) ?? null) : null;
+		if (pop?.hasUAVisualTransition !== true) source = shownCover(doc, view, titleID, key);
 	}
 	if (!source) return;
 
 	const moving = source;
+	if (opening) {
+		const key = coverKey(moving, titleID);
+		if (key === null) openedFrom.delete(titleID);
+		else openedFrom.set(titleID, key);
+	}
+	const target: Landing = { titleID, key: opening ? null : (openedFrom.get(titleID) ?? null) };
 	const start = moving.getBoundingClientRect();
 	const seen = placements;
 	const root = doc.documentElement;
 	const turn = ++carried;
 	let landing: HTMLElement | null = null;
-	moving.style.viewTransitionName = coverName;
+	name(moving, turn);
 
 	const clear = () => {
-		moving.style.viewTransitionName = '';
-		if (landing) landing.style.viewTransitionName = '';
+		unname(moving, turn);
+		unname(landing, turn);
 		if (turn === carried) root.style.removeProperty(coverStart);
 	};
 
 	return new Promise((resolve) => {
 		const update = async () => {
+			if (mine !== navigations) return;
 			resolve();
 			const deadline = Date.now() + placementWait;
 			await navigation.complete;
-			landing = await placedCover(doc, view, titleID, seen, deadline);
-			if (!landing) return;
-			landing.style.viewTransitionName = coverName;
+			landing = await placedCover(doc, view, target, seen, deadline);
+			if (!landing || turn !== carried) return;
+			name(landing, turn);
 			root.style.setProperty(coverStart, coverOffset(start, landing.getBoundingClientRect()));
 		};
 		try {

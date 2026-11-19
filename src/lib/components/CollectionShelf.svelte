@@ -46,7 +46,7 @@
 {#if rows.length}
 	<ul class="shelf" role="list" aria-label="Egzemplarze w kolekcji" aria-busy={loading}>
 		{#each rows as row (row.copy_id)}
-			<li data-cover-title={row.title_id}>
+			<li data-cover-title={row.title_id} data-cover-key={row.copy_id}>
 				<div class="artwork">
 					<CollectionCover kind={row.kind} url={row.cover_url} large />
 				</div>

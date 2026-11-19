@@ -109,6 +109,12 @@ class FakeElement {
 	getBoundingClientRect(): Box {
 		return this.rect;
 	}
+
+	key: string | null = null;
+
+	getAttribute(name: string): string | null {
+		return name === 'data-cover-key' ? this.key : null;
+	}
 }
 
 class FakeImage extends FakeElement {
@@ -144,12 +150,17 @@ class FakeRootStyle {
 /** A page with one title's cover, held by a tile or a hero, and the link inside the holder. */
 function pageWith(titleID: number, rect: Box, opacity = '1') {
 	const body = new FakeElement();
+	return { body, ...tileIn(body, titleID, rect, opacity) };
+}
+
+function tileIn(body: FakeElement, titleID: number, rect: Box, opacity = '1', key?: string) {
 	const holder = body.add(new FakeElement([], titleID));
+	holder.key = key ?? null;
 	const link = holder.add(new FakeElement(['link']));
 	const cover = holder.add(new FakeElement(['cover'], undefined, rect));
 	const image = cover.add(new FakeImage());
 	image.opacity = opacity;
-	return { body, holder, link, cover, image };
+	return { holder, link, cover, image };
 }
 
 type Transition = { update: Promise<void>; finish: () => void };
@@ -329,6 +340,71 @@ describe('carryCover', () => {
 		expect(carryCover(nav, asDocument())).toBeUndefined();
 		expect(transitions).toHaveLength(0);
 		expect(page.cover.style.viewTransitionName).toBe('');
+	});
+
+	it('never lets a navigation that a newer one overtook render its page', async () => {
+		const { doc, transitions, asDocument } = fakeDocument();
+		const collection = pageWith(7, tileBox);
+		doc.body = collection.body;
+		const open = navigation('link', '/', '/titles/7', { target: collection.link });
+		let released = false;
+		void carryCover(open.nav, asDocument())?.then(() => (released = true));
+		const back = navigation('popstate', '/', '/', {});
+		expect(carryCover(back.nav, asDocument())).toBeUndefined();
+
+		await vi.advanceTimersByTimeAsync(placementWait);
+		expect(transitions).toHaveLength(1);
+		expect(released).toBe(false);
+	});
+
+	it('keeps the name a newer transition gave the hero when the older one ends', async () => {
+		const { doc, transitions, asDocument } = fakeDocument();
+		const collection = pageWith(7, tileBox);
+		doc.body = collection.body;
+		const open = navigation('link', '/', '/titles/7', { target: collection.link });
+		await carryCover(open.nav, asDocument());
+		const title = pageWith(7, heroBox);
+		doc.body = title.body;
+		open.done();
+		coversPlaced();
+		await transitions[0]?.update;
+		expect(title.cover.style.viewTransitionName).toBe(coverName);
+
+		const back = navigation('popstate', '/titles/7', '/', {});
+		await carryCover(back.nav, asDocument());
+		transitions[0]?.finish();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(title.cover.style.viewTransitionName).toBe(coverName);
+	});
+
+	it('goes back to the copy the title was opened from', async () => {
+		const { doc, transitions, asDocument } = fakeDocument();
+		const shelf = () => {
+			const body = new FakeElement();
+			const first = tileIn(body, 7, tileBox, '1', '100');
+			const second = tileIn(body, 7, { ...tileBox, left: 140 }, '1', '101');
+			return { body, first, second };
+		};
+		const before = shelf();
+		doc.body = before.body;
+		const open = navigation('link', '/', '/titles/7', { target: before.second.link });
+		await carryCover(open.nav, asDocument());
+		const title = pageWith(7, heroBox);
+		doc.body = title.body;
+		open.done();
+		coversPlaced();
+		await transitions[0]?.update;
+		transitions[0]?.finish();
+
+		const back = navigation('popstate', '/titles/7', '/', {});
+		await carryCover(back.nav, asDocument());
+		const after = shelf();
+		doc.body = after.body;
+		back.done();
+		coversPlaced();
+		await transitions[1]?.update;
+		expect(after.second.cover.style.viewTransitionName).toBe(coverName);
+		expect(after.first.cover.style.viewTransitionName).toBe('');
 	});
 
 	it('lets the navigation go on when the transition cannot start', async () => {

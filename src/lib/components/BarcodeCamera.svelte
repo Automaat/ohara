@@ -694,8 +694,9 @@
 		display: none;
 	}
 
-	/* On a short screen, as a phone held sideways, the camera's controls join the bar and the band
-	   is lower, so the band and its hint keep their room above the tab bar and the visit's tray. */
+	/* On a short screen, as a phone held sideways, the camera's controls join the bar and a lower
+	   band stands just under it, so the band keeps clear of the tab bar, the visit's tray and the
+	   add toasts above them. */
 	.short .bar {
 		flex-wrap: wrap;
 	}
@@ -703,6 +704,10 @@
 	.short .bar .actions {
 		flex: none;
 		margin-block-start: 0;
+	}
+
+	.short .middle::before {
+		flex: 0 0 0.75rem;
 	}
 
 	.short .band {

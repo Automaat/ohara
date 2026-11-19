@@ -57,8 +57,11 @@ export const tabs: Tab[] = [
 /** The scan button beside the tabs. */
 export const scanHref = '/scan';
 
-/** A screen too short to frame the camera beside other content, as a phone held sideways. */
-export const shortScreen = '(max-height: 31.1875rem)';
+/**
+ * A screen too short to frame the camera beside other content, as a phone held sideways. In
+ * pixels, so the browser's default text size never moves it.
+ */
+export const shortScreen = '(height < 500px)';
 
 /**
  * Where the app takes its phone layout: the tab bar with the scan button, the settings sheet and

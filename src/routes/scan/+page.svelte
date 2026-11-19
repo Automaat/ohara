@@ -134,6 +134,12 @@
 		}
 	}
 
+	/** Stands the phone sheet's top just below the top of the scan band, so the band stays in view. */
+	function placeSheet() {
+		const top = band?.getBoundingClientRect().top;
+		sheetTop = phone.current && top !== undefined ? Math.round(top + bandPeek) : null;
+	}
+
 	/**
 	 * Opens the sheet for a code over the camera, in a history entry of its own so going back
 	 * closes it. A sheet already open gives way to the next code in the same entry. Returns
@@ -149,8 +155,7 @@
 		notice = null;
 		code = '';
 		typing = false;
-		const top = band?.getBoundingClientRect().top;
-		sheetTop = phone.current && top !== undefined ? Math.round(top + bandPeek) : null;
+		placeSheet();
 		const scanSheet: Sheet = { barcode, id: ++sheetSeq, typed };
 		void goto(page.url.href, {
 			shallow: true,
@@ -282,6 +287,21 @@
 			vv.removeEventListener('scroll', follow);
 			keyboard = 0;
 			viewport = null;
+		};
+	});
+
+	/* Turning the phone moves the band, so an open sheet follows it once the new layout is drawn. */
+	$effect(() => {
+		if (!sheet) return;
+		let frame = 0;
+		const onresize = () => {
+			cancelAnimationFrame(frame);
+			frame = requestAnimationFrame(placeSheet);
+		};
+		addEventListener('resize', onresize);
+		return () => {
+			cancelAnimationFrame(frame);
+			removeEventListener('resize', onresize);
 		};
 	});
 
@@ -647,11 +667,18 @@
 		);
 	}
 
-	/* On a short screen a toast keeps SUI's own width at the inline end, over the tray, rather
-	   than spanning the scan band. */
+	/* On a short screen the toasts stand side by side above the tab bar, each at most SUI's own
+	   width, so a second add's toast never stacks up over the scan band. */
+	:global(.ohara-phone) .scan-toasts.short :global(.sui-toaster) {
+		flex-direction: row;
+		justify-content: flex-end;
+	}
+
 	:global(.ohara-phone) .scan-toasts.short :global(.sui-toast) {
+		flex: 0 1 24rem;
 		inline-size: auto;
 		max-inline-size: 24rem;
+		min-inline-size: 0;
 	}
 
 	:global(.ohara-phone) .scan-toasts.over-tray :global(.sui-toaster) {
@@ -671,8 +698,8 @@
 	}
 
 	/* On a phone the sheet rises from the bottom edge over the live camera, leaving the top of the
-	   scan band in view, and stands on the keyboard while one is open. Held sideways, it keeps
-	   its content clear of the notch. */
+	   scan band in view, yet never under half the screen, and stands on the keyboard while one is
+	   open. Held sideways, it keeps its content clear of the notch. */
 	:global(.ohara-phone dialog.sui-modal.scan-sheet[open]) {
 		background: var(--sui-surface-base);
 		border-block-end: 0;
@@ -682,7 +709,7 @@
 		inline-size: 100%;
 		margin: auto 0 var(--scan-keyboard, 0px);
 		max-block-size: min(
-			calc(100dvh - var(--scan-sheet-top, 6rem)),
+			max(calc(100dvh - var(--scan-sheet-top, 6rem)), 50dvh),
 			calc(var(--scan-viewport, 100dvh) - 0.5rem)
 		);
 		max-inline-size: 100%;

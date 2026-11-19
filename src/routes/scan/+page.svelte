@@ -74,6 +74,7 @@
 	let codeError = $state<string>();
 	let queued = $state<number | null>(null);
 	let band = $state<HTMLElement>();
+	let sheetDialog = $state<HTMLDialogElement | null>(null);
 	let sheetTop = $state<number | null>(null);
 	let keyboard = $state(0);
 	let viewport = $state<number | null>(null);
@@ -188,6 +189,15 @@
 		if (!s || closing === s.id) return;
 		closing = s.id;
 		history.back();
+	}
+
+	/**
+	 * A dialog's `close` event comes a moment after it closed. When Back and then Forward, or the
+	 * next code, has opened the sheet again by then, the event belongs to the earlier close, so it
+	 * never reaches the sheet's Modal, which would close the reopened sheet and go back from it.
+	 */
+	function stopLateClose(event: Event) {
+		if (event.target === sheetDialog && sheetDialog?.open) event.stopImmediatePropagation();
 	}
 
 	function fromCamera(barcode: string): boolean {
@@ -339,6 +349,8 @@
 <svelte:head>
 	<title>Skanuj · Ohara</title>
 </svelte:head>
+
+<svelte:document onclosecapture={stopLateClose} />
 
 {#snippet manualEntry()}
 	<form
@@ -498,6 +510,7 @@
 
 <Modal
 	open={!!sheet}
+	bind:element={sheetDialog}
 	class="scan-sheet"
 	title={sheetTitle}
 	closeLabel="Zamknij"

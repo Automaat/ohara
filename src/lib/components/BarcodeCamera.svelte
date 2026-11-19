@@ -12,6 +12,7 @@
 		full = false,
 		queued = null,
 		ontype,
+		band = $bindable(),
 		children
 	}: {
 		/** Stops decoding while a read is being handled; the preview keeps running. */
@@ -24,6 +25,8 @@
 		queued?: number | null;
 		/** Opens manual entry from the full-screen camera's keyboard button. */
 		ontype?: () => void;
+		/** The scan band while the camera runs, for a page that keeps it in view. */
+		band?: HTMLElement;
 		/** Messages under the band. */
 		children?: Snippet;
 	} = $props();
@@ -39,7 +42,6 @@
 	const idleRest = 1500;
 
 	let video = $state<HTMLVideoElement>();
-	let band = $state<HTMLElement>();
 	let stream = $state<MediaStream | null>(null);
 	let starting = $state(false);
 	let error = $state<string | null>(null);

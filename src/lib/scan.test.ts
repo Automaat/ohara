@@ -15,17 +15,22 @@ import {
 	bandCrop,
 	emptySticky,
 	isBookBarcode,
+	isoDate,
 	isInvalidBarcode,
 	loadSticky,
 	looksLikeBarcode,
 	newRequestKey,
+	providerLabel,
 	quickForm,
+	rememberShop,
 	resolveScan,
 	saveScan,
 	saveSticky,
+	scanCopyPayload,
 	scanEditionPayload,
 	searchTitles,
 	scanTitlePayload,
+	stickyAfter,
 	torchSupported,
 	wedgeBarcodeIn,
 	type Candidate,
@@ -108,9 +113,13 @@ function form(over: Partial<QuickForm> = {}): QuickForm {
 		name: 'Seksmisja',
 		format: 'bluray',
 		binding: '',
+		packaging: [],
+		status: 'owned',
 		price: '',
+		purchased_on: '',
 		shop: '',
 		acquired_as: '',
+		condition: '',
 		...over
 	};
 }
@@ -248,6 +257,7 @@ describe('resolveScan', () => {
 				{
 					barcode: '0036000291452',
 					candidates: [movie],
+					needs_confirmation: false,
 					errors: [{ provider: 'x', error: 'down' }]
 				}
 			]
@@ -257,8 +267,30 @@ describe('resolveScan', () => {
 			kind: 'found',
 			barcode: '0036000291452',
 			candidates: [movie],
+			needsConfirmation: false,
 			errors: [{ provider: 'x', error: 'down' }]
 		});
+	});
+
+	it.each([
+		['asks for a pick', true, true],
+		['trusts its lone candidate', false, false],
+		['does not say', undefined, true]
+	])('needs a pick when the lookup %s', async (_, needs, want) => {
+		const s = server({
+			'GET /api/editions?barcode=5901234123457': [200, []],
+			'GET /api/lookup/5901234123457': [
+				200,
+				{
+					barcode: '5901234123457',
+					candidates: [movie, album],
+					errors: [],
+					...(needs === undefined ? {} : { needs_confirmation: needs })
+				}
+			]
+		});
+		const got = await resolveScan(s.fetchFn, '5901234123457');
+		expect(got.kind === 'found' && got.needsConfirmation).toBe(want);
 	});
 
 	it.each([
@@ -357,18 +389,23 @@ describe('resolveScan', () => {
 });
 
 describe('quickForm', () => {
-	const sticky = { shop: 'Empik', acquired_as: 'used' as const };
+	const sticky = { shop: 'Empik', acquired_as: 'used' as const, shops: ['Empik'] };
 
-	it('starts from the candidate and the sticky shop', () => {
-		expect(quickForm(movie, sticky, movie.edition.barcode)).toEqual({
+	it('starts from the candidate, the sticky shop and the visit date', () => {
+		expect(quickForm(movie, sticky, movie.edition.barcode, '2026-11-19')).toEqual({
 			kind: 'movie',
 			name: 'Seksmisja',
 			format: 'bluray',
 			binding: '',
+			packaging: ['steelbook'],
+			status: 'owned',
 			price: '',
+			purchased_on: '2026-11-19',
 			shop: 'Empik',
-			acquired_as: 'used'
+			acquired_as: 'used',
+			condition: ''
 		});
+		expect(quickForm(movie, sticky, movie.edition.barcode).purchased_on).toBe('');
 		expect(quickForm(book, emptySticky, book.edition.barcode)).toMatchObject({
 			kind: 'book',
 			binding: 'hardcover',
@@ -399,7 +436,14 @@ describe('scan payloads', () => {
 				notes: ''
 			}
 		});
-		expect(scanEditionPayload(form({ format: 'uhd' }), movie, '5901234123457', 9)).toEqual({
+		expect(
+			scanEditionPayload(
+				form({ format: 'uhd', packaging: ['steelbook'] }),
+				movie,
+				'5901234123457',
+				9
+			)
+		).toEqual({
 			ok: true,
 			value: {
 				title_id: 9,
@@ -415,6 +459,19 @@ describe('scan payloads', () => {
 				discogs_release_id: null,
 				notes: ''
 			}
+		});
+	});
+
+	it('takes the packaging the user toggled for a film only', () => {
+		const picked = form({ packaging: ['slipcover', 'digipak'] });
+		expect(scanEditionPayload(picked, movie, '5901234123457', 1)).toMatchObject({
+			ok: true,
+			value: { packaging: ['slipcover', 'digipak'] }
+		});
+		const asAlbum = form({ kind: 'music', format: 'cd', packaging: ['digipak'] });
+		expect(scanEditionPayload(asAlbum, album, '5099902987620', 1)).toMatchObject({
+			ok: true,
+			value: { packaging: [] }
 		});
 	});
 
@@ -509,26 +566,64 @@ describe('saveScan', () => {
 		const got = await saveScan(
 			s.fetchFn,
 			{ kind: 'new', barcode: '5901234123457', candidate: movie },
-			form({ price: '49,99', shop: ' Empik ', acquired_as: 'new' }),
+			form({
+				format: 'uhd',
+				packaging: ['steelbook', 'slipcover'],
+				price: '49,99',
+				purchased_on: '2026-11-18',
+				shop: ' Empik ',
+				acquired_as: 'used',
+				condition: 'very_good'
+			}),
 			'k1'
 		);
 		expect(got).toEqual({ titleID: 9, titleName: 'Seksmisja', editionID: 21, copy });
 		expect(s.calls[2].body).toMatchObject({
 			title_id: 9,
 			barcode: '5901234123457',
-			format: 'bluray'
+			format: 'uhd',
+			packaging: ['steelbook', 'slipcover']
 		});
 		expect(s.calls[3].body).toEqual({
 			edition_id: 21,
 			status: 'owned',
 			price_cents: 4999,
-			purchased_on: null,
+			purchased_on: '2026-11-18',
 			shop: 'Empik',
-			acquired_as: 'new',
-			condition: null,
+			acquired_as: 'used',
+			condition: 'very_good',
 			notes: '',
 			max_price_cents: null,
 			request_key: 'k1'
+		});
+	});
+
+	it('adds a wish with its price limit and nothing about a purchase', async () => {
+		const s = server({ 'POST /api/copies?cover=auto': [201, copy] });
+		await saveScan(
+			s.fetchFn,
+			{ kind: 'owned', edition: ownedEdition },
+			form({
+				status: 'wishlist',
+				price: '60',
+				purchased_on: '2026-11-18',
+				shop: 'Empik',
+				acquired_as: 'used',
+				condition: 'good'
+			}),
+			'k2'
+		);
+		expect(s.calls[0].body).toEqual({
+			edition_id: 5,
+			status: 'wishlist',
+			price_cents: null,
+			purchased_on: null,
+			shop: '',
+			acquired_as: null,
+			condition: null,
+			notes: '',
+			max_price_cents: 6000,
+			request_key: 'k2'
 		});
 	});
 
@@ -692,6 +787,26 @@ describe('saveScan', () => {
 		const keys = s.calls.filter((c) => c.url === '/api/copies?cover=auto').map((c) => c.body);
 		expect(keys).toMatchObject([{ request_key: 'k7' }, { request_key: 'k7' }]);
 		expect(s.paths()).toContain('DELETE /api/titles/10');
+	});
+
+	it('refuses a bad price limit or purchase date before any request', async () => {
+		const s = server({});
+		const target = { kind: 'owned', edition: ownedEdition } as const;
+		const limit = await saveScan(
+			s.fetchFn,
+			target,
+			form({ status: 'wishlist', price: 'dużo' }),
+			'k1'
+		).catch((e: unknown) => e);
+		expect((limit as FormRejected).field).toBe('max_price_cents');
+		const date = await saveScan(
+			s.fetchFn,
+			target,
+			form({ purchased_on: '18.11.2026' }),
+			'k1'
+		).catch((e: unknown) => e);
+		expect((date as FormRejected).field).toBe('purchased_on');
+		expect(s.calls).toHaveLength(0);
 	});
 
 	it('refuses a bad price for an owned edition before any request', async () => {
@@ -863,8 +978,20 @@ describe('sticky settings', () => {
 
 	it('round-trips through storage', () => {
 		const store = memory();
-		saveSticky(store, { shop: 'Empik', acquired_as: 'used' });
-		expect(loadSticky(store)).toEqual({ shop: 'Empik', acquired_as: 'used' });
+		const sticky = { shop: 'Empik', acquired_as: 'used' as const, shops: ['Empik', 'OLX'] };
+		saveSticky(store, sticky);
+		expect(loadSticky(store)).toEqual(sticky);
+	});
+
+	it('offers the last shop when no recent shops were stored', () => {
+		const store = memory({ 'ohara.scan.sticky': '{"shop":"Empik","acquired_as":"new"}' });
+		expect(loadSticky(store)).toEqual({ shop: 'Empik', acquired_as: 'new', shops: ['Empik'] });
+	});
+
+	it('cleans the stored recent shops', () => {
+		const shops = [' Empik ', 3, '', 'empik', 'OLX', 'A', 'B', 'C', 'D', 'E'];
+		const store = memory({ 'ohara.scan.sticky': JSON.stringify({ shop: '', shops }) });
+		expect(loadSticky(store).shops).toEqual(['Empik', 'OLX', 'A', 'B', 'C', 'D']);
 	});
 
 	it.each([
@@ -877,7 +1004,9 @@ describe('sticky settings', () => {
 	});
 
 	it('drops unknown values', () => {
-		const store = memory({ 'ohara.scan.sticky': '{"shop":3,"acquired_as":"stolen"}' });
+		const store = memory({
+			'ohara.scan.sticky': '{"shop":3,"acquired_as":"stolen","shops":"Empik"}'
+		});
 		expect(loadSticky(store)).toEqual(emptySticky);
 	});
 
@@ -892,6 +1021,75 @@ describe('sticky settings', () => {
 		};
 		expect(() => saveSticky(refusing, emptySticky)).not.toThrow();
 		expect(loadSticky(refusing)).toEqual(emptySticky);
+	});
+});
+
+describe('recent shops', () => {
+	it('moves a used shop to the front once, newest first', () => {
+		expect(rememberShop(['OLX', 'Empik'], ' empik ')).toEqual(['empik', 'OLX']);
+		expect(rememberShop(['OLX'], '  ')).toEqual(['OLX']);
+		expect(rememberShop(['A', 'B', 'C', 'D', 'E', 'F'], 'G')).toEqual([
+			'G',
+			'A',
+			'B',
+			'C',
+			'D',
+			'E'
+		]);
+	});
+
+	it('carries the shop and new or used of an owned copy only', () => {
+		const before = { shop: 'OLX', acquired_as: 'used' as const, shops: ['OLX'] };
+		expect(stickyAfter(before, form({ shop: ' Empik ', acquired_as: 'new' }))).toEqual({
+			shop: 'Empik',
+			acquired_as: 'new',
+			shops: ['Empik', 'OLX']
+		});
+		expect(stickyAfter(before, form({ shop: '', acquired_as: '' }))).toEqual({
+			shop: '',
+			acquired_as: '',
+			shops: ['OLX']
+		});
+		const wish = form({ status: 'wishlist', shop: 'Empik', acquired_as: 'new' });
+		expect(stickyAfter(before, wish)).toBe(before);
+	});
+});
+
+describe('copy payload', () => {
+	it('sends a condition only with a used copy', () => {
+		const used = scanCopyPayload(form({ acquired_as: 'used', condition: 'good' }), 1, 'k');
+		expect(used.ok && used.value.condition).toBe('good');
+		const fresh = scanCopyPayload(form({ acquired_as: 'new', condition: 'good' }), 1, 'k');
+		expect(fresh.ok && fresh.value.condition).toBeNull();
+	});
+});
+
+describe('isoDate', () => {
+	it('gives the local calendar day', () => {
+		expect(isoDate(new Date(2026, 0, 5, 23, 59))).toBe('2026-01-05');
+		expect(isoDate(new Date(2026, 10, 19, 0, 1))).toBe('2026-11-19');
+	});
+});
+
+describe('providerLabel', () => {
+	it.each([
+		['movie', {}, 'TMDB'],
+		['tmdb', {}, 'TMDB'],
+		['music', { discogs_release_id: 1 }, 'Discogs'],
+		['music', {}, 'MusicBrainz'],
+		['discogs', {}, 'Discogs'],
+		['bn', {}, 'Biblioteka Narodowa'],
+		['openlibrary', {}, 'Open Library'],
+		['google_books', {}, 'Google Books'],
+		['selection', {}, 'Twój wybór'],
+		['stub', {}, 'stub']
+	])('names %s', (provider, edition, want) => {
+		const c: Candidate = {
+			...movie,
+			provider,
+			edition: { barcode: '1', ...edition }
+		};
+		expect(providerLabel(c)).toBe(want);
 	});
 });
 

@@ -1,3 +1,8 @@
+<script module lang="ts">
+	/** Numbers each sheet, so a barcode read again opens a fresh one. */
+	let sheetSeq = 0;
+</script>
+
 <script lang="ts">
 	import {
 		Button,
@@ -11,14 +16,16 @@
 		Section,
 		TextInput
 	} from '@smykla-skalski/sui';
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import { MediaQuery } from 'svelte/reactivity';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { request } from '#lib/api.js';
 	import BarcodeCamera from '#lib/components/BarcodeCamera.svelte';
+	import ScanItem from '#lib/components/ScanItem.svelte';
 	import { queueDeletesSettled } from '#lib/queue-deletes.js';
 	import { outcomeLabels, outcomeTones, recentScans } from '#lib/recent.svelte.js';
+	import { ScanFlow, type Added } from '#lib/scan-flow.svelte.js';
 	import {
 		RepeatGuard,
 		barcodeInputError,
@@ -27,10 +34,22 @@
 		type QueueEntry
 	} from '#lib/scan.js';
 
+	type Sheet = NonNullable<App.PageState['scanSheet']>;
+
 	/** The tab bar's width, where the camera fills the screen and manual entry opens over it. */
 	const phone = new MediaQuery('max-width: 47.9375rem');
-	/** How long a camera read shows its green band before its page opens. */
-	const readHold = 350;
+	/** How long a code must stay out of view before the camera takes it again. */
+	const repeatWindow = 3000;
+	/** How much of the scan band stays in view above the sheet. */
+	const bandPeek = 56;
+
+	function storage(): Storage | undefined {
+		try {
+			return localStorage;
+		} catch {
+			return undefined;
+		}
+	}
 
 	let code = $state('');
 	let leaving = $state(false);
@@ -38,8 +57,42 @@
 	let notice = $state<string | null>(null);
 	let codeError = $state<string>();
 	let queued = $state<number | null>(null);
-	let pending: ReturnType<typeof setTimeout> | undefined;
-	const guard = new RepeatGuard(1500);
+	let band = $state<HTMLElement>();
+	let sheetTop = $state<number | null>(null);
+	let keyboard = $state(0);
+	let viewport = $state<number | null>(null);
+	let shown: Sheet | null = null;
+	let closing = 0;
+	const guard = new RepeatGuard(repeatWindow);
+	const flow = new ScanFlow(fetch, storage());
+
+	const sheet = $derived(page.state.scanSheet);
+	const sheetTitle = $derived(titleFor());
+	const sheetStyle = $derived(
+		[
+			sheetTop === null ? '' : `--scan-sheet-top: ${sheetTop}px`,
+			`--scan-keyboard: ${keyboard}px`,
+			viewport === null ? '' : `--scan-viewport: ${viewport}px`
+		]
+			.filter(Boolean)
+			.join('; ')
+	);
+
+	function titleFor(): string {
+		const p = flow.phase;
+		switch (p.kind) {
+			case 'loading':
+				return 'Sprawdzam kod…';
+			case 'queued':
+				return 'Nie znaleziono';
+			case 'invalid':
+				return 'Nieprawidłowy kod';
+			case 'failed':
+				return 'Nie udało się sprawdzić kodu';
+		}
+		if (p.status === 'owned') return 'Masz już to wydanie';
+		return p.status === 'missing' ? 'Dodaj ręcznie' : 'Znaleziono';
+	}
 
 	async function countQueue() {
 		try {
@@ -51,28 +104,41 @@
 	}
 
 	/**
-	 * Every scan opens its own add page, which says what the barcode turned out to be. Returns
-	 * whether the code was taken; a camera read waits `hold` ms so its green band shows.
+	 * Opens the sheet for a code over the camera, in a history entry of its own so going back
+	 * closes it. A sheet already open gives way to the next code in the same entry. Returns
+	 * whether the code was taken.
 	 */
-	function open(raw: string, manual = false, hold = 0): boolean {
+	function open(raw: string, typed: boolean): boolean {
 		const barcode = cleanBarcode(raw);
 		if (!barcode || leaving) return false;
 		if (!looksLikeBarcode(barcode)) {
 			notice = `„${raw.trim()}” nie wygląda na kod kreskowy.`;
 			return false;
 		}
-		leaving = true;
 		notice = null;
 		code = '';
-		const href = `/scan/${encodeURIComponent(barcode)}${manual ? '?manual=1' : ''}`;
-		clearTimeout(pending);
-		pending = setTimeout(() => void goto(href), hold);
+		typing = false;
+		const top = band?.getBoundingClientRect().top;
+		sheetTop = phone.current && top !== undefined ? Math.round(top + bandPeek) : null;
+		const scanSheet: Sheet = { barcode, id: ++sheetSeq, typed };
+		void goto(page.url.href, {
+			shallow: true,
+			replace: !!page.state.scanSheet,
+			state: { scanSheet }
+		});
 		return true;
 	}
 
+	function closeSheet() {
+		const s = page.state.scanSheet;
+		if (!s || closing === s.id) return;
+		closing = s.id;
+		history.back();
+	}
+
 	function fromCamera(barcode: string): boolean {
-		if (!guard.accepts(barcode, performance.now())) return false;
-		return open(barcode, false, readHold);
+		if (sheet || !guard.accepts(barcode, performance.now())) return false;
+		return open(barcode, false);
 	}
 
 	function submitCode() {
@@ -82,16 +148,88 @@
 			document.getElementById('scan-code')?.focus();
 			return;
 		}
-		open(code);
+		open(code, true);
+	}
+
+	function added(a: Added) {
+		if (!page.state.scanSheet) return;
+		if (a.next) open(a.next, true);
+		else closeSheet();
+	}
+
+	async function fillByHand() {
+		const s = page.state.scanSheet;
+		if (!s) return;
+		flow.dismiss();
+		await goto(`/scan/${encodeURIComponent(flow.item?.barcode ?? s.barcode)}?manual=1`, {
+			replace: true
+		});
+	}
+
+	function sheetOpened(s: Sheet) {
+		if (shown?.id === s.id) return;
+		shown = s;
+		void flow.load(s.barcode);
+	}
+
+	function sheetClosed(s: Sheet) {
+		guard.remember(s.barcode, performance.now());
+		flow.dismiss();
+		shown = null;
+		closing = 0;
+		sheetTop = null;
+		void countQueue();
+	}
+
+	$effect(() => {
+		const s = sheet;
+		untrack(() => {
+			if (s) sheetOpened(s);
+			else if (shown) sheetClosed(shown);
+		});
+	});
+
+	$effect(() => {
+		if (flow.phase.kind === 'queued') untrack(() => void countQueue());
+	});
+
+	$effect(() => {
+		const vv = window.visualViewport;
+		if (!sheet || !phone.current || !vv) return;
+		const follow = () => {
+			keyboard = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
+			viewport = Math.round(vv.height);
+			if (keyboard > 0) requestAnimationFrame(revealFocus);
+		};
+		follow();
+		vv.addEventListener('resize', follow);
+		vv.addEventListener('scroll', follow);
+		return () => {
+			vv.removeEventListener('resize', follow);
+			vv.removeEventListener('scroll', follow);
+			keyboard = 0;
+			viewport = null;
+		};
+	});
+
+	function revealFocus() {
+		const at = document.activeElement;
+		if (at instanceof HTMLElement && at.closest('.scan-sheet')) {
+			at.scrollIntoView({ block: 'nearest' });
+		}
 	}
 
 	onMount(() => {
 		void countQueue();
 		// Links from before the add page existed: /scan?barcode=…[&manual=1].
-		const preset = page.url.searchParams.get('barcode');
-		if (preset) open(preset, page.url.searchParams.get('manual') === '1');
-		else document.getElementById('scan-code')?.focus();
-		return () => clearTimeout(pending);
+		const preset = cleanBarcode(page.url.searchParams.get('barcode') ?? '');
+		if (preset) {
+			leaving = true;
+			const manual = page.url.searchParams.get('manual') === '1' ? '?manual=1' : '';
+			void goto(`/scan/${encodeURIComponent(preset)}${manual}`, { replace: true });
+		} else if (!phone.current) {
+			document.getElementById('scan-code')?.focus();
+		}
 	});
 </script>
 
@@ -164,7 +302,7 @@
 {:else}
 	<PageHeader
 		title="Skanuj"
-		description="Aparat albo czytnik kodów: każdy kod otwiera stronę, na której go dodasz."
+		description="Aparat albo czytnik kodów: każdy kod otwiera okno, w którym go dodasz."
 	>
 		{#snippet actions()}
 			<Button href="/scan/queue">
@@ -177,10 +315,11 @@
 <div class={['content', { phone: phone.current }]}>
 	<BarcodeCamera
 		full={phone.current}
-		paused={leaving || (phone.current && typing)}
+		paused={!!sheet || leaving || (phone.current && typing)}
 		ondetect={fromCamera}
 		{queued}
 		ontype={() => (typing = true)}
+		bind:band
 	>
 		{@render message()}
 	</BarcodeCamera>
@@ -192,12 +331,31 @@
 
 {#if phone.current}
 	<Modal bind:open={typing} title="Wpisz kod" closeLabel="Zamknij">
-		<div class="sheet">
+		<div class="typing">
 			{@render manualEntry()}
 			{@render recent()}
 		</div>
 	</Modal>
 {/if}
+
+<Modal
+	open={!!sheet}
+	class="scan-sheet"
+	title={sheetTitle}
+	closeLabel="Zamknij"
+	beforeClose={() => !flow.saving}
+	onclose={closeSheet}
+	style={sheetStyle}
+>
+	<span class="grabber" aria-hidden="true"></span>
+	<ScanItem
+		{flow}
+		autofocus={sheet?.typed ?? false}
+		onadded={added}
+		onclose={closeSheet}
+		onmanual={fillByHand}
+	/>
+</Modal>
 
 <style>
 	.title {
@@ -223,7 +381,7 @@
 		padding: 0;
 	}
 
-	.sheet {
+	.typing {
 		display: grid;
 		gap: 1rem;
 	}
@@ -238,5 +396,52 @@
 	.code {
 		font-family: var(--sui-mono);
 		margin-inline-end: 0.5rem;
+	}
+
+	.grabber {
+		display: none;
+	}
+
+	:global(.scan-sheet) {
+		--scan-gutter: var(--sui-local-modal-inset);
+	}
+
+	/* On a phone the sheet rises from the bottom edge over the live camera, leaving the top of the
+	   scan band in view, and stands on the keyboard while one is open. */
+	@media (max-width: 47.9375rem) {
+		:global(.scan-sheet[open]) {
+			background: var(--sui-surface-base);
+			border-block-end: 0;
+			border-inline: 0;
+			border-radius: 1.875rem 1.875rem 0 0;
+			box-shadow: 0 -18px 50px rgb(0 0 0 / 35%);
+			inline-size: 100%;
+			margin: auto 0 var(--scan-keyboard, 0px);
+			max-block-size: min(
+				calc(100dvh - var(--scan-sheet-top, 6rem)),
+				calc(var(--scan-viewport, 100dvh) - 0.5rem)
+			);
+			max-inline-size: 100%;
+			padding-block: 0.625rem max(env(safe-area-inset-bottom, 0px), 1rem);
+		}
+
+		:global(.scan-sheet .sui-modal-head) {
+			display: none;
+		}
+
+		:global(.scan-sheet::backdrop) {
+			-webkit-backdrop-filter: none;
+			backdrop-filter: none;
+			background: rgb(0 0 0 / 18%);
+		}
+
+		.grabber {
+			background: var(--sui-border-subtle);
+			block-size: 5px;
+			border-radius: 3px;
+			display: block;
+			inline-size: 40px;
+			margin: 0 auto 0.375rem;
+		}
 	}
 </style>

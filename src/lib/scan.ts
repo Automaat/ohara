@@ -7,7 +7,9 @@ import {
 	formatLabels,
 	type AcquiredAs,
 	type Binding,
+	type Condition,
 	type Copy,
+	type CopyStatus,
 	type Edition,
 	type EditionDetail,
 	type EditionPayload,
@@ -56,24 +58,22 @@ export type Candidate = {
 };
 
 /**
- * How the quick confirm lists a candidate: its name, for an album after the artist and followed
- * by the details pressings are told apart by, then the source and its confidence.
+ * A candidate's name, for a book or an album after its authors or artists, and the details that
+ * tell it apart: the year, and for an album the medium, year, publisher and label.
  */
-export function candidateLabel(c: Candidate): string {
+export function candidateParts(c: Candidate): { name: string; details: string[] } {
 	const t = c.title;
 	let name = displayName({
 		name: t.name,
 		polish_title: t.polish_title ?? null,
 		original_title: t.original_title ?? null
 	});
-	const parts: string[] = [];
-	if (c.type === 'book' && t.authors?.length) name = `${t.authors.join(', ')} – ${name}`;
+	if (c.type !== 'movie' && t.authors?.length) name = `${t.authors.join(', ')} – ${name}`;
+	const details: string[] = [];
 	if (c.type !== 'music') {
 		const year = t.year ?? c.edition.year;
-		if (year) parts.push(String(year));
-	}
-	if (c.type === 'music') {
-		if (t.authors?.length) name = `${t.authors.join(', ')} – ${name}`;
+		if (year) details.push(String(year));
+	} else {
 		const e = c.edition;
 		for (const part of [
 			e.format ? formatLabels[e.format] : '',
@@ -81,10 +81,19 @@ export function candidateLabel(c: Candidate): string {
 			e.publisher ?? '',
 			e.label ?? ''
 		]) {
-			if (part) parts.push(part);
+			if (part) details.push(part);
 		}
 	}
-	return [name, ...parts, c.provider, `${Math.round(c.confidence * 100)}%`].join(' · ');
+	return { name, details };
+}
+
+/**
+ * How the quick confirm lists a candidate: its name, for an album after the artist and followed
+ * by the details pressings are told apart by, then the source and its confidence.
+ */
+export function candidateLabel(c: Candidate): string {
+	const { name, details } = candidateParts(c);
+	return [name, ...details, c.provider, `${Math.round(c.confidence * 100)}%`].join(' · ');
 }
 
 /** What to type into the search by title, per kind. */
@@ -131,8 +140,33 @@ export async function searchTitles(
 export type LookupResult = {
 	barcode: string;
 	candidates: Candidate[];
+	/** False only when exactly one candidate is confident enough to take without asking. */
+	needs_confirmation?: boolean;
 	errors: { provider: string; error: string }[];
 };
+
+/** The source a candidate came from, as the quick confirm names it. */
+export function providerLabel(c: Candidate): string {
+	switch (c.provider) {
+		case 'movie':
+		case 'tmdb':
+			return 'TMDB';
+		case 'music':
+			return c.edition.discogs_release_id ? 'Discogs' : 'MusicBrainz';
+		case 'discogs':
+			return 'Discogs';
+		case 'bn':
+			return 'Biblioteka Narodowa';
+		case 'openlibrary':
+			return 'Open Library';
+		case 'google_books':
+			return 'Google Books';
+		case 'selection':
+			return 'Twój wybór';
+		default:
+			return c.provider;
+	}
+}
 
 export type QueueReason = 'not_found' | 'lookup_failed';
 
@@ -237,10 +271,19 @@ export function wedgeBarcodeIn(price: string): string | null {
 	return /^\d{8,14}$/.test(code) && looksLikeBarcode(code) ? code : null;
 }
 
-/** What a scan resolved to: an edition already in the collection, candidates, or the queue. */
+/**
+ * What a scan resolved to: an edition already in the collection, candidates, or the queue. Found
+ * candidates need a pick unless the lookup trusts its first one.
+ */
 export type Resolution =
 	| { kind: 'owned'; barcode: string; edition: EditionDetail }
-	| { kind: 'found'; barcode: string; candidates: Candidate[]; errors: LookupResult['errors'] }
+	| {
+			kind: 'found';
+			barcode: string;
+			candidates: Candidate[];
+			needsConfirmation: boolean;
+			errors: LookupResult['errors'];
+	  }
 	| { kind: 'queued'; barcode: string; entry: QueueEntry };
 
 function providerDetail(errors: LookupResult['errors']): string {
@@ -277,6 +320,7 @@ export async function resolveScan(fetchFn: typeof fetch, raw: string): Promise<R
 			kind: 'found',
 			barcode: lookup.barcode,
 			candidates: lookup.candidates,
+			needsConfirmation: lookup.needs_confirmation !== false,
 			errors: lookup.errors
 		};
 	}
@@ -291,32 +335,81 @@ export async function resolveScan(fetchFn: typeof fetch, raw: string): Promise<R
 	return { kind: 'queued', barcode, entry };
 }
 
-/** The fields the quick confirm asks for; the rest come from the candidate. */
+/**
+ * The fields the quick confirm asks for; the rest come from the candidate. An owned copy takes
+ * the price as what it cost, a wishlist copy as the most it may cost.
+ */
 export type QuickForm = {
 	kind: Kind;
 	name: string;
 	format: Format | '';
 	binding: Binding | '';
+	packaging: Packaging[];
+	status: CopyStatus;
 	price: string;
+	purchased_on: string;
 	shop: string;
 	acquired_as: AcquiredAs | '';
+	condition: Condition | '';
 };
 
-/** What carries over from one scan to the next during bulk entry from one shop. */
-export type Sticky = { shop: string; acquired_as: AcquiredAs | '' };
+/**
+ * What carries over from one scan to the next during bulk entry: the shop and new or used of the
+ * last copy added, and the shops used lately, newest first.
+ */
+export type Sticky = { shop: string; acquired_as: AcquiredAs | ''; shops: string[] };
 
-export const emptySticky: Sticky = { shop: '', acquired_as: '' };
+export const emptySticky: Sticky = { shop: '', acquired_as: '', shops: [] };
 
-/** The quick confirm for a candidate, or a blank one for a barcode added by hand. */
-export function quickForm(candidate: Candidate | null, sticky: Sticky, barcode: string): QuickForm {
+/** How many recently used shops the quick confirm offers. */
+export const recentShopLimit = 6;
+
+/** The recent shops with shop moved to the front; a blank shop changes nothing. */
+export function rememberShop(shops: readonly string[], shop: string): string[] {
+	const name = shop.trim();
+	if (!name) return [...shops];
+	const key = name.toLocaleLowerCase('pl-PL');
+	return [name, ...shops.filter((s) => s.toLocaleLowerCase('pl-PL') !== key)].slice(
+		0,
+		recentShopLimit
+	);
+}
+
+/** What the next scan starts from after f was added: a wish leaves the purchase defaults alone. */
+export function stickyAfter(sticky: Sticky, f: QuickForm): Sticky {
+	if (f.status !== 'owned') return sticky;
+	const shop = f.shop.trim();
+	return { shop, acquired_as: f.acquired_as, shops: rememberShop(sticky.shops, shop) };
+}
+
+/** A date as the API and a date field take it, YYYY-MM-DD, in local time. */
+export function isoDate(d: Date): string {
+	const pad = (n: number) => String(n).padStart(2, '0');
+	return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/**
+ * The quick confirm for a candidate, or a blank one for a barcode added by hand. The price
+ * always starts empty; the date is the one the visit last used.
+ */
+export function quickForm(
+	candidate: Candidate | null,
+	sticky: Sticky,
+	barcode: string,
+	date = ''
+): QuickForm {
 	return {
 		kind: candidate?.type ?? (isBookBarcode(barcode) ? 'book' : 'movie'),
 		name: candidate?.title.name ?? '',
 		format: candidate?.edition.format ?? '',
 		binding: candidate?.edition.binding ?? '',
+		packaging: [...(candidate?.edition.packaging ?? [])],
+		status: 'owned',
 		price: '',
+		purchased_on: date,
 		shop: sticky.shop,
-		acquired_as: sticky.acquired_as
+		acquired_as: sticky.acquired_as,
+		condition: ''
 	};
 }
 
@@ -373,7 +466,7 @@ export function scanEditionPayload(
 			format: (movie || music) && f.format ? f.format : null,
 			pl_subtitles: movie ? (e?.pl_subtitles ?? 'unknown') : 'unknown',
 			pl_voiceover: movie ? (e?.pl_voiceover ?? 'unknown') : 'unknown',
-			packaging: movie ? (e?.packaging ?? []) : [],
+			packaging: movie ? [...f.packaging] : [],
 			binding: f.kind === 'book' && f.binding ? f.binding : null,
 			discogs_release_id: music ? opt(e?.discogs_release_id) : null,
 			cover_url: selected?.cover_url,
@@ -382,17 +475,22 @@ export function scanEditionPayload(
 	};
 }
 
-function scanCopyPayload(f: QuickForm, editionID: number, requestKey: string) {
+/**
+ * The POST /api/copies body. A wish keeps only its price limit: no purchase date, shop, new or
+ * used, or condition. The condition goes with a used copy alone.
+ */
+export function scanCopyPayload(f: QuickForm, editionID: number, requestKey: string) {
+	const owned = f.status === 'owned';
 	const parsed = copyPayload(
 		{
-			status: 'owned',
-			price: f.price,
-			purchased_on: '',
-			shop: f.shop,
-			acquired_as: f.acquired_as,
-			condition: '',
+			status: f.status,
+			price: owned ? f.price : '',
+			purchased_on: owned ? f.purchased_on : '',
+			shop: owned ? f.shop : '',
+			acquired_as: owned ? f.acquired_as : '',
+			condition: owned && f.acquired_as === 'used' ? f.condition : '',
 			notes: '',
-			max_price: ''
+			max_price: owned ? '' : f.price
 		},
 		editionID
 	);
@@ -454,7 +552,7 @@ async function discardTitle(fetchFn: typeof fetch, id: number) {
 }
 
 /**
- * Saves a quick confirm as an owned copy. A new barcode first gets its title, reusing the one
+ * Saves a quick confirm as an owned or wishlist copy. A new barcode first gets its title, reusing the one
  * with the candidate's TMDB ID, then its edition; when another save created that edition in the
  * meantime, the copy joins it and a title made here is removed again. Every value is checked
  * before the first request, so a refused form changes nothing. Retry a failed save with the
@@ -622,23 +720,30 @@ export type KeyValueStore = Pick<Storage, 'getItem' | 'setItem'>;
 
 const stickyKey = 'ohara.scan.sticky';
 
-/** The shop and new/used last used, or blanks when nothing usable is stored. */
+/** The shop and new/used last used and the recent shops, or blanks when nothing usable is stored. */
 export function loadSticky(store: KeyValueStore | undefined): Sticky {
 	try {
 		const raw = store?.getItem(stickyKey);
 		const parsed: unknown = raw ? JSON.parse(raw) : null;
-		if (!parsed || typeof parsed !== 'object') return { ...emptySticky };
-		const { shop, acquired_as } = parsed as Record<string, unknown>;
+		if (!parsed || typeof parsed !== 'object') return { ...emptySticky, shops: [] };
+		const { shop, acquired_as, shops } = parsed as Record<string, unknown>;
+		const last = typeof shop === 'string' ? shop : '';
+		const recent = Array.isArray(shops)
+			? shops
+					.filter((s): s is string => typeof s === 'string')
+					.reduceRight<string[]>((list, s) => rememberShop(list, s), [])
+			: [];
 		return {
-			shop: typeof shop === 'string' ? shop : '',
-			acquired_as: acquired_as === 'new' || acquired_as === 'used' ? acquired_as : ''
+			shop: last,
+			acquired_as: acquired_as === 'new' || acquired_as === 'used' ? acquired_as : '',
+			shops: recent.length > 0 ? recent : rememberShop([], last)
 		};
 	} catch {
-		return { ...emptySticky };
+		return { ...emptySticky, shops: [] };
 	}
 }
 
-/** Keeps the shop and new/used for the next scan; storage that refuses is ignored. */
+/** Keeps the shop, new/used and recent shops for the next scan; storage that refuses is ignored. */
 export function saveSticky(store: KeyValueStore | undefined, sticky: Sticky) {
 	try {
 		store?.setItem(stickyKey, JSON.stringify(sticky));

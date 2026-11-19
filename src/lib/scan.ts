@@ -279,11 +279,12 @@ export function isBookBarcode(code: string): boolean {
 /**
  * A price field that holds a barcode instead: a wedge scanner typed the next item into it.
  * No price has 8 digits before the comma (the cap is 1 000 000 zł), so such input is never a
- * price.
+ * price. An ISBN-10, which may end in X, counts only when its check digit matches.
  */
 export function wedgeBarcodeIn(price: string): string | null {
 	const code = cleanBarcode(price);
-	return /^\d{8,14}$/.test(code) && looksLikeBarcode(code) ? code : null;
+	if (!looksLikeBarcode(code)) return null;
+	return code.length !== 10 || checkDigitMatches(code) ? code : null;
 }
 
 /**

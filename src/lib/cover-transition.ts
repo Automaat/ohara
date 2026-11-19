@@ -15,7 +15,8 @@ export const coverStart = '--ohara-cover-start';
 
 /**
  * How long, in milliseconds, a navigation keeps the old page on screen while the new one places
- * its cover. A slower page still opens, and the cover fades out instead of moving.
+ * its cover. A slower page still opens, and the cover fades out instead of moving, so pages draw
+ * what they already know (src/lib/collection-cache.ts) before their answer arrives.
  */
 export const placementWait = 400;
 
@@ -181,6 +182,14 @@ const namedBy = new WeakMap<HTMLElement, number>();
 
 /** The tile each title was last opened from, so going back lands on that tile. */
 const openedFrom = new Map<number, string>();
+
+/**
+ * What tells apart the tile the reader last opened the title from, its `data-cover-key`, or
+ * null when the title was not opened from a tile with one.
+ */
+export function openedTile(titleID: number): string | null {
+	return openedFrom.get(titleID) ?? null;
+}
 
 function name(cover: HTMLElement, turn: number) {
 	cover.style.viewTransitionName = coverName;

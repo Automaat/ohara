@@ -567,6 +567,16 @@ describe('ScanFlow.save', () => {
 		expect(s.calls.at(-1)?.body).toMatchObject({ price_cents: null });
 	});
 
+	it('starts the next item when a wedge scanner typed an ISBN-10 ending in X', async () => {
+		const s = server(ownedRoutes());
+		const flow = new ScanFlow(s.fetchFn, memory());
+		await flow.load(code);
+		flow.form.price = '080442957x';
+		const added = await flow.save();
+		expect(added?.next).toBe('080442957X');
+		expect(s.calls.at(-1)?.body).toMatchObject({ price_cents: null });
+	});
+
 	it('shows why a save was refused and keeps the wedge code to scan again', async () => {
 		const s = server(lookup([movie], false));
 		const flow = new ScanFlow(s.fetchFn, memory());
@@ -611,6 +621,83 @@ describe('ScanFlow.save', () => {
 		expect(flow.issue).toBeNull();
 		expect(recentScans.list[0]).toMatchObject({ barcode: code, outcome: 'added' });
 		expect(JSON.parse(store.data['ohara.scan.sticky']).shop).toBe('Empik');
+	});
+
+	it('saves and logs a copy whose page is gone, without reporting it', async () => {
+		let release: (r: [number, unknown]) => void = () => {};
+		const held = new Promise<[number, unknown]>((resolve) => (release = resolve));
+		const store = memory();
+		const flow = new ScanFlow(server(ownedRoutes(() => held)).fetchFn, store);
+		await flow.load(code);
+		flow.form.shop = 'Empik';
+		const saving = flow.save();
+		flow.detach();
+		release([201, { id: 41, edition_id: 5, price_cents: null, max_price_cents: null }]);
+		expect(await saving).toBeNull();
+		expect(recentScans.list[0]).toMatchObject({ barcode: code, outcome: 'added' });
+		expect(session.adds).toHaveLength(1);
+		expect(JSON.parse(store.data['ohara.scan.sticky']).shop).toBe('Empik');
+	});
+
+	it('reports nothing when a save fails after its page is gone', async () => {
+		let release: (r: [number, unknown]) => void = () => {};
+		const held = new Promise<[number, unknown]>((resolve) => (release = resolve));
+		const flow = new ScanFlow(server(ownedRoutes(() => held)).fetchFn, memory());
+		await flow.load(code);
+		flow.form.price = other;
+		const saving = flow.save();
+		flow.detach();
+		release([422, { error: 'zła cena', field: 'price_cents' }]);
+		expect(await saving).toBeNull();
+		expect(flow.issue).toBeNull();
+		expect(flow.notice).toBeNull();
+	});
+
+	it('keeps the shop another page saved while a wish here was on its way', async () => {
+		let releasePurchase: (r: [number, unknown]) => void = () => {};
+		let releaseWish: (r: [number, unknown]) => void = () => {};
+		const purchase = new Promise<[number, unknown]>((resolve) => (releasePurchase = resolve));
+		const wish = new Promise<[number, unknown]>((resolve) => (releaseWish = resolve));
+		const store = memory({
+			'ohara.scan.sticky': '{"shop":"OLX","acquired_as":"","shops":["OLX"]}'
+		});
+		const addPage = new ScanFlow(server(ownedRoutes(() => purchase)).fetchFn, store);
+		const scanner = new ScanFlow(server(ownedRoutes(() => wish)).fetchFn, store);
+		await addPage.load(code);
+		addPage.form.shop = 'Empik';
+		const buying = addPage.save();
+		await scanner.load(code);
+		scanner.wish(true);
+		const wishing = scanner.save();
+		releasePurchase([201, { id: 41, edition_id: 5, status: 'owned', price_cents: null }]);
+		await buying;
+		releaseWish([201, { id: 42, edition_id: 5, status: 'wishlist', max_price_cents: null }]);
+		await wishing;
+		expect(JSON.parse(store.data['ohara.scan.sticky'])).toEqual({
+			shop: 'Empik',
+			acquired_as: '',
+			shops: ['Empik', 'OLX']
+		});
+	});
+
+	it('keeps the shops of both pages when their purchases answer in turn', async () => {
+		let releaseFirst: (r: [number, unknown]) => void = () => {};
+		const first = new Promise<[number, unknown]>((resolve) => (releaseFirst = resolve));
+		const store = memory();
+		const addPage = new ScanFlow(server(ownedRoutes(() => first)).fetchFn, store);
+		const scanner = new ScanFlow(server(ownedRoutes()).fetchFn, store);
+		await addPage.load(code);
+		addPage.form.shop = 'Empik';
+		const buying = addPage.save();
+		await scanner.load(code);
+		scanner.form.shop = 'Allegro';
+		await scanner.save();
+		releaseFirst([201, { id: 41, edition_id: 5, status: 'owned', price_cents: null }]);
+		await buying;
+		expect(JSON.parse(store.data['ohara.scan.sticky'])).toMatchObject({
+			shop: 'Empik',
+			shops: ['Empik', 'Allegro']
+		});
 	});
 });
 

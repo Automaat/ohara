@@ -8,6 +8,7 @@ import {
 	coverTitle,
 	coversPlaced,
 	inView,
+	openedTile,
 	placementWait,
 	type Box
 } from './cover-transition';
@@ -405,6 +406,28 @@ describe('carryCover', () => {
 		await transitions[1]?.update;
 		expect(after.second.cover.style.viewTransitionName).toBe(coverName);
 		expect(after.first.cover.style.viewTransitionName).toBe('');
+	});
+
+	it('tells which tile a title was opened from', async () => {
+		const { doc, asDocument } = fakeDocument();
+		const body = new FakeElement();
+		const tile = tileIn(body, 12, tileBox, '1', '205');
+		const keyless = tileIn(body, 13, { ...tileBox, left: 140 });
+		doc.body = body;
+		expect(openedTile(12)).toBeNull();
+
+		await carryCover(
+			navigation('link', '/', '/titles/12', { target: tile.link }).nav,
+			asDocument()
+		);
+		expect(openedTile(12)).toBe('205');
+
+		await carryCover(
+			navigation('link', '/', '/titles/13', { target: keyless.link }).nav,
+			asDocument()
+		);
+		expect(openedTile(13)).toBeNull();
+		expect(openedTile(12)).toBe('205');
 	});
 
 	it('lets the navigation go on when the transition cannot start', async () => {

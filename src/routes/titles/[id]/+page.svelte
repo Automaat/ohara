@@ -17,6 +17,7 @@
 	import { afterNavigate, goto, replaceState } from '$app/navigation';
 	import { page } from '$app/state';
 	import { ApiError, errorMessage, request } from '#lib/api.js';
+	import { titlePreview } from '#lib/collection-cache.js';
 	import {
 		copyPayload,
 		copyToForm,
@@ -36,6 +37,7 @@
 	import EditionFormFields from '#lib/components/EditionFormFields.svelte';
 	import TitleFormFields from '#lib/components/TitleFormFields.svelte';
 	import TitleHero from '#lib/components/TitleHero.svelte';
+	import { openedTile } from '#lib/cover-transition.js';
 	import {
 		addCopyHref,
 		addCopyStart,
@@ -44,13 +46,13 @@
 		copyRequest,
 		editionArtwork,
 		editionName,
-		editionsLine,
-		kindAndYear,
 		openedFromCollection,
 		plainClick,
+		previewHero,
 		soleCopy,
-		titleArtwork,
-		valueCard
+		titleHero,
+		valueCard,
+		type Hero
 	} from '#lib/title-detail.js';
 	import { newRequestKey } from '#lib/scan.js';
 	import type { CopyValue, ValuationView } from '#lib/valuation.js';
@@ -65,6 +67,9 @@
 	const id = $derived(Number(page.params.id));
 
 	let detail = $state<TitleDetail | null>(null);
+	/** The title as the collection showed it, drawn in the hero until the title loads. */
+	let preview = $state<Hero | null>(null);
+	const hero = $derived(detail ? titleHero(detail) : preview);
 	let values = $state<CopyValue[]>([]);
 	let failure = $state<string | null>(null);
 	/** A failed refresh of the title already on the page, which stays in view. */
@@ -114,6 +119,7 @@
 		if (titleID !== requested) {
 			requested = titleID;
 			detail = null;
+			preview = null;
 			values = [];
 			failure = null;
 			refreshError = null;
@@ -142,6 +148,7 @@
 				refreshError = `Nie udało się odświeżyć tytułu: ${errorMessage(err)}`;
 			} else {
 				failure = errorMessage(err);
+				preview = null;
 			}
 		} finally {
 			if (current === loads) busy = false;
@@ -172,6 +179,12 @@
 	afterNavigate((navigation) => {
 		if (openedFromCollection(navigation) && !page.state.fromCollection) {
 			replaceState('', { ...page.state, fromCollection: true });
+		}
+		// A title opened from the collection shows its hero at once, so the cover carried from
+		// the tapped tile has a place to land however slowly the title answers.
+		if (navigation.from?.url.pathname === '/' && !detail) {
+			const shown = titlePreview(id, openedTile(id));
+			preview = shown ? previewHero(shown) : null;
 		}
 	});
 
@@ -316,6 +329,17 @@
 	<title>{detail ? displayName(detail) : 'Tytuł'} · Ohara</title>
 </svelte:head>
 
+{#if hero}
+	<TitleHero
+		{...hero}
+		backHref="/"
+		backLabel="Kolekcja"
+		coverTitle={id}
+		onback={backToCollection}
+		actions={titleActions}
+	/>
+{/if}
+
 {#if failure}
 	<div class="content">
 		<ErrorState
@@ -336,38 +360,6 @@
 		{ label: 'Open Library', value: t.openlibrary_id ?? undefined },
 		{ label: 'TMDB', value: t.tmdb_id?.toString() }
 	].filter((fact) => fact.value)}
-	<TitleHero
-		title={displayName(t)}
-		overline={kindAndYear(t)}
-		meta={editionsLine(t)}
-		byline={t.authors.length > 0 ? t.authors.join(', ') : undefined}
-		kind={t.kind}
-		artwork={titleArtwork(t)}
-		backHref="/"
-		backLabel="Kolekcja"
-		coverTitle={t.id}
-		onback={backToCollection}
-	>
-		{#snippet actions()}
-			<ActionMenu
-				label="Więcej działań"
-				icon="more"
-				toolbar
-				align="end"
-				items={[
-					{ label: 'Edytuj tytuł', icon: 'editor', onselect: () => editTitle(t) },
-					{ separator: true },
-					{
-						label: 'Usuń tytuł',
-						icon: 'trash',
-						tone: 'stop',
-						onselect: () => ((deleteError = null), (confirmDelete = true))
-					}
-				]}
-			/>
-		{/snippet}
-	</TitleHero>
-
 	<div class="content">
 		<FormError message={refreshError} />
 		<FormError message={deleteError} />
@@ -567,6 +559,34 @@
 		onconfirm={remove}
 	/>
 {/if}
+
+<!-- The menu stands in the hero from its first frame, disabled until the title loads, so the
+     hero keeps its height and the cover stays where it landed. -->
+{#snippet titleActions()}
+	<ActionMenu
+		label="Więcej działań"
+		icon="more"
+		toolbar
+		align="end"
+		disabled={!detail}
+		items={[
+			{
+				label: 'Edytuj tytuł',
+				icon: 'editor',
+				onselect: () => {
+					if (detail) editTitle(detail);
+				}
+			},
+			{ separator: true },
+			{
+				label: 'Usuń tytuł',
+				icon: 'trash',
+				tone: 'stop',
+				onselect: () => ((deleteError = null), (confirmDelete = true))
+			}
+		]}
+	/>
+{/snippet}
 
 <style>
 	.content {

@@ -347,7 +347,11 @@
 </div>
 
 <style>
+	/* Buttons, fields and selects are 44px targets with a mouse too, as on a phone. */
 	.item {
+		--sui-control-height: max(44px, 2.75rem);
+		--sui-control-height-compact: max(44px, 2.75rem);
+
 		color: var(--sui-text-primary);
 		display: grid;
 		font-family: var(--sui-sans);

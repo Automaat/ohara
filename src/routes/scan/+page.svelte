@@ -64,6 +64,8 @@
 	let shown: Sheet | null = null;
 	/** Every code the open sheet has shown, a wedge scan's next codes included. */
 	let handled: string[] = [];
+	/** Where to go once the sheet's history entry is gone, as the add page for a code by hand. */
+	let afterClose: string | null = null;
 	let closing = 0;
 	const guard = new RepeatGuard(repeatWindow);
 	const flow = new ScanFlow(fetch, storage());
@@ -159,13 +161,17 @@
 		else closeSheet();
 	}
 
-	async function fillByHand() {
+	/**
+	 * Opens the add page for a code typed in by hand once the sheet has closed, so going back
+	 * from that page lands on the scanner rather than reopening the sheet and queuing the code
+	 * again.
+	 */
+	function fillByHand() {
 		const s = page.state.scanSheet;
 		if (!s) return;
 		flow.dismiss();
-		await goto(`/scan/${encodeURIComponent(flow.item?.barcode ?? s.barcode)}?manual=1`, {
-			replace: true
-		});
+		afterClose = `/scan/${encodeURIComponent(flow.item?.barcode ?? s.barcode)}?manual=1`;
+		closeSheet();
 	}
 
 	function sheetOpened(s: Sheet) {
@@ -183,7 +189,10 @@
 		shown = null;
 		closing = 0;
 		sheetTop = null;
-		void countQueue();
+		const next = afterClose;
+		afterClose = null;
+		if (next) void goto(next);
+		else void countQueue();
 	}
 
 	$effect(() => {
@@ -202,11 +211,12 @@
 		const vv = window.visualViewport;
 		if (!sheet || !phone.current || !vv) return;
 		const follow = () => {
-			keyboard = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
+			const inset = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
+			keyboard = inset;
 			viewport = Math.round(vv.height);
-			if (keyboard > 0) requestAnimationFrame(revealFocus);
+			if (inset > 0) requestAnimationFrame(revealFocus);
 		};
-		follow();
+		untrack(follow);
 		vv.addEventListener('resize', follow);
 		vv.addEventListener('scroll', follow);
 		return () => {
@@ -411,10 +421,15 @@
 		--scan-gutter: var(--sui-local-modal-inset);
 	}
 
+	/* Every control in the sheet is a 44px target, its close button too, with a mouse as well. */
+	:global(dialog.sui-modal.scan-sheet .sui-modal-close) {
+		--sui-tier-quiet: max(44px, 2.75rem);
+	}
+
 	/* On a phone the sheet rises from the bottom edge over the live camera, leaving the top of the
 	   scan band in view, and stands on the keyboard while one is open. */
 	@media (max-width: 47.9375rem) {
-		:global(.scan-sheet[open]) {
+		:global(dialog.sui-modal.scan-sheet[open]) {
 			background: var(--sui-surface-base);
 			border-block-end: 0;
 			border-inline: 0;
@@ -430,11 +445,11 @@
 			padding-block: 0.625rem max(env(safe-area-inset-bottom, 0px), 1rem);
 		}
 
-		:global(.scan-sheet .sui-modal-head) {
+		:global(dialog.sui-modal.scan-sheet .sui-modal-head) {
 			display: none;
 		}
 
-		:global(.scan-sheet::backdrop) {
+		:global(dialog.sui-modal.scan-sheet::backdrop) {
 			-webkit-backdrop-filter: none;
 			backdrop-filter: none;
 			background: rgb(0 0 0 / 18%);

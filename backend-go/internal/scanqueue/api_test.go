@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 	"unicode/utf8"
 
 	"github.com/Automaat/ohara/backend-go/internal/collection"
@@ -147,22 +146,6 @@ func TestQueueRejectsBadInput(t *testing.T) {
 		{"unknown reason", obj{"barcode": "5901234123457", "reason": "bored"}, "reason"},
 		{"missing reason", obj{"barcode": "5901234123457"}, "reason"},
 		{"not an object", "nope", "body"},
-		{"restore without scans", obj{
-			"barcode": "5901234123457", "reason": "not_found",
-			"restore": obj{"scans": 0, "created_at": "2026-11-01T10:00:00Z", "last_scanned_at": "2026-11-02T10:00:00Z"},
-		}, "restore.scans"},
-		{"restore first after last", obj{
-			"barcode": "5901234123457", "reason": "not_found",
-			"restore": obj{"scans": 2, "created_at": "2026-11-03T10:00:00Z", "last_scanned_at": "2026-11-02T10:00:00Z"},
-		}, "restore.created_at"},
-		{"restore without times", obj{
-			"barcode": "5901234123457", "reason": "not_found",
-			"restore": obj{"scans": 2},
-		}, "restore.created_at"},
-		{"restore in the future", obj{
-			"barcode": "5901234123457", "reason": "not_found",
-			"restore": obj{"scans": 2, "created_at": "2026-11-01T10:00:00Z", "last_scanned_at": "2999-01-01T00:00:00Z"},
-		}, "restore.last_scanned_at"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -234,39 +217,64 @@ func TestStoreCount(t *testing.T) {
 	}
 }
 
-func TestRestorePutsBackAnUndoneEntry(t *testing.T) {
+func TestUndoneEditionRequeuesItsEntry(t *testing.T) {
 	a := newAPI(t)
-	first := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
-	last := time.Date(2026, 11, 2, 18, 30, 0, 0, time.UTC)
-	restore := obj{
-		"barcode": "5901234123457", "reason": "lookup_failed", "detail": "bn: timeout",
-		"restore": obj{"scans": 3, "created_at": first, "last_scanned_at": last},
-	}
-
-	var e scanqueue.Entry
-	a.mustDo(http.MethodPost, "/api/scan-queue", restore, &e, http.StatusCreated)
-	if e.Scans != 3 || !e.CreatedAt.Equal(first) || !e.LastScannedAt.Equal(last) || e.Reason != "lookup_failed" || e.Detail != "bn: timeout" {
-		t.Fatalf("restored = %+v", e)
-	}
-
-	a.mustDo(http.MethodPost, "/api/scan-queue", obj{"barcode": "5901234123457", "reason": "not_found"}, &e, http.StatusOK)
-	if e.Scans != 4 || !e.CreatedAt.Equal(first) || !e.LastScannedAt.After(last) {
-		t.Fatalf("scanned again after restore = %+v", e)
-	}
-
-	a.mustDo(http.MethodPost, "/api/scan-queue", restore, &e, http.StatusOK)
-	if e.Scans != 7 || !e.CreatedAt.Equal(first) || !e.LastScannedAt.After(last) {
-		t.Fatalf("restored over a queued entry = %+v", e)
-	}
+	const code = "5901234123457"
+	a.mustDo(http.MethodPost, "/api/scan-queue", obj{"barcode": code, "reason": "not_found"}, nil, http.StatusCreated)
+	var before scanqueue.Entry
+	a.mustDo(http.MethodPost, "/api/scan-queue", obj{"barcode": code, "reason": "lookup_failed", "detail": "bn: timeout"}, &before, http.StatusOK)
 
 	var movie collection.Title
 	a.mustDo(http.MethodPost, "/api/titles", obj{"kind": "movie", "name": "Rejs"}, &movie, http.StatusCreated)
-	a.mustDo(http.MethodPost, "/api/editions",
-		obj{"title_id": movie.ID, "barcode": "5901234123457", "format": "dvd"}, nil, http.StatusCreated)
-	var conflict struct {
-		Field string `json:"field"`
+	var e collection.Edition
+	a.mustDo(http.MethodPost, "/api/editions", obj{"title_id": movie.ID, "barcode": code, "format": "dvd"}, &e, http.StatusCreated)
+	var c collection.Copy
+	a.mustDo(http.MethodPost, "/api/copies", obj{"edition_id": e.ID, "status": "owned"}, &c, http.StatusCreated)
+	if got := a.queue(); len(got) != 0 {
+		t.Fatalf("queue with the edition = %v", got)
 	}
-	if got := a.do(http.MethodPost, "/api/scan-queue", restore, &conflict); got != http.StatusConflict || conflict.Field != "barcode" {
-		t.Fatalf("restoring a barcode in the collection = %d %+v, want 409 on barcode", got, conflict)
+
+	path := "/api/editions/" + strconv.FormatInt(e.ID, 10) + "?requeue=1"
+	a.mustDo(http.MethodDelete, path, nil, nil, http.StatusConflict)
+	a.mustDo(http.MethodDelete, "/api/copies/"+strconv.FormatInt(c.ID, 10), nil, nil, http.StatusNoContent)
+	a.mustDo(http.MethodDelete, path, nil, nil, http.StatusNoContent)
+	a.mustDo(http.MethodDelete, path, nil, nil, http.StatusNotFound)
+
+	got := a.queue()
+	if len(got) != 1 {
+		t.Fatalf("queue after undo = %v", got)
+	}
+	back := got[0]
+	if back.Barcode != code || back.Scans != 2 || back.Reason != "lookup_failed" || back.Detail != "bn: timeout" ||
+		!back.CreatedAt.Equal(before.CreatedAt) || !back.LastScannedAt.Equal(before.LastScannedAt) {
+		t.Fatalf("requeued = %+v, want %+v", back, before)
+	}
+}
+
+func TestDeletedEditionStaysOutOfTheQueue(t *testing.T) {
+	a := newAPI(t)
+	const code = "5901234123457"
+	a.mustDo(http.MethodPost, "/api/scan-queue", obj{"barcode": code, "reason": "not_found"}, nil, http.StatusCreated)
+	var movie collection.Title
+	a.mustDo(http.MethodPost, "/api/titles", obj{"kind": "movie", "name": "Rejs"}, &movie, http.StatusCreated)
+	var e collection.Edition
+	a.mustDo(http.MethodPost, "/api/editions", obj{"title_id": movie.ID, "barcode": code, "format": "dvd"}, &e, http.StatusCreated)
+
+	a.mustDo(http.MethodDelete, "/api/editions/"+strconv.FormatInt(e.ID, 10), nil, nil, http.StatusNoContent)
+	if got := a.queue(); len(got) != 0 {
+		t.Fatalf("queue after a plain delete = %v", got)
+	}
+}
+
+func TestRequeueSkipsAnEditionWithoutAQueuedBarcode(t *testing.T) {
+	a := newAPI(t)
+	var movie collection.Title
+	a.mustDo(http.MethodPost, "/api/titles", obj{"kind": "movie", "name": "Rejs"}, &movie, http.StatusCreated)
+	var e collection.Edition
+	a.mustDo(http.MethodPost, "/api/editions", obj{"title_id": movie.ID, "barcode": "5901234123457", "format": "dvd"}, &e, http.StatusCreated)
+
+	a.mustDo(http.MethodDelete, "/api/editions/"+strconv.FormatInt(e.ID, 10)+"?requeue=1", nil, nil, http.StatusNoContent)
+	if got := a.queue(); len(got) != 0 {
+		t.Fatalf("queue after undoing an unqueued barcode = %v", got)
 	}
 }

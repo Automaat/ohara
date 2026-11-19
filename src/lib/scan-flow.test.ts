@@ -10,18 +10,13 @@ type Reply = [number, unknown] | (() => Promise<[number, unknown]>);
 type Call = { method: string; url: string; body: unknown };
 
 /** A fetch that answers "METHOD /path" from routes, in order when a route has several replies. */
-/** The scan queue a save reads before it creates an edition: empty unless a test says otherwise. */
-function emptyQueue(method: string, url: string): Reply | undefined {
-	return method === 'GET' && url === '/api/scan-queue' ? [200, []] : undefined;
-}
-
 function server(routes: Record<string, Reply | Reply[]>) {
 	const calls: Call[] = [];
 	const fetchFn: typeof fetch = async (input, init) => {
 		const method = init?.method ?? 'GET';
 		const url = String(input);
 		calls.push({ method, url, body: init?.body ? JSON.parse(String(init.body)) : undefined });
-		const route = routes[`${method} ${url}`] ?? emptyQueue(method, url);
+		const route = routes[`${method} ${url}`];
 		const queued =
 			Array.isArray(route) && (Array.isArray(route[0]) || typeof route[0] === 'function');
 		const reply = queued ? (route as Reply[]).shift() : (route as Reply | undefined);
@@ -560,30 +555,6 @@ describe('ScanFlow.save', () => {
 			createdTitle: false,
 			medium: 'Blu-ray'
 		});
-	});
-
-	it('keeps the scan queue entry the new edition takes out, for undo', async () => {
-		const entry = {
-			id: 3,
-			barcode: code,
-			reason: 'lookup_failed',
-			detail: 'bn: timeout',
-			scans: 2,
-			created_at: '2026-11-01T10:00:00Z',
-			last_scanned_at: '2026-11-02T10:00:00Z'
-		};
-		const s = server({
-			...lookup([movie], false),
-			'GET /api/scan-queue': [200, [{ ...entry, id: 2, barcode: other }, entry]],
-			'GET /api/titles?tmdb_id=1': [200, []],
-			'POST /api/titles': [201, { id: 9, name: 'Diuna: Część druga', kind: 'movie' }],
-			'POST /api/editions': [201, { id: 21, title_id: 9, barcode: code, format: 'uhd' }],
-			'POST /api/copies?cover=auto': copyReply({ id: 41, edition_id: 21 })
-		});
-		const flow = new ScanFlow(s.fetchFn, memory());
-		await flow.load(code);
-		const added = await flow.save();
-		expect(added?.add.queued).toEqual(entry);
 	});
 
 	it('starts the next item when a wedge scanner typed a code into the price', async () => {

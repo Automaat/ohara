@@ -350,18 +350,72 @@ func (s *Store) fillEditionCover(ctx context.Context, edition *Edition, url stri
 }
 
 // DeleteEdition removes an edition without copies; ErrHasCopies otherwise.
-func (s *Store) DeleteEdition(ctx context.Context, id int64) error {
-	tag, err := s.pool.Exec(ctx, `DELETE FROM edition WHERE id = $1`, id)
-	if err != nil {
-		if isFKViolation(err, "copy_edition_id_fkey") {
-			return ErrHasCopies
+// With requeue, the scan queue entry the edition took out of the queue goes
+// back in the same transaction, with its scans and times, as when the add
+// that created the edition is undone. A repeat finds the edition gone, so the
+// entry never goes back twice.
+func (s *Store) DeleteEdition(ctx context.Context, id int64, requeue bool) error {
+	return s.inTx(ctx, func(tx pgx.Tx) error {
+		var entry resolvedEntry
+		queued := false
+		if requeue {
+			var err error
+			entry, queued, err = resolvedQueueEntry(ctx, tx, id)
+			if err != nil {
+				return err
+			}
 		}
-		return mapErr(err, ErrEditionNotFound, "delete edition")
+		tag, err := tx.Exec(ctx, `DELETE FROM edition WHERE id = $1`, id)
+		if err != nil {
+			if isFKViolation(err, "copy_edition_id_fkey") {
+				return ErrHasCopies
+			}
+			return mapErr(err, ErrEditionNotFound, "delete edition")
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrEditionNotFound
+		}
+		if !queued {
+			return nil
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO scan_queue
+			(barcode, reason, detail, scans, created_at, last_scanned_at)
+			VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (barcode) DO NOTHING`,
+			entry.Barcode, entry.Reason, entry.Detail, entry.Scans, entry.CreatedAt, entry.LastScannedAt)
+		if err != nil {
+			return fmt.Errorf("requeue %s: %w", entry.Barcode, err)
+		}
+		return nil
+	})
+}
+
+// resolvedEntry is a scan queue entry as an edition took it out of the queue.
+type resolvedEntry struct {
+	Barcode, Reason, Detail  string
+	Scans                    int
+	CreatedAt, LastScannedAt time.Time
+}
+
+// resolvedQueueEntry is the entry the edition took out of the queue under
+// its current barcode, locked against a concurrent scan of that barcode; the
+// bool is false when there is none.
+func resolvedQueueEntry(ctx context.Context, tx pgx.Tx, editionID int64) (resolvedEntry, bool, error) {
+	var e resolvedEntry
+	err := tx.QueryRow(ctx, `SELECT r.barcode, r.reason, r.detail, r.scans, r.created_at,
+		r.last_scanned_at FROM scan_queue_resolved r
+		JOIN edition e ON e.id = r.edition_id AND e.barcode = r.barcode
+		WHERE r.edition_id = $1`, editionID).Scan(
+		&e.Barcode, &e.Reason, &e.Detail, &e.Scans, &e.CreatedAt, &e.LastScannedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return resolvedEntry{}, false, nil
 	}
-	if tag.RowsAffected() == 0 {
-		return ErrEditionNotFound
+	if err != nil {
+		return resolvedEntry{}, false, fmt.Errorf("read resolved queue entry: %w", err)
 	}
-	return nil
+	if _, err := tx.Exec(ctx, `SELECT scan_queue_lock($1)`, e.Barcode); err != nil {
+		return resolvedEntry{}, false, fmt.Errorf("lock queued barcode: %w", err)
+	}
+	return e, true, nil
 }
 
 func (s *Store) editionCover(ctx context.Context, id int64) ([]byte, error) {

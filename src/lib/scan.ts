@@ -537,9 +537,9 @@ function must<T>(p: Parsed<T>): T {
 }
 
 /**
- * What a save went through to: the copy, the edition it joined and its title, whether this add
- * created the edition or the title rather than finding them, so undoing it removes only what it
- * made, and the scan queue entry the new edition took out of the queue.
+ * What a save went through to: the copy, the edition it joined and its title, and whether this
+ * add created the edition or the title rather than finding them, so undoing it removes only what
+ * it made.
  */
 export type Saved = {
 	titleID: number;
@@ -552,19 +552,17 @@ export type Saved = {
 	copy: Copy;
 	createdTitle: boolean;
 	createdEdition: boolean;
-	queued: QueueEntry | null;
 };
 
 /**
  * What one add did on the server across its attempts: the titles and editions it created that
- * still exist, whether a title request of an earlier attempt never answered, and the barcode's
- * scan queue entry before the add (undefined until read). A retried save passes the same record.
+ * still exist, and whether a title request of an earlier attempt never answered. A retried save
+ * passes the same record.
  */
 export type Made = {
 	titles: number[];
 	editions: number[];
 	titleUnanswered: boolean;
-	queued?: QueueEntry | null;
 };
 
 export function newMade(): Made {
@@ -589,13 +587,6 @@ async function editionByBarcode(fetchFn: typeof fetch, barcode: string): Promise
 		`/api/editions?barcode=${encodeURIComponent(barcode)}`
 	);
 	return found[0] ?? null;
-}
-
-/** The barcode's scan queue entry, if it waits there. */
-async function queueEntry(fetchFn: typeof fetch, barcode: string): Promise<QueueEntry | null> {
-	await queueDeletesSettled();
-	const entries = await request<QueueEntry[]>(fetchFn, 'GET', '/api/scan-queue');
-	return entries.find((e) => e.barcode === barcode) ?? null;
 }
 
 /** Removes a title made for an edition that went elsewhere; true once it is gone. */
@@ -681,8 +672,7 @@ export async function saveScan(
 			cover: edition.cover_override_url || edition.cover_url || title.cover_url || undefined,
 			copy,
 			createdTitle: made.titles.includes(title.id),
-			createdEdition,
-			queued: createdEdition ? (made.queued ?? null) : null
+			createdEdition
 		};
 	};
 	if (target.kind === 'owned') {
@@ -700,7 +690,6 @@ export async function saveScan(
 	must(scanEditionPayload(f, target.candidate, target.barcode, 0));
 	must(scanCopyPayload(f, 0, requestKey));
 
-	if (made.queued === undefined) made.queued = await queueEntry(fetchFn, target.barcode);
 	const title = await titleFor(fetchFn, titleBody, requestKey, made);
 	let edition: Edition;
 	let owner: Title = title;

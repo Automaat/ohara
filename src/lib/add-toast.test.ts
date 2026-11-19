@@ -45,7 +45,6 @@ const dune: SessionAdd = {
 	titleID: 9,
 	createdEdition: true,
 	createdTitle: true,
-	queued: null,
 	name: 'Diuna: Część druga',
 	medium: '4K UHD',
 	kind: 'movie',

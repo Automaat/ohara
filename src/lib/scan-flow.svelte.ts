@@ -336,7 +336,6 @@ export class ScanFlow {
 				titleID: saved.titleID,
 				createdEdition: saved.createdEdition,
 				createdTitle: saved.createdTitle,
-				queued: saved.queued,
 				name: saved.titleName,
 				medium: mediumOf(saved.edition),
 				kind: saved.kind,

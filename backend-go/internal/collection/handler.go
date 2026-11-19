@@ -403,7 +403,8 @@ func (h *Handler) deleteEdition(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := h.store.DeleteEdition(r.Context(), id); err != nil {
+	requeue := r.URL.Query().Get("requeue") == "1"
+	if err := h.store.DeleteEdition(r.Context(), id, requeue); err != nil {
 		h.writeErr(w, "delete edition", notFound(err))
 		return
 	}

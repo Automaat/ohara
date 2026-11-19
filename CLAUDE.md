@@ -136,9 +136,10 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   quote, so movie discs have no floor.
 - A barcode no provider resolves goes to `scan_queue`; a trigger on `edition`
   removes it once an edition carries that barcode. `ohara_scan_queue_size`
-  counts it on each scrape. `POST /api/scan-queue` with `restore` (`scans`,
-  `created_at`, `last_scanned_at`) puts an entry back with its history, as
-  the scanner does when it undoes an add whose new edition took it out.
+  counts it on each scrape. The trigger keeps the entry it removes in
+  `scan_queue_resolved`; `DELETE /api/editions/{id}?requeue=1` puts it back
+  with its scans and times in the same transaction, as the scanner does when
+  it undoes an add that created the edition.
 
 ### Frontend
 

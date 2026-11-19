@@ -419,7 +419,7 @@
 	</Modal>
 {/if}
 
-<Modal bind:open={listOpen} title="Ta sesja" closeLabel="Zamknij">
+<Modal bind:open={listOpen} class="session-list" title="Ta sesja" closeLabel="Zamknij">
 	{#if trayShown}
 		<div class="session">
 			<p class="summary">Dodano: {session.adds.length} · Wydano {spent}</p>
@@ -658,6 +658,14 @@
 
 		:global(dialog.sui-modal.scan-sheet .sui-modal-head) {
 			display: none;
+		}
+
+		/* While a sheet is open, its toasts stand at the top of the screen, over the camera, so a
+		   toast from the last add never covers the sheet's buttons. */
+		:global(dialog.sui-modal:is(.scan-sheet, .session-list) .sui-toaster) {
+			inline-size: auto;
+			inset-block: env(safe-area-inset-top, 0px) auto;
+			inset-inline: 0;
 		}
 
 		:global(dialog.sui-modal.scan-sheet::backdrop) {

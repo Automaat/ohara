@@ -9,22 +9,29 @@
 		registerServiceWorker
 	} from '@smykla-skalski/sui';
 	import type { Snippet } from 'svelte';
+	import { MediaQuery } from 'svelte/reactivity';
 	import { dev } from '$app/env';
 	import { onNavigate } from '$app/navigation';
 	import { page } from '$app/state';
 	import TabBar from '#lib/components/TabBar.svelte';
 	import { carryCover } from '#lib/cover-transition.js';
-	import { currentItem, sections } from '#lib/nav.js';
+	import { currentItem, phoneLayout, sections } from '#lib/nav.js';
 
 	let { children }: { children: Snippet } = $props();
 
+	const phone = new MediaQuery(phoneLayout);
 	const current = $derived(currentItem(page.url.pathname, sections));
 	const worker = registerServiceWorker('/service-worker.js', { dev });
 
 	onNavigate((navigation) => carryCover(navigation));
 </script>
 
-<AppShell class="ohara-shell" title="Ohara" label="Nawigacja" menuLabel="Menu">
+<AppShell
+	class={['ohara-shell', { 'ohara-phone': phone.current }]}
+	title="Ohara"
+	label="Nawigacja"
+	menuLabel="Menu"
+>
 	{#snippet sidebar()}
 		<SideNav
 			title="Ohara"
@@ -90,17 +97,22 @@
 		overflow: hidden;
 	}
 
-	/* On a phone the tab bar replaces SUI's top bar, whose menu button it makes redundant. The
-	   pane becomes a column so the bar sits at the foot of the screen even on a short page. */
-	@container sui-shell (max-width: 47.9375rem) {
-		:global(.ohara-shell.sui-shell > .sui-shell-bar) {
-			display: none;
-		}
+	/* In the phone layout the tab bar replaces SUI's top bar, whose menu button it makes redundant,
+	   and the side navigation, which SUI keeps on a phone held sideways because it answers to the
+	   shell's width alone. The pane becomes a column so the bar sits at the foot of the screen
+	   even on a short page. */
+	:global(.ohara-shell.ohara-phone > .sui-shell-bar),
+	:global(.ohara-shell.ohara-phone .sui-shell-side:not(:popover-open)) {
+		display: none;
+	}
 
-		:global(.ohara-shell .sui-shell-pane) {
-			display: flex;
-			flex-direction: column;
-		}
+	:global(.ohara-shell.ohara-phone .sui-shell-grid) {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	:global(.ohara-shell.ohara-phone .sui-shell-pane) {
+		display: flex;
+		flex-direction: column;
 	}
 
 	.ohara-page {
@@ -108,10 +120,8 @@
 	}
 
 	/* A control focused near the foot of the screen scrolls clear of the floating tab bar. */
-	@media (max-width: 47.9375rem) {
-		:global(html) {
-			scroll-padding-block-end: calc(4rem + 2 * max(env(safe-area-inset-bottom, 0px), 0.75rem));
-		}
+	:global(:root:has(.ohara-phone)) {
+		scroll-padding-block-end: calc(4rem + 2 * max(env(safe-area-inset-bottom, 0px), 0.75rem));
 	}
 
 	/* WebKit hides native select text when SUI supplies a selectedcontent button. */

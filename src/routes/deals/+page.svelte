@@ -14,7 +14,7 @@
 	} from '@smykla-skalski/sui';
 	import { onMount } from 'svelte';
 	import { ApiError, errorMessage, request } from '#lib/api.js';
-	import { loadUnderLimit } from '#lib/deal-badge.svelte.js';
+	import { dealBadge, loadUnderLimit } from '#lib/deal-badge.svelte.js';
 	import { options, type FormIssue } from '#lib/collection.js';
 	import DealCard from '#lib/components/DealCard.svelte';
 	import {
@@ -39,7 +39,8 @@
 	type Deals = {
 		status: HunterStatus;
 		wishes: number;
-		lists: Record<DealSegment, Observation[]>;
+		all: Observation[];
+		sent: Observation[];
 	};
 
 	let deals = $state<Deals | null>(null);
@@ -61,9 +62,10 @@
 	let issued = 0;
 
 	/**
-	 * "Pod limitem" comes from the request that also counts the Okazje badge, so the segment and
-	 * the badge always show the same answer. An answer that arrives after a later request's
-	 * answer is dropped. The search counts as running while any of the three answers says so.
+	 * "Pod limitem" lists the listings the Okazje badge last counted, so a refresh from this page,
+	 * a navigation or a returning tab moves the segment and the badge together. The page asks again
+	 * when the tab becomes visible, so the other segments follow. An answer that arrives after a
+	 * later request's answer is dropped. The search counts as running while any answer says so.
 	 */
 	async function load() {
 		const ticket = ++issued;
@@ -79,7 +81,8 @@
 			deals = {
 				status: [under, all, sent].find((v) => v.status.running)?.status ?? all.status,
 				wishes: all.wishes,
-				lists: { under: under.observations, all: all.observations, sent: sent.observations }
+				all: all.observations,
+				sent: sent.observations
 			};
 			failure = null;
 		} catch (err) {
@@ -104,9 +107,14 @@
 		void load();
 		void loadKeywords();
 		const clock = setInterval(() => (now = new Date()), 30_000);
+		const onvisibility = () => {
+			if (document.visibilityState === 'visible') void load();
+		};
+		document.addEventListener('visibilitychange', onvisibility);
 		return () => {
 			clearTimeout(poll);
 			clearInterval(clock);
+			document.removeEventListener('visibilitychange', onvisibility);
 		};
 	});
 
@@ -155,9 +163,11 @@
 	}
 
 	const status = $derived(deals?.status);
-	const lists = $derived<Record<DealSegment, Observation[]>>(
-		deals?.lists ?? { under: [], all: [], sent: [] }
-	);
+	const lists = $derived<Record<DealSegment, Observation[]>>({
+		under: deals ? (dealBadge.listings ?? []) : [],
+		all: deals?.all ?? [],
+		sent: deals?.sent ?? []
+	});
 	const segments = $derived(
 		(['under', 'all', 'sent'] as const).map((value) => ({
 			value,

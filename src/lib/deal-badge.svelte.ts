@@ -1,8 +1,16 @@
 import { request } from '#lib/api.js';
-import { underLimitCount, type DealsView } from '#lib/deals.js';
+import { underLimitCount, type DealsView, type Observation } from '#lib/deals.js';
 
-/** How many listings wait at or under their wish's price limit, for the Okazje tab's badge. */
-export const dealBadge = $state<{ count: number }>({ count: 0 });
+/**
+ * The listings at or under their wish's price limit from the newest answer, null before the
+ * first one, and how many there are, for the Okazje tab's badge. The deals page lists these same
+ * listings under "Pod limitem", so a refresh from any page moves the badge and the segment
+ * together.
+ */
+export const dealBadge = $state<{ count: number; listings: Observation[] | null }>({
+	count: 0,
+	listings: null
+});
 
 /**
  * The listings under their wish's limit, filtered by the server before its row limit, so newer
@@ -24,6 +32,7 @@ export async function loadUnderLimit(fetchFn: typeof fetch): Promise<DealsView> 
 	const view = await request<DealsView>(fetchFn, 'GET', badgePath);
 	if (ticket >= applied) {
 		applied = ticket;
+		dealBadge.listings = view.observations;
 		dealBadge.count = underLimitCount(view.observations);
 	}
 	return view;

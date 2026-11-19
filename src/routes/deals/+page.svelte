@@ -19,7 +19,7 @@
 	} from '@smykla-skalski/sui';
 	import { onMount, tick } from 'svelte';
 	import { ApiError, errorMessage, request } from '#lib/api.js';
-	import { showDeals } from '#lib/deal-badge.svelte.js';
+	import { showDeals, startDealsRequest } from '#lib/deal-badge.svelte.js';
 	import {
 		acquiredLabels,
 		collectionURL,
@@ -70,8 +70,9 @@
 	async function load() {
 		loading = true;
 		try {
+			const ticket = startDealsRequest();
 			const next = await request<DealsView>(fetch, 'GET', '/api/deals');
-			showDeals(next.observations);
+			showDeals(next.observations, ticket);
 			const restoreFocus = emptySearch !== null && document.activeElement === emptySearch;
 			view = next;
 			failure = null;

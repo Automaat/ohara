@@ -53,50 +53,60 @@ beforeEach(async () => {
 describe('refreshDealBadge', () => {
 	it('counts the listings under the wish limit', async () => {
 		const fetchFn = deals([listing(3500, 4000), listing(5500, 4000), listing(1000, null)]);
-		await badge.refreshDealBadge(fetchFn, 0);
+		await badge.refreshDealBadge(fetchFn);
 		expect(fetchFn).toHaveBeenCalledWith('/api/deals', expect.objectContaining({ method: 'GET' }));
 		expect(badge.dealBadge.count).toBe(1);
 	});
 
-	it('asks again only once the count is older than the maximum age', async () => {
-		const fetchFn = deals([listing(3500, 4000)]);
-		await badge.refreshDealBadge(fetchFn, 0);
-		await badge.refreshDealBadge(fetchFn, badge.badgeMaxAge - 1);
-		expect(fetchFn).toHaveBeenCalledTimes(1);
-		await badge.refreshDealBadge(fetchFn, badge.badgeMaxAge);
-		expect(fetchFn).toHaveBeenCalledTimes(2);
-	});
-
-	it('shares one request between callers', async () => {
-		const fetchFn = deals([]);
-		await Promise.all([badge.refreshDealBadge(fetchFn, 0), badge.refreshDealBadge(fetchFn, 0)]);
-		expect(fetchFn).toHaveBeenCalledTimes(1);
+	it('asks again on every call, so a lowered limit shows at the next navigation', async () => {
+		await badge.refreshDealBadge(deals([listing(3500, 4000)]));
+		expect(badge.dealBadge.count).toBe(1);
+		const lowered = deals([listing(3500, 3000)]);
+		await badge.refreshDealBadge(lowered);
+		expect(lowered).toHaveBeenCalledTimes(1);
+		expect(badge.dealBadge.count).toBe(0);
 	});
 
 	it('keeps the last count when the server fails', async () => {
-		badge.showDeals([listing(100, 200), listing(300, 400)], 0);
+		badge.showDeals([listing(100, 200), listing(300, 400)], badge.startDealsRequest());
 		const failing = vi.fn(async (): Promise<Response> => {
 			throw new TypeError('offline');
 		});
-		await badge.refreshDealBadge(failing, badge.badgeMaxAge);
+		await badge.refreshDealBadge(failing);
 		expect(failing).toHaveBeenCalledTimes(1);
 		expect(badge.dealBadge.count).toBe(2);
 	});
 
-	it('lets a count the deals page set during the request win', async () => {
-		const answer = Promise.withResolvers<Response>();
-		const slow = vi.fn(() => answer.promise);
-		const refreshing = badge.refreshDealBadge(slow, 0);
-		badge.showDeals([listing(100, 200), listing(300, 400), listing(500, 600)], 1);
-		answer.resolve(dealsResponse([]));
+	it('ignores an answer that arrives after a later request answered', async () => {
+		const older = Promise.withResolvers<Response>();
+		const slow = vi.fn(() => older.promise);
+		const stale = badge.refreshDealBadge(slow);
+		await badge.refreshDealBadge(deals([listing(3500, 4000)]));
+		expect(badge.dealBadge.count).toBe(1);
+		older.resolve(dealsResponse([]));
+		await stale;
+		expect(badge.dealBadge.count).toBe(1);
+	});
+
+	it('lets the deals page win over an older refresh and lose to a newer one', async () => {
+		const older = Promise.withResolvers<Response>();
+		const refreshing = badge.refreshDealBadge(vi.fn(() => older.promise));
+		const pageTicket = badge.startDealsRequest();
+		badge.showDeals([listing(100, 200), listing(300, 400), listing(500, 600)], pageTicket);
+		older.resolve(dealsResponse([]));
 		await refreshing;
 		expect(badge.dealBadge.count).toBe(3);
+
+		const leftPage = badge.startDealsRequest();
+		await badge.refreshDealBadge(deals([listing(100, 200)]));
+		badge.showDeals([], leftPage);
+		expect(badge.dealBadge.count).toBe(1);
 	});
 });
 
 describe('showDeals', () => {
 	it('shows zero when nothing is under the limit', () => {
-		badge.showDeals([listing(5500, 4000)]);
+		badge.showDeals([listing(5500, 4000)], badge.startDealsRequest());
 		expect(badge.dealBadge.count).toBe(0);
 	});
 });

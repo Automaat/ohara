@@ -235,9 +235,10 @@
 		background: var(--sui-brand-action-pressed);
 	}
 
-	/* On a short screen, as at a large zoom, a stuck bar would cover much of the page, so it rides
-	   with the content instead (WCAG 1.4.10). */
-	@media (max-height: 30rem) {
+	/* Where the bar would cover more than a quarter of the screen, as at a large zoom, it rides
+	   with the content instead (WCAG 1.4.10), as SUI's own bars do. The bar and its gap are about
+	   4.75rem, a quarter of 19rem. */
+	@media (max-height: 19rem) {
 		.tab-bar {
 			position: relative;
 			inset-block-end: auto;

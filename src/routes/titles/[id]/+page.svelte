@@ -1,12 +1,15 @@
 <script lang="ts">
 	import {
+		ActionMenu,
 		Button,
 		Card,
 		ConfirmDialog,
 		ErrorState,
 		FactList,
 		FormError,
+		Icon,
 		Link,
+		Modal,
 		Section,
 		Skeleton
 	} from '@smykla-skalski/sui';
@@ -14,34 +17,61 @@
 	import { page } from '$app/state';
 	import { ApiError, errorMessage, request } from '#lib/api.js';
 	import {
+		copyPayload,
+		copyToForm,
 		displayName,
 		editionPayload,
-		editionSummary,
 		editionToForm,
-		formatPLN,
-		kindLabels,
-		statusLabels,
 		titlePayload,
 		titleToForm,
+		type Copy,
 		type Edition,
 		type FormIssue,
 		type Title,
 		type TitleDetail
 	} from '#lib/collection.js';
-	import ArtworkHeader from '#lib/components/ArtworkHeader.svelte';
+	import CollectionCover from '#lib/components/CollectionCover.svelte';
+	import CopyFormFields from '#lib/components/CopyFormFields.svelte';
 	import EditionFormFields from '#lib/components/EditionFormFields.svelte';
 	import TitleFormFields from '#lib/components/TitleFormFields.svelte';
+	import TitleHero from '#lib/components/TitleHero.svelte';
+	import {
+		copyFacts,
+		copyLine,
+		editionArtwork,
+		editionName,
+		editionsLine,
+		kindAndYear,
+		soleCopy,
+		titleArtwork,
+		valueCard
+	} from '#lib/title-detail.js';
+	import type { CopyValue, ValuationView } from '#lib/valuation.js';
+
+	/** The copy sheet edits a copy or adds one to an edition. */
+	type CopyTarget = { mode: 'edit'; copy: Copy } | { mode: 'add'; editionID: number };
 
 	const id = $derived(Number(page.params.id));
 
 	let detail = $state<TitleDetail | null>(null);
+	let values = $state<CopyValue[]>([]);
 	let failure = $state<string | null>(null);
 	let busy = $state(false);
+	/** Counts loads, so a slower answer for an earlier load never replaces a newer one. */
+	let loads = 0;
+	/** The title the page was last asked for; moving to another one closes this one's forms. */
+	let requested: number | undefined;
 
-	let editing = $state(false);
+	let titleSheet = $state(false);
 	let titleForm = $state(titleToForm(null));
 	let titleIssue = $state<FormIssue | null>(null);
 	let savingTitle = $state(false);
+
+	let copySheet = $state(false);
+	let copyTarget = $state<CopyTarget | null>(null);
+	let copyForm = $state(copyToForm(null));
+	let copyIssue = $state<FormIssue | null>(null);
+	let savingCopy = $state(false);
 
 	let adding = $state(false);
 	let editionForm = $state(editionToForm(null));
@@ -51,15 +81,48 @@
 	let confirmDelete = $state(false);
 	let deleteError = $state<string | null>(null);
 
+	const sole = $derived(detail ? soleCopy(detail) : null);
+	const value = $derived(sole ? valueCard(sole.copy, values) : null);
+
 	async function load(titleID: number) {
+		if (titleID !== requested) {
+			requested = titleID;
+			titleSheet = false;
+			copySheet = false;
+			adding = false;
+			confirmDelete = false;
+			deleteError = null;
+		}
+		const current = ++loads;
 		busy = true;
 		try {
-			detail = await request<TitleDetail>(fetch, 'GET', `/api/titles/${titleID}`);
+			const next = await request<TitleDetail>(fetch, 'GET', `/api/titles/${titleID}`);
+			if (current !== loads) return;
+			if (detail?.id !== next.id) values = [];
+			detail = next;
 			failure = null;
+			void loadValues(next, current);
 		} catch (err) {
-			failure = errorMessage(err);
+			if (current === loads) failure = errorMessage(err);
 		} finally {
-			busy = false;
+			if (current === loads) busy = false;
+		}
+	}
+
+	/**
+	 * Today's values, asked only when the page leads with one owned copy. A failed request leaves
+	 * the copy without a value card, as a copy the valuation has not priced yet.
+	 */
+	async function loadValues(t: TitleDetail, current: number) {
+		if (soleCopy(t)?.copy.status !== 'owned') {
+			values = [];
+			return;
+		}
+		try {
+			const view = await request<ValuationView>(fetch, 'GET', '/api/valuation');
+			if (current === loads) values = view.copies.filter((v) => v.title_id === t.id);
+		} catch {
+			if (current === loads) values = [];
 		}
 	}
 
@@ -71,10 +134,10 @@
 		return { field: err instanceof ApiError ? (err.field ?? '') : '', message: errorMessage(err) };
 	}
 
-	function startEdit(t: Title) {
+	function editTitle(t: Title) {
 		titleForm = titleToForm(t);
 		titleIssue = null;
-		editing = true;
+		titleSheet = true;
 	}
 
 	async function saveTitle() {
@@ -86,13 +149,49 @@
 		savingTitle = true;
 		try {
 			await request<Title>(fetch, 'PUT', `/api/titles/${id}`, parsed.value);
-			editing = false;
+			titleSheet = false;
 			await load(id);
 		} catch (err) {
 			titleIssue = issueFrom(err);
 		} finally {
 			savingTitle = false;
 		}
+	}
+
+	function openCopy(target: CopyTarget) {
+		copyTarget = target;
+		copyForm = copyToForm(target.mode === 'edit' ? target.copy : null);
+		copyIssue = null;
+		copySheet = true;
+	}
+
+	async function saveCopy(target: CopyTarget) {
+		const editionID = target.mode === 'edit' ? target.copy.edition_id : target.editionID;
+		const parsed = copyPayload(copyForm, editionID);
+		if (!parsed.ok) {
+			copyIssue = parsed.issue;
+			return;
+		}
+		savingCopy = true;
+		try {
+			if (target.mode === 'edit') {
+				await request<Copy>(fetch, 'PUT', `/api/copies/${target.copy.id}`, parsed.value);
+			} else {
+				await request<Copy>(fetch, 'POST', '/api/copies', parsed.value);
+			}
+			copySheet = false;
+			await load(id);
+		} catch (err) {
+			copyIssue = issueFrom(err);
+		} finally {
+			savingCopy = false;
+		}
+	}
+
+	function startEdition() {
+		editionForm = editionToForm(null);
+		editionIssue = null;
+		adding = true;
 	}
 
 	async function addEdition(t: Title) {
@@ -141,124 +240,214 @@
 	<div class="content"><Skeleton /></div>
 {:else}
 	{@const t = detail}
-	<ArtworkHeader
+	{@const ids = [
+		{ label: 'BN', value: t.bn_id ?? undefined },
+		{ label: 'Open Library', value: t.openlibrary_id ?? undefined },
+		{ label: 'TMDB', value: t.tmdb_id?.toString() }
+	].filter((fact) => fact.value)}
+	<TitleHero
 		title={displayName(t)}
-		description={kindLabels[t.kind]}
+		overline={kindAndYear(t)}
+		meta={editionsLine(t)}
+		byline={t.authors.length > 0 ? t.authors.join(', ') : undefined}
+		kind={t.kind}
+		artwork={titleArtwork(t)}
 		backHref="/titles"
 		backLabel="Tytuły"
-		cover={t.cover_url}
-		coverLabel="Okładka poglądowa tytułu"
 	>
-		{#snippet facts()}
-			<FactList
-				layout="inline"
-				facts={[
-					{ label: t.kind === 'music' ? 'Wykonawcy' : 'Autorzy', value: t.authors.join(', ') },
-					{ label: 'Rok', value: t.year?.toString() }
-				].filter((fact) => fact.value)}
+		{#snippet actions()}
+			<ActionMenu
+				label="Więcej działań"
+				icon="more"
+				toolbar
+				align="end"
+				items={[
+					{ label: 'Edytuj tytuł', icon: 'editor', onselect: () => editTitle(t) },
+					{ separator: true },
+					{
+						label: 'Usuń tytuł',
+						icon: 'trash',
+						tone: 'stop',
+						onselect: () => ((deleteError = null), (confirmDelete = true))
+					}
+				]}
 			/>
 		{/snippet}
-	</ArtworkHeader>
+	</TitleHero>
 
 	<div class="content">
+		<FormError message={deleteError} />
+
+		{#if sole}
+			{@const s = sole}
+			<Card title={s.copy.status === 'owned' ? 'Twój egzemplarz' : 'Na liście życzeń'} level={2}>
+				{#snippet actions()}
+					<Button tone="ghost" onclick={() => openCopy({ mode: 'edit', copy: s.copy })}>
+						Edytuj
+					</Button>
+				{/snippet}
+				<dl class="facts">
+					{#each copyFacts(s.copy) as fact (fact.label)}
+						<div>
+							<dt>{fact.label}</dt>
+							<dd>{fact.value}</dd>
+						</div>
+					{/each}
+				</dl>
+			</Card>
+
+			{#if value}
+				<Card title="Wartość dziś" level={2}>
+					<div class="worth">
+						<p class="used">≈ {value.used}</p>
+						{#if value.delta}
+							<p class="delta">{value.delta}</p>
+						{/if}
+					</div>
+					<div class="range" aria-hidden="true">
+						<span class="mark" style:inset-inline-start={`${value.usedAt}%`}></span>
+						{#if value.paidAt != null}
+							<span class="paid" style:inset-inline-start={`${value.paidAt}%`}></span>
+						{/if}
+					</div>
+					<dl class="range-labels">
+						<div>
+							<dt>Skup</dt>
+							<dd>{value.floor}</dd>
+						</div>
+						<div>
+							<dt>Używane</dt>
+							<dd>{value.used}</dd>
+						</div>
+						<div>
+							<dt>Nowe</dt>
+							<dd>{value.ceiling}</dd>
+						</div>
+					</dl>
+				</Card>
+			{/if}
+
+			{#if !adding}
+				<div class="quiet">
+					<Button onclick={() => openCopy({ mode: 'add', editionID: s.edition.id })}>
+						{#snippet icon()}<Icon name="plus" />{/snippet}
+						Kolejny egzemplarz
+					</Button>
+					<Button onclick={startEdition}>Inne wydanie</Button>
+				</div>
+			{/if}
+		{:else}
+			<Section
+				title="Wydania"
+				count={t.editions.length}
+				countedName={(title: string, n: string) => `${title} (${n})`}
+			>
+				{#snippet actions()}
+					{#if !adding}
+						<Button tone={t.editions.length === 0 ? 'signal' : 'add'} onclick={startEdition}>
+							Dodaj wydanie
+						</Button>
+					{/if}
+				{/snippet}
+				{#if t.editions.length === 0 && !adding}
+					<p class="muted">Brak wydań. Dodaj wydanie, aby zapisać egzemplarz.</p>
+				{/if}
+				<div class="cards">
+					{#each t.editions as e (e.id)}
+						<Card
+							title={editionName(e)}
+							description={[e.publisher, e.year].filter(Boolean).join(' · ') || undefined}
+							level={3}
+							href={`/editions/${e.id}`}
+						>
+							<div class="edition">
+								<CollectionCover kind={t.kind} url={editionArtwork(e, t)} />
+								{#if e.copies.length === 0}
+									<p class="muted">Brak egzemplarzy.</p>
+								{:else}
+									<ul class="copies">
+										{#each e.copies as c (c.id)}
+											<li><a href={`/copies/${c.id}`}>{copyLine(c)}</a></li>
+										{/each}
+									</ul>
+								{/if}
+							</div>
+						</Card>
+					{/each}
+				</div>
+			</Section>
+		{/if}
+
+		{#if adding}
+			<Card title="Nowe wydanie" level={2}>
+				<EditionFormFields
+					bind:form={editionForm}
+					kind={t.kind}
+					issue={editionIssue}
+					saving={savingEdition}
+					submitLabel="Zapisz wydanie"
+					onsubmit={() => addEdition(t)}
+					oncancel={() => (adding = false)}
+				/>
+			</Card>
+		{/if}
+
 		{#if t.notes}
 			<p class="notes">{t.notes}</p>
 		{/if}
 
-		<Section
-			title="Wydania"
-			count={t.editions.length}
-			countedName={(title: string, n: string) => `${title} (${n})`}
-		>
-			{#snippet actions()}
-				{#if !adding}
-					<Button
-						tone={t.editions.length === 0 ? 'signal' : 'add'}
-						onclick={() => (
-							(editionForm = editionToForm(null)),
-							(editionIssue = null),
-							(adding = true)
-						)}
-					>
-						Dodaj wydanie
-					</Button>
-				{/if}
-			{/snippet}
-			{#if adding}
-				<Card title="Nowe wydanie" level={3}>
-					<EditionFormFields
-						bind:form={editionForm}
-						kind={t.kind}
-						issue={editionIssue}
-						saving={savingEdition}
-						submitLabel="Zapisz wydanie"
-						onsubmit={() => addEdition(t)}
-						oncancel={() => (adding = false)}
-					/>
-				</Card>
-			{/if}
-			{#if t.editions.length === 0 && !adding}
-				<p class="muted">Brak wydań. Dodaj wydanie, aby zapisać egzemplarz.</p>
-			{/if}
-			<div class="cards">
-				{#each t.editions as e (e.id)}
-					<Card
-						title={editionSummary(e)}
-						description={[e.publisher, e.year].filter(Boolean).join(' · ') || undefined}
-						level={3}
-						href={`/editions/${e.id}`}
-					>
-						{#if e.copies.length === 0}
-							<p class="muted">Brak egzemplarzy.</p>
-						{:else}
-							<ul class="copies">
-								{#each e.copies as c (c.id)}
-									<li>
-										<Link href={`/copies/${c.id}`}>{statusLabels[c.status]}</Link>{c.price_cents !=
-										null
-											? ` · ${formatPLN(c.price_cents)}`
-											: ''}{c.shop ? ` · ${c.shop}` : ''}
-									</li>
-								{/each}
-							</ul>
-						{/if}
-					</Card>
-				{/each}
-			</div>
-		</Section>
-		<Section title="Zarządzanie tytułem">
-			{#if t.bn_id || t.openlibrary_id || t.tmdb_id}
-				<FactList
-					layout="inline"
-					facts={[
-						{ label: 'BN', value: t.bn_id },
-						{ label: 'Open Library', value: t.openlibrary_id },
-						{ label: 'TMDB', value: t.tmdb_id?.toString() }
-					].filter((fact) => fact.value)}
-				/>
-			{/if}
-			<div class="actions">
-				<Button tone="ghost" onclick={() => startEdit(t)}>Edytuj tytuł</Button>
-				<Button tone="stop-quiet" onclick={() => ((deleteError = null), (confirmDelete = true))}>
-					Usuń tytuł
-				</Button>
-			</div>
-			<FormError message={deleteError} />
-			{#if editing}
-				<Card title="Edycja tytułu" level={3}>
-					<TitleFormFields
-						bind:form={titleForm}
-						issue={titleIssue}
-						saving={savingTitle}
-						kindLocked={t.edition_count > 0}
-						submitLabel="Zapisz zmiany"
-						onsubmit={saveTitle}
-						oncancel={() => (editing = false)}
-					/>
-				</Card>
-			{/if}
-		</Section>
+		{#if sole || ids.length > 0}
+			<Section title="Szczegóły">
+				<div class="details">
+					{#if sole}
+						<Link href={`/editions/${sole.edition.id}`}>Szczegóły wydania</Link>
+					{/if}
+					{#if ids.length > 0}
+						<FactList layout="inline" facts={ids} />
+					{/if}
+				</div>
+			</Section>
+		{/if}
 	</div>
+
+	<Modal
+		bind:open={titleSheet}
+		title="Edycja tytułu"
+		closeLabel="Zamknij"
+		busy={savingTitle}
+		size="inspector"
+	>
+		<TitleFormFields
+			bind:form={titleForm}
+			issue={titleIssue}
+			saving={savingTitle}
+			kindLocked={t.edition_count > 0}
+			submitLabel="Zapisz zmiany"
+			onsubmit={saveTitle}
+			oncancel={() => (titleSheet = false)}
+		/>
+	</Modal>
+
+	<Modal
+		bind:open={copySheet}
+		title={copyTarget?.mode === 'add' ? 'Nowy egzemplarz' : 'Edycja egzemplarza'}
+		description={sole ? editionName(sole.edition) : undefined}
+		closeLabel="Zamknij"
+		busy={savingCopy}
+		size="inspector"
+	>
+		{#if copyTarget}
+			{@const target = copyTarget}
+			<CopyFormFields
+				bind:form={copyForm}
+				issue={copyIssue}
+				saving={savingCopy}
+				submitLabel={target.mode === 'add' ? 'Dodaj egzemplarz' : 'Zapisz zmiany'}
+				onsubmit={() => saveCopy(target)}
+				oncancel={() => (copySheet = false)}
+			/>
+		{/if}
+	</Modal>
 
 	<ConfirmDialog
 		bind:open={confirmDelete}
@@ -277,7 +466,7 @@
 <style>
 	.content {
 		display: grid;
-		gap: 1.5rem;
+		gap: 1rem;
 		padding: var(--sui-pane-gutter, 1.5rem);
 	}
 	.cards {
@@ -285,14 +474,142 @@
 		gap: 1rem;
 		grid-template-columns: repeat(auto-fill, minmax(min(100%, 18rem), 1fr));
 	}
-	.actions {
+	.facts {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 0.625rem 0.875rem;
+		margin: 0;
+	}
+	.facts dt {
+		font-size: 0.75rem;
+		font-weight: 600;
+		color: var(--sui-text-muted);
+	}
+	.facts dd {
+		margin: 0;
+		font-size: 0.9375rem;
+		font-weight: 600;
+		font-variant-numeric: tabular-nums;
+		overflow-wrap: anywhere;
+	}
+	.worth {
 		display: flex;
 		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.25rem 0.75rem;
+	}
+	.used {
+		margin: 0;
+		font-family: var(--ohara-serif);
+		font-size: 2.125rem;
+		font-weight: 600;
+		letter-spacing: -0.02em;
+		font-variant-numeric: tabular-nums;
+	}
+	.delta {
+		display: inline-flex;
+		align-items: center;
+		min-block-size: 1.625rem;
+		margin: 0;
+		padding: 0 0.625rem;
+		border-radius: 999px;
+		font-size: 0.8125rem;
+		font-weight: 700;
+		background: var(--sui-surface-inset);
+		color: var(--sui-text-primary);
+		font-variant-numeric: tabular-nums;
+	}
+	.range {
+		position: relative;
+		block-size: 0.5rem;
+		margin: 0.875rem 0 0.5rem;
+		border-radius: 0.25rem;
+		background: linear-gradient(
+			90deg,
+			var(--sui-surface-inset),
+			color-mix(in srgb, var(--sui-brand-action) 30%, var(--sui-surface-inset))
+		);
+	}
+	.mark {
+		position: absolute;
+		inset-block-start: 50%;
+		inline-size: 1.125rem;
+		block-size: 1.125rem;
+		box-sizing: border-box;
+		border: 3px solid var(--sui-surface-base);
+		border-radius: 50%;
+		background: var(--ohara-selected);
+		box-shadow: 0 1px 4px rgb(0 0 0 / 25%);
+		translate: -50% -50%;
+	}
+	.paid {
+		position: absolute;
+		inset-block-start: -0.3125rem;
+		inline-size: 2px;
+		block-size: 1.125rem;
+		border-radius: 1px;
+		background: var(--sui-brand-action);
+		translate: -50% 0;
+	}
+	.range-labels {
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
 		gap: 0.5rem;
+		margin: 0;
+		font-size: 0.75rem;
+		color: var(--sui-text-muted);
+		font-variant-numeric: tabular-nums;
+	}
+	.range-labels dd {
+		margin: 0;
+		font-weight: 600;
+		color: var(--sui-text-primary);
+	}
+	.range-labels div:nth-child(2) {
+		text-align: center;
+	}
+	.range-labels div:last-child {
+		text-align: end;
+	}
+	.quiet {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.625rem;
+	}
+	.quiet > :global(*) {
+		flex: 1 1 auto;
+		white-space: nowrap;
+	}
+	.details {
+		display: grid;
+		justify-items: start;
+		gap: 0.75rem;
+	}
+	.edition {
+		display: flex;
+		align-items: flex-start;
+		gap: 0.75rem;
+		--collection-cover-width: 3.5rem;
 	}
 	.copies {
+		display: grid;
+		flex: 1;
+		gap: 0.25rem;
+		min-inline-size: 0;
 		margin: 0;
-		padding-inline-start: 1.25rem;
+		padding: 0;
+		list-style: none;
+	}
+	.copies a {
+		display: block;
+		padding: 0.375rem 0.5rem;
+		border-radius: var(--sui-radius-control);
+		color: var(--sui-link);
+		font-variant-numeric: tabular-nums;
+		text-decoration: none;
+	}
+	.copies a:hover {
+		background: var(--sui-row-hover);
 	}
 	.muted {
 		margin: 0;

@@ -46,6 +46,27 @@ export function limitComparison(price: number, limit: number | null): string {
 	return difference > 0 ? `${amount} poniżej limitu` : `${amount} powyżej limitu`;
 }
 
+/** A listing at or under the price limit of the wish it matched. */
+export function isUnderLimit(o: Pick<Observation, 'price_cents' | 'max_price_cents'>): boolean {
+	return o.max_price_cents != null && o.price_cents <= o.max_price_cents;
+}
+
+/** How many listings are at or under their wish's price limit. */
+export function underLimitCount(
+	observations: Pick<Observation, 'price_cents' | 'max_price_cents'>[]
+): number {
+	return observations.filter(isUnderLimit).length;
+}
+
+const pluralRules = new Intl.PluralRules('pl-PL');
+
+/** The count of listings under the limit in words, as "3 oferty pod limitem". */
+export function underLimitLabel(count: number): string {
+	const plural = pluralRules.select(count);
+	const noun = plural === 'one' ? 'oferta' : plural === 'few' ? 'oferty' : 'ofert';
+	return `${count} ${noun} pod limitem`;
+}
+
 export type RunResult = {
 	wants: number;
 	queries: number;

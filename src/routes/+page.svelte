@@ -18,6 +18,7 @@
 	import { afterNavigate, replaceState } from '$app/navigation';
 	import { page } from '$app/state';
 	import { errorMessage, request } from '#lib/api.js';
+	import SettingsSheet from '#lib/components/SettingsSheet.svelte';
 	import {
 		collectionSearch,
 		collectionURL,
@@ -206,6 +207,7 @@
 		{#if !emptyShelf}
 			<Button tone="signal" href="/titles/new">Dodaj tytuł</Button>
 		{/if}
+		<SettingsSheet />
 	{/snippet}
 </PageHeader>
 

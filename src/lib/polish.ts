@@ -34,3 +34,8 @@ export function queuedCodes(count: number): string {
 export function purchaseDate(date: string | null): string {
 	return date ? purchaseDateFormat.format(new Date(date)) : '';
 }
+
+/** How many times a queued code was scanned, such as "2 skany". */
+export function scanCount(count: number): string {
+	return counted(count, 'skan', 'skany', 'skanów');
+}

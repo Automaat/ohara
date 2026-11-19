@@ -4,6 +4,7 @@ import type { EditionDetail, Format } from './collection';
 import {
 	FormRejected,
 	LatestLoad,
+	barcodeGroups,
 	RepeatGuard,
 	barcodeInputError,
 	cameraErrorMessage,
@@ -204,6 +205,25 @@ describe('barcode input', () => {
 		['', null]
 	])('wedgeBarcodeIn(%j) is %j', (price, want) => {
 		expect(wedgeBarcodeIn(price)).toBe(want);
+	});
+});
+
+describe('barcodeGroups', () => {
+	it.each([
+		['5901234123457', ['5', '901234', '123457']],
+		['0602445790098', ['0', '602445', '790098']],
+		['9788375780635', ['978', '8375', '780635']],
+		['9790260000438', ['979', '0260', '000438']],
+		['96385074', ['9638', '5074']],
+		['036000291452', ['0', '36000', '29145', '2']],
+		['10012345678902', ['1', '00', '12345', '67890', '2']]
+	])('groups %s like the digits under its bars', (code, groups) => {
+		expect(barcodeGroups(code)).toEqual(groups);
+		expect(barcodeGroups(code).join('')).toBe(code);
+	});
+
+	it.each(['123', '123456789X', ''])('keeps %j whole when it has no known shape', (code) => {
+		expect(barcodeGroups(code)).toEqual([code]);
 	});
 });
 

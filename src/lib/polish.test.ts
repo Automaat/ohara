@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { copyCount, editionCount, purchaseDate, queuedCodes, resultCount } from './polish';
+import {
+	copyCount,
+	editionCount,
+	purchaseDate,
+	queuedCodes,
+	resultCount,
+	scanCount
+} from './polish';
 
 describe('Polish result counts', () => {
 	it.each([
@@ -37,6 +44,20 @@ describe('Polish scan queue counts', () => {
 		[1000, '1000 kodów czeka na uzupełnienie']
 	])('formats %d as %s', (count, expected) => {
 		expect(queuedCodes(count)).toBe(expected);
+	});
+});
+
+describe('Polish scan counts', () => {
+	it.each([
+		[1, '1 skan'],
+		[2, '2 skany'],
+		[4, '4 skany'],
+		[5, '5 skanów'],
+		[12, '12 skanów'],
+		[22, '22 skany'],
+		[25, '25 skanów']
+	])('formats %d as %s', (count, expected) => {
+		expect(scanCount(count)).toBe(expected);
 	});
 });
 

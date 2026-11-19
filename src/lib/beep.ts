@@ -19,14 +19,20 @@ function after(ms: number): Promise<false> {
 	return new Promise((resolve) => setTimeout(() => resolve(false), ms));
 }
 
+/** Whether the beep can sound: `ready`, `locked` until a tap or key press, or `none` without Web Audio. */
+export type Sound = 'ready' | 'locked' | 'none';
+
 /**
  * A short read beep made in the app with Web Audio, with no file to fetch. iOS starts audio only
- * from a tap or a key press, so `prime` runs in one; until then a beep stays silent rather than
- * sounding after the next tap. Audio is suspended between beeps, which keeps the device idle.
+ * from a tap or a key press, so `unlock` runs in one; until then a beep stays silent rather than
+ * sounding after the next tap. Audio stays on from `unlock` or a beep until `rest`, because
+ * starting it again for every read could miss the read; the camera rests it when it stops.
  */
 export function createBeeper(make: () => Tone | null) {
 	let context: Tone | null | undefined;
 	let sounding = 0;
+	let unlocked = false;
+	let awake = false;
 
 	function audio(): Tone | null {
 		if (context === undefined) {
@@ -39,36 +45,57 @@ export function createBeeper(make: () => Tone | null) {
 		return context;
 	}
 
-	function rest(c: Tone) {
-		if (sounding === 0 && running(c)) void c.suspend().catch(() => undefined);
+	function sleep(c: Tone) {
+		if (!awake && sounding === 0 && running(c)) void c.suspend().catch(() => undefined);
 	}
 
-	async function started(c: Tone): Promise<boolean> {
-		if (running(c)) return true;
+	/**
+	 * Starts audio, true when it runs within startWait. It calls resume at once, so it works
+	 * inside a tap's handler; audio that starts later counts as unlocked, and sleeps again when
+	 * it was rested meanwhile.
+	 */
+	function started(c: Tone): Promise<boolean> {
+		awake = true;
+		if (running(c)) {
+			unlocked = true;
+			return Promise.resolve(true);
+		}
 		const resumed = c.resume().then(
-			() => true,
+			() => {
+				unlocked = true;
+				sleep(c);
+				return true;
+			},
 			() => false
 		);
-		return (await Promise.race([resumed, after(startWait)])) && running(c);
+		return Promise.race([resumed, after(startWait)]);
 	}
 
-	/** Unlocks audio from a tap or key press; call it from the event handler. */
-	function prime() {
+	/** Starts audio and keeps it on; call it from a tap or key press. True once a beep can sound. */
+	function unlock(): Promise<boolean> {
 		const c = audio();
-		if (!c || running(c)) return;
-		c.resume().then(
-			() => rest(c),
-			() => undefined
-		);
+		return c ? started(c) : Promise.resolve(false);
 	}
 
-	/** Plays one short beep, or nothing when audio cannot start. */
-	async function beep() {
+	/** Suspends audio once no beep is sounding, until the next unlock or beep. */
+	function rest() {
+		awake = false;
+		if (context) sleep(context);
+	}
+
+	/** Whether a beep can sound now. */
+	function sound(): Sound {
+		if (!audio()) return 'none';
+		return unlocked ? 'ready' : 'locked';
+	}
+
+	/** Plays one short beep; true when it sounded, false when audio cannot start. */
+	async function beep(): Promise<boolean> {
 		const c = audio();
-		if (!c) return;
+		if (!c) return false;
 		sounding++;
 		try {
-			if (!(await started(c))) return;
+			if (!(await started(c))) return false;
 			const at = c.currentTime;
 			const osc = c.createOscillator();
 			const gain = c.createGain();
@@ -84,21 +111,33 @@ export function createBeeper(make: () => Tone | null) {
 			osc.start(at);
 			osc.stop(at + length + 0.01);
 			await Promise.race([ended, after(endWait)]);
+			return true;
 		} finally {
 			sounding--;
-			rest(c);
+			sleep(c);
 		}
 	}
 
-	return { prime, beep };
+	return { unlock, rest, sound, beep };
 }
 
 const shared = createBeeper(() =>
 	typeof AudioContext === 'undefined' ? null : new AudioContext({ latencyHint: 'interactive' })
 );
 
-/** Unlocks the read beep from a tap or key press. */
-export const primeBeep = shared.prime;
+/** Starts the read beep's audio and keeps it on; call it from a tap or key press. */
+export const unlockBeep = shared.unlock;
 
-/** Plays the read beep. */
+/** Starts the read beep's audio from an event handler that needs no answer. */
+export function primeBeep() {
+	void shared.unlock();
+}
+
+/** Suspends the read beep's audio, as when the camera stops. */
+export const restBeep = shared.rest;
+
+/** Whether the read beep can sound now. */
+export const beepSound = shared.sound;
+
+/** Plays the read beep; true when it sounded. */
 export const beep = shared.beep;

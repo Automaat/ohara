@@ -57,40 +57,44 @@ afterEach(() => {
 });
 
 describe('createBeeper', () => {
-	it('plays one short tone and lets audio rest after it', async () => {
+	it('plays one short tone and keeps audio on until it rests', async () => {
 		const fake = fakeAudio('running');
-		const { beep } = beeper(fake);
-		await beep();
+		const { beep, rest } = beeper(fake);
+		await expect(beep()).resolves.toBe(true);
 		expect(fake.tones).toEqual([{ at: 2, frequency: 1760 }]);
+		expect(fake.state).toBe('running');
+		rest();
 		expect(fake.state).toBe('suspended');
 	});
 
 	it('starts suspended audio before the tone', async () => {
 		const fake = fakeAudio('suspended');
-		const { beep } = beeper(fake);
-		await beep();
+		const { beep, sound } = beeper(fake);
+		await expect(beep()).resolves.toBe(true);
 		expect(fake.resumes).toBe(1);
 		expect(fake.tones).toHaveLength(1);
-		expect(fake.state).toBe('suspended');
+		expect(sound()).toBe('ready');
 	});
 
 	it('stays silent when audio does not start, and never sounds later', async () => {
 		vi.useFakeTimers();
 		const fake = fakeAudio('suspended', 'never');
-		const { beep } = beeper(fake);
+		const { beep, sound } = beeper(fake);
 		const playing = beep();
 		await vi.advanceTimersByTimeAsync(250);
-		await playing;
+		await expect(playing).resolves.toBe(false);
 		fake.state = 'running';
 		await vi.advanceTimersByTimeAsync(1000);
 		expect(fake.tones).toEqual([]);
+		expect(sound()).toBe('locked');
 	});
 
 	it('stays silent when the browser refuses audio', async () => {
 		const fake = fakeAudio('suspended', 'fail');
-		const { beep } = beeper(fake);
-		await beep();
+		const { beep, sound } = beeper(fake);
+		await expect(beep()).resolves.toBe(false);
 		expect(fake.tones).toEqual([]);
+		expect(sound()).toBe('locked');
 	});
 
 	it('stops waiting for a tone a suspended context never ends', async () => {
@@ -101,25 +105,77 @@ describe('createBeeper', () => {
 		void beep().then(() => (done = true));
 		await vi.advanceTimersByTimeAsync(400);
 		expect(done).toBe(true);
+	});
+
+	it('waits for a sounding beep before it rests', async () => {
+		vi.useFakeTimers();
+		const fake = fakeAudio('running', 'ok', false);
+		const { beep, rest } = beeper(fake);
+		const playing = beep();
+		await vi.advanceTimersByTimeAsync(0);
+		rest();
+		expect(fake.state).toBe('running');
+		await vi.advanceTimersByTimeAsync(400);
+		await playing;
 		expect(fake.state).toBe('suspended');
 	});
 
-	it('unlocks audio on a tap and lets it rest', async () => {
+	it('unlocks audio on a tap and keeps it on until it rests', async () => {
 		const fake = fakeAudio('suspended');
-		const { prime } = beeper(fake);
-		prime();
-		await Promise.resolve();
-		await Promise.resolve();
+		const { unlock, rest, sound } = beeper(fake);
+		expect(sound()).toBe('locked');
+		await expect(unlock()).resolves.toBe(true);
 		expect(fake.resumes).toBe(1);
-		expect(fake.suspends).toBe(1);
-		expect(fake.state).toBe('suspended');
+		expect(fake.state).toBe('running');
 		expect(fake.tones).toEqual([]);
+		expect(sound()).toBe('ready');
+		await expect(unlock()).resolves.toBe(true);
+		expect(fake.resumes).toBe(1);
+		rest();
+		expect(fake.state).toBe('suspended');
+		await expect(unlock()).resolves.toBe(true);
+		expect(fake.resumes).toBe(2);
 	});
 
-	it('makes one context and leaves running audio alone on a tap', async () => {
+	it('reports audio that is not allowed to start yet as locked', async () => {
+		vi.useFakeTimers();
+		const fake = fakeAudio('suspended', 'never');
+		const { unlock, sound } = beeper(fake);
+		const unlocking = unlock();
+		await vi.advanceTimersByTimeAsync(250);
+		await expect(unlocking).resolves.toBe(false);
+		expect(sound()).toBe('locked');
+	});
+
+	it('puts audio that starts after a rest back to sleep without a tone', async () => {
+		vi.useFakeTimers();
+		let release = () => undefined as void;
+		const fake = fakeAudio('suspended', 'never');
+		fake.resume = () => {
+			fake.resumes++;
+			return new Promise<void>((resolve) => {
+				release = () => {
+					fake.state = 'running';
+					resolve();
+				};
+			});
+		};
+		const { beep, rest, sound } = beeper(fake);
+		const playing = beep();
+		await vi.advanceTimersByTimeAsync(250);
+		await expect(playing).resolves.toBe(false);
+		rest();
+		release();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(fake.tones).toEqual([]);
+		expect(fake.state).toBe('suspended');
+		expect(sound()).toBe('ready');
+	});
+
+	it('makes one context and counts running audio as unlocked', async () => {
 		const fake = fakeAudio('running');
-		const { make, prime, beep } = beeper(fake);
-		prime();
+		const { make, unlock, beep } = beeper(fake);
+		await expect(unlock()).resolves.toBe(true);
 		expect(fake.resumes).toBe(0);
 		await beep();
 		await beep();
@@ -129,14 +185,17 @@ describe('createBeeper', () => {
 
 	it('does nothing without Web Audio', async () => {
 		const missing = beeper(null);
-		missing.prime();
-		await missing.beep();
+		expect(missing.sound()).toBe('none');
+		await expect(missing.unlock()).resolves.toBe(false);
+		await expect(missing.beep()).resolves.toBe(false);
+		missing.rest();
 		expect(missing.make).toHaveBeenCalledTimes(1);
 
 		const broken = createBeeper(() => {
 			throw new Error('no audio');
 		});
-		broken.prime();
-		await expect(broken.beep()).resolves.toBeUndefined();
+		await expect(broken.unlock()).resolves.toBe(false);
+		await expect(broken.beep()).resolves.toBe(false);
+		expect(broken.sound()).toBe('none');
 	});
 });

@@ -3,7 +3,7 @@
 	import { onMount, tick as flush, type Snippet } from 'svelte';
 	import { prepareZXingModule, readBarcodes } from 'zxing-wasm/reader';
 	import wasmURL from 'zxing-wasm/reader/zxing_reader.wasm?url';
-	import { beep, primeBeep } from '#lib/beep.js';
+	import { beep, beepSound, restBeep, unlockBeep, type Sound } from '#lib/beep.js';
 	import { bandCrop, cameraErrorMessage, scanFormats, torchSupported } from '#lib/scan.js';
 
 	let {
@@ -43,7 +43,10 @@
 	let error = $state<string | null>(null);
 	let flashing = $state(false);
 	let torch = $state(false);
-	let torchOn = $state(false);
+	let torchWanted = $state(false);
+	let sound = $state<Sound>('locked');
+	let torchOn = false;
+	let torchBusy = false;
 	let wanted = false;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let flashTimer: ReturnType<typeof setTimeout> | undefined;
@@ -102,6 +105,7 @@
 			await video.play();
 			remember(true);
 			torch = canTorch(media);
+			unlockSound();
 			schedule();
 		} catch (err) {
 			halt();
@@ -121,18 +125,40 @@
 		}
 	}
 
-	async function toggleTorch() {
+	/** Flips the wanted torch state at once; the light follows one constraint at a time. */
+	function toggleTorch() {
+		torchWanted = !torchWanted;
+		if (!torchBusy) void syncTorch();
+	}
+
+	/** Sends one torch constraint at a time until the light matches the last tap. */
+	async function syncTorch() {
 		const track = stream?.getVideoTracks()[0];
-		if (!track) return;
-		const on = !torchOn;
+		if (!torch || !track || torchOn === torchWanted) return;
+		const on = torchWanted;
 		const constraints: TorchConstraints = { advanced: [{ torch: on }] };
+		torchBusy = true;
 		try {
 			await track.applyConstraints(constraints);
-			if (stream?.getVideoTracks()[0] === track) torchOn = on;
+			if (stream?.getVideoTracks()[0] !== track) return;
+			torchOn = on;
 		} catch {
 			torch = false;
 			torchOn = false;
+			torchWanted = false;
+			return;
+		} finally {
+			torchBusy = false;
 		}
+		await syncTorch();
+	}
+
+	/** Starts the read beep's audio while the camera runs; a tap or key press anywhere starts it too. */
+	function unlockSound() {
+		void unlockBeep().then(() => {
+			sound = beepSound();
+			if (!stream) restBeep();
+		});
 	}
 
 	function halt() {
@@ -141,6 +167,8 @@
 		stream = null;
 		torch = false;
 		torchOn = false;
+		torchWanted = false;
+		restBeep();
 		if (video) video.srcObject = null;
 	}
 
@@ -188,7 +216,7 @@
 				const hit = found.find((b) => b.isValid && b.text);
 				if (hit && !paused && stream && ondetect(hit.text)) {
 					flash();
-					void beep();
+					void beep().then(() => (sound = beepSound()));
 				}
 			}
 		}
@@ -204,6 +232,7 @@
 	}
 
 	onMount(() => {
+		sound = beepSound();
 		let auto = false;
 		try {
 			auto = localStorage.getItem(autoStartKey) === 'on';
@@ -211,13 +240,14 @@
 			auto = false;
 		}
 		if (auto) void start();
+		else restBeep();
 		document.addEventListener('visibilitychange', onVisibility);
-		document.addEventListener('pointerdown', primeBeep, true);
-		document.addEventListener('keydown', primeBeep, true);
+		document.addEventListener('pointerdown', unlockSound, true);
+		document.addEventListener('keydown', unlockSound, true);
 		return () => {
 			document.removeEventListener('visibilitychange', onVisibility);
-			document.removeEventListener('pointerdown', primeBeep, true);
-			document.removeEventListener('keydown', primeBeep, true);
+			document.removeEventListener('pointerdown', unlockSound, true);
+			document.removeEventListener('keydown', unlockSound, true);
 			clearTimeout(flashTimer);
 			wanted = false;
 			halt();
@@ -229,6 +259,29 @@
 	<Button tone="signal" type="button" loading={starting} onclick={() => void start()}>
 		Włącz aparat
 	</Button>
+{/snippet}
+
+{#snippet soundButton()}
+	{#if sound === 'locked'}
+		<button type="button" class="glass pill" onclick={unlockSound}>
+			<svg
+				width="18"
+				height="18"
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				stroke-width="2"
+				stroke-linecap="round"
+				stroke-linejoin="round"
+				aria-hidden="true"
+				focusable="false"
+			>
+				<path d="M11 5 6 9H3v6h3l5 4z" />
+				<path d="m22 9-6 6M16 9l6 6" />
+			</svg>
+			Włącz dźwięk
+		</button>
+	{/if}
 {/snippet}
 
 {#snippet problem()}
@@ -247,9 +300,11 @@
 					<a
 						class="glass chip"
 						href="/scan/queue"
-						aria-label={queued ? `Do uzupełnienia: ${queued}` : undefined}
+						aria-label={queued === null ? undefined : `Do uzupełnienia: ${queued}`}
 					>
-						{#if queued}<span class="count" aria-hidden="true">{queued}</span>{/if}
+						{#if queued !== null}
+							<span class={['count', { none: queued === 0 }]} aria-hidden="true">{queued}</span>
+						{/if}
 						Do uzupełnienia
 					</a>
 				{/if}
@@ -259,8 +314,8 @@
 						type="button"
 						class="glass round"
 						aria-label="Latarka"
-						aria-pressed={torchOn}
-						onclick={() => void toggleTorch()}
+						aria-pressed={torchWanted}
+						onclick={toggleTorch}
 					>
 						<svg
 							width="20"
@@ -311,6 +366,12 @@
 					<span class="laser"></span>
 				</div>
 				<p class="hint">Nakieruj na kod kreskowy</p>
+				{#if full}
+					<div class="actions">
+						{@render soundButton()}
+						<button type="button" class="glass pill" onclick={stop}>Wyłącz aparat</button>
+					</div>
+				{/if}
 			{:else if full}
 				{@render startButton()}
 			{/if}
@@ -326,6 +387,9 @@
 {#if !full}
 	{#if stream}
 		<div class="controls">
+			{#if sound === 'locked'}
+				<Button type="button" tone="ghost" onclick={unlockSound}>Włącz dźwięk</Button>
+			{/if}
 			<Button type="button" tone="ghost" onclick={stop}>Wyłącz aparat</Button>
 		</div>
 	{:else}
@@ -451,6 +515,33 @@
 		padding: 0 0.375rem;
 	}
 
+	.count.none {
+		background: rgb(255 255 255 / 22%);
+		color: var(--camera-ink);
+	}
+
+	.actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.625rem;
+		justify-content: center;
+		margin-block-start: 1rem;
+		position: relative;
+		z-index: 1;
+	}
+
+	.pill {
+		align-items: center;
+		border-radius: 1.375rem;
+		cursor: pointer;
+		display: inline-flex;
+		font-size: 0.875rem;
+		font-weight: 700;
+		gap: 0.5rem;
+		min-block-size: 2.75rem;
+		padding: 0 1rem;
+	}
+
 	.round {
 		align-items: center;
 		block-size: 2.75rem;
@@ -574,6 +665,7 @@
 
 	.controls {
 		display: flex;
+		gap: 0.5rem;
 		justify-content: flex-end;
 	}
 

@@ -1,13 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import {
+	dealPrice,
+	dealsSummary,
 	intervalLabel,
 	isUnderLimit,
 	keywordPayload,
 	keywordsOf,
 	lastRunSummary,
 	limitComparison,
+	searchedFor,
+	segmentLabel,
+	timeAgo,
 	underLimitCount,
 	underLimitLabel,
+	wishLimit,
 	type HunterStatus,
 	type Keyword,
 	type RunResult
@@ -96,10 +102,10 @@ describe('lastRunSummary', () => {
 
 describe('limitComparison', () => {
 	it.each([
-		[8500, 10000, '15\u00a0zł poniżej limitu'],
+		[8500, 10000, '15\u00a0zł pod limitem'],
 		[10000, 10000, 'W limicie'],
-		[8450, 10000, '15,50\u00a0zł poniżej limitu'],
-		[10001, 10000, '0,01\u00a0zł powyżej limitu'],
+		[8450, 10000, '15,50\u00a0zł pod limitem'],
+		[10001, 10000, '0,01\u00a0zł ponad limit'],
 		[8500, null, 'Brak limitu'],
 		[0, 0, 'W limicie']
 	] as const)('compares %s grosze against %s', (price, limit, expected) => {
@@ -142,5 +148,78 @@ describe('underLimitLabel', () => {
 		[22, '22 oferty pod limitem']
 	] as const)('%s → %s', (count, expected) => {
 		expect(underLimitLabel(count)).toBe(expected);
+	});
+});
+
+describe('dealPrice', () => {
+	it.each([
+		[7900, '79 zł'],
+		[7999, '79,99 zł'],
+		[7950, '79,50 zł'],
+		[0, '0 zł']
+	] as const)('%s grosze → %s', (cents, expected) => {
+		expect(dealPrice(cents)).toBe(expected);
+	});
+});
+
+describe('wishLimit', () => {
+	it.each([
+		[4000, 'limit 40 zł'],
+		[3999, 'limit 39,99 zł'],
+		[null, 'bez limitu']
+	] as const)('%s → %s', (limit, expected) => {
+		expect(wishLimit(limit)).toBe(expected);
+	});
+});
+
+describe('segments', () => {
+	it('labels a segment with its count', () => {
+		expect(segmentLabel('under', 3)).toBe('Pod limitem · 3');
+		expect(segmentLabel('all', 0)).toBe('Wszystkie · 0');
+		expect(segmentLabel('sent', 12)).toBe('Wysłane · 12');
+	});
+});
+
+describe('timeAgo', () => {
+	const now = new Date('2026-11-19T12:00:00Z');
+	it.each([
+		['2026-11-19T11:59:30Z', 'przed chwilą'],
+		['2026-11-19T12:00:05Z', 'przed chwilą'],
+		['2026-11-19T11:55:00Z', '5 min temu'],
+		['2026-11-19T10:00:00Z', '2 godz. temu'],
+		['2026-11-18T11:00:00Z', 'wczoraj'],
+		['2026-11-16T12:00:00Z', '3 dni temu']
+	])('%s → %s', (instant, expected) => {
+		expect(timeAgo(instant, now)).toBe(expected);
+	});
+});
+
+describe('dealsSummary', () => {
+	const now = new Date('2026-11-19T12:00:00Z');
+
+	it('names the wishes and the last run', () => {
+		expect(dealsSummary(4, status({ last_finished_at: '2026-11-19T10:00:00Z' }), now)).toBe(
+			'4 na liście życzeń · sprawdzono 2 godz. temu'
+		);
+	});
+
+	it('leaves out a run that has not finished', () => {
+		expect(dealsSummary(1, status({}), now)).toBe('1 na liście życzeń');
+	});
+});
+
+describe('searchedFor', () => {
+	const now = new Date('2026-11-19T12:00:00Z');
+
+	it('names the wishes and the last run', () => {
+		expect(searchedFor(4, status({ last_finished_at: '2026-11-19T11:55:00Z' }), now)).toBe(
+			'Szukamy ofert dla 4 pozycji z listy życzeń. Ostatnie wyszukiwanie: 5 min temu.'
+		);
+	});
+
+	it('says when no run finished since the server started', () => {
+		expect(searchedFor(1, status({}), now)).toBe(
+			'Szukamy ofert dla 1 pozycji z listy życzeń. Od uruchomienia serwera nie było wyszukiwania.'
+		);
 	});
 });

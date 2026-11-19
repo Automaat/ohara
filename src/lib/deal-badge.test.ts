@@ -101,3 +101,37 @@ describe('refreshDealBadge', () => {
 		expect(badge.dealBadge.count).toBe(0);
 	});
 });
+
+describe('loadUnderLimit', () => {
+	it('returns the listings it counts in the badge', async () => {
+		const view = await badge.loadUnderLimit(deals([listing(3500, 4000), listing(7900, 8000)]));
+		expect(view.observations).toHaveLength(2);
+		expect(badge.dealBadge.count).toBe(2);
+	});
+
+	it('hands a stale answer to its caller without moving the badge', async () => {
+		let resolve!: (r: Response) => void;
+		const stale = badge.loadUnderLimit(vi.fn(() => new Promise<Response>((r) => (resolve = r))));
+		await badge.loadUnderLimit(deals([listing(3500, 4000)]));
+		resolve(dealsResponse([listing(100, 200), listing(300, 400)]));
+		expect((await stale).observations).toHaveLength(2);
+		expect(badge.dealBadge.count).toBe(1);
+		expect(badge.dealBadge.listings?.map((l) => l.price_cents)).toEqual([3500]);
+	});
+
+	it('keeps the listings a refresh from another page counted, for the deals page', async () => {
+		expect(badge.dealBadge.listings).toBeNull();
+		await badge.loadUnderLimit(deals([listing(3500, 4000), listing(3900, 4000)]));
+		await badge.refreshDealBadge(deals([listing(3500, 3600)]));
+		expect(badge.dealBadge.count).toBe(1);
+		expect(badge.dealBadge.listings?.map((l) => l.price_cents)).toEqual([3500]);
+	});
+
+	it('rejects a failed request, keeping the last count', async () => {
+		await badge.loadUnderLimit(deals([listing(3500, 4000)]));
+		await expect(
+			badge.loadUnderLimit(vi.fn(async () => new Response('{}', { status: 500 })))
+		).rejects.toThrow();
+		expect(badge.dealBadge.count).toBe(1);
+	});
+});

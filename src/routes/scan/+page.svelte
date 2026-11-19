@@ -34,7 +34,7 @@
 	import { queueDeletesSettled } from '#lib/queue-deletes.js';
 	import { outcomeLabels, outcomeTones, recentScans } from '#lib/recent.svelte.js';
 	import { ScanFlow, type Added } from '#lib/scan-flow.svelte.js';
-	import { session, sessionSpent, undoAdd, type SessionAdd } from '#lib/session.svelte.js';
+	import { addLine, session, sessionSpent, undoAdd, type SessionAdd } from '#lib/session.svelte.js';
 	import {
 		RepeatGuard,
 		barcodeInputError,
@@ -54,6 +54,12 @@
 	 * a narrower one keeps the tray above the bar.
 	 */
 	const beside = new MediaQuery(`${shortScreen} and (min-width: 600px)`);
+	const sideways = new MediaQuery('(orientation: landscape)');
+	/**
+	 * A phone held sideways on a short screen too narrow for the tray beside the tab bar, where the
+	 * tray and one toast at a time share the room between the band and the tab bar.
+	 */
+	const cramped = $derived(phone.current && short.current && !beside.current && sideways.current);
 	/** How long a code must stay out of view before the camera takes it again. */
 	const repeatWindow = 3000;
 	/** How much of the scan band stays in view above the sheet. */
@@ -76,6 +82,8 @@
 	let band = $state<HTMLElement>();
 	let sheetDialog = $state<HTMLDialogElement | null>(null);
 	let sheetTop = $state<number | null>(null);
+	/** Where the scan band ends on a cramped screen, in pixels from the top. */
+	let bandFoot = $state<number | null>(null);
 	let keyboard = $state(0);
 	let viewport = $state<number | null>(null);
 	let shown: Sheet | null = null;
@@ -96,7 +104,9 @@
 			holding: (id) => {
 				const el = document.querySelector(`[data-toast="${id}"]`);
 				return el !== null && (el.matches(':hover') || el.contains(document.activeElement));
-			}
+			},
+			single: () => cramped,
+			listing: () => listOpen
 		},
 		(add) => undoAdd(fetch, add)
 	);
@@ -285,6 +295,38 @@
 		if (flow.phase.kind === 'queued') untrack(() => void countQueue());
 	});
 
+	/*
+	 * Where the tray and the toasts share one slot under the band, the slot stands below the band's
+	 * foot as drawn: it moves when the screen turns or the camera's bar wraps.
+	 */
+	$effect(() => {
+		const el = band;
+		if (!cramped || !el) return;
+		let frame = 0;
+		const measure = () => {
+			cancelAnimationFrame(frame);
+			frame = requestAnimationFrame(() => {
+				bandFoot = Math.round(el.getBoundingClientRect().bottom);
+			});
+		};
+		untrack(measure);
+		const observer = new ResizeObserver(measure);
+		if (el.parentElement) observer.observe(el.parentElement);
+		addEventListener('resize', measure);
+		return () => {
+			cancelAnimationFrame(frame);
+			observer.disconnect();
+			removeEventListener('resize', measure);
+			bandFoot = null;
+		};
+	});
+
+	/* Turning the phone fits the toasts to the new screen: one at a time where only one fits. */
+	$effect(() => {
+		const single = cramped;
+		untrack(() => addToasts.fit(single));
+	});
+
 	$effect(() => {
 		const vv = window.visualViewport;
 		if (!sheet || !phone.current || !vv) return;
@@ -450,7 +492,11 @@
 </div>
 
 {#if phone.current && trayShown}
-	<div class={['tray-dock', { beside: beside.current }]} data-sui-theme="dark">
+	<div
+		class={['tray-dock', { beside: beside.current, cramped }]}
+		style:--band-foot={bandFoot === null ? undefined : `${bandFoot}px`}
+		data-sui-theme="dark"
+	>
 		{@render tray(true)}
 	</div>
 {/if}
@@ -488,6 +534,11 @@
 							{:else}
 								<Pill tone="neutral">Lista życzeń</Pill>
 							{/if}
+							{#if addToasts.listed.has(add.id)}
+								<Button aria-label={`Cofnij: ${addLine(add)}`} onclick={() => addToasts.undo(add)}>
+									Cofnij
+								</Button>
+							{/if}
 						{/snippet}
 					</ObjectRow>
 				{/each}
@@ -501,8 +552,13 @@
 <div
 	class={[
 		'scan-toasts',
-		{ 'over-tray': phone.current && trayShown && !beside.current, short: short.current }
+		{
+			'over-tray': phone.current && trayShown && !beside.current && !cramped,
+			short: short.current,
+			cramped
+		}
 	]}
+	style:--band-foot={bandFoot === null ? undefined : `${bandFoot}px`}
 	data-sui-theme={phone.current ? 'dark' : undefined}
 >
 	<Toaster label="Powiadomienia" dismissLabel="Zamknij" />
@@ -643,7 +699,31 @@
 		);
 	}
 
-	:global(:root:has(dialog:modal)) .tray-dock {
+	/* Narrower, the tray and the toasts take turns in one slot midway between the band's foot and
+	   the tab bar, never closer than 4px to the band: while a toast is up, the tray gives it its
+	   place. Until the band is measured, its foot is taken where the camera draws it. */
+	.tray-dock.cramped,
+	:global(.ohara-phone) .scan-toasts.cramped {
+		--session-tray-height: 3.5rem;
+		--scan-slot-top: calc(
+			var(--band-foot, 10.75rem) +
+				max(
+					0.25rem,
+					(
+							100dvh - 4rem - max(env(safe-area-inset-bottom, 0px), 0.75rem) -
+								var(--band-foot, 10.75rem) - var(--session-tray-height)
+						) /
+						2
+				)
+		);
+	}
+
+	.tray-dock.cramped {
+		inset-block: var(--scan-slot-top) auto;
+	}
+
+	:global(:root:has(dialog:modal)) .tray-dock,
+	:global(:root:has(.scan-toasts.cramped .sui-toast)) .tray-dock {
 		visibility: hidden;
 	}
 
@@ -721,6 +801,74 @@
 		overflow-x: clip;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+	}
+
+	/* In the tray's slot a toast is one line as tall as the tray: its copy cut short, then its
+	   action and Dismiss. Every toast takes that one place, so one leaving fades under the next
+	   rather than pushing it up over the band. A toast the scan sheet draws is the same line at
+	   the top of the screen, above the band. */
+	:global(.ohara-phone) .scan-toasts.cramped :global(.sui-toaster) {
+		inset-block: calc(var(--scan-slot-top) - var(--sui-space-4)) auto;
+	}
+
+	:global(:root:has(.scan-toasts.cramped) dialog.sui-modal.scan-sheet .sui-toaster) {
+		--session-tray-height: 3.5rem;
+
+		padding-block-start: 0.375rem;
+	}
+
+	:global(.ohara-phone) .scan-toasts.cramped :global(.sui-toaster:popover-open),
+	:global(:root:has(.scan-toasts.cramped) dialog.sui-modal.scan-sheet .sui-toaster:popover-open) {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	:global(.ohara-phone) .scan-toasts.cramped :global(.sui-toast),
+	:global(:root:has(.scan-toasts.cramped) dialog.sui-modal.scan-sheet .sui-toast) {
+		align-items: center;
+		block-size: var(--session-tray-height);
+		grid-area: 1 / 1;
+		inline-size: auto;
+		justify-self: stretch;
+		max-inline-size: none;
+		padding-block: 0;
+	}
+
+	:global(.ohara-phone) .scan-toasts.cramped :global(.sui-toast-body),
+	:global(:root:has(.scan-toasts.cramped) dialog.sui-modal.scan-sheet .sui-toast-body) {
+		align-items: center;
+		flex-wrap: nowrap;
+	}
+
+	:global(.ohara-phone) .scan-toasts.cramped :global(.sui-toast-main),
+	:global(:root:has(.scan-toasts.cramped) dialog.sui-modal.scan-sheet .sui-toast-main) {
+		align-items: center;
+		grid-template-columns: minmax(0, 1fr) auto;
+	}
+
+	:global(.ohara-phone) .scan-toasts.cramped :global(.sui-toast-copy),
+	:global(:root:has(.scan-toasts.cramped) dialog.sui-modal.scan-sheet .sui-toast-copy) {
+		align-items: center;
+		display: flex;
+		gap: 0.5rem;
+	}
+
+	:global(:root:has(.scan-toasts.cramped) dialog.sui-modal.scan-sheet)
+		:global(:is(.sui-toast-title, .sui-toast-description)) {
+		min-inline-size: 0;
+		overflow-x: clip;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	:global(.ohara-phone) .scan-toasts.cramped :global(.sui-toast-description),
+	:global(:root:has(.scan-toasts.cramped) dialog.sui-modal.scan-sheet .sui-toast-description) {
+		flex: 1 1 0;
+	}
+
+	:global(.ohara-phone) .scan-toasts.cramped :global(.sui-toast-dismiss),
+	:global(:root:has(.scan-toasts.cramped) dialog.sui-modal.scan-sheet .sui-toast-dismiss) {
+		margin-block-start: 0;
 	}
 
 	:global(.ohara-phone) .scan-toasts.over-tray :global(.sui-toaster) {

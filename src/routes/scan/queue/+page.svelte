@@ -13,16 +13,13 @@
 	import { onDestroy, onMount, tick } from 'svelte';
 	import QueueRow from '#lib/components/QueueRow.svelte';
 	import { errorMessage, request } from '#lib/api.js';
-	import { queueDeletesSettled } from '#lib/queue-deletes.js';
+	import { deleteQueueEntry, queueDeletesSettled } from '#lib/queue-deletes.js';
 	import { QueueRemovals } from '#lib/queue.svelte.js';
 	import type { QueueEntry } from '#lib/scan.js';
 
 	let entries = $state<QueueEntry[] | null>(null);
 	let failure = $state<string | null>(null);
 	let openRow = $state<number | null>(null);
-
-	/** A removal the closing page sends still reaches the server with `keepalive`. */
-	const keepalive: typeof fetch = (input, init) => fetch(input, { ...init, keepalive: true });
 
 	const removals = new QueueRemovals({
 		toast,
@@ -31,7 +28,7 @@
 			const shown = document.querySelector(`[data-toast="${id}"]`);
 			return shown !== null && (shown.matches(':hover') || shown.contains(document.activeElement));
 		},
-		send: (entry) => request<void>(keepalive, 'DELETE', `/api/scan-queue/${entry.id}`),
+		send: (entry) => deleteQueueEntry(entry.id),
 		removed: (entry) => {
 			entries = (entries ?? []).filter((e) => e.id !== entry.id);
 		}

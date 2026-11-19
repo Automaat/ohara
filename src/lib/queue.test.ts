@@ -1,7 +1,6 @@
 import type { ToastEnd, ToastOptions } from '@smykla-skalski/sui';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from './api';
-import { queueDeletesSettled } from './queue-deletes';
 import {
 	QueueRemovals,
 	swipeAxis,
@@ -162,6 +161,19 @@ describe('QueueRemovals', () => {
 		expect(p.sent).toEqual([1]);
 	});
 
+	it('restarts the undo window in full once the reader leaves the toast', async () => {
+		const p = page();
+		p.removals.remove(entry(1));
+		p.hold(true);
+		await vi.advanceTimersByTimeAsync(4000);
+		p.hold(false);
+		await vi.advanceTimersByTimeAsync(undoWindowMs - 1);
+		expect(p.sent).toEqual([]);
+		expect(p.toasts.size).toBe(1);
+		await vi.advanceTimersByTimeAsync(1);
+		expect(p.sent).toEqual([1]);
+	});
+
 	it('ignores a second removal of an entry that is still waiting', () => {
 		const p = page();
 		p.removals.remove(entry(1));
@@ -218,34 +230,6 @@ describe('QueueRemovals', () => {
 			description: 'Serwer zwrócił błąd 500.',
 			tone: 'danger'
 		});
-	});
-
-	it('holds back a later read of the queue until a sent removal settles', async () => {
-		let answer: () => void = () => {};
-		const p = page(() => new Promise<void>((resolve) => (answer = resolve)));
-		p.removals.remove(entry(1));
-		p.removals.destroy();
-		let settled = false;
-		void queueDeletesSettled().then(() => (settled = true));
-		await vi.advanceTimersByTimeAsync(0);
-		expect(settled).toBe(false);
-		answer();
-		await vi.advanceTimersByTimeAsync(0);
-		expect(settled).toBe(true);
-		expect(p.removed).toEqual([1]);
-	});
-
-	it('lets a later read go on after a sent removal fails', async () => {
-		let refuse: (err: Error) => void = () => {};
-		const p = page(() => new Promise<void>((_, reject) => (refuse = reject)));
-		p.removals.remove(entry(1));
-		p.removals.destroy();
-		let settled = false;
-		void queueDeletesSettled().then(() => (settled = true));
-		refuse(new ApiError('Serwer nie odpowiada.', 0));
-		await vi.advanceTimersByTimeAsync(0);
-		expect(settled).toBe(true);
-		expect(p.removals.hidden.has(1)).toBe(false);
 	});
 
 	it('sends waiting removals on destroy and stays quiet about later failures', async () => {

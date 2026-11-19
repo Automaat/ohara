@@ -1,11 +1,13 @@
 import type { ToastEnd, ToastOptions } from '@smykla-skalski/sui';
 import { SvelteSet } from 'svelte/reactivity';
 import { ApiError, errorMessage } from './api.js';
-import { trackDelete } from './queue-deletes.js';
 import type { QueueEntry } from './scan.js';
 
 /** How long "Cofnij" stays on offer before a removal goes to the server. */
 export const undoWindowMs = 8000;
+
+/** How often a waiting removal checks whether the reader is on its toast, in milliseconds. */
+const holdCheckMs = 250;
 
 /** How far a swiped row slides to show "Usuń", in CSS pixels. */
 export const swipeWidth = 92;
@@ -48,12 +50,13 @@ export type RemovalHost = {
 	removed(entry: QueueEntry): void;
 };
 
-type Pending = { entry: QueueEntry; toast: number; timer?: ReturnType<typeof setTimeout> };
+type Pending = { entry: QueueEntry; toast: number; timer?: ReturnType<typeof setInterval> };
 
 /**
  * Removals from the scan queue that wait for their undo toast. A removed entry hides at once
  * and its toast offers "Cofnij"; the DELETE goes out only when the toast closes some other way:
- * dismissed, expired after `undoWindowMs`, or flushed when the page goes away.
+ * dismissed, expired after `undoWindowMs` away from the toast, or flushed when the page goes
+ * away.
  */
 export class QueueRemovals {
 	/** Ids of the entries hidden while their removal waits or is on its way. */
@@ -95,17 +98,23 @@ export class QueueRemovals {
 		this.#live = false;
 	}
 
+	/** The undo window runs while the reader is away from the toast and restarts in full each time they come back to it. */
 	#arm(pending: Pending): void {
-		pending.timer = setTimeout(() => {
-			if (this.#host.holding(pending.toast)) this.#arm(pending);
-			else this.#host.dismiss(pending.toast, 'expired');
-		}, this.#window);
+		let left = this.#window;
+		pending.timer = setInterval(() => {
+			if (this.#host.holding(pending.toast)) {
+				left = this.#window;
+				return;
+			}
+			left -= holdCheckMs;
+			if (left <= 0) this.#host.dismiss(pending.toast, 'expired');
+		}, holdCheckMs);
 	}
 
 	#settle(id: number): Pending | undefined {
 		const pending = this.#pending.get(id);
 		if (!pending) return undefined;
-		clearTimeout(pending.timer);
+		clearInterval(pending.timer);
 		this.#pending.delete(id);
 		return pending;
 	}
@@ -127,7 +136,7 @@ export class QueueRemovals {
 
 	async #commit(entry: QueueEntry): Promise<void> {
 		try {
-			await trackDelete(this.#host.send(entry));
+			await this.#host.send(entry);
 		} catch (err) {
 			if (!alreadyGone(err)) {
 				this.hidden.delete(entry.id);

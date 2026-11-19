@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ApiError } from './api';
-import { trackDelete } from './queue-deletes';
+import { deleteQueueEntry } from './queue-deletes';
 import type { EditionDetail, Format } from './collection';
 import {
 	FormRejected,
@@ -300,7 +300,15 @@ describe('resolveScan', () => {
 
 	it('queues a rescanned barcode only after a queue removal on its way has settled', async () => {
 		let answer: () => void = () => {};
-		void trackDelete(new Promise<void>((resolve) => (answer = resolve)));
+		vi.stubGlobal(
+			'fetch',
+			() =>
+				new Promise<Response>(
+					(resolve) => (answer = () => resolve(new Response(null, { status: 204 })))
+				)
+		);
+		const removal = deleteQueueEntry(9, undefined);
+		vi.unstubAllGlobals();
 		const entry = {
 			id: 1,
 			barcode: '5901234123457',
@@ -322,6 +330,7 @@ describe('resolveScan', () => {
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		expect(s.paths()).not.toContain('POST /api/scan-queue');
 		answer();
+		await removal;
 		expect(await scan).toEqual({ kind: 'queued', barcode: '5901234123457', entry });
 		expect(s.paths().at(-1)).toBe('POST /api/scan-queue');
 	});

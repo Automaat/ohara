@@ -92,11 +92,14 @@
 
 	/* Wider than a phone the collection shelf's covers outgrow the phone's hero cover, so the
 	   hero takes a 200 px cover, larger with a larger default font as the shelf's covers are,
-	   and a cover opened from the shelf still grows into it. A screen under 500 px tall, such
-	   as a phone held sideways, keeps the phone's hero, which leaves the title in view. */
-	@media (width > 640px) and (height >= 500px) {
-		.hero {
-			--hero-cover: max(200px, 12.5rem);
+	   and a cover opened from the shelf still grows into it. A phone held sideways, which the
+	   app lays out as a phone (`phoneLayout` in nav.ts), keeps the phone's hero, so the title
+	   stays in view on its short screen. */
+	@media (width > 640px) {
+		@media not all and (pointer: coarse) and (orientation: landscape) and (height < 500px) {
+			.hero {
+				--hero-cover: max(200px, 12.5rem);
+			}
 		}
 	}
 

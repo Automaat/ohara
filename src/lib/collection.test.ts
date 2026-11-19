@@ -17,6 +17,7 @@ import {
 	options,
 	parsePLN,
 	readCollectionFilter,
+	shelfLine,
 	shelfSummary,
 	titlePayload,
 	titleToForm,
@@ -24,6 +25,7 @@ import {
 	spentLabel,
 	uncopiedLine,
 	uncopiedTitles,
+	wishLine,
 	withoutCopies,
 	type Title
 } from './collection';
@@ -477,5 +479,32 @@ describe('collection header', () => {
 		{ owned: 12345, wishlist: 1, want: /^12\s345 na półce · 1 na liście życzeń$/ }
 	])('summarizes $owned owned and $wishlist wanted', ({ owned, wishlist, want }) => {
 		expect(shelfSummary({ owned, wishlist })).toMatch(want);
+	});
+});
+
+describe('shelf tile line', () => {
+	const owned = {
+		status: 'owned' as const,
+		max_price_cents: null,
+		authors: ['Stanisław Lem'],
+		format: null,
+		binding: 'hardcover' as const,
+		label: ''
+	};
+
+	it.each([
+		{ max: 8000, want: /^Lista życzeń · do\u00a080\szł$/ },
+		{ max: 7999, want: /^Lista życzeń · do\u00a079,99\szł$/ },
+		{ max: 0, want: /^Lista życzeń · do\u00a00\szł$/ },
+		{ max: null, want: /^Lista życzeń$/ }
+	])('names a wish with limit $max', ({ max, want }) => {
+		expect(wishLine(max)).toMatch(want);
+		expect(shelfLine({ ...owned, status: 'wishlist', max_price_cents: max })).toMatch(want);
+	});
+
+	it('gives an owned copy its creators and edition, without a status', () => {
+		expect(shelfLine(owned)).toBe('Stanisław Lem · Twarda oprawa');
+		expect(shelfLine({ ...owned, authors: [], format: 'bluray', binding: null })).toBe('Blu-ray');
+		expect(shelfLine({ ...owned, authors: undefined, binding: null })).toBe('Wydanie bez opisu');
 	});
 });

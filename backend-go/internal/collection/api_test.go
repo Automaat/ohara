@@ -553,6 +553,29 @@ func TestCollectionViewReturnsArtworkAndCreators(t *testing.T) {
 	}
 }
 
+func TestCollectionViewReturnsWishPriceLimits(t *testing.T) {
+	a := newAPI(t)
+	edition := a.edition(obj{"title_id": a.title("movie", "Ida"), "format": "dvd"})
+	wantByCopy := map[int64]*int64{
+		a.copyOf(obj{"edition_id": edition, "status": "wishlist", "max_price_cents": 8000}): new(int64(8000)),
+		a.copyOf(obj{"edition_id": edition, "status": "wishlist"}):                          nil,
+		a.copyOf(obj{"edition_id": edition, "status": "owned", "price_cents": 2500}):        nil,
+	}
+
+	var view collection.CollectionView
+	a.mustDo(http.MethodGet, "/api/collection", nil, &view, http.StatusOK)
+	if len(view.Items) != len(wantByCopy) {
+		t.Fatalf("collection contains %d copies, want %d", len(view.Items), len(wantByCopy))
+	}
+	for _, item := range view.Items {
+		want, found := wantByCopy[item.CopyID]
+		if !found || (want == nil) != (item.MaxPriceCents == nil) ||
+			(want != nil && *item.MaxPriceCents != *want) {
+			t.Errorf("copy %d max price = %v, want %v", item.CopyID, item.MaxPriceCents, want)
+		}
+	}
+}
+
 func TestListTitles(t *testing.T) {
 	a := newAPI(t)
 	a.title("movie", "Rejs")

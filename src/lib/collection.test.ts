@@ -13,9 +13,11 @@ import {
 	formatLabels,
 	formatOptions,
 	formatPLN,
+	kindCounts,
 	options,
 	parsePLN,
 	readCollectionFilter,
+	shelfSummary,
 	titlePayload,
 	titleToForm,
 	type Edition,
@@ -396,5 +398,21 @@ describe('spentLabel', () => {
 		}
 	])('$name', ({ totals, want }) => {
 		expect(spentLabel(totals)).toMatch(want);
+	});
+});
+
+describe('collection header', () => {
+	it('counts copies of each kind, including kinds with none', () => {
+		const items = [{ kind: 'movie' }, { kind: 'book' }, { kind: 'movie' }] as const;
+		expect(kindCounts(items)).toEqual({ movie: 2, book: 1, music: 0 });
+		expect(kindCounts([])).toEqual({ movie: 0, book: 0, music: 0 });
+	});
+
+	it.each([
+		{ owned: 20, wishlist: 4, want: '20 na półce · 4 na liście życzeń' },
+		{ owned: 0, wishlist: 0, want: '0 na półce · 0 na liście życzeń' },
+		{ owned: 12345, wishlist: 1, want: /^12\s345 na półce · 1 na liście życzeń$/ }
+	])('summarizes $owned owned and $wishlist wanted', ({ owned, wishlist, want }) => {
+		expect(shelfSummary({ owned, wishlist })).toMatch(want);
 	});
 });

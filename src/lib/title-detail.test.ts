@@ -12,8 +12,10 @@ import {
 	kindAndYear,
 	openedFromCollection,
 	plainClick,
+	previewHero,
 	soleCopy,
 	titleArtwork,
+	titleHero,
 	valueCard,
 	wantsCopy,
 	type TitleEdition
@@ -218,6 +220,64 @@ describe('hero lines', () => {
 		expect(editionsLine(title({ editions: two }))).toBe('2 wydania · 3 egzemplarze');
 		const five = Array.from({ length: 5 }, (_, i) => edition({ id: i + 10, copies: [] }));
 		expect(editionsLine(title({ editions: five }))).toBe('5 wydań · 0 egzemplarzy');
+	});
+});
+
+describe('hero', () => {
+	it('shows a loaded title', () => {
+		const book = title({
+			kind: 'book',
+			name: 'Solaris',
+			polish_title: 'Solaris',
+			original_title: 'Solaris (1961)',
+			year: 1961,
+			authors: ['Stanisław Lem', 'Joanna Kowalska'],
+			cover_url: 'https://image.test/title.jpg',
+			editions: [edition({ format: null, packaging: [], binding: 'hardcover' })]
+		});
+		expect(titleHero(book)).toEqual({
+			title: 'Solaris (Solaris (1961))',
+			overline: 'Książka · 1961',
+			meta: 'Twarda oprawa',
+			byline: 'Stanisław Lem, Joanna Kowalska',
+			kind: 'book',
+			artwork: 'https://image.test/title.jpg'
+		});
+		expect(titleHero(title({ editions: [] })).byline).toBeUndefined();
+	});
+
+	it('shows a title still loading as the collection listed it', () => {
+		const shown = {
+			kind: 'music' as const,
+			name: 'Kind of Blue',
+			original_title: null,
+			polish_title: null,
+			year: 1959,
+			authors: ['Miles Davis'],
+			cover_url: 'https://image.test/kob.jpg'
+		};
+		expect(previewHero(shown)).toEqual({
+			title: 'Kind of Blue',
+			overline: 'Muzyka · 1959',
+			meta: '\u00a0',
+			byline: 'Miles Davis',
+			kind: 'music',
+			artwork: 'https://image.test/kob.jpg'
+		});
+		expect(previewHero({ ...shown, authors: [], cover_url: '' })).toMatchObject({
+			byline: undefined,
+			artwork: undefined
+		});
+	});
+
+	it('changes only the editions line once the title loads', () => {
+		const t = title({ authors: ['Christopher Nolan'], cover_url: 'https://image.test/t.jpg' });
+		const loaded = titleHero({
+			...t,
+			editions: [edition({ cover_url: 'https://image.test/e.jpg' })]
+		});
+		const loading = previewHero({ ...t, cover_url: 'https://image.test/e.jpg' });
+		expect({ ...loading, meta: loaded.meta }).toEqual(loaded);
 	});
 });
 

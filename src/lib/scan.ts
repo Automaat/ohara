@@ -535,22 +535,49 @@ export class LatestLoad {
 /** The part of a video frame the reader decodes, scaled down for speed. */
 export type Crop = { sx: number; sy: number; sw: number; sh: number; dw: number; dh: number };
 
+/** A rectangle on the screen, in CSS pixels, as getBoundingClientRect measures it. */
+export type Box = { left: number; top: number; width: number; height: number };
+
 /**
- * The middle band of a frame: the full width and half the height, where the aiming guide is,
- * scaled to at most maxWidth pixels wide.
+ * The part of a video frame that shows under the scan band, scaled to at most maxWidth pixels
+ * wide. The video fills `view` as `object-fit: cover` draws it: scaled to cover, centred and
+ * cut at the edges. Null when the band covers none of the frame.
  */
-export function cropRect(width: number, height: number, maxWidth = 1280): Crop {
-	const sh = Math.round(height / 2);
-	const sy = Math.round((height - sh) / 2);
-	const scale = Math.min(1, maxWidth / width);
+export function bandCrop(
+	videoWidth: number,
+	videoHeight: number,
+	view: Box,
+	band: Box,
+	maxWidth = 1280
+): Crop | null {
+	if (videoWidth <= 0 || videoHeight <= 0 || view.width <= 0 || view.height <= 0) return null;
+	const scale = Math.max(view.width / videoWidth, view.height / videoHeight);
+	const left = view.left + (view.width - videoWidth * scale) / 2;
+	const top = view.top + (view.height - videoHeight * scale) / 2;
+	const sx = Math.round(Math.max(0, (band.left - left) / scale));
+	const sy = Math.round(Math.max(0, (band.top - top) / scale));
+	const sw = Math.round(Math.min(videoWidth, (band.left + band.width - left) / scale)) - sx;
+	const sh = Math.round(Math.min(videoHeight, (band.top + band.height - top) / scale)) - sy;
+	if (sw <= 0 || sh <= 0) return null;
+	const k = Math.min(1, maxWidth / sw);
 	return {
-		sx: 0,
+		sx,
 		sy,
-		sw: width,
+		sw,
 		sh,
-		dw: Math.round(width * scale),
-		dh: Math.round(sh * scale)
+		dw: Math.max(1, Math.round(sw * k)),
+		dh: Math.max(1, Math.round(sh * k))
 	};
+}
+
+/**
+ * Whether a camera track's capabilities offer a torch: `true` in the Image Capture spec, a list
+ * of the settings it takes in some browsers.
+ */
+export function torchSupported(capabilities: object | undefined): boolean {
+	if (!capabilities || !('torch' in capabilities)) return false;
+	const torch = capabilities.torch;
+	return torch === true || (Array.isArray(torch) && torch.includes(true));
 }
 
 /** The Polish message for a getUserMedia failure. */

@@ -12,7 +12,7 @@ import {
 	candidateLabel,
 	checkDigitMatches,
 	cleanBarcode,
-	cropRect,
+	bandCrop,
 	emptySticky,
 	isBookBarcode,
 	isInvalidBarcode,
@@ -26,6 +26,7 @@ import {
 	scanEditionPayload,
 	searchTitles,
 	scanTitlePayload,
+	torchSupported,
 	wedgeBarcodeIn,
 	type Candidate,
 	type KeyValueStore,
@@ -753,20 +754,82 @@ describe('LatestLoad', () => {
 	});
 });
 
-describe('cropRect', () => {
-	it('takes the middle half of a frame at full width', () => {
-		expect(cropRect(1280, 720)).toEqual({ sx: 0, sy: 180, sw: 1280, sh: 360, dw: 1280, dh: 360 });
+describe('bandCrop', () => {
+	const phone = { left: 0, top: 0, width: 390, height: 844 };
+
+	it('takes the frame under the band when the video spills past the sides', () => {
+		// A portrait 1080 x 1920 frame covers 390 x 844 at 844 / 1920: 474.75 px wide, so
+		// 42.375 px are cut off at each side.
+		const band = { left: 36, top: 264, width: 318, height: 128 };
+		expect(bandCrop(1080, 1920, phone, band)).toEqual({
+			sx: 178,
+			sy: 601,
+			sw: 724,
+			sh: 291,
+			dw: 724,
+			dh: 291
+		});
 	});
 
-	it('scales a wide frame down', () => {
-		expect(cropRect(1920, 1080)).toEqual({
-			sx: 0,
-			sy: 270,
-			sw: 1920,
-			sh: 540,
-			dw: 1280,
-			dh: 360
+	it('takes the frame under the band when the video spills past the top and bottom', () => {
+		// A 1920 x 1080 frame covers an 800 x 300 box at 800 / 1920: 450 px tall, 75 px cut off
+		// at the top and at the bottom.
+		const view = { left: 100, top: 50, width: 800, height: 300 };
+		const band = { left: 300, top: 136, width: 400, height: 128 };
+		expect(bandCrop(1920, 1080, view, band)).toEqual({
+			sx: 480,
+			sy: 386,
+			sw: 960,
+			sh: 308,
+			dw: 960,
+			dh: 308
 		});
+	});
+
+	it('scales a wide crop down', () => {
+		const band = { left: 0, top: 0, width: 390, height: 844 };
+		expect(bandCrop(3840, 2160, { left: 0, top: 0, width: 1600, height: 900 }, band, 640)).toEqual({
+			sx: 0,
+			sy: 0,
+			sw: 936,
+			sh: 2026,
+			dw: 640,
+			dh: 1385
+		});
+	});
+
+	it('keeps a band that reaches past the frame inside it', () => {
+		const view = { left: 0, top: 0, width: 640, height: 480 };
+		const band = { left: -50, top: 400, width: 800, height: 200 };
+		expect(bandCrop(640, 480, view, band)).toEqual({
+			sx: 0,
+			sy: 400,
+			sw: 640,
+			sh: 80,
+			dw: 640,
+			dh: 80
+		});
+	});
+
+	it('gives nothing for a band off the frame or a video without a size', () => {
+		const band = { left: 36, top: 264, width: 318, height: 128 };
+		expect(bandCrop(1080, 1920, phone, { ...band, top: 900 })).toBeNull();
+		expect(bandCrop(0, 0, phone, band)).toBeNull();
+		expect(bandCrop(1080, 1920, { ...phone, width: 0 }, band)).toBeNull();
+	});
+});
+
+describe('torchSupported', () => {
+	it.each([
+		[undefined, false],
+		[{}, false],
+		[{ torch: false }, false],
+		[{ torch: true }, true],
+		[{ torch: [false] }, false],
+		[{ torch: [false, true] }, true],
+		[{ torch: 'true' }, false]
+	])('reads %j as %s', (capabilities, want) => {
+		expect(torchSupported(capabilities)).toBe(want);
 	});
 });
 

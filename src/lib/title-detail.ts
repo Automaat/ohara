@@ -21,6 +21,53 @@ export function soleCopy(t: TitleDetail): { edition: TitleEdition; copy: Copy } 
 	return copy ? { edition, copy } : null;
 }
 
+/** A link to a title or edition page that opens the form for adding a copy once it loads. */
+export function addCopyHref(path: string): string {
+	return `${path}?add=copy`;
+}
+
+/** Whether a page was opened to add a copy, as `addCopyHref` asks. */
+export function wantsCopy(params: Pick<URLSearchParams, 'get'>): boolean {
+	return params.get('add') === 'copy';
+}
+
+/**
+ * A page's request to add a copy, read once when the page opens an id and used by at most one
+ * answer for it. Refreshing the same id or an answer that arrives after the page closed starts
+ * nothing, since the address can still show the request after it was used.
+ */
+export function copyRequest() {
+	let pending: number | undefined;
+	return {
+		/** Notes whether the page opened for `id` was asked to add a copy. */
+		open(id: number, params: Pick<URLSearchParams, 'get'>) {
+			pending = wantsCopy(params) ? id : undefined;
+		},
+		/** Whether the answer for `id` starts adding a copy: true once per request. */
+		take(id: number): boolean {
+			if (pending !== id) return false;
+			pending = undefined;
+			return true;
+		},
+		/** Drops the request when the page closes. */
+		close() {
+			pending = undefined;
+		}
+	};
+}
+
+/**
+ * Where adding a copy to a title starts: a new edition when it has none, the copy form of its only
+ * edition, or null when the reader picks one of several editions.
+ */
+export function addCopyStart(
+	t: Pick<TitleDetail, 'editions'>
+): { form: 'edition' } | { form: 'copy'; editionID: number } | null {
+	const [only] = t.editions;
+	if (!only) return { form: 'edition' };
+	return t.editions.length === 1 ? { form: 'copy', editionID: only.id } : null;
+}
+
 /** An edition's artwork: its own photo, then its catalog cover, then the title's. */
 export function editionArtwork(
 	e: { cover_override_url?: string; cover_url?: string },

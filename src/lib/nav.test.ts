@@ -20,9 +20,22 @@ describe('currentItem', () => {
 		['/deals/watch', '/deals/watch'],
 		['/deals/watch/7', '/deals/watch'],
 		['/dealsx', undefined],
-		['/unknown', undefined]
+		['/unknown', undefined],
+		['/titles/12', '/'],
+		['/titles/new', '/'],
+		['/editions/4', '/'],
+		['/copies/9', '/'],
+		['/valuation', undefined]
 	])('%s → %s', (pathname, href) => {
 		expect(currentItem(pathname, navSections)?.href).toBe(href);
+	});
+});
+
+describe('sections', () => {
+	it('has no separate title catalog', () => {
+		const hrefs = sections.flatMap((s) => s.items.map((item) => item.href));
+		expect(hrefs).not.toContain('/titles');
+		expect(hrefs).toContain('/');
 	});
 });
 
@@ -55,10 +68,6 @@ describe('tabs', () => {
 
 describe('morePages', () => {
 	it('lists the pages that have no place in the tab bar', () => {
-		expect(morePages(sections).map((item) => item.href)).toEqual([
-			'/titles',
-			'/scan/queue',
-			'/informacje'
-		]);
+		expect(morePages(sections).map((item) => item.href)).toEqual(['/scan/queue', '/informacje']);
 	});
 });

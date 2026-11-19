@@ -4,7 +4,6 @@ export const sections: NavSection[] = [
 	{
 		items: [
 			{ href: '/', label: 'Kolekcja', icon: 'book' },
-			{ href: '/titles', label: 'Katalog tytułów', icon: 'repositories' },
 			{ href: '/scan', label: 'Skanuj', icon: 'plus' },
 			{ href: '/scan/queue', label: 'Do uzupełnienia', icon: 'pending' },
 			{ href: '/deals', label: 'Okazje', icon: 'tag' },
@@ -21,15 +20,21 @@ function within(pathname: string, href: string): boolean {
 	return href === '/' ? pathname === '/' : pathname === href || pathname.startsWith(`${href}/`);
 }
 
-/** The nav item for `pathname`: the longest href that is the path or one of its parents. */
+/**
+ * The nav item for `pathname`: the longest href that is the path or one of its parents, else the
+ * item of the tab that owns the page, so a title, edition or copy page marks Kolekcja.
+ */
 export function currentItem(pathname: string, navSections: NavSection[]): NavItem | undefined {
+	const items = navSections.flatMap((s) => s.items);
 	let best: NavItem | undefined;
-	for (const item of navSections.flatMap((s) => s.items)) {
+	for (const item of items) {
 		if (within(pathname, item.href) && (!best || item.href.length > best.href.length)) {
 			best = item;
 		}
 	}
-	return best;
+	if (best) return best;
+	const owner = currentTab(pathname);
+	return owner ? items.find((item) => item.href === owner) : undefined;
 }
 
 export type TabIcon = 'grid' | 'tag' | 'trend';

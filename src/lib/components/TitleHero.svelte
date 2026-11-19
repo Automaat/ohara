@@ -78,17 +78,36 @@
 </header>
 
 <style>
+	/* The cover's width sets the hero's size: the backdrop's height and how far the cover reaches
+	   up into it keep a phone's proportions, 16rem and 6.75rem to an 8.25rem cover. The top
+	   padding puts the cover's top `--hero-overlap` above the backdrop's foot. */
 	.hero {
+		--hero-cover: 8.25rem;
+		--hero-backdrop: calc(var(--hero-cover) * 16 / 8.25);
+		--hero-overlap: calc(var(--hero-cover) * 6.75 / 8.25);
 		position: relative;
 		isolation: isolate;
-		padding: 1rem var(--sui-pane-gutter, 1.5rem) 0;
+		padding: calc(var(--hero-backdrop) - var(--hero-overlap)) var(--sui-pane-gutter, 1.5rem) 0;
+	}
+
+	/* Wider than a phone the collection shelf's covers outgrow the phone's hero cover, so the
+	   hero takes a 200 px cover, larger with a larger default font as the shelf's covers are,
+	   and a cover opened from the shelf still grows into it. A phone held sideways, which the
+	   app lays out as a phone (`phoneLayout` in nav.ts), keeps the phone's hero, so the title
+	   stays in view on its short screen. */
+	@media (width > 640px) {
+		@media not all and (pointer: coarse) and (orientation: landscape) and (height < 500px) {
+			.hero {
+				--hero-cover: max(200px, 12.5rem);
+			}
+		}
 	}
 
 	/* The artwork, blurred and dimmed at the top, fading into the page. */
 	.backdrop {
 		position: absolute;
 		inset: 0 0 auto;
-		block-size: 16rem;
+		block-size: var(--hero-backdrop);
 		overflow: hidden;
 		z-index: -1;
 		background: var(--sui-surface-inset);
@@ -129,7 +148,12 @@
 		);
 	}
 
+	/* The bar floats over the backdrop, so the cover's place does not hang on the bar's height,
+	   which a touch screen raises to 44 px. */
 	.bar {
+		position: absolute;
+		inset-block-start: 1rem;
+		inset-inline: var(--sui-pane-gutter, 1.5rem);
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
@@ -159,7 +183,6 @@
 		display: flex;
 		align-items: flex-end;
 		gap: 1rem;
-		margin-block-start: 5.5rem;
 	}
 
 	/* The cover keeps its place however tall the text beside it grows, so a cover carried in from
@@ -167,7 +190,7 @@
 	.art {
 		flex: none;
 		align-self: flex-start;
-		--collection-cover-width: 8.25rem;
+		--collection-cover-width: var(--hero-cover);
 	}
 
 	.art :global(.cover) {

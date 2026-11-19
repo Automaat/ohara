@@ -1,11 +1,14 @@
+import type { TitlePreview } from '#lib/collection-cache.js';
 import {
 	acquiredLabels,
 	conditionLabels,
+	displayName,
 	editionSummary,
 	formatPLN,
 	kindLabels,
 	statusLabels,
 	type Copy,
+	type Kind,
 	type TitleDetail
 } from '#lib/collection.js';
 import { copyCount, editionCount, purchaseDate } from '#lib/polish.js';
@@ -128,6 +131,47 @@ export function editionsLine(t: TitleDetail): string {
 	if (t.editions.length === 0) return 'Brak wydań';
 	const copies = t.editions.reduce((n, e) => n + e.copies.length, 0);
 	return `${editionCount(t.editions.length)} · ${copyCount(copies)}`;
+}
+
+/** What a title page's hero shows, as `TitleHero` takes it. */
+export type Hero = {
+	title: string;
+	overline: string;
+	meta: string;
+	byline?: string;
+	kind: Kind;
+	artwork?: string;
+};
+
+function byline(authors: readonly string[]): string | undefined {
+	return authors.length > 0 ? authors.join(', ') : undefined;
+}
+
+/** The hero of a loaded title. */
+export function titleHero(t: TitleDetail): Hero {
+	return {
+		title: displayName(t),
+		overline: kindAndYear(t),
+		meta: editionsLine(t),
+		byline: byline(t.authors),
+		kind: t.kind,
+		artwork: titleArtwork(t)
+	};
+}
+
+/**
+ * The hero of a title still loading, as the collection showed it. A no-break space holds the
+ * editions line's height until the title arrives, so the lines beside the cover stay put.
+ */
+export function previewHero(p: TitlePreview): Hero {
+	return {
+		title: displayName(p),
+		overline: kindAndYear(p),
+		meta: '\u00a0',
+		byline: byline(p.authors),
+		kind: p.kind,
+		artwork: p.cover_url || undefined
+	};
 }
 
 export type CopyFact = { label: string; value: string };

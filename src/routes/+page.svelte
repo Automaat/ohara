@@ -14,10 +14,18 @@
 		SegmentedControl,
 		type DataTableColumn
 	} from '@smykla-skalski/sui';
-	import { onMount, tick, untrack } from 'svelte';
+	import { onDestroy, onMount, tick, untrack } from 'svelte';
 	import { afterNavigate, replaceState } from '$app/navigation';
 	import { page } from '$app/state';
 	import { errorMessage, request } from '#lib/api.js';
+	import {
+		keepListing,
+		keepOverview,
+		keptListing,
+		keptOverview,
+		type Listing,
+		type Overview
+	} from '#lib/collection-cache.js';
 	import SettingsSheet from '#lib/components/SettingsSheet.svelte';
 	import {
 		collectionSearch,
@@ -38,9 +46,7 @@
 		type CollectionFilter,
 		type CollectionItem,
 		type CollectionView,
-		type Kind,
-		type Title,
-		type Totals
+		type Title
 	} from '#lib/collection.js';
 	import {
 		collectionSortLabels,
@@ -59,8 +65,6 @@
 
 	type Row = CollectionItem & Record<string, unknown>;
 	type Layout = 'shelf' | 'table';
-	/** The whole collection's counts, whatever the filter. */
-	type Overview = { totals: Totals; kinds: Record<Kind, number> };
 
 	const layoutKey = 'ohara.collection.layout';
 	const layoutOptions: { value: Layout; label: string }[] = [
@@ -105,6 +109,10 @@
 	let loading = $state(true);
 	let sheetOpen = $state(false);
 	let seq = 0;
+	/** The listing on screen, kept under the filter the reader leaves the collection with. */
+	let shown: Listing | null = null;
+	/** Counts the overviews shown, so an answer asked for before a newer one never replaces it. */
+	let overviews = 0;
 	let restoreScroll: [number, number] | undefined;
 	let pendingOverview: Promise<void> | undefined;
 	let pendingQueue: Promise<void> | undefined;
@@ -126,16 +134,35 @@
 		return { totals: full.totals, kinds: kindCounts(full.items) };
 	}
 
-	function loadOverview() {
-		if (overview) return;
+	function showOverview(next: Overview) {
+		overview = next;
+		overviews += 1;
+		keepOverview(next);
+	}
+
+	/** Loads the whole collection's counts once, or again when `again` asks for fresh ones. */
+	function loadOverview(again = false) {
+		if (overview && !again) return;
+		const asked = overviews;
 		pendingOverview ??= request<CollectionView>(fetch, 'GET', '/api/collection')
 			.catch(() => null)
 			.then((full) => {
-				if (full) overview ??= overviewOf(full);
+				if (full && overviews === asked) showOverview(overviewOf(full));
 				pendingOverview = undefined;
 			});
 		return pendingOverview;
 	}
+
+	// Going back draws the collection as the reader left it, rows still waiting for a new
+	// filter's answer included. Loads it left pending never keep what they bring, which would
+	// replace what a newer visit kept.
+	onDestroy(() => {
+		seq += 1;
+		overviews += 1;
+		if (shown && 'titles' in shown === listsTitles) {
+			keepListing({ ...shown, url: collectionURL(filter), pending: loading });
+		}
+	});
 
 	/** Counts the scan queue once per visit; a failed count is asked again on the next load. */
 	function loadQueue() {
@@ -178,27 +205,79 @@
 		if (overview?.totals.copies === 0 && untrack(() => uncopied) === null) loadUncopied();
 	});
 
+	/** Shows a listing and keeps it for the way back. */
+	function show(listing: Listing) {
+		if ('titles' in listing) {
+			uncopied = listing.titles;
+		} else {
+			view = listing.view;
+			if (listing.url === '/api/collection' && !listing.pending) {
+				showOverview(overviewOf(listing.view));
+			}
+		}
+		shown = listing;
+		keepListing(listing);
+	}
+
 	/**
-	 * Loads the copies or titles the filter lists. The covers count as placed only after the
-	 * restored scroll moves them, so a cover carried back from a title lands on its tile.
+	 * Scrolls back to where the reader left the copies, once they are drawn. The position is
+	 * kept from the copies' top, so the header's counts and a queue notice that arrives later
+	 * cannot move the restored row.
 	 */
-	async function load() {
+	async function restore(mine: number, overviewReady?: Promise<void>) {
+		if (!restoreScroll) return;
+		await overviewReady;
+		await tick();
+		if (mine === seq && restoreScroll) {
+			const [x, fromResults] = restoreScroll;
+			window.scrollTo(x, resultsTop() + fromResults);
+			restoreScroll = undefined;
+		}
+	}
+
+	/**
+	 * Draws a kept listing at once, restores the scroll position and places the covers, so a
+	 * cover carried back from a title lands on its tile while the listing reloads.
+	 */
+	async function redraw(mine: number, kept: Listing) {
+		show(kept);
+		overview ??= keptOverview();
+		failure = null;
+		loading = kept.pending ?? false;
+		// SvelteKit hands the page its snapshot only after the navigation's callbacks have run.
+		await new Promise((resolve) => setTimeout(resolve));
+		await restore(mine);
+		await tick();
+		if (mine === seq) coversPlaced();
+	}
+
+	/** Loads the copies or titles the filter lists. */
+	function load() {
+		return loadListing(null);
+	}
+
+	/**
+	 * Loads the copies or titles the filter lists, first drawing `kept` when given. The covers
+	 * count as placed only after the restored scroll moves them, so a cover carried back from a
+	 * title lands on its tile.
+	 */
+	async function loadListing(kept: Listing | null) {
 		const mine = ++seq;
 		const url = collectionURL(filter);
 		const titles = filter.status === 'none';
-		loading = true;
-		const overviewReady = url === '/api/collection' ? undefined : loadOverview();
+		if (kept) void redraw(mine, kept);
+		else loading = true;
+		const overviewReady = url === '/api/collection' ? undefined : loadOverview(kept !== null);
 		void loadQueue();
 		try {
 			if (titles) {
 				const got = await request<Title[]>(fetch, 'GET', url);
 				if (mine !== seq) return;
-				uncopied = withoutCopies(got);
+				show({ url, titles: withoutCopies(got) });
 			} else {
 				const got = await request<CollectionView>(fetch, 'GET', url);
 				if (mine !== seq) return;
-				view = got;
-				if (url === '/api/collection') overview = overviewOf(got);
+				show({ url, view: got });
 			}
 			failure = null;
 		} catch (err) {
@@ -206,25 +285,17 @@
 		} finally {
 			if (mine === seq) loading = false;
 		}
-		if (mine === seq && !failure && restoreScroll) {
-			// The position is kept from the copies' top, so the header's counts and a queue notice
-			// that arrives later cannot move the restored row.
-			await overviewReady;
-			await tick();
-			if (mine === seq && restoreScroll) {
-				const [x, fromResults] = restoreScroll;
-				window.scrollTo(x, resultsTop() + fromResults);
-				restoreScroll = undefined;
-			}
-		}
+		if (kept) return;
+		if (mine === seq && !failure) await restore(mine, overviewReady);
 		await tick();
 		if (mine === seq) coversPlaced();
 	}
 
-	afterNavigate(() => {
+	afterNavigate((navigation) => {
 		filter = readCollectionFilter(new URLSearchParams(window.location.search));
 		query = filter.q;
-		void load();
+		const back = navigation.type === 'popstate';
+		void loadListing(back ? keptListing(collectionURL(filter)) : null);
 	});
 
 	// The search asks once the reader pauses typing, as the list toolbar did.

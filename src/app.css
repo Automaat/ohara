@@ -70,6 +70,8 @@
 	--ohara-selected-pressed: #172e28;
 	--ohara-on-selected: #f4c6cc;
 	--ohara-bar-shadow: rgb(31 59 51 / 35%);
+	/* Cover artwork dims a little in the dark theme, as the dark collection mockup draws it. */
+	--ohara-cover-brightness: 1;
 	--sui-border-subtle: #e6cbc6;
 	--sui-border-band: #e6cbc6;
 	/* Fields and segmented tracks sit on inset, as the README says. Hover lightens the field
@@ -106,6 +108,7 @@
 	--ohara-selected-pressed: #efb3bb;
 	--ohara-on-selected: #1f3b33;
 	--ohara-bar-shadow: rgb(0 0 0 / 55%);
+	--ohara-cover-brightness: 0.92;
 	--sui-border-subtle: #2b4038;
 	--sui-border-band: #2b4038;
 	--sui-control-bg: var(--sui-surface-inset);
@@ -140,6 +143,7 @@
 		--ohara-selected-pressed: #efb3bb;
 		--ohara-on-selected: #1f3b33;
 		--ohara-bar-shadow: rgb(0 0 0 / 55%);
+		--ohara-cover-brightness: 0.92;
 		--sui-border-subtle: #2b4038;
 		--sui-border-band: #2b4038;
 		--sui-control-bg: var(--sui-surface-inset);

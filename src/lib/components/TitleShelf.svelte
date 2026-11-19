@@ -40,7 +40,7 @@
 			{@const name = displayName(t)}
 			<li>
 				<div class="artwork">
-					<CollectionCover kind={t.kind} url={t.cover_url} large />
+					<CollectionCover kind={t.kind} url={t.cover_url} large {name} />
 				</div>
 				<span class="name"><Link href={`/titles/${t.id}`}>{name}</Link></span>
 				<span class="meta">{uncopiedLine(t)}</span>

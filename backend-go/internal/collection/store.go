@@ -456,6 +456,7 @@ type Item struct {
 	CreatedAtUS   int64    `json:"created_at_us"`
 	Status        string   `json:"status"`
 	PriceCents    *int64   `json:"price_cents"`
+	MaxPriceCents *int64   `json:"max_price_cents"`
 	PurchasedOn   *Date    `json:"purchased_on"`
 	Shop          string   `json:"shop"`
 	AcquiredAs    *string  `json:"acquired_as"`
@@ -479,8 +480,8 @@ func scanItem(row pgx.Row) (Item, error) {
 	var it Item
 	var createdAt time.Time
 	var purchased *time.Time
-	err := row.Scan(&it.CopyID, &createdAt, &it.Status, &it.PriceCents, &purchased, &it.Shop, &it.AcquiredAs,
-		&it.Condition, &it.EditionID, &it.Barcode, &it.Label, &it.Format, &it.Binding,
+	err := row.Scan(&it.CopyID, &createdAt, &it.Status, &it.PriceCents, &it.MaxPriceCents, &purchased, &it.Shop,
+		&it.AcquiredAs, &it.Condition, &it.EditionID, &it.Barcode, &it.Label, &it.Format, &it.Binding,
 		&it.TitleID, &it.Kind, &it.Name, &it.OriginalTitle, &it.PolishTitle, &it.Year, &it.CoverURL, &it.Authors)
 	it.CreatedAtUS = createdAt.UnixMicro()
 	if purchased != nil {
@@ -491,8 +492,8 @@ func scanItem(row pgx.Row) (Item, error) {
 
 // Collection returns every copy matching f, by title name.
 func (s *Store) Collection(ctx context.Context, f Filter) ([]Item, error) {
-	rows, err := s.pool.Query(ctx, `SELECT c.id, c.created_at, c.status, c.price_cents, c.purchased_on, c.shop,
-			c.acquired_as, c.condition, e.id, e.barcode, e.label, e.format, e.binding,
+	rows, err := s.pool.Query(ctx, `SELECT c.id, c.created_at, c.status, c.price_cents, c.max_price_cents,
+			c.purchased_on, c.shop, c.acquired_as, c.condition, e.id, e.barcode, e.label, e.format, e.binding,
 			t.id, t.kind, t.name, t.original_title, t.polish_title, t.year,
 			`+CoverURL+`, t.authors
 		FROM copy c JOIN edition e ON e.id = c.edition_id JOIN title t ON t.id = e.title_id

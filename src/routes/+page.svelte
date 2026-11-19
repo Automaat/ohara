@@ -49,6 +49,7 @@
 		type CollectionSort
 	} from '#lib/collection-sort.js';
 	import { purchaseDate, queuedCodes, resultCount } from '#lib/polish.js';
+	import { queueDeletesSettled } from '#lib/queue-deletes.js';
 	import type { QueueEntry } from '#lib/scan.js';
 	import CollectionFilterSheet from '#lib/components/CollectionFilterSheet.svelte';
 	import CollectionShelf from '#lib/components/CollectionShelf.svelte';
@@ -137,7 +138,8 @@
 
 	/** Counts the scan queue once per visit; a failed count is asked again on the next load. */
 	function loadQueue() {
-		pendingQueue ??= request<QueueEntry[]>(fetch, 'GET', '/api/scan-queue')
+		pendingQueue ??= queueDeletesSettled()
+			.then(() => request<QueueEntry[]>(fetch, 'GET', '/api/scan-queue'))
 			.then((entries) => showQueue(entries.length))
 			.catch(() => {
 				pendingQueue = undefined;

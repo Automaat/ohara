@@ -1,4 +1,5 @@
 import { ApiError, errorMessage, invalidBarcodeMessage, request } from './api';
+import { queueDeletesSettled } from './queue-deletes';
 import {
 	copyPayload,
 	displayName,
@@ -150,6 +151,25 @@ export const reasonLabels: Record<QueueReason, string> = {
 	lookup_failed: 'Wyszukiwanie nie powiodło się'
 };
 
+/**
+ * A stored barcode cut into the groups a reader compares with the digits under the bars:
+ * 1-6-6 for an EAN-13, 3-4-6 for a book's 978 or 979 code, 4-4 for an EAN-8, 1-5-5-1 for a
+ * UPC-A and 1-2-5-5-1 for a GTIN-14. Anything else stays one group.
+ */
+export function barcodeGroups(code: string): string[] {
+	if (!/^\d+$/.test(code)) return [code];
+	const sizes: Record<number, number[]> = {
+		8: [4, 4],
+		12: [1, 5, 5, 1],
+		13: /^97[89]/.test(code) ? [3, 4, 6] : [1, 6, 6],
+		14: [1, 2, 5, 5, 1]
+	};
+	const groups = sizes[code.length];
+	if (!groups) return [code];
+	let at = 0;
+	return groups.map((size) => code.slice(at, (at += size)));
+}
+
 /** The symbologies on discs and books; QR and the rest only slow the reader down. */
 export const scanFormats = ['EAN13', 'EAN8', 'UPCA'] as const;
 
@@ -262,6 +282,7 @@ export async function resolveScan(fetchFn: typeof fetch, raw: string): Promise<R
 	}
 	const barcode = lookup?.barcode ?? code;
 	const failed = !lookup || lookup.errors.length > 0;
+	await queueDeletesSettled();
 	const entry = await request<QueueEntry>(fetchFn, 'POST', '/api/scan-queue', {
 		barcode,
 		reason: failed ? 'lookup_failed' : 'not_found',

@@ -1,16 +1,32 @@
 import { describe, expect, it } from 'vitest';
 import {
-	boundTotal,
+	boundLine,
+	byValue,
+	copiesLabel,
+	copyMeta,
+	copyNote,
+	copyRange,
+	daysAgo,
 	estimateSource,
 	estimateValue,
 	formatZl,
-	historyChart,
+	heroFigures,
+	historyPaths,
+	historyRows,
+	historySpan,
 	intervalLabel,
 	lastRunSummary,
 	offers,
+	pageSummary,
+	rangeMarks,
+	recentHistory,
+	sparkline,
+	type CopyValue,
 	type HistoryPoint,
 	type RunResult,
-	type RunnerStatus
+	type RunnerStatus,
+	type Summary,
+	type ValuationView
 } from './valuation';
 
 const nbsp = (s: string) => s.replace(/[  ]/g, ' ');
@@ -70,18 +86,6 @@ describe('estimates', () => {
 		expect(estimateSource('floor', { cents: 537, source: 'skupszop', count: 1, trimmed: 0 })).toBe(
 			'SkupSzop'
 		);
-	});
-});
-
-describe('boundTotal', () => {
-	it.each([
-		[{ cents: 0, copies: 0 }, 0, 'Brak wyceny (0 z 0 egz.)'],
-		[{ cents: 0, copies: 0 }, 4, 'Brak wyceny (0 z 4 egz.)'],
-		[{ cents: 0, copies: 1 }, 4, '0,00 zł (1 z 4 egz.)'],
-		[{ cents: 537, copies: 1 }, 3, '5,37 zł (1 z 3 egz.)'],
-		[{ cents: 1234500, copies: 3 }, 3, '12 345,00 zł (3 z 3 egz.)']
-	])('formats %o over %i copies as %s', (bound, copies, expected) => {
-		expect(nbsp(boundTotal(bound, copies))).toBe(expected);
 	});
 });
 
@@ -150,33 +154,351 @@ const point = (day: string, base: number): HistoryPoint => ({
 	low_confidence: 1
 });
 
-describe('history chart', () => {
-	it('labels the first valuation with its date and leaves padding ticks blank', () => {
-		const chart = historyChart([point('2026-11-17', 1000)]);
+const summary = (patch: Partial<Summary> = {}): Summary => ({
+	copies: 20,
+	spent_cents: 117300,
+	floor: { cents: 3900, copies: 6 },
+	mid: { cents: 84800, copies: 20 },
+	ceiling: { cents: 137500, copies: 18 },
+	low_confidence: 3,
+	...patch
+});
 
-		const first = chart.series[0].points[0];
+describe('value hero', () => {
+	it('states the used total against what was spent', () => {
+		const f = heroFigures(summary());
 
-		expect(first.x).toBe(0);
-		expect(chart.formatDay(first.x)).toBe('17 lis');
-		expect(chart.formatDay(-1)).toBe('');
-		expect(chart.formatDay(1)).toBe('');
+		expect(f.value).toBe('848');
+		expect(nbsp(f.spent)).toBe('1173 zł');
+		expect(nbsp(f.delta ?? '')).toBe('−325 zł · −28%');
 	});
 
-	it('preserves elapsed days and values in złoty across a gap', () => {
-		const history = [point('2026-10-24', 1000), point('2026-10-27', 1100)];
+	it('signs a gain and rounds it from grosze', () => {
+		const f = heroFigures(summary({ mid: { cents: 1234560, copies: 3 }, spent_cents: 1000040 }));
 
-		const { series, formatDay } = historyChart(history);
+		expect(nbsp(f.value ?? '')).toBe('12 346');
+		expect(nbsp(f.delta ?? '')).toBe('+2345 zł · +23%');
+	});
 
-		expect(series.map((s) => s.label)).toEqual(['Skup', 'Używane', 'Nowe', 'Wydano']);
-		expect(series[1].points).toEqual([
-			{ x: 0, y: 40 },
-			{ x: 3, y: 44 }
+	it('does not round a grosz apart into whole złoty and percent', () => {
+		const f = heroFigures(summary({ mid: { cents: 1050, copies: 1 }, spent_cents: 1049 }));
+
+		expect(f.value).toBe('11');
+		expect(nbsp(f.spent)).toBe('10 zł');
+		expect(nbsp(f.delta ?? '')).toBe('0 zł · 0%');
+		expect(
+			nbsp(heroFigures(summary({ mid: { cents: 1000, copies: 1 }, spent_cents: 1049 })).delta ?? '')
+		).toBe('0 zł · −5%');
+	});
+
+	it('leaves the difference out when nothing was spent or valued', () => {
+		expect(heroFigures(summary({ spent_cents: 0 })).delta).toBeNull();
+		const unvalued = heroFigures(summary({ mid: { cents: 0, copies: 0 } }));
+		expect(unvalued.value).toBeNull();
+		expect(unvalued.delta).toBeNull();
+	});
+
+	it('shows no sign for an even difference', () => {
+		expect(nbsp(heroFigures(summary({ spent_cents: 84800 })).delta ?? '')).toBe('0 zł · 0%');
+	});
+
+	it('places the used total and the amount spent between buy-back and new', () => {
+		const m = rangeMarks(summary());
+
+		expect(m?.mid).toBeCloseTo(60.55, 1);
+		expect(m?.spent).toBeCloseTo(84.88, 1);
+	});
+
+	it('keeps marks past either end on that end', () => {
+		expect(rangeMarks(summary({ spent_cents: 500000 }))?.spent).toBe(100);
+		expect(rangeMarks(summary({ mid: { cents: 1000, copies: 1 } }))?.mid).toBe(0);
+	});
+
+	it('marks no used total without one', () => {
+		expect(rangeMarks(summary({ mid: { cents: 0, copies: 0 } }))).toEqual({
+			mid: null,
+			spent: expect.closeTo(84.88, 1)
+		});
+	});
+
+	it('starts the bar at 0 zł when no buy-back shop quotes the collection', () => {
+		const m = rangeMarks(
+			summary({
+				floor: { cents: 0, copies: 0 },
+				mid: { cents: 8000, copies: 1 },
+				ceiling: { cents: 16000, copies: 1 },
+				spent_cents: 10000
+			})
+		);
+
+		expect(m).toEqual({ mid: 50, spent: 62.5 });
+	});
+
+	it('draws no bar without a new total above its start', () => {
+		const unpriced = { cents: 0, copies: 0 };
+		const movie = { mid: { cents: 8000, copies: 1 }, spent_cents: 10000 };
+
+		expect(rangeMarks(summary({ ...movie, floor: unpriced, ceiling: unpriced }))).toBeNull();
+		expect(rangeMarks(summary({ ...movie, ceiling: unpriced }))).toBeNull();
+		expect(
+			rangeMarks(
+				summary({ floor: { cents: 5000, copies: 1 }, ceiling: { cents: 5000, copies: 1 } })
+			)
+		).toBeNull();
+	});
+
+	it('labels each bound total, or a dash when no copy has it', () => {
+		expect(nbsp(boundLine('floor', { cents: 3900, copies: 6 }))).toBe('Skup 39 zł');
+		expect(nbsp(boundLine('ceiling', { cents: 137500, copies: 18 }))).toBe('Nowe 1375 zł');
+		expect(boundLine('floor', { cents: 0, copies: 0 })).toBe('Skup —');
+		expect(boundLine('floor', { cents: 0, copies: 2 })).toBe('Skup 0 zł');
+	});
+});
+
+describe('page summary', () => {
+	it.each([
+		[1, '1 egzemplarz'],
+		[2, '2 egzemplarze'],
+		[5, '5 egzemplarzy'],
+		[22, '22 egzemplarze'],
+		[1000, '1000 egzemplarzy']
+	])('%i → %s', (count, want) => {
+		expect(nbsp(copiesLabel(count))).toBe(want);
+	});
+
+	it.each([
+		['2026-11-19', 'dzisiaj'],
+		['2026-11-18', 'wczoraj'],
+		['2026-11-16', '3 dni temu']
+	])('%s on 19 Nov is %s', (day, want) => {
+		expect(daysAgo(day, new Date(2026, 10, 19, 23, 30))).toBe(want);
+	});
+
+	it('counts copies, the unvalued ones and when the last valuation ran', () => {
+		const view = (s: Summary): ValuationView => ({
+			status: status({}),
+			window_days: 90,
+			min_observations: 3,
+			summary: s,
+			copies: [],
+			history: [],
+			last_valuation: '2026-11-18'
+		});
+		const now = new Date(2026, 10, 19, 9);
+
+		expect(pageSummary(view(summary()), now)).toBe('20 egzemplarzy · wycena wczoraj');
+		expect(pageSummary(view(summary({ mid: { cents: 100, copies: 18 } })), now)).toBe(
+			'20 egzemplarzy · 2 bez wyceny · wycena wczoraj'
+		);
+	});
+});
+
+describe('history', () => {
+	it('keeps the last 90 days up to today', () => {
+		const history = [
+			point('2026-08-21', 1),
+			point('2026-08-22', 2),
+			point('2026-10-01', 3),
+			point('2026-11-19', 4)
+		];
+		const now = new Date(2026, 10, 19, 23, 30);
+
+		expect(recentHistory(history, now).map((p) => p.day)).toEqual([
+			'2026-08-22',
+			'2026-10-01',
+			'2026-11-19'
 		]);
-		expect(formatDay(3)).toBe('27 paź');
-		expect(series[3].points.map((p) => p.y)).toEqual([100, 100]);
+		expect(recentHistory([], now)).toEqual([]);
 	});
 
-	it('formats axis values in whole złoty', () => {
+	it('leaves out valuations older than 90 days even when they are the latest', () => {
+		const history = [point('2026-07-01', 1), point('2026-08-01', 2)];
+
+		expect(recentHistory(history, new Date(2026, 10, 19, 9))).toEqual([]);
+	});
+
+	it('names the days it spans', () => {
+		expect(historySpan([])).toBe('');
+		expect(historySpan([point('2026-11-17', 1)])).toBe('17 lis');
+		expect(historySpan([point('2026-08-24', 1), point('2026-11-19', 1)])).toBe('24 sie – 19 lis');
+	});
+
+	it('turns each valuation into złoty, x in days from the first', () => {
+		const rows = historyRows([point('2026-10-24', 1000), point('2026-10-27', 1100)]);
+
+		expect(rows).toEqual([
+			{ x: 0, day: '24 paź', floor: 10, mid: 40, ceiling: 80, spent: 100 },
+			{ x: 3, day: '27 paź', floor: 11, mid: 44, ceiling: 88, spent: 100 }
+		]);
+	});
+
+	it('leaves bounds no copy had as gaps, keeping quotes of 0 zł', () => {
+		const unpriced = point('2026-10-25', 1000);
+		unpriced.mid = { cents: 0, copies: 0 };
+		unpriced.floor = { cents: 0, copies: 2 };
+		unpriced.ceiling = { cents: 0, copies: 0 };
+
+		expect(historyRows([unpriced])[0]).toEqual({
+			x: 0,
+			day: '25 paź',
+			floor: 0,
+			mid: null,
+			ceiling: null,
+			spent: 100
+		});
+	});
+
+	it('keeps the band over the estimates a day has', () => {
+		const movies = (day: string, base: number) => {
+			const p = point(day, base);
+			p.floor = { cents: 0, copies: 0 };
+			return p;
+		};
+
+		const paths = historyPaths(
+			[movies('2026-10-24', 1000), movies('2026-10-27', 1000)],
+			100,
+			100,
+			0
+		);
+
+		// Used 40 zł, new 80 zł and spent 100 zł with an 8% margin: y = (1 - (zł - 35.2) / 69.6) * 100.
+		expect(paths?.band).toBe('M0 35.6 L100 35.6 L100 93.1 L0 93.1 Z');
+		expect(paths?.mid).toBe('M0 93.1 L100 93.1');
+	});
+
+	it('breaks the lines where a bound is missing', () => {
+		const gap = point('2026-10-25', 1100);
+		gap.mid = { cents: 0, copies: 0 };
+		gap.ceiling = { cents: 0, copies: 0 };
+		const history = [
+			point('2026-10-24', 1000),
+			gap,
+			point('2026-10-26', 1000),
+			point('2026-10-27', 1000)
+		];
+
+		const paths = historyPaths(history, 300, 100, 0);
+
+		const xs = (d = '') => d.split(' ').filter((t) => /^[MLZ]/.test(t));
+		expect(xs(paths?.mid)).toEqual(['M0', 'L0', 'M200', 'L300']);
+		expect(xs(paths?.band)).toEqual([
+			'M0',
+			'L100',
+			'L200',
+			'L300',
+			'L300',
+			'L200',
+			'L100',
+			'L0',
+			'Z'
+		]);
+		expect(xs(paths?.spent)).toEqual(['M0', 'L100', 'L200', 'L300']);
+	});
+
+	it('draws the band from buy-back to new, the used line and the spent line', () => {
+		const paths = historyPaths([point('2026-10-24', 1000), point('2026-10-27', 1250)], 100, 100, 0);
+		// Values run from 10 to 100 zł with an 8% margin: y = (1 - (zł - 2.8) / 104.4) * 100.
+		expect(paths).toEqual({
+			band: 'M0 26.1 L100 6.9 L100 90.7 L0 93.1 Z',
+			mid: 'M0 64.4 L100 54.8',
+			spent: 'M0 6.9 L100 6.9'
+		});
+	});
+
+	it('stretches a single valuation across the plot', () => {
+		const paths = historyPaths([point('2026-11-17', 1000)], 100, 50, 0);
+
+		expect(paths?.mid).toMatch(/^M0 (\S+) L100 \1$/);
+		expect(paths?.spent).toMatch(/^M0 (\S+) L100 \1$/);
+		expect(historyPaths([], 100, 50)).toBeNull();
+	});
+
+	it('leaves days without a used total out of the sparkline', () => {
+		const gap = point('2026-11-11', 1000);
+		gap.mid = { cents: 0, copies: 0 };
+		const last = point('2026-11-18', 1000);
+		last.mid = { cents: 0, copies: 0 };
+
+		expect(sparkline([point('2026-11-01', 1000), gap, last], 92, 36)).toBeNull();
+
+		const spark = sparkline(
+			[point('2026-11-01', 1000), gap, point('2026-11-17', 2000), last],
+			92,
+			36
+		);
+		expect(spark).toEqual({ path: 'M4 32 L4 32 M88 4 L88 4', end: { x: 88, y: 4 } });
+	});
+
+	it('draws the used total as a sparkline ending on the latest value', () => {
+		expect(sparkline([point('2026-11-17', 1000)], 92, 36)).toBeNull();
+
+		const spark = sparkline(
+			[point('2026-11-01', 1000), point('2026-11-11', 1000), point('2026-11-17', 2000)],
+			92,
+			36
+		);
+
+		expect(spark).toEqual({ path: 'M4 32 L56.5 32 L88 4', end: { x: 88, y: 4 } });
+	});
+
+	it('formats values in whole złoty', () => {
 		expect(nbsp(formatZl(12345.4))).toBe('12 345 zł');
+	});
+});
+
+const copy = (patch: Partial<CopyValue>): CopyValue => ({
+	copy_id: 1,
+	edition_id: 1,
+	title_id: 1,
+	title_name: 'Spokojnie',
+	kind: 'music',
+	format: 'vinyl',
+	barcode: null,
+	price_cents: null,
+	floor: null,
+	mid: null,
+	ceiling: null,
+	low_confidence: false,
+	...patch
+});
+
+const est = (cents: number, count = 3) => ({ cents, source: 'olx' as const, count, trimmed: 0 });
+
+describe('copy rows', () => {
+	it('sorts by used value from the highest, unvalued copies last in their order', () => {
+		const sorted = byValue([
+			copy({ copy_id: 1 }),
+			copy({ copy_id: 2, mid: est(7900) }),
+			copy({ copy_id: 3, mid: est(15200) }),
+			copy({ copy_id: 4 }),
+			copy({ copy_id: 5, mid: est(0) })
+		]);
+
+		expect(sorted.map((c) => c.copy_id)).toEqual([3, 2, 5, 1, 4]);
+	});
+
+	it('shows the range from buy-back to new, or the end it has', () => {
+		expect(nbsp(copyRange(copy({ floor: est(11800), ceiling: est(20100) })) ?? '')).toBe(
+			'118–201 zł'
+		);
+		expect(nbsp(copyRange(copy({ floor: est(0), ceiling: est(14900) })) ?? '')).toBe('0–149 zł');
+		expect(nbsp(copyRange(copy({ ceiling: est(14900) })) ?? '')).toBe('do 149 zł');
+		expect(nbsp(copyRange(copy({ floor: est(500) })) ?? '')).toBe('od 5 zł');
+		expect(copyRange(copy({ mid: est(7900) }))).toBeNull();
+	});
+
+	it('falls back from the range to the source of the used value', () => {
+		expect(nbsp(copyNote(copy({ floor: est(500), ceiling: est(900), mid: est(700) })))).toBe(
+			'5–9 zł'
+		);
+		expect(copyNote(copy({ mid: est(7900, 2) }))).toBe('OLX · 2 oferty');
+		expect(copyNote(copy({}))).toBe('brak danych');
+	});
+
+	it('names the format, or the kind, and what was paid', () => {
+		expect(nbsp(copyMeta(copy({ price_cents: 18999 })))).toBe('Winyl · kupiono za 189,99 zł');
+		expect(copyMeta(copy({ format: 'uhd' }))).toBe('4K UHD');
+		expect(copyMeta(copy({ kind: 'book', format: null }))).toBe('Książka');
 	});
 });

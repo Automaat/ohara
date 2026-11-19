@@ -4,32 +4,33 @@
 		Callout,
 		DataTable,
 		Disclosure,
-		FactList,
+		EmptyState,
+		ErrorState,
 		FormError,
-		LineChart,
 		Link,
 		PageHeader,
 		Pill,
 		RelativeTime,
-		Section,
-		type DataTableColumn,
-		type Fact
+		type DataTableColumn
 	} from '@smykla-skalski/sui';
 	import { onMount } from 'svelte';
 	import { ApiError, errorMessage, request } from '#lib/api.js';
 	import { formatLabels, formatPLN, kindLabels } from '#lib/collection.js';
+	import ValuationHero from '#lib/components/ValuationHero.svelte';
+	import ValuationHistory from '#lib/components/ValuationHistory.svelte';
+	import ValuationRows from '#lib/components/ValuationRows.svelte';
 	import {
 		boundHints,
 		boundKeys,
 		boundLabels,
-		boundTotal,
+		byValue,
 		estimateSource,
 		estimateValue,
-		formatZl,
-		historyChart,
 		intervalLabel,
 		lastRunSummary,
 		offers,
+		pageSummary,
+		recentHistory,
 		type CopyValue,
 		type RunnerStatus,
 		type ValuationView
@@ -68,7 +69,10 @@
 		starting = true;
 		runError = null;
 		try {
-			await request<RunnerStatus>(fetch, 'POST', '/api/valuation/run');
+			const started = await request<RunnerStatus>(fetch, 'POST', '/api/valuation/run');
+			// The accepted run's status stands until a refresh succeeds, so a failed refresh
+			// keeps polling for its result.
+			if (view) view = { ...view, status: started };
 		} catch (err) {
 			runError =
 				err instanceof ApiError && err.status === 409 ? 'Wycena już trwa.' : errorMessage(err);
@@ -86,55 +90,41 @@
 		{ key: 'ceiling', label: boundLabels.ceiling, numeric: true },
 		{ key: 'low_confidence', label: 'Pewność' }
 	];
-	const rows = $derived((view?.copies ?? []) as Row[]);
+	const copies = $derived(byValue(view?.copies ?? []));
+	const rows = $derived(copies as Row[]);
 	const status = $derived(view?.status);
-	const summary = $derived(view?.summary);
-	const lastValuation = $derived(
-		view?.history.at(-1)?.computed_at ??
-			(status?.last_result && !status.last_result.failure ? status.last_finished_at : null)
-	);
+	const valued = $derived(!!view?.last_valuation);
+	const recent = $derived(view ? recentHistory(view.history, new Date()) : []);
+	const description = $derived(view && valued ? pageSummary(view, new Date()) : undefined);
 	const runSummary = $derived(lastRunSummary(status?.last_result ?? null));
 	const sourceErrors = $derived(status?.last_result?.errors ?? []);
-	const chart = $derived(historyChart(view?.history ?? []));
-	const facts = $derived<Fact[]>(
-		summary
-			? [
-					{ label: 'Egzemplarzy', value: String(summary.copies) },
-					...boundKeys.map((k) => ({
-						label: boundLabels[k],
-						value: boundTotal(summary[k], summary.copies)
-					})),
-					{ label: 'Niska pewność', value: String(summary.low_confidence) }
-				]
-			: []
-	);
+	const busy = $derived(starting || !!status?.running);
 </script>
 
 <svelte:head>
 	<title>Wartość · Ohara</title>
 </svelte:head>
 
-<PageHeader title="Wartość kolekcji">
-	{#snippet actions()}
-		<Button
-			tone="signal"
-			loading={starting || !!status?.running}
-			onclick={runNow}
-			disabled={!status}
-		>
-			{status?.running ? 'Wyceniam…' : 'Wyceń teraz'}
-		</Button>
-	{/snippet}
-</PageHeader>
+{#snippet runButton()}
+	<Button tone="signal" loading={busy} onclick={runNow} disabled={!status}>
+		{status?.running ? 'Wyceniam…' : 'Wyceń teraz'}
+	</Button>
+{/snippet}
 
-<div class="content">
-	<FormError message={runError} />
+{#snippet runStatus()}
 	{#if status}
 		<p class="status metadata" role="status">
 			{#if status.scheduled}
 				Automatyczna wycena {intervalLabel(status)}.
 			{:else}
 				Automatyczna wycena wyłączona.
+			{/if}
+			{#if status.last_finished_at}
+				Ostatni przebieg: <RelativeTime
+					value={status.last_finished_at}
+					locale="pl"
+					exactLabel={(time) => `dokładnie ${time}`}
+				/>.
 			{/if}
 			{#if runSummary}
 				{runSummary}.
@@ -150,113 +140,109 @@
 			</Callout>
 		{/if}
 	{/if}
+{/snippet}
 
-	{#if summary}
-		<Section title="Szacowana wartość">
-			<div class="summary">
-				<FactList {facts} />
-				{#if lastValuation}
-					<p class="status">
-						Ostatnia wycena: <RelativeTime value={lastValuation} locale="pl" />
-					</p>
-				{/if}
-				<p class="status">
-					Wydano na zakup: <span class="price">{formatPLN(summary.spent_cents)}</span>
-				</p>
-			</div>
-		</Section>
-	{/if}
+<PageHeader title="Wartość" {description} actions={valued ? runButton : undefined} />
 
-	<Disclosure summary="Jak liczymy wartość?">
-		<ul class="hints">
-			{#each boundKeys as k (k)}
-				<li><strong>{boundLabels[k]}:</strong> {boundHints[k]}</li>
-			{/each}
-		</ul>
-		<p class="methodology">
-			Dla wydań powiązanych z Discogs używamy najtańszej oferty oraz sugerowanych cen dla stanów VG+
-			i Mint.
-		</p>
-		<p class="methodology">
-			Ceny z OLX i Vinted pochodzą z ogłoszeń. Nie znamy cen, po których zawarto transakcje.
-			Uwzględniamy oferty z ostatnich {view?.window_days ?? 90} dni. Wycena używanych egzemplarzy na podstawie
-			mniej niż {offers(view?.min_observations ?? 3)} ma niską pewność.
-		</p>
-	</Disclosure>
-
-	<Section title="Historia">
-		<div class="history" class:single-day={view?.history.length === 1}>
-			<LineChart
-				title="Wartość kolekcji w czasie"
-				description="Suma przedziałów wartości z każdej wyceny na tle tego, ile wydano na kolekcję."
-				level={3}
-				series={chart.series}
-				status={loading && !view ? 'loading' : failure && !view ? 'failed' : undefined}
-				error={failure ?? undefined}
+<div class="content">
+	<FormError message={runError} />
+	{#if !view}
+		{#if failure}
+			<ErrorState
+				title="Nie udało się wczytać wyceny"
+				description={failure}
 				onretry={load}
-				xLabel="Dzień"
-				yLabel="Wartość"
-				seriesHeading="Seria"
-				formatX={chart.formatDay}
-				formatY={formatZl}
-				dataLabel="Pokaż dane"
-				emptyTitle="Brak historii"
-				emptyDescription="Pierwszy punkt pojawi się po pierwszej wycenie."
-				emptyStep="Uruchom wycenę przyciskiem „Wyceń teraz”."
-				loadingLabel="Wczytywanie historii…"
-				refreshingLabel="Odświeżanie…"
-				failedTitle="Nie udało się wczytać historii"
+				busy={loading}
+				retryLabel="Spróbuj ponownie"
+				retryingLabel="Ponawianie…"
 			/>
-		</div>
-	</Section>
-
-	<Section title="Egzemplarze">
-		<DataTable
-			aria-label="Wartość egzemplarzy"
-			{columns}
-			{rows}
-			rowKey={(r) => r.copy_id}
-			loading={loading && !view}
-			refreshing={loading && !!view}
-			error={failure}
+		{:else}
+			<p role="status">Wczytywanie wyceny…</p>
+		{/if}
+	{:else if failure}
+		<ErrorState
+			title="Nie udało się odświeżyć wyceny"
+			description={failure}
 			onretry={load}
+			busy={loading}
+			overContent
 			retryLabel="Spróbuj ponownie"
-			loadingLabel="Wczytywanie wyceny…"
-			refreshingLabel="Odświeżanie…"
-			emptyLabel="Brak posiadanych egzemplarzy."
-			scrollHint="Przewiń tabelę w bok"
-		>
-			{#snippet cell(row, column)}
-				{#if column.key === 'title_name'}
-					<Link href={`/copies/${row.copy_id}`}>{row.title_name}</Link>
-					<span class="meta">{row.format ? formatLabels[row.format] : kindLabels[row.kind]}</span>
-				{:else if column.key === 'price_cents'}
-					<span class="price">{row.price_cents == null ? '—' : formatPLN(row.price_cents)}</span>
-				{:else if column.key === 'floor' || column.key === 'mid' || column.key === 'ceiling'}
-					{estimateValue(row[column.key])}
-					<span class="meta">{estimateSource(column.key, row[column.key])}</span>
-				{:else if column.key === 'low_confidence'}
-					<Pill tone={row.low_confidence ? 'warning' : 'success'}>
-						{row.low_confidence ? 'Niska' : 'Dobra'}
-					</Pill>
-				{/if}
-			{/snippet}
-		</DataTable>
-	</Section>
+			retryingLabel="Ponawianie…"
+		/>
+	{/if}
+	{#if view && !valued}
+		<EmptyState
+			title="Kolekcja nie ma jeszcze wyceny"
+			description="Wycena sprawdza ceny posiadanych egzemplarzy w skupie, w ogłoszeniach z OLX i Vinted oraz w sklepach z Ceneo."
+			action={runButton}
+		/>
+		{#if status?.last_result}
+			{@render runStatus()}
+		{/if}
+	{:else if view}
+		<ValuationHero summary={view.summary} history={recent} />
+		<ValuationHistory history={recent} lastValuation={view.last_valuation} />
+
+		{#if copies.length === 0}
+			<p class="status">Brak posiadanych egzemplarzy.</p>
+		{:else}
+			<div class="mobile-results">
+				<ValuationRows {copies} />
+			</div>
+			<DataTable
+				class="desktop-results"
+				aria-label="Wartość egzemplarzy"
+				{columns}
+				{rows}
+				rowKey={(r) => r.copy_id}
+				refreshing={loading}
+				refreshingLabel="Odświeżanie…"
+				scrollHint="Przewiń tabelę w bok"
+			>
+				{#snippet cell(row, column)}
+					{#if column.key === 'title_name'}
+						<Link href={`/copies/${row.copy_id}`}>{row.title_name}</Link>
+						<span class="meta">{row.format ? formatLabels[row.format] : kindLabels[row.kind]}</span>
+					{:else if column.key === 'price_cents'}
+						<span class="price">{row.price_cents == null ? '—' : formatPLN(row.price_cents)}</span>
+					{:else if column.key === 'floor' || column.key === 'mid' || column.key === 'ceiling'}
+						{estimateValue(row[column.key])}
+						<span class="meta">{estimateSource(column.key, row[column.key])}</span>
+					{:else if column.key === 'low_confidence'}
+						<Pill tone={row.low_confidence ? 'warning' : 'success'}>
+							{row.low_confidence ? 'Niska' : 'Dobra'}
+						</Pill>
+					{/if}
+				{/snippet}
+			</DataTable>
+		{/if}
+
+		{@render runStatus()}
+
+		<Disclosure summary="Jak liczymy wartość?">
+			<ul class="hints">
+				{#each boundKeys as k (k)}
+					<li><strong>{boundLabels[k]}:</strong> {boundHints[k]}</li>
+				{/each}
+			</ul>
+			<p class="methodology">
+				Dla wydań powiązanych z Discogs używamy najtańszej oferty oraz sugerowanych cen dla stanów
+				VG+ i Mint.
+			</p>
+			<p class="methodology">
+				Ceny z OLX i Vinted pochodzą z ogłoszeń. Nie znamy cen, po których zawarto transakcje.
+				Uwzględniamy oferty z ostatnich {view.window_days} dni. Wycena używanych egzemplarzy na podstawie
+				mniej niż {offers(view.min_observations)} ma niską pewność i jest oznaczona jako „mało danych”.
+			</p>
+		</Disclosure>
+	{/if}
 </div>
 
 <style>
 	.content {
 		display: grid;
-		gap: 1.5rem;
+		gap: 0.75rem;
 		padding: var(--sui-pane-gutter, 1.5rem);
-	}
-	.history :global(svg[role='img']) {
-		min-inline-size: 23rem;
-	}
-	.single-day :global(svg[role='img']) {
-		inline-size: 100%;
-		min-inline-size: 0;
 	}
 	.methodology {
 		font-family: 'SUI Plus Jakarta Sans', system-ui, sans-serif;
@@ -264,10 +250,6 @@
 	}
 	.status {
 		margin: 0;
-	}
-	.summary {
-		display: grid;
-		gap: 0.75rem;
 	}
 	.hints {
 		margin: 0;
@@ -278,5 +260,16 @@
 		display: block;
 		font-size: 0.8125rem;
 		color: var(--sui-text-muted, inherit);
+	}
+	.mobile-results {
+		display: none;
+	}
+	@media (max-width: 640px) {
+		.content :global(.desktop-results) {
+			display: none;
+		}
+		.mobile-results {
+			display: block;
+		}
 	}
 </style>

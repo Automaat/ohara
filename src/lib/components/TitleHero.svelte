@@ -92,8 +92,9 @@
 
 	/* Wider than a phone the collection shelf's covers outgrow the phone's hero cover, so the
 	   hero takes a 200 px cover, larger with a larger default font as the shelf's covers are,
-	   and a cover opened from the shelf still grows into it. */
-	@media not (max-width: 640px) {
+	   and a cover opened from the shelf still grows into it. A screen under 500 px tall, such
+	   as a phone held sideways, keeps the phone's hero, which leaves the title in view. */
+	@media (width > 640px) and (height >= 500px) {
 		.hero {
 			--hero-cover: max(200px, 12.5rem);
 		}

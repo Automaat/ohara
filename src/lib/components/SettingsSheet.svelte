@@ -34,11 +34,9 @@
 	}
 
 	/* The side navigation holds the theme switch and these pages wherever the tab bar is not
-	   drawn, so the gear shows only with the bar. */
-	@container sui-shell (max-width: 47.9375rem) {
-		.settings-open {
-			display: inline-flex;
-		}
+	   drawn, so the gear shows only with the bar, in the phone layout. */
+	:global(.ohara-phone) .settings-open {
+		display: inline-flex;
 	}
 
 	.settings {

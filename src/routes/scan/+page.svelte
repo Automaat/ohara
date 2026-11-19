@@ -30,6 +30,7 @@
 	import CollectionCover from '#lib/components/CollectionCover.svelte';
 	import ScanItem from '#lib/components/ScanItem.svelte';
 	import SessionTray from '#lib/components/SessionTray.svelte';
+	import { phoneLayout, shortScreen } from '#lib/nav.js';
 	import { queueDeletesSettled } from '#lib/queue-deletes.js';
 	import { outcomeLabels, outcomeTones, recentScans } from '#lib/recent.svelte.js';
 	import { ScanFlow, type Added } from '#lib/scan-flow.svelte.js';
@@ -44,8 +45,10 @@
 
 	type Sheet = NonNullable<App.PageState['scanSheet']>;
 
-	/** The tab bar's width, where the camera fills the screen and manual entry opens over it. */
-	const phone = new MediaQuery('max-width: 47.9375rem');
+	/** The phone layout, where the camera fills the screen and manual entry opens over it. */
+	const phone = new MediaQuery(phoneLayout);
+	/** A screen too short for the tray above the tab bar, which then stands beside it. */
+	const short = new MediaQuery(shortScreen);
 	/** How long a code must stay out of view before the camera takes it again. */
 	const repeatWindow = 3000;
 	/** How much of the scan band stays in view above the sheet. */
@@ -407,7 +410,9 @@
 </div>
 
 {#if phone.current && trayShown}
-	<div class="tray-dock" data-sui-theme="dark">{@render tray(true)}</div>
+	<div class={['tray-dock', { beside: short.current }]} data-sui-theme="dark">
+		{@render tray(true)}
+	</div>
 {/if}
 
 {#if phone.current}
@@ -454,7 +459,10 @@
 </Modal>
 
 <div
-	class={['scan-toasts', { 'over-tray': phone.current && trayShown }]}
+	class={[
+		'scan-toasts',
+		{ 'over-tray': phone.current && trayShown && !short.current, short: short.current }
+	]}
 	data-sui-theme={phone.current ? 'dark' : undefined}
 >
 	<Toaster label="Powiadomienia" dismissLabel="Zamknij" />
@@ -566,6 +574,26 @@
 		z-index: 1;
 	}
 
+	/* On a short screen, as a phone held sideways, the tray stands beside a narrower tab bar, so
+	   the scan band keeps the height between the camera's bar and the tab bar. */
+	:global(:root:has(.tray-dock.beside)) {
+		--tray-beside-width: min(20rem, 40vw);
+	}
+
+	.tray-dock.beside {
+		--session-tray-height: 4rem;
+
+		inline-size: var(--tray-beside-width);
+		inset-block-end: max(env(safe-area-inset-bottom, 0px), 0.75rem);
+		inset-inline-start: auto;
+	}
+
+	:global(:root:has(.tray-dock.beside) .ohara-phone .tab-bar) {
+		margin-inline-end: calc(
+			max(env(safe-area-inset-right, 0px), 1rem) + var(--tray-beside-width) + 0.625rem
+		);
+	}
+
 	:global(:root:has(dialog:modal)) .tray-dock {
 		visibility: hidden;
 	}
@@ -601,31 +629,36 @@
 
 	/* On a phone the toast stands over the camera above the tab bar, and above the tray when the
 	   visit has one. */
-	@media (max-width: 47.9375rem) {
-		.scan-toasts {
-			--session-tray-height: 4.5rem;
-		}
+	:global(.ohara-phone) .scan-toasts {
+		--session-tray-height: 4.5rem;
+	}
 
-		/* The toast takes the width of the tray under it. */
-		.scan-toasts :global(.sui-toast) {
-			max-inline-size: none;
-		}
+	/* The toast takes the width of the tray under it. */
+	:global(.ohara-phone) .scan-toasts :global(.sui-toast) {
+		max-inline-size: none;
+	}
 
-		/* A popover is as wide as its content; between both screen edges it spans the screen. */
-		.scan-toasts :global(.sui-toaster) {
-			inline-size: auto;
-			inset-inline: 0;
-			inset-block-end: calc(
-				4rem + 2 * max(env(safe-area-inset-bottom, 0px), 0.75rem) - var(--sui-space-4)
-			);
-		}
+	/* A popover is as wide as its content; between both screen edges it spans the screen. */
+	:global(.ohara-phone) .scan-toasts :global(.sui-toaster) {
+		inline-size: auto;
+		inset-inline: 0;
+		inset-block-end: calc(
+			4rem + 2 * max(env(safe-area-inset-bottom, 0px), 0.75rem) - var(--sui-space-4)
+		);
+	}
 
-		.scan-toasts.over-tray :global(.sui-toaster) {
-			inset-block-end: calc(
-				4rem + 2 * max(env(safe-area-inset-bottom, 0px), 0.75rem) + var(--session-tray-height) +
-					0.75rem - var(--sui-space-4)
-			);
-		}
+	/* On a short screen a toast keeps SUI's own width at the inline end, over the tray, rather
+	   than spanning the scan band. */
+	:global(.ohara-phone) .scan-toasts.short :global(.sui-toast) {
+		inline-size: auto;
+		max-inline-size: 24rem;
+	}
+
+	:global(.ohara-phone) .scan-toasts.over-tray :global(.sui-toaster) {
+		inset-block-end: calc(
+			4rem + 2 * max(env(safe-area-inset-bottom, 0px), 0.75rem) + var(--session-tray-height) +
+				0.75rem - var(--sui-space-4)
+		);
 	}
 
 	:global(.scan-sheet) {
@@ -638,49 +671,49 @@
 	}
 
 	/* On a phone the sheet rises from the bottom edge over the live camera, leaving the top of the
-	   scan band in view, and stands on the keyboard while one is open. */
-	@media (max-width: 47.9375rem) {
-		:global(dialog.sui-modal.scan-sheet[open]) {
-			background: var(--sui-surface-base);
-			border-block-end: 0;
-			border-inline: 0;
-			border-radius: 1.875rem 1.875rem 0 0;
-			box-shadow: 0 -18px 50px rgb(0 0 0 / 35%);
-			inline-size: 100%;
-			margin: auto 0 var(--scan-keyboard, 0px);
-			max-block-size: min(
-				calc(100dvh - var(--scan-sheet-top, 6rem)),
-				calc(var(--scan-viewport, 100dvh) - 0.5rem)
-			);
-			max-inline-size: 100%;
-			padding-block: 0.625rem max(env(safe-area-inset-bottom, 0px), 1rem);
-		}
+	   scan band in view, and stands on the keyboard while one is open. Held sideways, it keeps
+	   its content clear of the notch. */
+	:global(.ohara-phone dialog.sui-modal.scan-sheet[open]) {
+		background: var(--sui-surface-base);
+		border-block-end: 0;
+		border-inline: 0;
+		border-radius: 1.875rem 1.875rem 0 0;
+		box-shadow: 0 -18px 50px rgb(0 0 0 / 35%);
+		inline-size: 100%;
+		margin: auto 0 var(--scan-keyboard, 0px);
+		max-block-size: min(
+			calc(100dvh - var(--scan-sheet-top, 6rem)),
+			calc(var(--scan-viewport, 100dvh) - 0.5rem)
+		);
+		max-inline-size: 100%;
+		padding-block: 0.625rem max(env(safe-area-inset-bottom, 0px), 1rem);
+		padding-inline: env(safe-area-inset-left, 0px) env(safe-area-inset-right, 0px);
+	}
 
-		:global(dialog.sui-modal.scan-sheet .sui-modal-head) {
-			display: none;
-		}
+	:global(.ohara-phone dialog.sui-modal.scan-sheet .sui-modal-head) {
+		display: none;
+	}
 
-		/* While a sheet is open, its toasts stand at the top of the screen, over the camera, so a
-		   toast from the last add never covers the sheet's buttons. */
-		:global(dialog.sui-modal:is(.scan-sheet, .session-list) .sui-toaster) {
-			inline-size: auto;
-			inset-block: env(safe-area-inset-top, 0px) auto;
-			inset-inline: 0;
-		}
+	/* While a sheet is open, its toasts stand at the top of the screen, over the camera, so a
+	   toast from the last add never covers the sheet's buttons. */
+	:global(.ohara-phone dialog.sui-modal:is(.scan-sheet, .session-list) .sui-toaster) {
+		inline-size: auto;
+		inset-block: env(safe-area-inset-top, 0px) auto;
+		inset-inline: 0;
+	}
 
-		:global(dialog.sui-modal.scan-sheet::backdrop) {
-			-webkit-backdrop-filter: none;
-			backdrop-filter: none;
-			background: rgb(0 0 0 / 18%);
-		}
+	:global(.ohara-phone dialog.sui-modal.scan-sheet::backdrop) {
+		-webkit-backdrop-filter: none;
+		backdrop-filter: none;
+		background: rgb(0 0 0 / 18%);
+	}
 
-		.grabber {
-			background: var(--sui-border-subtle);
-			block-size: 5px;
-			border-radius: 3px;
-			display: block;
-			inline-size: 40px;
-			margin: 0 auto 0.375rem;
-		}
+	:global(.ohara-phone) .grabber {
+		background: var(--sui-border-subtle);
+		block-size: 5px;
+		border-radius: 3px;
+		display: block;
+		inline-size: 40px;
+		margin: 0 auto 0.375rem;
 	}
 </style>

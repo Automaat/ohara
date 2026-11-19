@@ -1,9 +1,11 @@
 <script lang="ts">
 	import { Button, Callout } from '@smykla-skalski/sui';
 	import { onMount, tick as flush, type Snippet } from 'svelte';
+	import { MediaQuery } from 'svelte/reactivity';
 	import { prepareZXingModule, readBarcodes } from 'zxing-wasm/reader';
 	import wasmURL from 'zxing-wasm/reader/zxing_reader.wasm?url';
 	import { beep, beepSound, restBeep, unlockBeep, type Sound } from '#lib/beep.js';
+	import { shortScreen } from '#lib/nav.js';
 	import { bandCrop, cameraErrorMessage, scanFormats, torchSupported } from '#lib/scan.js';
 
 	let {
@@ -40,6 +42,8 @@
 	const flashLength = 700;
 	/** How long audio unlocked by a tap waits for the camera to start before it rests. */
 	const idleRest = 1500;
+	/** A screen too short for the controls under the band, as a phone held sideways. */
+	const short = new MediaQuery(shortScreen);
 
 	let video = $state<HTMLVideoElement>();
 	let stream = $state<MediaStream | null>(null);
@@ -299,13 +303,25 @@
 	{/if}
 {/snippet}
 
+{#snippet liveActions()}
+	<div class="actions">
+		{@render soundButton()}
+		<button type="button" class="glass pill" onclick={stop}>Wyłącz aparat</button>
+	</div>
+{/snippet}
+
 {#snippet problem()}
 	{#if error}
 		<Callout tone="warning" live>{error}</Callout>
 	{/if}
 {/snippet}
 
-<div class={['stage', { full, 'ohara-full-camera': full, live: stream !== null }]}>
+<div
+	class={[
+		'stage',
+		{ full, 'ohara-full-camera': full, live: stream !== null, short: full && short.current }
+	]}
+>
 	<!-- svelte-ignore a11y_media_has_caption -->
 	<video bind:this={video} playsinline muted autoplay></video>
 	<div class="overlay">
@@ -324,6 +340,9 @@
 					</a>
 				{/if}
 				<span class="spacer"></span>
+				{#if full && stream && short.current}
+					{@render liveActions()}
+				{/if}
 				{#if torch}
 					<button
 						type="button"
@@ -381,11 +400,8 @@
 					<span class="laser"></span>
 				</div>
 				<p class="hint">Nakieruj na kod kreskowy</p>
-				{#if full}
-					<div class="actions">
-						{@render soundButton()}
-						<button type="button" class="glass pill" onclick={stop}>Wyłącz aparat</button>
-					</div>
+				{#if full && !short.current}
+					{@render liveActions()}
 				{/if}
 			{:else if full}
 				{@render startButton()}
@@ -676,6 +692,25 @@
 
 	.notes:empty {
 		display: none;
+	}
+
+	/* On a short screen, as a phone held sideways, the camera's controls join the bar and the band
+	   is lower, so the band and its hint keep their room above the tab bar and the visit's tray. */
+	.short .bar {
+		flex-wrap: wrap;
+	}
+
+	.short .bar .actions {
+		flex: none;
+		margin-block-start: 0;
+	}
+
+	.short .band {
+		block-size: 6.5rem;
+	}
+
+	.short .hint {
+		margin-block-start: 0.75rem;
 	}
 
 	.controls {

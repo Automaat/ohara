@@ -57,6 +57,17 @@ export const tabs: Tab[] = [
 /** The scan button beside the tabs. */
 export const scanHref = '/scan';
 
+/** A screen too short to frame the camera beside other content, as a phone held sideways. */
+export const shortScreen = '(max-height: 31.1875rem)';
+
+/**
+ * Where the app takes its phone layout: the tab bar with the scan button, the settings sheet and
+ * the full-screen camera instead of the side navigation. A narrow screen, or a touch screen held
+ * sideways below 500px, wider than the narrow breakpoint but too short for the side layout. The
+ * root layout marks the shell `ohara-phone` from it, and every component keys on that class.
+ */
+export const phoneLayout = `(max-width: 47.9375rem), (pointer: coarse) and (orientation: landscape) and ${shortScreen}`;
+
 /** The tab bar place for `pathname`: a tab's href, the scan button's, or undefined. */
 export function currentTab(pathname: string): string | undefined {
 	const places = [

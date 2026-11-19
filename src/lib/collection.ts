@@ -176,6 +176,19 @@ export function options<K extends string>(
 export const maxPriceCents = 100_000_000;
 
 const pln = new Intl.NumberFormat('pl-PL', { style: 'currency', currency: 'PLN' });
+const count = new Intl.NumberFormat('pl-PL');
+
+/** How many copies of each kind a list holds. */
+export function kindCounts(items: readonly Pick<CollectionItem, 'kind'>[]): Record<Kind, number> {
+	const counts: Record<Kind, number> = { movie: 0, book: 0, music: 0 };
+	for (const { kind } of items) counts[kind] += 1;
+	return counts;
+}
+
+/** The collection header's one line, such as "20 na półce · 4 na liście życzeń". */
+export function shelfSummary(t: Pick<Totals, 'owned' | 'wishlist'>): string {
+	return `${count.format(t.owned)} na półce · ${count.format(t.wishlist)} na liście życzeń`;
+}
 
 /** Grosze as "49,99 zł"; null as an empty string. */
 /** Hint under a purchase price field: blank, not 0, is an unknown price. */

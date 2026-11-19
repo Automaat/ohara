@@ -17,11 +17,14 @@ export type ToastHost = {
 	dismiss(id: number, reason: ToastEnd): void;
 	/** Whether the reader is on the toast, by pointer or focus, so its clock waits. */
 	holding(id: number): boolean;
-	/** Whether the screen has room for one toast only, so each new one takes the last one's place. */
+	/** Whether the screen has room for one toast only, which the newest add's toast takes first. */
 	single(): boolean;
 	/** Whether the reader has the visit's list open, so the clocks of the adds it offers wait. */
 	listing(): boolean;
 };
+
+/** A toast to raise, with the add whose toast it is: its add toast or the failure of its undo. */
+type Pending = { options: ToastOptions; add: SessionAdd | null; offer: boolean };
 
 /** An add's way back while its window runs: on its toast, or in the list once the toast gave way. */
 type Offer = {
@@ -37,8 +40,9 @@ type Offer = {
  * keeps its own toast and clock, so a quick next add never cuts the last one's window short.
  * "Cofnij" undoes the add and says so; a failed undo stays as a failure with "Spróbuj ponownie".
  *
- * Where only one toast fits, each new toast takes the last one's place, and an add whose toast
- * gave way stays in `listed`, undoable from the visit's list, for the rest of its window.
+ * Where only one toast fits, the newest add's toast takes the place: an add whose toast gave way
+ * stays in `listed`, undoable from the visit's list, for the rest of its window, and any other
+ * toast waits its turn until the place is free.
  */
 export class AddToasts {
 	readonly #host: ToastHost;
@@ -46,9 +50,13 @@ export class AddToasts {
 	readonly #window: number;
 	/** Each add still undoable, by add id. */
 	readonly #offers = new Map<number, Offer>();
-	/** Every toast still up, oldest first, with the add it offers to undo. */
-	readonly #up = new Map<number, SessionAdd | null>();
+	/** Every toast still up, oldest first. */
+	readonly #up = new Map<number, Pending>();
+	/** Toasts waiting for the one place, oldest first. */
+	#waiting: Pending[] = [];
 	readonly #listed = new SvelteSet<number>();
+	/** Set while toasts give way, so the place they leave is not handed on yet. */
+	#yielding = false;
 	#live = true;
 
 	constructor(
@@ -69,18 +77,13 @@ export class AddToasts {
 	/** Shows what the add put in, with "Cofnij". */
 	show(add: SessionAdd): void {
 		if (!this.#live) return;
-		const id = this.#raise(
-			{
-				title: add.status === 'owned' ? 'Dodano do kolekcji' : 'Dodano do listy życzeń',
-				description: addLine(add),
-				action: { label: 'Cofnij', run: () => void this.#revert(add) },
-				ondismiss: () => {
-					if (this.#offers.get(add.id)?.toast === id) this.#end(add);
-				}
-			},
-			add
-		);
-		this.#offer(add, id);
+		const options: ToastOptions = {
+			title: add.status === 'owned' ? 'Dodano do kolekcji' : 'Dodano do listy życzeń',
+			description: addLine(add),
+			action: { label: 'Cofnij', run: () => void this.#revert(add) }
+		};
+		if (this.#host.single()) this.#giveWay([...this.#up.keys()]);
+		this.#offer(add, this.#raise({ options, add, offer: true }));
 	}
 
 	/** Undoes a listed add, from its "Cofnij" in the visit's list. */
@@ -90,52 +93,85 @@ export class AddToasts {
 		void this.#revert(add);
 	}
 
-	/** Leaves only the newest toast up, for a screen that has just become too small for more. */
-	collapse(): void {
-		this.#giveWay([...this.#up.keys()].slice(0, -1));
+	/**
+	 * Fits the toasts to a screen that has just changed: where only one fits (`single`), the newest
+	 * add's toast stays up, else the newest toast; where more fit, every waiting toast comes up.
+	 */
+	fit(single: boolean): void {
+		if (!this.#live) return;
+		if (!single) {
+			this.#next();
+			return;
+		}
+		const ids = [...this.#up.keys()];
+		const keep = ids.findLast((id) => this.#up.get(id)?.offer) ?? ids.at(-1);
+		this.#giveWay(ids.filter((id) => id !== keep));
 	}
 
 	/** Takes every toast back and stops reporting, for a page that is gone. */
 	destroy(): void {
 		this.#live = false;
+		this.#waiting = [];
 		for (const id of [...this.#up.keys()]) this.#host.dismiss(id, 'withdrawn');
 		for (const offer of this.#offers.values()) clearInterval(offer.timer);
 		this.#offers.clear();
 		this.#listed.clear();
 	}
 
-	#raise(options: ToastOptions, add: SessionAdd | null): number {
-		if (this.#host.single()) this.#giveWay([...this.#up.keys()]);
+	/** Raises a toast other than an add's, which waits while another holds the one place. */
+	#tell(pending: Pending): void {
+		if (this.#host.single() && this.#up.size > 0) this.#waiting.push(pending);
+		else this.#raise(pending);
+	}
+
+	#raise(pending: Pending): number {
+		const { options, add } = pending;
 		const id = this.#host.toast({
 			...options,
 			ondismiss: (reason) => {
 				this.#up.delete(id);
 				options.ondismiss?.(reason);
+				if (add && this.#offers.get(add.id)?.toast === id) this.#end(add);
+				if (!this.#yielding) this.#next();
 			}
 		});
-		this.#up.set(id, add);
+		this.#up.set(id, pending);
 		return id;
 	}
 
+	/** Hands the place on: to the next waiting toast where one fits, to all of them where more do. */
+	#next(): void {
+		if (!this.#live) return;
+		const single = this.#host.single();
+		if (single && this.#up.size > 0) return;
+		const next = single ? this.#waiting.splice(0, 1) : this.#waiting.splice(0);
+		for (const pending of next) this.#raise(pending);
+	}
+
 	/**
-	 * Takes the toasts back, each add they offer moving to the list: an add toast keeps what is
-	 * left of its window, a failure starts a new one.
+	 * Takes the toasts back: an add toast's add moves to the list with what is left of its window,
+	 * any other toast goes back to the head of the line.
 	 */
 	#giveWay(ids: number[]): void {
+		const back: Pending[] = [];
+		this.#yielding = true;
 		for (const id of ids) {
-			const add = this.#up.get(id);
-			if (add) {
-				const offer = this.#offers.get(add.id);
-				if (offer) offer.toast = null;
-				else this.#offer(add, null);
-				this.#listed.add(add.id);
+			const pending = this.#up.get(id);
+			const offer = pending?.add && this.#offers.get(pending.add.id);
+			if (pending?.add && offer && offer.toast === id) {
+				offer.toast = null;
+				this.#listed.add(pending.add.id);
+			} else if (pending) {
+				back.push(pending);
 			}
 			this.#host.dismiss(id, 'withdrawn');
 		}
+		this.#yielding = false;
+		this.#waiting = [...back, ...this.#waiting];
 	}
 
-	/** Starts an add's window, on its toast or, with `toast` null, in the list. */
-	#offer(add: SessionAdd, toast: number | null): void {
+	/** Starts an add's window on its toast; once the toast gives way, the list offers it. */
+	#offer(add: SessionAdd, toast: number): void {
 		const offer: Offer = {
 			toast,
 			left: this.#window,
@@ -163,18 +199,25 @@ export class AddToasts {
 	async #revert(add: SessionAdd): Promise<void> {
 		try {
 			await this.#undo(add);
-			if (this.#live) this.#raise({ title: 'Cofnięto dodanie', description: addLine(add) }, null);
+			if (this.#live) {
+				this.#tell({
+					options: { title: 'Cofnięto dodanie', description: addLine(add) },
+					add: null,
+					offer: false
+				});
+			}
 		} catch (err) {
 			if (!this.#live) return;
-			this.#raise(
-				{
+			this.#tell({
+				options: {
 					title: `Nie udało się cofnąć: ${addLine(add)}`,
 					description: errorMessage(err),
 					tone: 'danger',
 					action: { label: 'Spróbuj ponownie', run: () => void this.#revert(add) }
 				},
-				add
-			);
+				add,
+				offer: false
+			});
 		}
 	}
 }

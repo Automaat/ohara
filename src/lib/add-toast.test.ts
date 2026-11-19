@@ -199,7 +199,7 @@ describe('AddToasts where one toast fits', () => {
 		expect(h.shown.size).toBe(0);
 	});
 
-	it('undoes a listed add from the list and says so in the one toast', async () => {
+	it('undoes a listed add from the list and says so once the newest add toast leaves', async () => {
 		const h = single();
 		const undo = vi.fn(async () => {});
 		const toasts = new AddToasts(h, undo);
@@ -208,8 +208,25 @@ describe('AddToasts where one toast fits', () => {
 		toasts.undo(dune);
 		await vi.advanceTimersByTimeAsync(0);
 		expect(undo).toHaveBeenCalledWith(dune);
+		expect([...toasts.listed]).toEqual([]);
+		expect(h.descriptions()).toEqual(['Solaris']);
+		await vi.advanceTimersByTimeAsync(addToastMs);
 		expect(h.titles()).toEqual(['Cofnięto dodanie']);
-		expect([...toasts.listed]).toEqual([2]);
+	});
+
+	it('keeps the newest add toast up when an earlier undo answers late', async () => {
+		const h = single();
+		let finish: () => void = () => {};
+		const toasts = new AddToasts(h, () => new Promise<void>((resolve) => (finish = resolve)));
+		toasts.show(dune);
+		h.act(1);
+		toasts.show(solaris);
+		finish();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.descriptions()).toEqual(['Solaris']);
+		expect(h.shown.get(2)?.action?.label).toBe('Cofnij');
+		h.dismiss(2, 'dismissed');
+		expect(h.titles()).toEqual(['Cofnięto dodanie']);
 	});
 
 	it('keeps a listed add while the list is open, then restarts its window in full', () => {
@@ -249,7 +266,7 @@ describe('AddToasts where one toast fits', () => {
 		expect([...toasts.listed]).toEqual([]);
 	});
 
-	it('lists a failed undo that gives way, for a new window', async () => {
+	it('puts a failed undo back in line behind the newest add toast', async () => {
 		const h = single();
 		const undo = vi
 			.fn<(add: SessionAdd) => Promise<void>>()
@@ -259,24 +276,47 @@ describe('AddToasts where one toast fits', () => {
 		toasts.show(dune);
 		h.act(1);
 		await vi.advanceTimersByTimeAsync(0);
-		expect(h.titles()).toEqual(['Nie udało się cofnąć: Diuna: Część druga · 4K UHD']);
+		const failure = 'Nie udało się cofnąć: Diuna: Część druga · 4K UHD';
+		expect(h.titles()).toEqual([failure]);
 		toasts.show(solaris);
 		expect(h.descriptions()).toEqual(['Solaris']);
-		expect([...toasts.listed]).toEqual([1]);
-		toasts.undo(dune);
+		expect([...toasts.listed]).toEqual([]);
+		await vi.advanceTimersByTimeAsync(addToastMs);
+		expect(h.titles()).toEqual([failure]);
+		h.act(h.idOf(failure));
 		await vi.advanceTimersByTimeAsync(0);
 		expect(undo).toHaveBeenCalledTimes(2);
 		expect(h.titles()).toEqual(['Cofnięto dodanie']);
 	});
 
-	it('leaves only the newest toast up when the screen turns too small', () => {
+	it('leaves only the newest add toast up when the screen turns too small', async () => {
 		const h = host();
 		const toasts = new AddToasts(h, async () => {});
 		toasts.show(dune);
+		h.act(1);
+		await vi.advanceTimersByTimeAsync(0);
 		toasts.show(solaris);
-		toasts.collapse();
-		expect(h.descriptions()).toEqual(['Solaris']);
-		expect([...toasts.listed]).toEqual([1]);
+		toasts.show({ ...solaris, id: 3, name: 'Stalker' });
+		h.screen.single = true;
+		toasts.fit(true);
+		expect(h.descriptions()).toEqual(['Stalker']);
+		expect([...toasts.listed]).toEqual([2]);
+		h.dismiss(h.idOf('Dodano do kolekcji'), 'dismissed');
+		expect(h.titles()).toEqual(['Cofnięto dodanie']);
+	});
+
+	it('shows every waiting toast once the screen has room again', async () => {
+		const h = single();
+		let finish: () => void = () => {};
+		const toasts = new AddToasts(h, () => new Promise<void>((resolve) => (finish = resolve)));
+		toasts.show(dune);
+		h.act(1);
+		toasts.show(solaris);
+		finish();
+		await vi.advanceTimersByTimeAsync(0);
+		h.screen.single = false;
+		toasts.fit(false);
+		expect(h.titles()).toEqual(['Dodano do kolekcji', 'Cofnięto dodanie']);
 	});
 
 	it('forgets the list when the page goes', () => {

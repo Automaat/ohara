@@ -10,14 +10,18 @@
 	} from '@smykla-skalski/sui';
 	import type { Snippet } from 'svelte';
 	import { dev } from '$app/env';
+	import { onNavigate } from '$app/navigation';
 	import { page } from '$app/state';
 	import TabBar from '#lib/components/TabBar.svelte';
+	import { carryCover } from '#lib/cover-transition.js';
 	import { currentItem, sections } from '#lib/nav.js';
 
 	let { children }: { children: Snippet } = $props();
 
 	const current = $derived(currentItem(page.url.pathname, sections));
 	const worker = registerServiceWorker('/service-worker.js', { dev });
+
+	onNavigate((navigation) => carryCover(navigation));
 </script>
 
 <AppShell class="ohara-shell" title="Ohara" label="Nawigacja" menuLabel="Menu">

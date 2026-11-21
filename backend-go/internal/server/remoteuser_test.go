@@ -51,6 +51,9 @@ func TestRemoteUserRequired(t *testing.T) {
 		{"metrics with a trailing slash", http.MethodGet, "/metrics/", "", nil, http.StatusUnauthorized, ""},
 		{"health spelled with an escape", http.MethodGet, "/heal%74h", "", nil, http.StatusUnauthorized, ""},
 		{"metrics spelled with an escape", http.MethodGet, "/metric%73", "", nil, http.StatusUnauthorized, ""},
+		{"health HEAD without header", http.MethodHead, "/health", "", nil, http.StatusUnauthorized, ""},
+		{"metrics HEAD without header", http.MethodHead, "/metrics", "", nil, http.StatusUnauthorized, ""},
+		{"health POST without header", http.MethodPost, "/health", "", nil, http.StatusUnauthorized, ""},
 
 		{"health without header", http.MethodGet, "/health", "", nil, http.StatusOK, ""},
 		{"metrics without header", http.MethodGet, "/metrics", "", nil, http.StatusOK, ""},
@@ -63,6 +66,7 @@ func TestRemoteUserRequired(t *testing.T) {
 		{"SPA page with header", http.MethodGet, "/collection", "", []string{"someone"}, http.StatusOK, ""},
 		{"static file with header", http.MethodGet, "/_app/immutable/app.js", "", []string{"someone"}, http.StatusOK, ""},
 		{"health with header", http.MethodGet, "/health", "", []string{"someone"}, http.StatusOK, ""},
+		{"metrics with header", http.MethodGet, "/metrics", "", []string{"someone"}, http.StatusOK, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

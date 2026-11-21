@@ -278,11 +278,15 @@ func remoteUserGuard(logger *slog.Logger) func(http.Handler) http.Handler {
 	}
 }
 
-// probePath reports a request for /health or /metrics, the paths served
-// without the Remote-User header. It reads the path the way chi routes it,
-// RawPath when set, so an escaped spelling such as /heal%74h, which chi sends
-// to the frontend instead of the probe, is not exempt.
+// probePath reports a GET of /health or /metrics, the requests served without
+// the Remote-User header. Only GET is exempt: chi has the health probe for GET
+// alone and sends HEAD /health to the frontend. The path is read the way chi
+// routes it, RawPath when set, so an escaped spelling such as /heal%74h, which
+// chi also sends to the frontend, is not exempt.
 func probePath(r *http.Request) bool {
+	if r.Method != http.MethodGet {
+		return false
+	}
 	path := r.URL.RawPath
 	if path == "" {
 		path = r.URL.Path

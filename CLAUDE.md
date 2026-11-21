@@ -277,13 +277,12 @@ the container port beyond the LAN. With `OHARA_REQUIRE_REMOTE_USER=true` the
 router answers 401 (`{"error": "..."}`, never a redirect) to a request
 without a non-empty `Remote-User` header, the one Traefik copies from
 Authelia's answer, so a request that skips the middleware reaches no handler,
-page or file. The path is matched as chi routes it, so only `/health` and
-`/metrics` stay open, for the Docker healthcheck and Prometheus, and so does
-`OPTIONS *` with the header; a 401 still counts in
-`ohara_http_requests_total`. The guard checks only that the header is there,
-so it holds only while Traefik sets it from Authelia's answer and the
-container port accepts nothing but Traefik and Prometheus (home-nas firewall);
-anyone else who can reach the port can send the header. The name is never
+page or file. Only `GET /health` and `GET /metrics` stay open, for the Docker
+healthcheck and Prometheus, with the path matched as chi routes it; a 401
+still counts in `ohara_http_requests_total`. The guard checks only that the
+header is there, so it holds only while Traefik sets it from Authelia's
+answer and the container port accepts nothing but Traefik and Prometheus
+(home-nas firewall); anyone else who can reach the port can send the header. The name is never
 used for authorization or stored. It is off by default (dev, CI and the Vite
 proxy have no Authelia) and the startup log says whether it is on.
 

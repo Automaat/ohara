@@ -146,6 +146,16 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   edition → add a copy, lookup candidates → quick confirm, nothing → queue.
 - `static/manifest.webmanifest` is linked with `crossorigin="use-credentials"`
   because Authelia guards every path.
+- The SPA enforces a Content-Security-Policy (`src/lib/csp.ts`, SvelteKit's
+  `csp` option): built pages carry it in a `<meta>` tag with the hash of the
+  inline boot script, `vite dev` sends it as a header. `script-src` is
+  `'self'` plus `'wasm-unsafe-eval'` for zxing, never `'unsafe-inline'` or
+  `'unsafe-eval'`. Styles allow `'unsafe-inline'` (Svelte and SUI style
+  attributes), fonts `data:` (SUI inlines its Latin fonts), images any
+  `https:` or `http:` host. Anything the page loads from another origin
+  needs its directive there. `npm run build` ends with
+  `scripts/check-csp.mjs`, which fails when a built page lacks the policy
+  or an inline script's hash.
 
 ### Auth
 

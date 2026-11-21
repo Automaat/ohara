@@ -46,8 +46,6 @@ func TestRanges(t *testing.T) {
 		{EditionID: 1, TitleID: 100, Source: SourceOLX, Cents: 3000, SeenAt: now},
 		{EditionID: 1, TitleID: 100, Source: SourceOLX, Cents: 9900, AcquiredAs: &fresh, SeenAt: now},
 		{EditionID: 2, TitleID: 100, Source: SourceOLX, Cents: 2500, AcquiredAs: &used, SeenAt: now},
-		{EditionID: 1, TitleID: 100, Source: SourceCeneo, Cents: 5000, AcquiredAs: &fresh, SeenAt: now},
-		{EditionID: 2, TitleID: 100, Source: SourceCeneo, Cents: 6000, AcquiredAs: &fresh, SeenAt: now},
 		{EditionID: 1, TitleID: 100, Source: SourceSkupSzop, Cents: 400, SeenAt: now.Add(-time.Hour)},
 		{EditionID: 1, TitleID: 100, Source: SourceSkupSzop, Cents: 732, SeenAt: now},
 		{EditionID: 2, TitleID: 100, Source: SourceSkupSzop, Cents: 0, SeenAt: now},
@@ -68,27 +66,22 @@ func TestRanges(t *testing.T) {
 		want    Range
 	}{
 		{
-			name: "own floor, pooled middle and ceiling", edition: 1, title: 100,
+			name: "own floor, pooled middle and no ceiling without Discogs", edition: 1, title: 100,
 			want: Range{
-				Floor:   &Estimate{Cents: 732, Source: SourceSkupSzop, Count: 1},
-				Mid:     &Estimate{Cents: 2500, Source: SourceOLX, Count: 3},
-				Ceiling: &Estimate{Cents: 5500, Source: SourceCeneo, Count: 2},
+				Floor: &Estimate{Cents: 732, Source: SourceSkupSzop, Count: 1},
+				Mid:   &Estimate{Cents: 2500, Source: SourceOLX, Count: 3},
 			},
 		},
 		{
 			name: "second printing shares the title's prices", edition: 2, title: 100,
 			want: Range{
-				Floor:   &Estimate{Cents: 0, Source: SourceSkupSzop, Count: 1},
-				Mid:     &Estimate{Cents: 2500, Source: SourceOLX, Count: 3},
-				Ceiling: &Estimate{Cents: 5500, Source: SourceCeneo, Count: 2},
+				Floor: &Estimate{Cents: 0, Source: SourceSkupSzop, Count: 1},
+				Mid:   &Estimate{Cents: 2500, Source: SourceOLX, Count: 3},
 			},
 		},
 		{
 			name: "edition without its own prices", edition: 9, title: 100,
-			want: Range{
-				Mid:     &Estimate{Cents: 2500, Source: SourceOLX, Count: 3},
-				Ceiling: &Estimate{Cents: 5500, Source: SourceCeneo, Count: 2},
-			},
+			want: Range{Mid: &Estimate{Cents: 2500, Source: SourceOLX, Count: 3}},
 		},
 		{
 			name: "same format pools", edition: 4, title: 200, format: &bluray,
@@ -120,7 +113,6 @@ func TestDiscogsRanges(t *testing.T) {
 	r := NewRanges([]Price{
 		{EditionID: 7, TitleID: 700, Format: &cd, Source: SourceOLX, Cents: 2000, SeenAt: now},
 		{EditionID: 8, TitleID: 700, Format: &cd, Source: SourceOLX, Cents: 3000, SeenAt: now},
-		{EditionID: 7, TitleID: 700, Format: &cd, Source: SourceCeneo, Cents: 6000, SeenAt: now},
 		{EditionID: 7, TitleID: 700, Format: &cd, Source: SourceDiscogsLowest, Cents: 1800, SeenAt: now.Add(-time.Hour)},
 		{EditionID: 7, TitleID: 700, Format: &cd, Source: SourceDiscogsLowest, Cents: 1500, SeenAt: now},
 		{EditionID: 7, TitleID: 700, Format: &cd, Source: SourceDiscogsVGPlus, Cents: 2400, SeenAt: now},
@@ -141,9 +133,8 @@ func TestDiscogsRanges(t *testing.T) {
 	}
 	other := r.For(8, 700, &cd)
 	want = Range{
-		Floor:   &Estimate{Cents: 900, Source: SourceDiscogs, Count: 1},
-		Mid:     &Estimate{Cents: 2500, Source: SourceOLX, Count: 2},
-		Ceiling: &Estimate{Cents: 6000, Source: SourceCeneo, Count: 1},
+		Floor: &Estimate{Cents: 900, Source: SourceDiscogs, Count: 1},
+		Mid:   &Estimate{Cents: 2500, Source: SourceOLX, Count: 2},
 	}
 	if !reflect.DeepEqual(other, want) {
 		t.Fatalf("pressing without suggestions = %+v, want %+v", other, want)
@@ -181,9 +172,8 @@ func TestValueAndSummarize(t *testing.T) {
 	for _, c := range []int64{2400, 2500, 2500, 2600} {
 		prices = append(prices, Price{EditionID: 1, TitleID: 1, Source: SourceOLX, Cents: c, AcquiredAs: &used})
 	}
-	prices = append(prices, Price{EditionID: 1, TitleID: 1, Source: SourceCeneo, Cents: 6000})
 	Value(copies, NewRanges(prices))
-	if copies[0].Mid == nil || copies[1].Ceiling == nil || copies[2].Mid != nil {
+	if copies[0].Mid == nil || copies[1].Ceiling != nil || copies[2].Mid != nil {
 		t.Fatalf("Value left ranges %+v", copies)
 	}
 	if copies[0].LowConfidence || !copies[2].LowConfidence {
@@ -195,7 +185,6 @@ func TestValueAndSummarize(t *testing.T) {
 		SpentCents:    8000,
 		Floor:         Bound{Cents: 1400, Copies: 2},
 		Mid:           Bound{Cents: 5000, Copies: 2},
-		Ceiling:       Bound{Cents: 12000, Copies: 2},
 		LowConfidence: 1,
 	}
 	if got != want {

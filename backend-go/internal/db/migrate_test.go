@@ -137,3 +137,44 @@ func TestMigrateAgainstPostgres(t *testing.T) {
 		t.Fatalf("embedded migrate: %v", err)
 	}
 }
+
+// TestRemoveCeneoMigration stores a Ceneo listing with a deal alert beside
+// an OLX one before 0012, then applies it: the Ceneo listing and its alert
+// are gone, the OLX ones stay.
+func TestRemoveCeneoMigration(t *testing.T) {
+	pool := dbtest.Pool(t)
+	ctx := context.Background()
+	all, err := db.EmbeddedMigrations()
+	if err != nil {
+		t.Fatalf("embedded: %v", err)
+	}
+	before := slices.DeleteFunc(slices.Clone(all), func(m db.Migration) bool { return m.Version >= "0012" })
+	if len(before) == len(all) {
+		t.Fatal("no migration 0012")
+	}
+	if _, err := db.Migrate(ctx, pool, before); err != nil {
+		t.Fatalf("migrate to 0011: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO price_observation (source, external_id, price_cents)
+		VALUES ('ceneo', '165912980', 3370), ('olx', '900', 2500)`); err != nil {
+		t.Fatalf("observations: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO deal_alert (observation_id) SELECT id FROM price_observation`); err != nil {
+		t.Fatalf("alerts: %v", err)
+	}
+	if _, err := db.Migrate(ctx, pool, all); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	var sources []string
+	if err := pool.QueryRow(ctx, `SELECT array_agg(source ORDER BY source) FROM price_observation`).Scan(&sources); err != nil {
+		t.Fatalf("observations: %v", err)
+	}
+	var alerts []string
+	if err := pool.QueryRow(ctx, `SELECT array_agg(o.source ORDER BY o.source) FROM deal_alert a
+		JOIN price_observation o ON o.id = a.observation_id`).Scan(&alerts); err != nil {
+		t.Fatalf("alerts: %v", err)
+	}
+	if !slices.Equal(sources, []string{"olx"}) || !slices.Equal(alerts, []string{"olx"}) {
+		t.Fatalf("observations %v, alerts %v; want only the OLX listing and its alert", sources, alerts)
+	}
+}

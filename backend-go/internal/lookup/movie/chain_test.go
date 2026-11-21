@@ -18,7 +18,7 @@ import (
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
 )
 
-// Fixtures. Ceneo and UPCitemdb pages in testdata/ are recorded responses.
+// Fixtures. UPCitemdb answers in testdata/ are recorded responses.
 // Allegro catalog answers follow the documented /sale/products schema with
 // the product names Polish shops list for these EANs. TMDB answers carry the
 // IDs, pl-PL titles and release dates shown on themoviedb.org, trimmed to
@@ -55,6 +55,10 @@ var (
 // the product.
 const refusedEAN = "5900058301379"
 
+// unlistedEAN is a Blu-ray neither Allegro nor UPCitemdb names; the chain
+// used to find it only on a shop's search page, which it no longer asks.
+const unlistedEAN = "5903570157564"
+
 type upstream struct {
 	t      *testing.T
 	mu     sync.Mutex
@@ -88,14 +92,6 @@ func newUpstream(t *testing.T) *upstream {
 		}
 		writeJSON(w, out)
 	})
-	mux.HandleFunc("GET /{search}", func(w http.ResponseWriter, r *http.Request) {
-		u.hit("ceneo")
-		if !strings.HasPrefix(r.PathValue("search"), ";szukaj-") {
-			http.NotFound(w, r)
-			return
-		}
-		serveFile(t, w, "testdata/ceneo-no-match.html")
-	})
 	mux.HandleFunc("GET /prod/trial/lookup", func(w http.ResponseWriter, r *http.Request) {
 		u.hit("upcitemdb")
 		if r.URL.Query().Get("upc") == refusedEAN {
@@ -120,6 +116,11 @@ func newUpstream(t *testing.T) *upstream {
 			res = []movie.TMDBMovie{}
 		}
 		writeJSON(w, map[string]any{"page": 1, "results": res, "total_results": len(res)})
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		u.hit("unexpected")
+		t.Errorf("unexpected request %s %s", r.Method, r.URL)
+		http.NotFound(w, r)
 	})
 	u.server = httptest.NewServer(mux)
 	t.Cleanup(u.server.Close)
@@ -157,7 +158,6 @@ func (u *upstream) provider() *movie.Provider {
 				ClientID: "id", ClientSecret: "secret", Client: c, APIBase: u.server.URL, AuthBase: u.server.URL,
 				Store: &staticStore{token: movie.Token{Access: "access-1", Refresh: "r", Expiry: time.Now().Add(time.Hour)}},
 			},
-			movie.Ceneo{Client: c, BaseURL: u.server.URL},
 			movie.UPCitemdb{Client: c, BaseURL: u.server.URL},
 		},
 		TMDB: movie.TMDB{Client: c, BaseURL: u.server.URL, Key: "tmdb-key"},
@@ -240,6 +240,17 @@ func TestPolishEANsResolveToTMDB(t *testing.T) {
 		}
 	})
 
+	t.Run("a code no catalog names is not found", func(t *testing.T) {
+		before := u.count("tmdb")
+		res := svc.Lookup(context.Background(), unlistedEAN)
+		if len(res.Errors) != 0 || len(res.Candidates) != 0 || !res.NeedsConfirmation {
+			t.Fatalf("result = %+v", res)
+		}
+		if u.count("tmdb") != before || u.count("unexpected") != 0 {
+			t.Fatalf("tmdb hits %d -> %d, unexpected requests %d", before, u.count("tmdb"), u.count("unexpected"))
+		}
+	})
+
 	t.Run("an Allegro refusal is reported and not cached", func(t *testing.T) {
 		for range 2 {
 			before := u.count("allegro")
@@ -279,12 +290,10 @@ func TestPolishEANsResolveToTMDB(t *testing.T) {
 		body := scrapeMetrics(t)
 		for _, want := range []string{
 			`ohara_source_requests_total{source="allegro",status="ok"}`,
-			`ohara_source_requests_total{source="ceneo",status="ok"}`,
 			`ohara_source_requests_total{source="upcitemdb",status="ok"}`,
 			`ohara_source_requests_total{source="tmdb",status="ok"}`,
 			`ohara_source_last_success_timestamp_seconds{source="tmdb"}`,
 			`ohara_source_results{source="tmdb"}`,
-			`ohara_source_results{source="ceneo"}`,
 		} {
 			if !strings.Contains(body, want) {
 				t.Errorf("metrics missing %s", want)

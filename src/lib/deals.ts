@@ -6,7 +6,7 @@ import {
 	type Parsed
 } from '#lib/collection.js';
 
-export type DealSource = 'olx' | 'vinted' | 'pepper' | 'ceneo';
+export type DealSource = 'olx' | 'vinted' | 'pepper';
 export type AlertState = 'none' | 'pending' | 'sent' | 'failed';
 export type KeywordKind = 'reject' | 'accept';
 
@@ -156,8 +156,7 @@ export type KeywordPayload = { kind: KeywordKind; phrase: string };
 export const sourceLabels: Record<DealSource, string> = {
 	olx: 'OLX',
 	vinted: 'Vinted',
-	pepper: 'Pepper',
-	ceneo: 'Ceneo'
+	pepper: 'Pepper'
 };
 
 export const alertLabels: Record<AlertState, string> = {

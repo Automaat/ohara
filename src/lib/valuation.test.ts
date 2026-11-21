@@ -60,12 +60,12 @@ describe('estimates', () => {
 		);
 	});
 
-	it('names the source and count of a used or new price', () => {
+	it('names the source and count of a used price', () => {
 		expect(estimateSource('mid', { cents: 2550, source: 'olx', count: 5, trimmed: 2 })).toBe(
 			'OLX · 5 ofert (2 odrzucone)'
 		);
-		expect(estimateSource('ceiling', { cents: 4999, source: 'ceneo', count: 1, trimmed: 0 })).toBe(
-			'Ceneo · 1 oferta'
+		expect(estimateSource('mid', { cents: 4999, source: 'vinted', count: 1, trimmed: 0 })).toBe(
+			'Vinted · 1 oferta'
 		);
 		expect(estimateSource('mid', { cents: 2600, source: 'olx+vinted', count: 3, trimmed: 0 })).toBe(
 			'OLX i Vinted · 3 oferty'

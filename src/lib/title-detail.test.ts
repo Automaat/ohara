@@ -106,7 +106,7 @@ function valued(over: Partial<CopyValue> = {}): CopyValue {
 		price_cents: 8999,
 		floor: estimate(1600, 'skupszop'),
 		mid: estimate(7400),
-		ceiling: estimate(10300, 'ceneo'),
+		ceiling: estimate(10300, 'discogs'),
 		low_confidence: false,
 		...over
 	};

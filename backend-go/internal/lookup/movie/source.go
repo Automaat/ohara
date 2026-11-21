@@ -1,7 +1,7 @@
 // Package movie resolves a DVD, Blu-ray or 4K barcode to TMDB titles. TMDB
 // has no barcode search, so the chain first asks product catalogs (Allegro,
-// Ceneo, UPCitemdb) for the product name, cleans the name into a title and
-// then searches TMDB for it.
+// UPCitemdb) for the product name, cleans the name into a title and then
+// searches TMDB for it.
 package movie
 
 import (
@@ -84,6 +84,3 @@ func isStatus(err error, code int) bool {
 	var e statusError
 	return errors.As(err, &e) && e.code == code
 }
-
-// browserUA is sent to HTML sources that turn away unknown clients.
-const browserUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"

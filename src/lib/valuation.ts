@@ -1,6 +1,6 @@
 import { formatLabels, formatPLN, kindLabels, type Format, type Kind } from '#lib/collection.js';
 
-export type ValueSource = 'olx' | 'vinted' | 'olx+vinted' | 'ceneo' | 'skupszop' | 'discogs';
+export type ValueSource = 'olx' | 'vinted' | 'olx+vinted' | 'skupszop' | 'discogs';
 export type BoundKey = 'floor' | 'mid' | 'ceiling';
 
 export type Estimate = { cents: number; source: ValueSource; count: number; trimmed: number };
@@ -75,14 +75,14 @@ export const boundLabels: Record<BoundKey, string> = {
 export const boundHints: Record<BoundKey, string> = {
 	floor: 'Ile od ręki zapłaci skup (SkupSzop, tylko książki).',
 	mid: 'Mediana cen ofertowych używanych egzemplarzy na OLX i Vinted, bez wartości odstających.',
-	ceiling: 'Najniższa cena nowego egzemplarza w sklepach z Ceneo (mediana produktów).'
+	ceiling:
+		'Sugerowana cena egzemplarza w stanie Mint z Discogs, tylko dla płyt powiązanych z Discogs.'
 };
 
 export const sourceLabels: Record<ValueSource, string> = {
 	olx: 'OLX',
 	vinted: 'Vinted',
 	'olx+vinted': 'OLX i Vinted',
-	ceneo: 'Ceneo',
 	skupszop: 'SkupSzop',
 	discogs: 'Discogs'
 };

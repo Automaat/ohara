@@ -978,6 +978,25 @@ describe('ScanFlow without a barcode', () => {
 		expect(flow.item?.candidates).toEqual([]);
 	});
 
+	it('drops a search answer once the form was edited, even back to how it was', async () => {
+		let release: (r: [number, unknown]) => void = () => {};
+		const held = new Promise<[number, unknown]>((resolve) => (release = resolve));
+		const s = server({ 'GET /api/search?kind=music&q=Kind': () => held });
+		const flow = new ScanFlow(s.fetchFn, memory());
+		flow.start('music');
+		flow.form.name = 'Mój szkic';
+		flow.query = 'Kind';
+		const searching = flow.search();
+		flow.edited();
+		expect(flow.searching).toBe(false);
+		release([200, { candidates: [album] }]);
+		await searching;
+		expect(flow.form.name).toBe('Mój szkic');
+		expect(flow.item?.candidates).toEqual([]);
+		flow.edited();
+		expect(flow.searching).toBe(false);
+	});
+
 	it('keeps the candidates a barcode resolved to', async () => {
 		const s = server(lookup([movie, book], true));
 		const flow = new ScanFlow(s.fetchFn, memory());

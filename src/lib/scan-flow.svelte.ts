@@ -317,6 +317,11 @@ export class ScanFlow {
 		this.issue = null;
 	}
 
+	/** The user changed the form or the query: a search still on its way answers nothing. */
+	edited() {
+		if (this.searching) this.#settleSearch();
+	}
+
 	/** Drops the answer of a title search still on its way. */
 	#settleSearch() {
 		this.#search++;

@@ -13,9 +13,9 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
-	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
 )
@@ -133,10 +133,6 @@ func Outcome(err error) string {
 	return metrics.SourceError
 }
 
-// queryText is a URL query inside an error's text, up to the next space
-// or quote.
-var queryText = regexp.MustCompile("\\?[^\\s\"'`]*")
-
 // queryFreeError is an error whose text had a URL query cut out. Unwrap
 // still reaches the cause, so errors.Is and errors.As see through it.
 type queryFreeError struct {
@@ -148,16 +144,17 @@ func (e queryFreeError) Error() string { return e.msg }
 
 func (e queryFreeError) Unwrap() error { return e.err }
 
-// withoutQuery drops the request URL from a client error and cuts any
-// other URL query out of its text, such as a malformed redirect target
-// net/http quotes.
+// withoutQuery drops the request URL from a client error and cuts the
+// rest of its text from the first "?" on, so no URL it quotes, such as a
+// malformed redirect target, keeps its query however the query is
+// written.
 func withoutQuery(err error) error {
 	if uerr, ok := errors.AsType[*url.Error](err); ok {
 		err = uerr.Err
 	}
 	msg := err.Error()
-	if clean := queryText.ReplaceAllString(msg, "?…"); clean != msg {
-		return queryFreeError{msg: clean, err: err}
+	if before, _, found := strings.Cut(msg, "?"); found {
+		return queryFreeError{msg: before + "?…", err: err}
 	}
 	return err
 }

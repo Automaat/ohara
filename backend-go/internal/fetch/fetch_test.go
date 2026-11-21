@@ -3,6 +3,7 @@ package fetch
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -188,22 +189,44 @@ func TestDoRefusalWithStalledBody(t *testing.T) {
 }
 
 // TestDoRedirectErrorHidesQuery checks that a malformed redirect target,
-// which net/http quotes in its error, loses its query too.
+// which net/http quotes in its error, loses its query too, however the
+// query is written.
 func TestDoRedirectErrorHidesQuery(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Location", "/%zz?"+r.URL.RawQuery)
-		w.WriteHeader(http.StatusFound)
-	}))
-	t.Cleanup(srv.Close)
-	_, err := Do(t.Context(), srv.Client(), Request{URL: srv.URL + "/search?api_key=secret", MaxBody: testCap})
-	if err == nil {
-		t.Fatal("Do followed a malformed redirect")
+	for _, tc := range []struct{ name, query string }{
+		{name: "plain", query: "api_key=secret"},
+		{name: "apostrophe", query: "tracking=abc'&api_key=secret"},
+		{name: "double quote", query: `tracking=abc"&api_key=secret`},
+		{name: "space", query: "tracking=a b&api_key=secret"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Location", "/%zz?"+tc.query)
+				w.WriteHeader(http.StatusFound)
+			}))
+			t.Cleanup(srv.Close)
+			_, err := Do(t.Context(), srv.Client(), Request{URL: srv.URL + "/search?api_key=secret", MaxBody: testCap})
+			if err == nil {
+				t.Fatal("Do followed a malformed redirect")
+			}
+			if strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "api_key") {
+				t.Errorf("error %q carries the query", err)
+			}
+			if !strings.Contains(err.Error(), "Location") {
+				t.Errorf("error %q, want it to name the redirect failure", err)
+			}
+		})
 	}
-	if strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "api_key") {
+}
+
+// TestWithoutQueryKeepsCause checks that an error cleaned of a query
+// still unwraps to its cause.
+func TestWithoutQueryKeepsCause(t *testing.T) {
+	err := withoutQuery(fmt.Errorf("dial %q: %w", "http://x/?token=secret", context.DeadlineExceeded))
+	if strings.Contains(err.Error(), "secret") {
 		t.Errorf("error %q carries the query", err)
 	}
-	if !strings.Contains(err.Error(), "Location") {
-		t.Errorf("error %q, want it to name the redirect failure", err)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("err = %v, want it to unwrap to context.DeadlineExceeded", err)
 	}
 }
 

@@ -22,6 +22,7 @@
 		type FormIssue
 	} from '#lib/collection.js';
 	import CopyFormFields from '#lib/components/CopyFormFields.svelte';
+	import { LatestLoad } from '#lib/scan.js';
 
 	const id = $derived(Number(page.params.id));
 
@@ -35,16 +36,36 @@
 	let confirmDelete = $state(false);
 	let deleteError = $state<string | null>(null);
 
+	/** The copy the page was last asked for; another one's answers and forms are dropped. */
+	let requested: number | undefined;
+	/** A slower answer for an earlier load never replaces a newer one. */
+	const loads = new LatestLoad();
+
 	async function load(copyID: number) {
+		if (copyID !== requested) {
+			requested = copyID;
+			detail = null;
+			failure = null;
+			form = copyToForm(null);
+			issue = null;
+			saving = false;
+			saved = false;
+			confirmDelete = false;
+			deleteError = null;
+		}
+		const isLatest = loads.start();
 		busy = true;
 		try {
-			detail = await request<CopyDetail>(fetch, 'GET', `/api/copies/${copyID}`);
-			form = copyToForm(detail);
+			const next = await request<CopyDetail>(fetch, 'GET', `/api/copies/${copyID}`);
+			if (!isLatest()) return;
+			detail = next;
+			form = copyToForm(next);
 			failure = null;
 		} catch (err) {
+			if (!isLatest()) return;
 			failure = errorMessage(err);
 		} finally {
-			busy = false;
+			if (isLatest()) busy = false;
 		}
 	}
 
@@ -61,26 +82,28 @@
 		saving = true;
 		saved = false;
 		try {
-			await request<Copy>(fetch, 'PUT', `/api/copies/${id}`, parsed.value);
+			await request<Copy>(fetch, 'PUT', `/api/copies/${d.id}`, parsed.value);
+			if (d.id !== requested) return;
 			issue = null;
 			saved = true;
-			await load(id);
+			await load(d.id);
 		} catch (err) {
+			if (d.id !== requested) return;
 			issue = {
 				field: err instanceof ApiError ? (err.field ?? '') : '',
 				message: errorMessage(err)
 			};
 		} finally {
-			saving = false;
+			if (d.id === requested) saving = false;
 		}
 	}
 
 	async function remove(d: CopyDetail) {
 		try {
-			await request(fetch, 'DELETE', `/api/copies/${id}`);
-			await goto(`/editions/${d.edition_id}`);
+			await request(fetch, 'DELETE', `/api/copies/${d.id}`);
+			if (d.id === requested) await goto(`/editions/${d.edition_id}`);
 		} catch (err) {
-			deleteError = errorMessage(err);
+			if (d.id === requested) deleteError = errorMessage(err);
 		}
 	}
 </script>

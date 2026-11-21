@@ -38,7 +38,7 @@
 	import EditionCoverSheet from '#lib/components/EditionCoverSheet.svelte';
 	import { coverUndo } from '#lib/edition-cover.js';
 	import { purchaseDate } from '#lib/polish.js';
-	import { newRequestKey } from '#lib/scan.js';
+	import { LatestLoad, newRequestKey } from '#lib/scan.js';
 	import { copyRequest } from '#lib/title-detail.js';
 
 	const id = $derived(Number(page.params.id));
@@ -67,25 +67,48 @@
 	let confirmDelete = $state(false);
 	let deleteError = $state<string | null>(null);
 
-	/** The edition the page was last asked for, and a link's request to add a copy to it. */
+	/**
+	 * The edition the page was last asked for, and a link's request to add a copy to it. Another
+	 * edition's answers and forms are dropped.
+	 */
 	let requested: number | undefined;
 	const addRequest = copyRequest();
 	onDestroy(addRequest.close);
+	/** A slower answer for an earlier load never replaces a newer one. */
+	const loads = new LatestLoad();
 
 	async function load(editionID: number) {
 		if (editionID !== requested) {
 			requested = editionID;
+			detail = null;
+			failure = null;
+			editing = false;
+			editionForm = editionToForm(null);
+			editionIssue = null;
+			savingEdition = false;
+			adding = false;
+			copyForm = copyToForm(null);
+			copyIssue = null;
+			savingCopy = false;
+			copyKey = '';
+			coverSheet = false;
+			confirmDelete = false;
+			deleteError = null;
 			addRequest.open(editionID, page.url.searchParams);
 		}
+		const isLatest = loads.start();
 		busy = true;
 		try {
-			detail = await request<EditionDetail>(fetch, 'GET', `/api/editions/${editionID}`);
+			const next = await request<EditionDetail>(fetch, 'GET', `/api/editions/${editionID}`);
+			if (!isLatest()) return;
+			detail = next;
 			failure = null;
 			if (addRequest.take(editionID)) startCopyFromLink();
 		} catch (err) {
+			if (!isLatest()) return;
 			failure = errorMessage(err);
 		} finally {
-			busy = false;
+			if (isLatest()) busy = false;
 		}
 	}
 
@@ -120,18 +143,19 @@
 		}
 		savingEdition = true;
 		try {
-			await request<Edition>(fetch, 'PUT', `/api/editions/${id}`, parsed.value);
+			await request<Edition>(fetch, 'PUT', `/api/editions/${d.id}`, parsed.value);
+			if (d.id !== requested) return;
 			editing = false;
-			await load(id);
+			await load(d.id);
 		} catch (err) {
-			editionIssue = issueFrom(err);
+			if (d.id === requested) editionIssue = issueFrom(err);
 		} finally {
-			savingEdition = false;
+			if (d.id === requested) savingEdition = false;
 		}
 	}
 
-	async function addCopy() {
-		const parsed = copyPayload(copyForm, id);
+	async function addCopy(d: EditionDetail) {
+		const parsed = copyPayload(copyForm, d.id);
 		if (!parsed.ok) {
 			copyIssue = parsed.issue;
 			return;
@@ -139,21 +163,22 @@
 		savingCopy = true;
 		try {
 			await request<Copy>(fetch, 'POST', '/api/copies', { ...parsed.value, request_key: copyKey });
+			if (d.id !== requested) return;
 			adding = false;
-			await load(id);
+			await load(d.id);
 		} catch (err) {
-			copyIssue = issueFrom(err);
+			if (d.id === requested) copyIssue = issueFrom(err);
 		} finally {
-			savingCopy = false;
+			if (d.id === requested) savingCopy = false;
 		}
 	}
 
 	async function remove(d: EditionDetail) {
 		try {
-			await request(fetch, 'DELETE', `/api/editions/${id}`);
-			await goto(`/titles/${d.title_id}`);
+			await request(fetch, 'DELETE', `/api/editions/${d.id}`);
+			if (d.id === requested) await goto(`/titles/${d.title_id}`);
 		} catch (err) {
-			deleteError = errorMessage(err);
+			if (d.id === requested) deleteError = errorMessage(err);
 		}
 	}
 </script>
@@ -222,7 +247,7 @@
 						issue={copyIssue}
 						saving={savingCopy}
 						submitLabel="Zapisz egzemplarz"
-						onsubmit={addCopy}
+						onsubmit={() => addCopy(d)}
 						oncancel={() => (adding = false)}
 					/>
 				</Card>

@@ -8,5 +8,6 @@ serve(self, {
 	immutable,
 	assets,
 	prerendered,
+	fallback: '',
 	never: [/^api\//, /^health$/, /^metrics$/]
 });

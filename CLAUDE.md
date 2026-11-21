@@ -108,6 +108,15 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   when the cart shows the offer or the shop does not buy the book, with
   results 1 for an offer. Register each source with
   `metrics.InitSource` so its counters exist before the first failure.
+  Every finished deal or valuation run, scheduled or manual, counts in
+  `ohara_background_runs_total{task="deals"|"valuation",outcome}`: `failed`
+  when the run returns an error (database, panic, shutdown), else `ok`,
+  failing sources included. It also observes
+  `ohara_background_run_duration_seconds{task}` (1 s to 2 h buckets), and
+  an `ok` run sets `ohara_background_last_success_timestamp_seconds{task}`.
+  Each Telegram send counts in `ohara_deal_alerts_total{outcome="sent"|"failed"}`.
+  The run counters exist at 0 from startup, the alert counters when
+  Telegram is configured.
   Every source request but Telegram's goes through `fetch.Do`: a body
   over the caller's cap fails (`fetch.Outcome` counts it a parse error),
   a status the caller does not accept is a `fetch.StatusError` returned

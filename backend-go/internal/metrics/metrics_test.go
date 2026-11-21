@@ -75,3 +75,48 @@ func TestScanQueueCollector(t *testing.T) {
 		t.Fatalf("failed count exported %d series", n)
 	}
 }
+
+func TestObserveBackgroundRun(t *testing.T) {
+	const task = "test-background-run"
+	InitBackgroundTask(task)
+	if n := testutil.CollectAndCount(backgroundRuns); n != 2 {
+		t.Fatalf("runs exported %d series before the first run, want ok and failed", n)
+	}
+	if n := testutil.CollectAndCount(backgroundLastSuccess); n != 0 {
+		t.Fatalf("last success exported %d series before any run", n)
+	}
+
+	start := float64(time.Now().UnixNano()) / 1e9
+	ObserveBackgroundRun(task, 3*time.Second, nil)
+	lastOK := testutil.ToFloat64(backgroundLastSuccess.WithLabelValues(task))
+	if lastOK < start {
+		t.Fatalf("last success = %v, want at least %v", lastOK, start)
+	}
+	ObserveBackgroundRun(task, time.Second, errors.New("db down"))
+	if got := testutil.ToFloat64(backgroundRuns.WithLabelValues(task, outcomeOK)); got != 1 {
+		t.Errorf("ok runs = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(backgroundRuns.WithLabelValues(task, outcomeFailed)); got != 1 {
+		t.Errorf("failed runs = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(backgroundLastSuccess.WithLabelValues(task)); got != lastOK {
+		t.Errorf("last success = %v after a failed run, want %v", got, lastOK)
+	}
+	if first, last := runDurationBuckets[0], runDurationBuckets[len(runDurationBuckets)-1]; first != 1 || last < 7200 {
+		t.Errorf("duration buckets span %v..%v s, want 1..at least 7200", first, last)
+	}
+}
+
+func TestObserveDealAlert(t *testing.T) {
+	InitDealAlerts()
+	sent, failed := testutil.ToFloat64(dealAlerts.WithLabelValues(outcomeSent)), testutil.ToFloat64(dealAlerts.WithLabelValues(outcomeFailed))
+	ObserveDealAlert(nil)
+	ObserveDealAlert(errors.New("telegram: status 502"))
+	ObserveDealAlert(nil)
+	if got := testutil.ToFloat64(dealAlerts.WithLabelValues(outcomeSent)) - sent; got != 2 {
+		t.Errorf("sent grew by %v, want 2", got)
+	}
+	if got := testutil.ToFloat64(dealAlerts.WithLabelValues(outcomeFailed)) - failed; got != 1 {
+		t.Errorf("failed grew by %v, want 1", got)
+	}
+}

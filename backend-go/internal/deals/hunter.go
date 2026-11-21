@@ -107,6 +107,10 @@ func NewHunter(store *Store, sources []Source, notifier Notifier, cfg Config, lo
 	h.status.Scheduled = cfg.Interval > 0
 	h.status.IntervalSeconds = int64(cfg.Interval.Seconds())
 	h.status.Telegram = notifier != nil
+	metrics.InitBackgroundTask(metrics.TaskDeals)
+	if notifier != nil {
+		metrics.InitDealAlerts()
+	}
 	for _, src := range sources {
 		metrics.InitSource(src.Name())
 	}
@@ -224,6 +228,7 @@ func (h *Hunter) execute(ctx context.Context) {
 			"alerts", res.Alerts, "sent", res.Sent, "errors", len(res.Errors))
 	}
 	finished := time.Now().Truncate(time.Microsecond)
+	metrics.ObserveBackgroundRun(metrics.TaskDeals, finished.Sub(started), err)
 	h.mu.Lock()
 	h.status.LastFinishedAt = &finished
 	h.status.LastResult = &res
@@ -473,6 +478,7 @@ func (r *run) deliver(ctx context.Context, only map[string]bool) error {
 		r.tried[a.ObservationID] = true
 		err := r.h.notifier.Send(ctx, alertText(a))
 		r.h.sent()
+		metrics.ObserveDealAlert(err)
 		if err != nil {
 			r.h.logger.Warn("telegram alert failed", "observation", a.ObservationID, "err", err)
 			if err := r.h.store.MarkFailed(ctx, a.ObservationID, err.Error()); err != nil {

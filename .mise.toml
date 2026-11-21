@@ -28,23 +28,35 @@ echo "Postgres does not accept TCP connections" >&2
 exit 1
 '''
 
+# The tasks ask compose for the published port, so OHARA_DB_PORT set in the
+# shell or in .env reaches them the same way it reaches compose.
 [tasks.backend]
 description = "Start the API only; without DATABASE_URL or PGHOST it uses the `mise run db` Postgres"
 run = '''
 if [ -z "${DATABASE_URL:-}" ] && [ -z "${PGHOST:-}" ]; then
-  export PGHOST=localhost PGPORT="${OHARA_DB_PORT:-5432}" PGUSER=ohara PGPASSWORD=ohara PGDATABASE=ohara PGSSLMODE=disable
+  port=$(docker compose port postgres 5432 2>/dev/null | head -n 1)
+  if [ -z "$port" ]; then
+    echo "Postgres is not running: run mise run db, or set DATABASE_URL or PGHOST" >&2
+    exit 1
+  fi
+  export PGHOST=localhost PGPORT="${port##*:}" PGUSER=ohara PGPASSWORD=ohara PGDATABASE=ohara PGSSLMODE=disable
 fi
 cd backend-go && go run ./cmd/api
 '''
 
-# The DB tests get their own database, created on first use, so they never
-# touch the dev data. Extra arguments go to `go test`, e.g. `-- -run TestX -v`.
+# The DB tests get their own database, created on first use under an
+# advisory lock so parallel first runs do not race, and never touch the dev
+# data. Extra arguments go to `go test`, e.g. `-- -run TestX -v`.
 [tasks.test-backend]
 description = "Run the Go tests, DB tests included, against the ohara_test database of the `mise run db` Postgres"
 depends = ["db"]
 run = '''
-echo "SELECT 'CREATE DATABASE ohara_test' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'ohara_test')\gexec" | docker compose exec -T postgres psql -U ohara -d postgres -q -v ON_ERROR_STOP=1
-cd backend-go && OHARA_TEST_DATABASE_URL="postgres://ohara:ohara@localhost:${OHARA_DB_PORT:-5432}/ohara_test?sslmode=disable" go test ./...
+printf '%s\n' \
+  "SELECT pg_advisory_lock(187) AS locked \gset" \
+  "SELECT 'CREATE DATABASE ohara_test' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'ohara_test')\gexec" |
+  docker compose exec -T postgres psql -U ohara -d postgres -q -v ON_ERROR_STOP=1
+port=$(docker compose port postgres 5432 | head -n 1)
+cd backend-go && OHARA_TEST_DATABASE_URL="postgres://ohara:ohara@localhost:${port##*:}/ohara_test?sslmode=disable" go test ./...
 '''
 
 [tasks.frontend]

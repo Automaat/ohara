@@ -14,7 +14,10 @@ import (
 	"testing"
 
 	"github.com/Automaat/ohara/backend-go/internal/dbtest"
+	"github.com/Automaat/ohara/backend-go/internal/discogs"
+	"github.com/Automaat/ohara/backend-go/internal/lookup/music"
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
+	"github.com/Automaat/ohara/backend-go/internal/valuation"
 )
 
 // upstreams stands in for every outside source the deal hunter and the
@@ -189,4 +192,51 @@ func TestValuationAsksOnlyItsSources(t *testing.T) {
 		t.Fatalf("%s = %v after the run, want %v: the quote must count once as http_503", unavailableSeries, got, unavailableBefore+1)
 	}
 	checkSources(t)
+}
+
+func TestDiscogsCallersShareOneBudget(t *testing.T) {
+	t.Setenv("OHARA_DISCOGS_TOKEN", "secret")
+	t.Setenv("OHARA_MUSICBRAINZ", "false")
+	logger := slog.New(slog.DiscardHandler)
+
+	search, ok := titleSearchers()["music"].(music.TextSearch)
+	if !ok {
+		t.Fatalf("title search for music is not music.TextSearch")
+	}
+	provider := newMusicProvider(nil, logger)
+	if provider == nil {
+		t.Fatal("no music provider with a Discogs token")
+	}
+	runner, _, err := newValuation(nil, logger)
+	if err != nil {
+		t.Fatalf("newValuation: %v", err)
+	}
+	pricer, ok := runner.Pricer().(valuation.Discogs)
+	if !ok {
+		t.Fatalf("valuation pricer is %T, want valuation.Discogs", runner.Pricer())
+	}
+	callers := []struct {
+		name     string
+		caller   any
+		priority discogs.Priority
+	}{
+		{"title search", search.Discogs, discogs.Interactive},
+		{"music provider", provider.Discogs, discogs.Interactive},
+		{"valuation", pricer.Market, discogs.Background},
+	}
+	for _, tc := range callers {
+		c, ok := tc.caller.(*discogs.Client)
+		if !ok {
+			t.Fatalf("%s: Discogs caller is %T, want *discogs.Client", tc.name, tc.caller)
+		}
+		if c.Limiter == nil || c.Limiter != discogsBudget {
+			t.Errorf("%s: limiter %p, want the shared budget %p", tc.name, c.Limiter, discogsBudget)
+		}
+		if c.HTTP != discogsHTTP {
+			t.Errorf("%s: HTTP client is not discogsHTTP, which keeps no connection to resend on", tc.name)
+		}
+		if c.Priority != tc.priority {
+			t.Errorf("%s: priority %d, want %d", tc.name, c.Priority, tc.priority)
+		}
+	}
 }

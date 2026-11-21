@@ -55,6 +55,7 @@ func New(cfg Config, logger *slog.Logger, deps Deps) http.Handler {
 	r.Use(requestObserver(logger, cfg.AccessLog))
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(requestTimeout))
+	r.Use(crossOriginGuard(logger))
 
 	r.Get("/health", healthHandler(logger, deps.DB))
 	r.Handle("/metrics", metrics.Handler())
@@ -73,6 +74,19 @@ func New(cfg Config, logger *slog.Logger, deps Deps) http.Handler {
 		r.Handle("/*", web.Handler(deps.Web))
 	}
 	return r
+}
+
+// crossOriginGuard answers 403 to any method but GET, HEAD and OPTIONS when the
+// browser marks the request as cross-origin: by Sec-Fetch-Site, or, when that
+// header is missing, by an Origin whose host is not Host. Authelia's session
+// cookie covers every sibling site of the parent domain, so their pages could
+// otherwise write here. Clients that send neither header, like curl, pass.
+func crossOriginGuard(logger *slog.Logger) func(http.Handler) http.Handler {
+	cop := http.NewCrossOriginProtection()
+	cop.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		httpx.WriteError(w, logger, http.StatusForbidden, "cross-origin request rejected")
+	}))
+	return cop.Handler
 }
 
 func requestObserver(logger *slog.Logger, accessLog bool) func(http.Handler) http.Handler {

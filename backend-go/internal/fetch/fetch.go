@@ -13,6 +13,7 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 
@@ -59,10 +60,12 @@ type Response struct {
 
 // Do sends r with client (http.DefaultClient when nil) and reads the body
 // of an answer whose status r accepts. Any other status is a StatusError,
-// returned with the answer's status and headers but no body; when that
-// body also fails to read, the error names the failure and still wraps
-// the StatusError, so a refusal stays a refusal however its page ends.
-// Errors name the method, host and path at most, never the query.
+// returned with the answer's status and headers but no body. A refusal
+// (403, 429) returns as soon as its headers arrive, so a stalled page
+// cannot hold it back. Another status reads its page first: when that
+// fails, the error names the failure and still wraps the StatusError, so
+// the status counts however its page ends. Errors name the method, host
+// and path at most, never a query.
 func Do(ctx context.Context, client *http.Client, r Request) (Response, error) {
 	method := r.Method
 	if method == "" {
@@ -86,17 +89,21 @@ func Do(ctx context.Context, client *http.Client, r Request) (Response, error) {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return Response{}, fmt.Errorf("%s %s://%s%s: %w", method, req.URL.Scheme, req.URL.Host, req.URL.Path, withoutURL(err))
+		return Response{}, fmt.Errorf("%s %s://%s%s: %w", method, req.URL.Scheme, req.URL.Host, req.URL.Path, withoutQuery(err))
 	}
 	defer resp.Body.Close()
+	answer := Response{Status: resp.StatusCode, Header: resp.Header}
+	accepted := slices.Contains(ok, resp.StatusCode)
+	if !accepted && (resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests) {
+		return answer, StatusError{Code: resp.StatusCode}
+	}
 	data, readErr := io.ReadAll(io.LimitReader(resp.Body, r.MaxBody+1))
 	if readErr != nil {
-		readErr = withoutURL(readErr)
+		readErr = withoutQuery(readErr)
 	} else if int64(len(data)) > r.MaxBody {
 		readErr = ErrTooLarge
 	}
-	answer := Response{Status: resp.StatusCode, Header: resp.Header}
-	if !slices.Contains(ok, resp.StatusCode) {
+	if !accepted {
 		se := StatusError{Code: resp.StatusCode}
 		if readErr != nil {
 			return answer, fmt.Errorf("%w (%w)", readErr, se)
@@ -126,10 +133,31 @@ func Outcome(err error) string {
 	return metrics.SourceError
 }
 
-// withoutURL drops the request URL from a client error.
-func withoutURL(err error) error {
+// queryText is a URL query inside an error's text, up to the next space
+// or quote.
+var queryText = regexp.MustCompile("\\?[^\\s\"'`]*")
+
+// queryFreeError is an error whose text had a URL query cut out. Unwrap
+// still reaches the cause, so errors.Is and errors.As see through it.
+type queryFreeError struct {
+	msg string
+	err error
+}
+
+func (e queryFreeError) Error() string { return e.msg }
+
+func (e queryFreeError) Unwrap() error { return e.err }
+
+// withoutQuery drops the request URL from a client error and cuts any
+// other URL query out of its text, such as a malformed redirect target
+// net/http quotes.
+func withoutQuery(err error) error {
 	if uerr, ok := errors.AsType[*url.Error](err); ok {
-		return uerr.Err
+		err = uerr.Err
+	}
+	msg := err.Error()
+	if clean := queryText.ReplaceAllString(msg, "?…"); clean != msg {
+		return queryFreeError{msg: clean, err: err}
 	}
 	return err
 }

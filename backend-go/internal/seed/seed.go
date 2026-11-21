@@ -16,6 +16,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"slices"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -234,55 +235,44 @@ var demoQueue = []queued{
 	{barcode: "59012344", reason: "not_found", scans: 3, hoursAgo: 150},
 }
 
+// ErrNotMigrated means the database lacks a migration this build has, so
+// the seed changed nothing: start the app once to migrate it first.
+var ErrNotMigrated = errors.New("database is not migrated to this build; start the app once, then seed")
+
 // dataTables are the tables whose rows make a database not empty.
 var dataTables = []string{"title", "price_observation", "valuation_history", "scan_queue", "deal_run"}
 
-type querier interface {
-	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
-}
-
-// CheckEmpty returns ErrNotEmpty when any data table holds a row. A table
-// that does not exist yet, as before the migrations ran, holds none, so a
-// caller can check a database before migrating it and refuse it unchanged.
-func CheckEmpty(ctx context.Context, q querier) error {
-	for _, table := range dataTables {
-		var exists bool
-		if err := q.QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, table).Scan(&exists); err != nil {
-			return fmt.Errorf("seed: check %s: %w", table, err)
-		}
-		if !exists {
-			continue
-		}
-		var taken bool
-		sql := `SELECT EXISTS (SELECT 1 FROM ` + pgx.Identifier{table}.Sanitize() + `)`
-		if err := q.QueryRow(ctx, sql).Scan(&taken); err != nil {
-			return fmt.Errorf("seed: check %s: %w", table, err)
-		}
-		if taken {
-			return ErrNotEmpty
-		}
-	}
-	return nil
-}
-
-// Run fills an empty, migrated database with the demo collection in one
-// transaction. It returns ErrNotEmpty, having changed nothing, when the
-// database already holds titles, listings, value history, scan queue
-// entries or a deal run. It locks those tables before it checks them, so
-// a second seed, or a write from a running app such as a queued scan,
-// waits until this one commits and cannot slip in after the check.
-func Run(ctx context.Context, pool *pgxpool.Pool) (Counts, error) {
+// Run fills an empty database that holds every migration in versions with
+// the demo collection, in one transaction. It never migrates: a migration
+// commits on its own, so a refused seed could not undo one. It returns
+// ErrNotMigrated or ErrNotEmpty, having changed nothing, when a version is
+// missing or the database already holds titles, listings, value history,
+// scan queue entries or a deal run.
+//
+// It takes the scan queue's lock for every barcode it adds before it locks
+// those tables, the order a queued scan takes them in, then checks them, so
+// a second seed or a write from a running app waits for it without a
+// deadlock and cannot slip in after the check.
+func Run(ctx context.Context, pool *pgxpool.Pool, versions []string) (Counts, error) {
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return Counts{}, fmt.Errorf("seed: begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	if err := checkMigrated(ctx, tx, versions); err != nil {
+		return Counts{}, err
+	}
+	for _, code := range barcodes() {
+		if _, err := tx.Exec(ctx, `SELECT scan_queue_lock($1)`, code); err != nil {
+			return Counts{}, fmt.Errorf("seed: lock barcode %s: %w", code, err)
+		}
+	}
 	_, err = tx.Exec(ctx, `LOCK TABLE title, price_observation, valuation_history, scan_queue, deal_run
 		IN EXCLUSIVE MODE`)
 	if err != nil {
 		return Counts{}, fmt.Errorf("seed: lock: %w", err)
 	}
-	if err := CheckEmpty(ctx, tx); err != nil {
+	if err := checkEmpty(ctx, tx); err != nil {
 		return Counts{}, err
 	}
 	photo, err := coverPhoto()
@@ -305,6 +295,56 @@ func Run(ctx context.Context, pool *pgxpool.Pool) (Counts, error) {
 		return Counts{}, fmt.Errorf("seed: commit: %w", err)
 	}
 	return s.counts, nil
+}
+
+func checkMigrated(ctx context.Context, tx pgx.Tx, versions []string) error {
+	var exists, missing bool
+	err := tx.QueryRow(ctx, `SELECT to_regclass('schema_migrations') IS NOT NULL`).Scan(&exists)
+	if err != nil {
+		return fmt.Errorf("seed: check migrations: %w", err)
+	}
+	if !exists {
+		return ErrNotMigrated
+	}
+	err = tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM unnest($1::text[]) AS v
+		WHERE v NOT IN (SELECT version FROM schema_migrations))`, versions).Scan(&missing)
+	if err != nil {
+		return fmt.Errorf("seed: check migrations: %w", err)
+	}
+	if missing {
+		return ErrNotMigrated
+	}
+	return nil
+}
+
+func checkEmpty(ctx context.Context, tx pgx.Tx) error {
+	for _, table := range dataTables {
+		var taken bool
+		sql := `SELECT EXISTS (SELECT 1 FROM ` + pgx.Identifier{table}.Sanitize() + `)`
+		if err := tx.QueryRow(ctx, sql).Scan(&taken); err != nil {
+			return fmt.Errorf("seed: check %s: %w", table, err)
+		}
+		if taken {
+			return ErrNotEmpty
+		}
+	}
+	return nil
+}
+
+// barcodes returns every barcode the seed adds, editions and queue
+// entries, sorted, so two seeds take their locks in one order.
+func barcodes() []string {
+	var codes []string
+	for i := range demo {
+		for j := range demo[i].editions {
+			codes = append(codes, demo[i].editions[j].barcode)
+		}
+	}
+	for _, q := range demoQueue {
+		codes = append(codes, q.barcode)
+	}
+	slices.Sort(codes)
+	return codes
 }
 
 // seeder writes the demo rows in one transaction and counts them;

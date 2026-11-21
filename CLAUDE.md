@@ -188,9 +188,11 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
 - `api seed` (`internal/seed`) fills an empty database with demo rows for
   every page in one transaction and sends no request; it refuses (exit 1,
   nothing changed) a database holding titles, listings, value history,
-  scan queue entries or a deal run. It checks before it migrates, so a
-  refused older database keeps its schema and rows, and it locks those
-  tables before the check, so a write from a running app waits for it.
+  scan queue entries or a deal run, and one missing a migration of this
+  build: it never migrates, since a migration commits on its own and a
+  refusal could not undo it. It takes the scan queue's barcode locks,
+  then locks those tables, before the check, the order a queued scan
+  takes them in, so a write from a running app waits for it.
   It seeds no deal run (a running hunter reads that only at startup) and
   never a pending deal alert. Its DB test asserts what each page needs,
   so a schema change that breaks the seed fails CI.

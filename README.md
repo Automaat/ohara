@@ -19,8 +19,9 @@ mise run seed     # in another shell: demo data for an empty database
 The seed adds demo movies, books and albums with prices, a personal cover
 photo, wishlist deals, 45 days of value history and scan queue entries,
 without asking any outside source. It refuses a database that already holds
-data. `api seed` does the same against `DATABASE_URL` or the `PG*`
-variables.
+data, and one the app has not migrated yet: it never migrates, so start the
+app once first. `api seed` does the same against `DATABASE_URL` or the
+`PG*` variables.
 
 For frontend work, run `mise run backend` against a Postgres and
 `mise run frontend` for the Vite dev server on http://localhost:5173.

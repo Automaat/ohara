@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/Automaat/ohara/backend-go/internal/barcode"
+	"github.com/Automaat/ohara/backend-go/internal/db"
 	"github.com/Automaat/ohara/backend-go/internal/dbtest"
 	"github.com/Automaat/ohara/backend-go/internal/deals"
 	"github.com/Automaat/ohara/backend-go/internal/valuation"
@@ -19,6 +20,46 @@ import (
 var tables = []string{
 	"title", "edition", "copy", "price_observation", "deal_alert",
 	"valuation_history", "scan_queue", "deal_run",
+}
+
+func versions(t *testing.T) []string {
+	t.Helper()
+	migrations, err := db.EmbeddedMigrations()
+	if err != nil {
+		t.Fatalf("embedded migrations: %v", err)
+	}
+	out := make([]string, len(migrations))
+	for i, m := range migrations {
+		out[i] = m.Version
+	}
+	return out
+}
+
+// waitForLock polls until a lock of locktype is waited for, failing when
+// Run finishes first or nothing waits within 10 s.
+func waitForLock(t *testing.T, pool *pgxpool.Pool, locktype string, done <-chan error) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var waiting int
+		err := pool.QueryRow(context.Background(), `SELECT count(*) FROM pg_locks
+			WHERE NOT granted AND locktype = $1`, locktype).Scan(&waiting)
+		if err != nil {
+			t.Fatalf("pg_locks: %v", err)
+		}
+		if waiting > 0 {
+			return
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("Run finished with %v before the writer committed", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Run never waited for a %s lock", locktype)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func rowCounts(t *testing.T, pool *pgxpool.Pool) map[string]int {
@@ -47,7 +88,7 @@ func TestRunFillsEmptyDatabase(t *testing.T) {
 	pool := dbtest.Migrated(t)
 	ctx := context.Background()
 
-	got, err := Run(ctx, pool)
+	got, err := Run(ctx, pool, versions(t))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -160,12 +201,12 @@ func TestRunFillsEmptyDatabase(t *testing.T) {
 func TestRunRefusesFilledDatabase(t *testing.T) {
 	pool := dbtest.Migrated(t)
 	ctx := context.Background()
-	if _, err := Run(ctx, pool); err != nil {
+	if _, err := Run(ctx, pool, versions(t)); err != nil {
 		t.Fatalf("first Run: %v", err)
 	}
 	before := rowCounts(t, pool)
 
-	if _, err := Run(ctx, pool); !errors.Is(err, ErrNotEmpty) {
+	if _, err := Run(ctx, pool, versions(t)); !errors.Is(err, ErrNotEmpty) {
 		t.Fatalf("second Run = %v, want ErrNotEmpty", err)
 	}
 	after := rowCounts(t, pool)
@@ -195,7 +236,7 @@ func TestRunRefusesExistingData(t *testing.T) {
 			}
 			before := rowCounts(t, pool)
 
-			if _, err := Run(ctx, pool); !errors.Is(err, ErrNotEmpty) {
+			if _, err := Run(ctx, pool, versions(t)); !errors.Is(err, ErrNotEmpty) {
 				t.Fatalf("Run = %v, want ErrNotEmpty", err)
 			}
 			after := rowCounts(t, pool)
@@ -225,30 +266,10 @@ func TestRunWaitsForScanQueueWriter(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := Run(ctx, pool)
+		_, err := Run(ctx, pool, versions(t))
 		done <- err
 	}()
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		var waiting int
-		err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_locks
-			WHERE NOT granted AND relation = 'scan_queue'::regclass`).Scan(&waiting)
-		if err != nil {
-			t.Fatalf("pg_locks: %v", err)
-		}
-		if waiting > 0 {
-			break
-		}
-		select {
-		case err := <-done:
-			t.Fatalf("Run finished with %v before the queued scan committed", err)
-		default:
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("Run never waited for the scan queue writer")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitForLock(t, pool, "relation", done)
 	if err := writer.Commit(ctx); err != nil {
 		t.Fatalf("commit: %v", err)
 	}
@@ -264,9 +285,88 @@ func TestRunWaitsForScanQueueWriter(t *testing.T) {
 	}
 }
 
-func TestCheckEmptyBeforeMigrations(t *testing.T) {
-	pool := dbtest.Pool(t)
-	if err := CheckEmpty(context.Background(), pool); err != nil {
-		t.Fatalf("CheckEmpty on an unmigrated database = %v, want nil", err)
+// TestRunWaitsForScanOfDemoBarcode queues a demo barcode the way the scan
+// queue does: its barcode lock first, then the insert. The seed takes the
+// barcode locks before its table locks, so it waits for the scan instead
+// of deadlocking with it, then sees the entry and refuses.
+func TestRunWaitsForScanOfDemoBarcode(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	ctx := context.Background()
+	writer, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
 	}
+	defer func() { _ = writer.Rollback(ctx) }()
+	if _, err := writer.Exec(ctx, `SELECT scan_queue_lock('5903567700015')`); err != nil {
+		t.Fatalf("barcode lock: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := Run(ctx, pool, versions(t))
+		done <- err
+	}()
+	waitForLock(t, pool, "advisory", done)
+	if _, err := writer.Exec(ctx, `INSERT INTO scan_queue (barcode, reason) VALUES ('5903567700015', 'not_found')`); err != nil {
+		t.Fatalf("queue: %v", err)
+	}
+	if err := writer.Commit(ctx); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	if err := <-done; !errors.Is(err, ErrNotEmpty) {
+		t.Fatalf("Run = %v, want ErrNotEmpty", err)
+	}
+	if n := scalar(t, pool, `SELECT count(*) FROM scan_queue WHERE barcode = '5903567700015'`); n != 1 {
+		t.Errorf("queued scan rows = %d, want 1", n)
+	}
+}
+
+// TestRunRefusesUnmigratedDatabase seeds a database without migrations and
+// one an older release left at 0012 with a Vinted listing, which 0013
+// deletes. The seed never migrates, so both are refused unchanged.
+func TestRunRefusesUnmigratedDatabase(t *testing.T) {
+	ctx := context.Background()
+	t.Run("fresh", func(t *testing.T) {
+		pool := dbtest.Pool(t)
+		if _, err := Run(ctx, pool, versions(t)); !errors.Is(err, ErrNotMigrated) {
+			t.Fatalf("Run = %v, want ErrNotMigrated", err)
+		}
+		if n := scalar(t, pool, `SELECT count(*) FROM pg_tables WHERE schemaname = current_schema()`); n != 0 {
+			t.Errorf("tables = %d, want 0", n)
+		}
+	})
+	t.Run("older release", func(t *testing.T) {
+		pool := dbtest.Pool(t)
+		embedded, err := db.EmbeddedMigrations()
+		if err != nil {
+			t.Fatalf("embedded: %v", err)
+		}
+		var older []db.Migration
+		for _, m := range embedded {
+			if m.Version <= "0012" {
+				older = append(older, m)
+			}
+		}
+		if _, err := db.Migrate(ctx, pool, older); err != nil {
+			t.Fatalf("older release: %v", err)
+		}
+		if _, err := pool.Exec(ctx, `INSERT INTO price_observation (source, external_id, price_cents)
+			VALUES ('vinted', '1', 1000)`); err != nil {
+			t.Fatalf("listing: %v", err)
+		}
+
+		if _, err := Run(ctx, pool, versions(t)); !errors.Is(err, ErrNotMigrated) {
+			t.Fatalf("Run = %v, want ErrNotMigrated", err)
+		}
+		if n := scalar(t, pool, `SELECT count(*) FROM price_observation WHERE source = 'vinted'`); n != 1 {
+			t.Errorf("Vinted listings = %d, want 1", n)
+		}
+		if n := scalar(t, pool, `SELECT count(*) FROM schema_migrations`); n != len(older) {
+			t.Errorf("applied migrations = %d, want %d", n, len(older))
+		}
+		if n := scalar(t, pool, `SELECT count(*) FROM title`); n != 0 {
+			t.Errorf("titles = %d, want 0", n)
+		}
+	})
 }

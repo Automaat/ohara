@@ -343,16 +343,21 @@ browser's `Host` (`changeOrigin: false`) so dev writes pass this check.
 
 ```bash
 mise run dev                         # Postgres + app from source (docker compose)
-mise run backend                     # API only, needs DATABASE_URL or PG*
+mise run db                          # Postgres only, in the background
+mise run backend                     # API only; the `mise run db` Postgres unless DATABASE_URL or PGHOST is set
 mise run frontend                    # Vite dev server, proxies /api to :8000
+mise run test-backend                # go test ./... with DB tests in ohara_test; args go to go test
 
 npm run lint && npm run check        # oxlint + prettier, svelte-check
 npm run test:coverage                # vitest
 npm run build                        # SPA into build/
-cd backend-go && go test ./...       # set OHARA_TEST_DATABASE_URL for DB tests
+cd backend-go && go test ./...       # DB tests skip unless OHARA_TEST_DATABASE_URL is set
 cd backend-go && golangci-lint run ./...
 ./scripts/run-nilaway.sh backend-go github.com/Automaat/ohara/backend-go
 ```
+
+`OHARA_DB_PORT` (default `5432`) moves the dev Postgres's host port when
+another one holds 5432; `db`, `backend` and `test-backend` follow it.
 
 Allegro authorization is one-time: with the client credentials set, run
 `docker exec -it ohara api allegro-login`, open the printed link and

@@ -147,7 +147,7 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   mid = median of OLX and Vinted prices not marked new, outliers beyond
   1.5 IQR dropped (source `olx+vinted` when both contribute); ceiling = median Ceneo price. Mid and ceiling pool every
   edition of the same title and format, owned, wished or without copies; an unowned edition's prices count
-  only once seen after its last change. A mid from fewer than 3 prices is
+  only when first seen after its last change. A mid from fewer than 3 prices is
   low confidence. An owned album edition with a `discogs_release_id` is
   priced on Discogs (marketplace stats in EUR, price suggestions in the
   seller-settings currency, converted to PLN at the NBP table A rate): its

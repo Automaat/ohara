@@ -69,8 +69,9 @@ func (s *Store) Record(ctx context.Context, l *deals.Listing, h *Holding) (bool,
 // edition without an owned copy count when an edition of the same title
 // and format is owned, as middles and ceilings pool that group and a
 // listing keeps the edition it was first stored against, often a wished
-// one. Such a price counts only once seen after the edition last changed:
-// a listing matched before an edit, such as a new format, may not fit it.
+// one. Such a price counts only when first seen after the edition last
+// changed: a listing matched before an edit, such as a new format, may not
+// fit it, and a match for another edition later keeps it on this one.
 // Floors and Discogs bounds are per edition, so those count only for an
 // owned edition. A Discogs price counts only for the release the edition
 // names now: its external ID is "<release>/<edition>", so a changed or
@@ -82,7 +83,7 @@ func (s *Store) Prices(ctx context.Context, window time.Duration) ([]Price, erro
 		WHERE o.source = ANY ($1)
 			AND o.last_seen_at > now() - make_interval(secs => $2)
 			AND (o.edition_id IN (SELECT edition_id FROM copy WHERE status = 'owned')
-				OR o.source = ANY ($4) AND o.last_seen_at > e.updated_at
+				OR o.source = ANY ($4) AND o.observed_at > e.updated_at
 					AND (e.title_id, coalesce(e.format, '')) IN (
 						SELECT owned.title_id, coalesce(owned.format, '')
 						FROM copy c JOIN edition owned ON owned.id = c.edition_id

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/Automaat/ohara/backend-go/internal/deals"
 )
 
 // fakeShop mimics the SkupSzop sell flow: the sell page sets a session and
@@ -332,5 +334,45 @@ func TestParseCartIgnoresRowWithoutPrice(t *testing.T) {
 	page = []byte(`<div class="buy-cart-item" data-isbn="9788308074770"><div class="price"><span class="value">abc</span></div>`)
 	if _, ok := parseCart(page, "9788308074770"); ok {
 		t.Fatal("an unreadable price must not quote")
+	}
+}
+
+func TestSkupSzopRefusalStopsTheRun(t *testing.T) {
+	for _, tt := range []struct {
+		status  int
+		refused bool
+	}{
+		{http.StatusForbidden, true},
+		{http.StatusTooManyRequests, true},
+		{http.StatusServiceUnavailable, false},
+	} {
+		t.Run(strconv.Itoa(tt.status), func(t *testing.T) {
+			shop := newFakeShop(t)
+			shop.status = tt.status
+			srv := httptest.NewServer(shop)
+			t.Cleanup(srv.Close)
+			_, err := SkupSzop{Client: srv.Client(), BaseURL: srv.URL + "/"}.Quote(context.Background(), "9788308074770")
+			if err == nil {
+				t.Fatal("Quote succeeded")
+			}
+			var f deals.Refused
+			if got := f.Note(err); got != tt.refused {
+				t.Fatalf("Note(%v) = %v, want %v", err, got, tt.refused)
+			}
+		})
+	}
+}
+
+func TestSkupSzopRefusalWithABrokenBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "1000")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte("Too Many"))
+	}))
+	t.Cleanup(srv.Close)
+	_, err := SkupSzop{Client: srv.Client(), BaseURL: srv.URL + "/"}.Quote(context.Background(), "9788308074770")
+	var f deals.Refused
+	if err == nil || !f.Note(err) {
+		t.Fatalf("Quote err = %v, want a 429 refusal", err)
 	}
 }

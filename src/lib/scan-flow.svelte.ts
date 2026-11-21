@@ -13,6 +13,7 @@ import {
 	LatestLoad,
 	checkDigitMatches,
 	cleanBarcode,
+	discardMade,
 	emptySticky,
 	isInvalidBarcode,
 	loadSticky,
@@ -329,7 +330,8 @@ export class ScanFlow {
 	 * The copy the server returns decides what is logged: a retry of a save whose answer was
 	 * lost returns the copy the first attempt made, even when the form changed in between. An
 	 * owned copy's shop joins the ones stored when it answers, so another page's save that
-	 * answered meanwhile keeps its shop.
+	 * answered meanwhile keeps its shop. A failed add without a barcode removes the title and
+	 * edition it made and starts over with a new key, as no barcode would find them again.
 	 */
 	async save(): Promise<Added | null> {
 		const item = this.item;
@@ -375,6 +377,10 @@ export class ScanFlow {
 			});
 			return current() ? { saved, add, barcode: item.barcode, next } : null;
 		} catch (err) {
+			if (!item.barcode && (await discardMade(this.#fetch, item.made))) {
+				item.key = newRequestKey();
+				item.made = newMade();
+			}
 			if (!current()) return null;
 			this.issue =
 				err instanceof FormRejected

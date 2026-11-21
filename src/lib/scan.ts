@@ -596,14 +596,31 @@ async function editionByBarcode(fetchFn: typeof fetch, barcode: string): Promise
 	return found[0] ?? null;
 }
 
-/** Removes a title made for an edition that went elsewhere; true once it is gone. */
-async function discardTitle(fetchFn: typeof fetch, id: number): Promise<boolean> {
+/** Deletes a title or an edition an add made; true once it is gone. */
+async function discard(fetchFn: typeof fetch, path: string): Promise<boolean> {
 	try {
-		await request<void>(fetchFn, 'DELETE', `/api/titles/${id}`);
+		await request<void>(fetchFn, 'DELETE', path);
 		return true;
 	} catch (err) {
 		return err instanceof ApiError && err.status === 404;
 	}
+}
+
+/**
+ * Removes what a failed add without a barcode made, edition first, so neither a retry for
+ * another title nor a later add of the same one finds it. An edition that holds a copy, as after
+ * a lost answer, stays with its title. True when nothing the add made is left.
+ */
+export async function discardMade(fetchFn: typeof fetch, made: Made): Promise<boolean> {
+	const drop = (ids: number[], path: string) =>
+		Promise.all(
+			[...ids].map(async (id) => {
+				if (await discard(fetchFn, `${path}/${id}`)) forget(ids, id);
+			})
+		);
+	await drop(made.editions, '/api/editions');
+	if (made.editions.length === 0) await drop(made.titles, '/api/titles');
+	return made.editions.length === 0 && made.titles.length === 0 && !made.titleUnanswered;
 }
 
 function remember(ids: number[], id: number) {
@@ -709,12 +726,15 @@ export async function saveScan(
 	} catch (err) {
 		const raced = err instanceof ApiError && err.status === 409 && err.field === 'barcode';
 		const existing = raced ? await editionByBarcode(fetchFn, target.barcode) : null;
-		if (made.titles.includes(title.id) && (await discardTitle(fetchFn, title.id))) {
+		if (made.titles.includes(title.id) && (await discard(fetchFn, `/api/titles/${title.id}`))) {
 			forget(made.titles, title.id);
 		}
 		if (!existing) throw err;
 		edition = existing;
-		owner = await request<Title>(fetchFn, 'GET', `/api/titles/${existing.title_id}`);
+	}
+	// A retry's key answers the edition an earlier attempt made, under the title it took then.
+	if (edition.title_id !== title.id) {
+		owner = await request<Title>(fetchFn, 'GET', `/api/titles/${edition.title_id}`);
 	}
 	const copy = await request<Copy>(
 		fetchFn,

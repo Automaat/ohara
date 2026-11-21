@@ -771,6 +771,86 @@ describe('ScanFlow without a barcode', () => {
 		});
 	});
 
+	it('removes what a failed add made and starts over, so adding it again makes no duplicate', async () => {
+		const s = server({
+			'GET /api/search?kind=music&q=Kind+of+Blue': [200, { candidates: [album] }],
+			'POST /api/titles': [
+				[201, { id: 4, name: 'Kind of Blue', kind: 'music' }],
+				[201, { id: 5, name: 'Kind of Blue', kind: 'music' }]
+			],
+			'POST /api/editions': [
+				[201, { id: 30, title_id: 4, barcode: null, format: 'vinyl', binding: null }],
+				[201, { id: 31, title_id: 5, barcode: null, format: 'vinyl', binding: null }]
+			],
+			'POST /api/copies?cover=auto': [
+				[500, { error: 'boom' }],
+				copyReply({ id: 50, edition_id: 31 })
+			],
+			'DELETE /api/editions/30': [204, null],
+			'DELETE /api/titles/4': [204, null]
+		});
+		const flow = new ScanFlow(s.fetchFn, memory());
+		flow.start('music');
+		flow.query = 'Kind of Blue';
+		await flow.search();
+		const firstKey = flow.item?.key;
+		expect(await flow.save()).toBeNull();
+		expect(flow.issue?.message).toBeTruthy();
+		expect(s.paths().slice(-2)).toEqual(['DELETE /api/editions/30', 'DELETE /api/titles/4']);
+		expect(flow.item?.key).not.toBe(firstKey);
+		expect(flow.item?.made).toEqual({ titles: [], editions: [], titleUnanswered: false });
+
+		const added = await flow.save();
+		expect(added?.saved).toMatchObject({ titleID: 5, editionID: 31 });
+		const keys = s.calls.filter((c) => c.url === '/api/titles').map((c) => c.body);
+		expect(keys).toMatchObject([{ request_key: firstKey }, { request_key: flow.item?.key }]);
+	});
+
+	it('keeps an edition whose copy went in unanswered and opens the title it belongs to', async () => {
+		const rejs: Candidate = {
+			type: 'movie',
+			title: { name: 'Rejs', year: 1970, tmdb_id: 2 },
+			edition: { barcode: '', format: 'dvd' },
+			provider: 'tmdb',
+			confidence: 0.6
+		};
+		const diuna = { ...movie, edition: { barcode: '', format: 'uhd' as const } };
+		const s = server({
+			'GET /api/search?kind=movie&q=Diuna': [200, { candidates: [diuna, rejs] }],
+			'GET /api/titles?tmdb_id=1': [200, []],
+			'GET /api/titles?tmdb_id=2': [200, [{ id: 20, name: 'Rejs', kind: 'movie' }]],
+			'POST /api/titles': [201, { id: 10, name: 'Diuna: Część druga', kind: 'movie' }],
+			'POST /api/editions': [
+				[201, { id: 42, title_id: 10, barcode: null, format: 'uhd', binding: null }],
+				[200, { id: 42, title_id: 10, barcode: null, format: 'uhd', binding: null }]
+			],
+			'POST /api/copies?cover=auto': [
+				() => Promise.reject(new TypeError('lost')),
+				copyReply({ id: 60, edition_id: 42 })
+			],
+			'DELETE /api/editions/42': [409, { error: 'edition still has copies' }],
+			'GET /api/titles/10': [200, { id: 10, name: 'Diuna: Część druga', kind: 'movie' }]
+		});
+		const flow = new ScanFlow(s.fetchFn, memory());
+		flow.start('movie');
+		flow.query = 'Diuna';
+		await flow.search();
+		flow.pick(0);
+		const key = flow.item?.key;
+		expect(await flow.save()).toBeNull();
+		expect(flow.item?.key).toBe(key);
+		expect(flow.item?.made.editions).toEqual([42]);
+
+		flow.choose();
+		flow.pick(1);
+		const added = await flow.save();
+		expect(added?.saved).toMatchObject({
+			titleID: 10,
+			titleName: 'Diuna: Część druga',
+			editionID: 42
+		});
+	});
+
 	it('drops what a barcode was still answering', async () => {
 		let release: (r: [number, unknown]) => void = () => {};
 		const slow = new Promise<[number, unknown]>((resolve) => (release = resolve));

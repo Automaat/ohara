@@ -29,6 +29,7 @@ import (
 	"github.com/Automaat/ohara/backend-go/internal/lookup/music"
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
 	"github.com/Automaat/ohara/backend-go/internal/scanqueue"
+	"github.com/Automaat/ohara/backend-go/internal/seed"
 	"github.com/Automaat/ohara/backend-go/internal/server"
 	"github.com/Automaat/ohara/backend-go/internal/valuation"
 	"github.com/Automaat/ohara/backend-go/internal/web"
@@ -43,6 +44,9 @@ func main() {
 	}
 	if len(os.Args) >= 2 && os.Args[1] == "allegro-login" {
 		os.Exit(allegroLogin())
+	}
+	if len(os.Args) >= 2 && os.Args[1] == "seed" {
+		os.Exit(seedDemo())
 	}
 	os.Exit(run())
 }
@@ -393,6 +397,35 @@ func allegroLogin() int {
 		fmt.Fprintln(os.Stderr, "allegro-login:", err)
 		return 1
 	}
+	return 0
+}
+
+// seedDemo fills an empty database with demo data for local work. It
+// applies the migrations first, so it can run before the app ever started,
+// and exits 1 without a change when the database already holds data.
+func seedDemo() int {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" && os.Getenv("PGHOST") == "" {
+		fmt.Fprintln(os.Stderr, "seed: set DATABASE_URL or the PG* variables")
+		return 2
+	}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	pool, err := openDB(ctx, dsn, logger)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "seed: database:", err)
+		return 2
+	}
+	defer pool.Close()
+	n, err := seed.Run(ctx, pool)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "seed:", err)
+		return 1
+	}
+	fmt.Printf("seed: added %d titles, %d editions, %d copies, %d listings, %d deal alerts, "+
+		"%d days of value history and %d scan queue entries\n",
+		n.Titles, n.Editions, n.Copies, n.Observations, n.Alerts, n.HistoryDays, n.ScanQueue)
 	return 0
 }
 

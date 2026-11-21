@@ -10,6 +10,10 @@ go = "1.27.4"
 description = "Start Postgres and the app from local source"
 run = "docker compose up --build"
 
+[tasks.seed]
+description = "Fill the empty dev database with demo data (needs mise run dev)"
+run = "docker compose exec app /usr/local/bin/api seed"
+
 [tasks.down]
 description = "Stop the local stack"
 run = "docker compose down"

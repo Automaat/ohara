@@ -33,6 +33,7 @@ Same layout and tooling as `../baratie`. `package.json` and
     /fetch/            # fetch.Do: one request to an outside source, capped body, query-free errors
     /metrics/          # Prometheus collectors on a private registry (ohara_*)
     /recovery/         # recovery.Call: a panic outside a request handler becomes a logged error
+    /seed/             # `api seed`: demo data for an empty local database
 /src/                  # SvelteKit SPA (adapter-static, ssr off)
   /routes/             # pages; /scan is the scanner, /scan/queue the unresolved barcodes
   /lib/                # nav table, API client, collection types, form helpers, scan flow (pure TS, unit tested)
@@ -184,6 +185,12 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   run. A panic there is logged at error level with its stack and counts as
   that provider's, source's or run's failure.
 - DB tests call `dbtest.Migrated(t)`; each gets its own schema.
+- `api seed` (`internal/seed`) fills an empty database with demo rows for
+  every page in one transaction and sends no request; it refuses (exit 1,
+  nothing changed) a database holding titles, listings, value history,
+  scan queue entries or a deal run. It never queues a pending deal alert.
+  Its DB test asserts what each page needs, so a schema change that
+  breaks the seed fails CI.
 - Deal sources implement `deals.Source`. A run matches listing titles to
   wishlist copies (all title words, the edition's format for movies, the
   author's surname for books, the artist's words and a fitting medium for
@@ -345,6 +352,7 @@ browser's `Host` (`changeOrigin: false`) so dev writes pass this check.
 mise run dev                         # Postgres + app from source (docker compose)
 mise run backend                     # API only, needs DATABASE_URL or PG*
 mise run frontend                    # Vite dev server, proxies /api to :8000
+mise run seed                        # demo data into the empty `mise run dev` database
 
 npm run lint && npm run check        # oxlint + prettier, svelte-check
 npm run test:coverage                # vitest

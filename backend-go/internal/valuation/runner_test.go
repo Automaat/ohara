@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -44,6 +46,7 @@ func (f *fakeSource) Search(_ context.Context, q string) ([]deals.Listing, error
 
 type fakeBuyBack struct {
 	quotes map[string]Quote
+	err    error
 	asked  []string
 }
 
@@ -51,6 +54,9 @@ func (*fakeBuyBack) Name() string { return SourceSkupSzop }
 
 func (f *fakeBuyBack) Quote(_ context.Context, isbn string) (Quote, error) {
 	f.asked = append(f.asked, isbn)
+	if f.err != nil {
+		return Quote{}, f.err
+	}
 	q, ok := f.quotes[isbn]
 	if !ok {
 		return Quote{}, errors.New("skupszop: status 503")
@@ -688,6 +694,10 @@ func TestRunPricesAlbumsOnDiscogs(t *testing.T) {
 		byEdition[c.EditionID] = c
 	}
 	cd := byEdition[70]
+	if cd.DiscogsReleaseID == nil || *cd.DiscogsReleaseID != 1873013 || byEdition[71].DiscogsReleaseID != nil {
+		t.Fatalf("release IDs = %v, %v: want the CD's 1873013 and none for the vinyl",
+			cd.DiscogsReleaseID, byEdition[71].DiscogsReleaseID)
+	}
 	if cd.Floor == nil || cd.Floor.Cents != lowest || cd.Floor.Source != SourceDiscogs ||
 		cd.Mid == nil || cd.Mid.Cents != vgPlus || cd.Ceiling == nil || cd.Ceiling.Cents != mint || cd.LowConfidence {
 		t.Fatalf("CD value = %+v", cd)
@@ -757,6 +767,50 @@ func TestChangedReleaseDropsItsDiscogsPrices(t *testing.T) {
 	}
 }
 
+func TestValuedReadsOneSnapshot(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	exec(t, pool, `INSERT INTO title (id, kind, name, authors) OVERRIDING SYSTEM VALUE
+		VALUES (8, 'music', 'Nevermind', '{"Nirvana"}')`)
+	exec(t, pool, `INSERT INTO edition (id, title_id, format, discogs_release_id) OVERRIDING SYSTEM VALUE
+		VALUES (80, 8, 'cd', 200)`)
+	exec(t, pool, `INSERT INTO copy (edition_id, status) VALUES (80, 'owned')`)
+	vgPlus := int64(50000)
+	pricer := &fakePricer{prices: map[int64]ReleasePrice{200: {VGPlusCents: &vgPlus}}}
+	store := NewStore(pool)
+	r := NewRunner(store, nil, nil, pricer, Config{Window: 90 * 24 * time.Hour}, slog.New(slog.DiscardHandler))
+	r.sleep = func(ctx context.Context, _ time.Duration) error { return ctx.Err() }
+	ctx := context.Background()
+	if _, err := r.Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	exec(t, pool, `UPDATE edition SET discogs_release_id = 100 WHERE id = 80`)
+
+	// An edit naming release 200 again lands after the copies are read:
+	// the prices must still be read as of before it.
+	store.betweenReads = func() {
+		exec(t, pool, `UPDATE edition SET discogs_release_id = 200 WHERE id = 80`)
+	}
+	copies, _, err := store.Valued(ctx, r.Window())
+	if err != nil || len(copies) != 1 {
+		t.Fatalf("Valued = %+v, %v", copies, err)
+	}
+	c := copies[0]
+	if c.DiscogsReleaseID == nil || *c.DiscogsReleaseID != 100 || c.Mid != nil {
+		t.Fatalf("copy = release %v, mid %+v: want release 100 without release 200's price",
+			c.DiscogsReleaseID, c.Mid)
+	}
+
+	store.betweenReads = nil
+	copies, _, err = store.Valued(ctx, r.Window())
+	if err != nil || len(copies) != 1 {
+		t.Fatalf("Valued = %+v, %v", copies, err)
+	}
+	c = copies[0]
+	if c.DiscogsReleaseID == nil || *c.DiscogsReleaseID != 200 || c.Mid == nil || c.Mid.Cents != vgPlus {
+		t.Fatalf("after the edit: release %v, mid %+v", c.DiscogsReleaseID, c.Mid)
+	}
+}
+
 // panickingSource trips an index past the end of a slice on every search,
 // like a parser meeting a malformed answer.
 type panickingSource struct{ calls atomic.Int32 }
@@ -812,5 +866,90 @@ func TestPanickingRunFailsAndTheScheduleGoesOn(t *testing.T) {
 		if !strings.Contains(logs.String(), want) {
 			t.Errorf("log lacks %s:\n%s", want, logs.String())
 		}
+	}
+}
+
+func TestRunStopsAskingSitesThatRefused(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	seed(t, pool)
+	exec(t, pool, `INSERT INTO title (id, kind, name, authors) OVERRIDING SYSTEM VALUE
+		VALUES (3, 'book', 'Lód', '{"Jacek Dukaj"}'), (4, 'book', 'Perfekcyjna niedoskonałość', '{"Jacek Dukaj"}')`)
+	exec(t, pool, `INSERT INTO edition (id, title_id, barcode, binding) OVERRIDING SYSTEM VALUE
+		VALUES (30, 3, '9788308041208', 'paperback'), (40, 4, '9788308035306', 'paperback')`)
+	exec(t, pool, `INSERT INTO copy (edition_id, status) VALUES (30, 'owned'), (40, 'owned')`)
+	refusing := &fakeSource{name: "valuation-refusing", err: statusError{http.StatusForbidden}}
+	next := &fakeSource{name: "valuation-after-refusal"}
+	bb := &fakeBuyBack{err: fmt.Errorf("skupszop: sell page: %w", statusError{http.StatusTooManyRequests})}
+	r := newTestRunner(pool, bb, refusing, next)
+	refusedBefore := counter(t, `ohara_source_requests_total{source="valuation-refusing",status="http_403"}`)
+
+	res, err := r.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Queries < 3 {
+		t.Fatalf("queries = %d, want several", res.Queries)
+	}
+	if len(refusing.queries) != 1 {
+		t.Fatalf("refusing source asked %q, want 1 query", refusing.queries)
+	}
+	if len(next.queries) != res.Queries {
+		t.Fatalf("next source asked %d of %d queries", len(next.queries), res.Queries)
+	}
+	if len(bb.asked) != 1 {
+		t.Fatalf("buy-back asked %q, want 1 quote", bb.asked)
+	}
+	want := []string{
+		fmt.Sprintf("valuation-refusing: refused with status 403, skipped %d queries", res.Queries-1),
+		"skupszop: refused with status 429, skipped 2 quotes",
+	}
+	if !slices.Equal(res.Errors, want) {
+		t.Fatalf("errors = %q, want %q", res.Errors, want)
+	}
+	if d := counter(t, `ohara_source_requests_total{source="valuation-refusing",status="http_403"}`) - refusedBefore; d != 1 {
+		t.Fatalf("http_403 requests grew by %v, want 1", d)
+	}
+
+	if _, err := r.Run(context.Background()); err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+	if len(refusing.queries) != 2 || refusing.queries[1] != refusing.queries[0] {
+		t.Fatalf("second run asked %q, want the first query again", refusing.queries[1:])
+	}
+	if len(bb.asked) != 2 || bb.asked[1] != bb.asked[0] {
+		t.Fatalf("second run quoted %q, want the first book again", bb.asked[1:])
+	}
+}
+
+// counter reads one series from /metrics, 0 when it is absent.
+func counter(t *testing.T, series string) float64 {
+	t.Helper()
+	for line := range strings.Lines(scrape(t)) {
+		key, val, ok := strings.Cut(strings.TrimSpace(line), " ")
+		if !ok || key != series {
+			continue
+		}
+		v, err := strconv.ParseFloat(val, 64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	return 0
+}
+
+func TestRunKeepsTheRefusalBeyondTheErrorCap(t *testing.T) {
+	x := &run{}
+	for range maxRunErrors {
+		x.res.Errors = append(x.res.Errors, "olx: status 503")
+	}
+	var f deals.Refused
+	if !f.Note(statusError{http.StatusTooManyRequests}) {
+		t.Fatal("429 is not a refusal")
+	}
+	f.Skip()
+	x.report("olx", &f, "queries")
+	if len(x.res.Errors) != maxRunErrors+1 || x.res.Errors[maxRunErrors] != "olx: refused with status 429, skipped 1 queries" {
+		t.Fatalf("errors = %q", x.res.Errors)
 	}
 }

@@ -16,6 +16,7 @@
 	import { onMount } from 'svelte';
 	import { ApiError, errorMessage, request } from '#lib/api.js';
 	import { formatLabels, formatPLN, kindLabels } from '#lib/collection.js';
+	import DiscogsCredit from '#lib/components/DiscogsCredit.svelte';
 	import ValuationHero from '#lib/components/ValuationHero.svelte';
 	import ValuationHistory from '#lib/components/ValuationHistory.svelte';
 	import ValuationRows from '#lib/components/ValuationRows.svelte';
@@ -24,6 +25,7 @@
 		boundKeys,
 		boundLabels,
 		byValue,
+		discogsRelease,
 		estimateSource,
 		estimateValue,
 		intervalLabel,
@@ -203,6 +205,7 @@
 					{#if column.key === 'title_name'}
 						<Link href={`/copies/${row.copy_id}`}>{row.title_name}</Link>
 						<span class="meta">{row.format ? formatLabels[row.format] : kindLabels[row.kind]}</span>
+						<DiscogsCredit release={discogsRelease(row)} />
 					{:else if column.key === 'price_cents'}
 						<span class="price">{row.price_cents == null ? '—' : formatPLN(row.price_cents)}</span>
 					{:else if column.key === 'floor' || column.key === 'mid' || column.key === 'ceiling'}

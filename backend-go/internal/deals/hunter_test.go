@@ -3,6 +3,7 @@ package deals
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -310,8 +311,8 @@ func TestRunRecordsAlertSentBeforeCancellation(t *testing.T) {
 	defer cancel()
 	notifier := &cancellingNotifier{cancel: cancel}
 	h := newTestHunter(pool, notifier, olxFixture(t))
-	if res, err := h.Run(ctx); err != nil || res.Sent != 1 {
-		t.Fatalf("canceled run = %+v, %v; want the delivered alert recorded", res, err)
+	if res, err := h.Run(ctx); (err != nil && !errors.Is(err, context.Canceled)) || res.Sent != 1 {
+		t.Fatalf("canceled run = %+v, %v; want the delivered alert recorded and at most the cancellation", res, err)
 	}
 	if n := count(t, pool, `SELECT count(*) FROM deal_alert WHERE sent_at IS NOT NULL`); n != 1 {
 		t.Fatalf("sent alerts = %d, want 1", n)
@@ -614,5 +615,369 @@ func TestPanickingRunFailsAndTheScheduleGoesOn(t *testing.T) {
 		if !strings.Contains(logs.String(), want) {
 			t.Errorf("log lacks %s:\n%s", want, logs.String())
 		}
+	}
+}
+
+// refusingSource answers every query with no listings until its
+// refuseFrom-th request, counted over all runs, and with refusal from then
+// on.
+type refusingSource struct {
+	name       string
+	refuseFrom int
+	refusal    error
+	queries    []string
+}
+
+func (f *refusingSource) Name() string   { return f.name }
+func (f *refusingSource) PerQuery() bool { return true }
+
+func (f *refusingSource) Search(_ context.Context, query string) ([]Listing, error) {
+	f.queries = append(f.queries, query)
+	if len(f.queries) >= f.refuseFrom {
+		return nil, f.refusal
+	}
+	return nil, nil
+}
+
+// fiveWants wishes five DVDs, one query each.
+func fiveWants(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	for _, name := range []string{"Alien", "Aliens", "Predator", "Terminator", "Robocop"} {
+		wishlist(t, pool, &Want{Kind: "movie", Name: name, Format: new("dvd")})
+	}
+}
+
+func TestRunStopsAskingASourceThatRefused(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	fiveWants(t, pool)
+	refusing := &refusingSource{name: "refusing-source", refuseFrom: 2, refusal: statusError{http.StatusTooManyRequests}}
+	next := &fakeSource{name: "after-refusal", perQuery: true}
+	h := newTestHunter(pool, nil, refusing, next)
+	pauses := 0
+	h.sleep = func(ctx context.Context, _ time.Duration) error {
+		pauses++
+		return ctx.Err()
+	}
+	okBefore, _ := metric(t, `ohara_source_requests_total{source="refusing-source",status="ok"}`)
+	refusedBefore, _ := metric(t, `ohara_source_requests_total{source="refusing-source",status="http_429"}`)
+
+	res := mustRun(t, h)
+	if res.Queries != 5 {
+		t.Fatalf("queries = %d, want 5", res.Queries)
+	}
+	if len(refusing.queries) != 2 {
+		t.Fatalf("refusing source asked %q, want 2 queries", refusing.queries)
+	}
+	if len(next.queries) != 5 {
+		t.Fatalf("next source asked %q, want all 5 queries", next.queries)
+	}
+	want := []string{"refusing-source: refused with status 429, skipped 3 queries"}
+	if !slices.Equal(res.Errors, want) {
+		t.Fatalf("errors = %q, want %q", res.Errors, want)
+	}
+	if pauses != 6 {
+		t.Fatalf("pauses = %d, want one between each of the 7 requests", pauses)
+	}
+	if d := mustMetric(t, `ohara_source_requests_total{source="refusing-source",status="ok"}`) - okBefore; d != 1 {
+		t.Fatalf("ok requests grew by %v, want 1", d)
+	}
+	if d := mustMetric(t, `ohara_source_requests_total{source="refusing-source",status="http_429"}`) - refusedBefore; d != 1 {
+		t.Fatalf("http_429 requests grew by %v, want 1", d)
+	}
+
+	res = mustRun(t, h)
+	if len(refusing.queries) != 3 || refusing.queries[2] != refusing.queries[0] {
+		t.Fatalf("second run asked %q, want the first query again", refusing.queries[2:])
+	}
+	want = []string{"refusing-source: refused with status 429, skipped 4 queries"}
+	if !slices.Equal(res.Errors, want) {
+		t.Fatalf("second run errors = %q, want %q", res.Errors, want)
+	}
+	if d := mustMetric(t, `ohara_source_requests_total{source="refusing-source",status="http_429"}`) - refusedBefore; d != 2 {
+		t.Fatalf("http_429 requests grew by %v over two runs, want 2", d)
+	}
+}
+
+func TestRunTreatsOnly403And429AsRefusals(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	fiveWants(t, pool)
+	tests := []struct {
+		name    string
+		err     error
+		refused bool
+	}{
+		{name: "forbidden", err: statusError{http.StatusForbidden}, refused: true},
+		{name: "too many requests", err: fmt.Errorf("olx: %w", statusError{http.StatusTooManyRequests}), refused: true},
+		{name: "server error", err: statusError{http.StatusServiceUnavailable}},
+		{name: "not found", err: statusError{http.StatusNotFound}},
+		{name: "timeout", err: context.DeadlineExceeded},
+		{name: "parse error", err: parseError{errors.New("olx: decode")}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			src := &refusingSource{name: "refusal-kind", refuseFrom: 1, refusal: tt.err}
+			res := mustRun(t, newTestHunter(pool, nil, src))
+			asked := 5
+			if tt.refused {
+				asked = 1
+			}
+			if len(src.queries) != asked {
+				t.Fatalf("asked %d queries, want %d", len(src.queries), asked)
+			}
+			if tt.refused != (len(res.Errors) == 1) {
+				t.Fatalf("errors = %q", res.Errors)
+			}
+		})
+	}
+}
+
+// failThenRefuse answers its first fails queries with a 503 and every
+// later one with a 429.
+type failThenRefuse struct {
+	fails   int
+	queries []string
+}
+
+func (*failThenRefuse) Name() string   { return "fail-then-refuse" }
+func (*failThenRefuse) PerQuery() bool { return true }
+
+func (f *failThenRefuse) Search(_ context.Context, query string) ([]Listing, error) {
+	f.queries = append(f.queries, query)
+	if len(f.queries) <= f.fails {
+		return nil, statusError{http.StatusServiceUnavailable}
+	}
+	return nil, statusError{http.StatusTooManyRequests}
+}
+
+func TestRunKeepsTheRefusalBeyondTheErrorCap(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	for i := range maxRunErrors + 2 {
+		wishlist(t, pool, &Want{Kind: "movie", Name: "Film " + strconv.Itoa(i+1), Format: new("dvd")})
+	}
+	src := &failThenRefuse{fails: maxRunErrors}
+	res := mustRun(t, newTestHunter(pool, nil, src))
+	if res.Queries != maxRunErrors+2 || len(src.queries) != maxRunErrors+1 {
+		t.Fatalf("asked %d of %d queries, want all but the last", len(src.queries), res.Queries)
+	}
+	if len(res.Errors) != maxRunErrors+1 {
+		t.Fatalf("errors = %d, want %d failures and the refusal", len(res.Errors), maxRunErrors)
+	}
+	if last := res.Errors[maxRunErrors]; last != "fail-then-refuse: refused with status 429, skipped 1 queries" {
+		t.Fatalf("last error = %q", last)
+	}
+}
+
+// callLog records source requests and notifier sends in the order they
+// happen.
+type callLog struct {
+	mu    sync.Mutex
+	calls []string
+}
+
+func (c *callLog) add(call string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls = append(c.calls, call)
+}
+
+func (c *callLog) list() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.calls...)
+}
+
+type loggedSource struct {
+	*fakeSource
+	log *callLog
+}
+
+func (s loggedSource) Search(ctx context.Context, query string) ([]Listing, error) {
+	s.log.add("search " + s.name)
+	return s.fakeSource.Search(ctx, query)
+}
+
+type loggedNotifier struct {
+	fakeNotifier
+	log *callLog
+}
+
+func (n *loggedNotifier) Send(ctx context.Context, text string) error {
+	n.log.add("send")
+	return n.fakeNotifier.Send(ctx, text)
+}
+
+func TestRunSendsAlertBeforeTheNextRequest(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	wishlist(t, pool, wantBluray(new(int64(5000))))
+	log := &callLog{}
+	olx := loggedSource{olxFixture(t), log}
+	other := loggedSource{&fakeSource{name: "other", perQuery: true}, log}
+	notifier := &loggedNotifier{log: log}
+	if res := mustRun(t, newTestHunter(pool, notifier, olx, other)); res.Sent != 1 {
+		t.Fatalf("run = %+v", res)
+	}
+	want := []string{"search olx", "send", "search olx", "search other", "search other"}
+	if got := log.list(); !slices.Equal(got, want) {
+		t.Fatalf("calls = %q, want %q", got, want)
+	}
+}
+
+func TestRunTriesAFailedAlertOncePerRun(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	wishlist(t, pool, wantBluray(new(int64(5000))))
+	notifier := &fakeNotifier{fail: 100}
+	other := &fakeSource{name: "other", perQuery: true}
+	h := newTestHunter(pool, notifier, olxFixture(t), other)
+	if res := mustRun(t, h); res.Alerts != 1 || res.Sent != 0 || len(other.queries) != 2 {
+		t.Fatalf("run = %+v, other asked %q", res, other.queries)
+	}
+	if notifier.fail != 99 {
+		t.Fatalf("notifier tried %d times in one run, want 1", 100-notifier.fail)
+	}
+	if n := count(t, pool, `SELECT attempts FROM deal_alert`); n != 1 {
+		t.Fatalf("attempts = %d after one run, want 1", n)
+	}
+	mustRun(t, h)
+	if n := count(t, pool, `SELECT attempts FROM deal_alert`); n != 2 {
+		t.Fatalf("attempts = %d after two runs, want 2", n)
+	}
+}
+
+// slowNotifier takes delay to deliver each message, as a slow Telegram
+// answer does.
+type slowNotifier struct {
+	fakeNotifier
+	delay time.Duration
+}
+
+func (n *slowNotifier) Send(ctx context.Context, text string) error {
+	time.Sleep(n.delay)
+	return n.fakeNotifier.Send(ctx, text)
+}
+
+// recordWaits makes h's sleeps return at once and keeps their lengths.
+func recordWaits(h *Hunter) func() []time.Duration {
+	var mu sync.Mutex
+	var waits []time.Duration
+	h.sleep = func(ctx context.Context, d time.Duration) error {
+		mu.Lock()
+		waits = append(waits, d)
+		mu.Unlock()
+		return ctx.Err()
+	}
+	return func() []time.Duration {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]time.Duration(nil), waits...)
+	}
+}
+
+// pacedFromReturn reports whether a wait began a full telegramPause after a
+// send that took delay returned, not after it started.
+func pacedFromReturn(waits []time.Duration, delay time.Duration) bool {
+	return slices.ContainsFunc(waits, func(d time.Duration) bool {
+		return d > telegramPause-delay/2 && d <= telegramPause
+	})
+}
+
+func TestRunAlertsOnceForAListingInTwoAnswersAndPacesMessages(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	wishlist(t, pool, wantBluray(new(int64(5000))))
+	cheap := Listing{Source: "olx", ExternalID: "1", Title: "Blade Runner Blu-ray", URL: "https://www.olx.pl/d/oferta/z-ID1.html", PriceCents: 4000}
+	olx := &fakeSource{name: "olx", perQuery: true, listings: []Listing{cheap}}
+	other := &fakeSource{name: "other", perQuery: true, listings: []Listing{{
+		Source: "other", ExternalID: "2", Title: "Blade Runner Blu-ray PL", URL: "https://example.com/2", PriceCents: 4500,
+	}}}
+	const delay = 200 * time.Millisecond
+	notifier := &slowNotifier{delay: delay}
+	h := newTestHunter(pool, notifier, olx, other)
+	waits := recordWaits(h)
+	res := mustRun(t, h)
+	if len(olx.queries) != 2 || res.Alerts != 2 || res.Sent != 2 {
+		t.Fatalf("run = %+v, olx asked %q", res, olx.queries)
+	}
+	if got := len(notifier.messages()); got != 2 {
+		t.Fatalf("sent %d messages, want one per listing", got)
+	}
+	if !pacedFromReturn(waits(), delay) {
+		t.Fatalf("waits = %v, want about telegramPause after the first send returned", waits())
+	}
+}
+
+func TestRunPacesMessagesAcrossRuns(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	wishlist(t, pool, wantBluray(new(int64(5000))))
+	olx := &fakeSource{name: "olx", perQuery: true, listings: []Listing{
+		{Source: "olx", ExternalID: "1", Title: "Blade Runner Blu-ray", URL: "https://www.olx.pl/d/oferta/z-ID1.html", PriceCents: 4000},
+	}}
+	const delay = 200 * time.Millisecond
+	notifier := &slowNotifier{delay: delay}
+	h := newTestHunter(pool, notifier, olx)
+	waits := recordWaits(h)
+	if res := mustRun(t, h); res.Sent != 1 {
+		t.Fatalf("first run = %+v", res)
+	}
+	olx.add(Listing{Source: "olx", ExternalID: "2", Title: "Blade Runner Blu-ray PL", URL: "https://www.olx.pl/d/oferta/z-ID2.html", PriceCents: 4500})
+	if res := mustRun(t, h); res.Sent != 1 {
+		t.Fatalf("second run = %+v", res)
+	}
+	if !pacedFromReturn(waits(), delay) {
+		t.Fatalf("waits = %v, want about telegramPause before the second run's message", waits())
+	}
+}
+
+func TestRunRetriesAnAlertOnlyAtItsRefreshedPrice(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	wishlist(t, pool, wantBluray(new(int64(5000))))
+	olx := &fakeSource{name: "olx", perQuery: true, listings: []Listing{
+		{Source: "olx", ExternalID: "1", Title: "Blade Runner Blu-ray", URL: "https://www.olx.pl/d/oferta/z-ID1.html", PriceCents: 4000},
+	}}
+	notifier := &fakeNotifier{fail: 1}
+	h := newTestHunter(pool, notifier, olx)
+	if res := mustRun(t, h); res.Alerts != 1 || res.Sent != 0 {
+		t.Fatalf("failing run = %+v", res)
+	}
+	olx.listings[0].PriceCents = 6500
+	if res := mustRun(t, h); res.Sent != 0 || len(notifier.messages()) != 0 {
+		t.Fatalf("run with the price now above the limit = %+v, want no alert", res)
+	}
+}
+
+// hookSource calls before once, ahead of its first search, and logs each
+// search.
+type hookSource struct {
+	*fakeSource
+	before func()
+	once   sync.Once
+	log    *callLog
+}
+
+func (s *hookSource) Search(ctx context.Context, query string) ([]Listing, error) {
+	s.once.Do(s.before)
+	s.log.add("search " + s.name)
+	return s.fakeSource.Search(ctx, query)
+}
+
+func TestRunSendsAnAlertWhoseLimitRoseDuringTheRun(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	copyID := wishlist(t, pool, wantBluray(new(int64(5000))))
+	listing := Listing{Source: "olx", ExternalID: "1", Title: "Blade Runner Blu-ray", URL: "https://www.olx.pl/d/oferta/z-ID1.html", PriceCents: 4000}
+	notifier := &fakeNotifier{fail: 1}
+	if res := mustRun(t, newTestHunter(pool, notifier, &fakeSource{name: "olx", perQuery: true, listings: []Listing{listing}})); res.Alerts != 1 || res.Sent != 0 {
+		t.Fatalf("failing run = %+v", res)
+	}
+	setLimit := func(cents int64) {
+		if _, err := pool.Exec(context.Background(), `UPDATE copy SET max_price_cents = $2 WHERE id = $1`, copyID, cents); err != nil {
+			t.Fatalf("limit: %v", err)
+		}
+	}
+	setLimit(3000)
+	log := &callLog{}
+	olx := &hookSource{fakeSource: &fakeSource{name: "olx", perQuery: true, listings: []Listing{listing}}, before: func() { setLimit(5000) }, log: log}
+	if res := mustRun(t, newTestHunter(pool, &loggedNotifier{log: log}, olx)); res.Sent != 1 {
+		t.Fatalf("run with the limit raised during it = %+v, want the pending alert sent", res)
+	}
+	if want := []string{"search olx", "send", "search olx"}; !slices.Equal(log.list(), want) {
+		t.Fatalf("calls = %q, want the alert sent before the next request", log.list())
 	}
 }

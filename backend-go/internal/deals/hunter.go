@@ -17,6 +17,7 @@ import (
 )
 
 // maxRunErrors bounds the source errors a run keeps for the status view.
+// A refusal, at most one per source, is kept beyond it.
 const maxRunErrors = 20
 
 // telegramPause keeps alerts under Telegram's one message per second per
@@ -78,6 +79,9 @@ type Hunter struct {
 
 	mu     sync.Mutex
 	status Status
+	// lastSend is when the notifier last returned, kept across runs so
+	// messages stay telegramPause apart; guarded by mu.
+	lastSend time.Time
 }
 
 // NewHunter wires the hunter. A nil notifier records listings without
@@ -186,18 +190,26 @@ func (h *Hunter) execute(ctx context.Context) {
 	h.mu.Unlock()
 }
 
-// run is one search: its counters and pacing between requests.
+// run is one search: its counters, pacing between requests and the alerts
+// it has already tried to send.
 type run struct {
 	h     *Hunter
 	wants []Want
 	rules Rules
 	res   RunResult
 	first bool
+	// tried holds the observations whose alert this run sent or failed to
+	// send; a failed one waits for the next run.
+	tried map[int64]bool
 }
 
 // Run searches every source for every wishlist copy, records matching
-// listings and delivers pending alerts. Source failures are collected in
-// the result; a database failure or cancellation stops the run.
+// listings and delivers pending alerts. An alert for a listing an answer
+// matched goes out before the run asks a source again; every other pending
+// alert, such as one for a listing no answer matched, goes out after the
+// last request.
+// Source failures are collected in the result; a database failure or
+// cancellation stops the run.
 func (h *Hunter) Run(ctx context.Context) (RunResult, error) {
 	wants, err := h.store.Wants(ctx)
 	if err != nil {
@@ -207,7 +219,7 @@ func (h *Hunter) Run(ctx context.Context) (RunResult, error) {
 	if err != nil {
 		return RunResult{}, err
 	}
-	r := &run{h: h, wants: wants, rules: rules, first: true}
+	r := &run{h: h, wants: wants, rules: rules, first: true, tried: map[int64]bool{}}
 	r.res.Wants = len(wants)
 	r.res.Errors = []string{}
 	var queries []string
@@ -222,7 +234,7 @@ func (h *Hunter) Run(ctx context.Context) (RunResult, error) {
 			}
 		}
 	}
-	if err := r.deliver(ctx); err != nil {
+	if err := r.deliver(ctx, nil); err != nil {
 		return r.res, err
 	}
 	return r.res, nil
@@ -256,9 +268,18 @@ func (r *run) pause(ctx context.Context) error {
 // publishes the listing count and canary outcome. A feed source is asked
 // once: that answer is both its canary and, with a wishlist, its listings.
 func (r *run) search(ctx context.Context, src Source, queries []string) error {
+	var f Refused
+	err := r.searchAll(ctx, src, &f, queries)
+	if msg := f.Message(src.Name(), "queries"); msg != "" {
+		r.res.Errors = append(r.res.Errors, msg)
+	}
+	return err
+}
+
+func (r *run) searchAll(ctx context.Context, src Source, f *Refused, queries []string) error {
 	canary := r.h.cfg.CanaryQuery
 	if !src.PerQuery() {
-		listings, ok, err := r.ask(ctx, src, "")
+		listings, ok, err := r.ask(ctx, src, f, "")
 		if err != nil {
 			return err
 		}
@@ -273,7 +294,7 @@ func (r *run) search(ctx context.Context, src Source, queries []string) error {
 	}
 	results := 0
 	if canary != "" {
-		listings, ok, err := r.ask(ctx, src, canary)
+		listings, ok, err := r.ask(ctx, src, f, canary)
 		if err != nil {
 			return err
 		}
@@ -281,7 +302,7 @@ func (r *run) search(ctx context.Context, src Source, queries []string) error {
 		results += len(listings)
 	}
 	for _, q := range queries {
-		listings, ok, err := r.ask(ctx, src, q)
+		listings, ok, err := r.ask(ctx, src, f, q)
 		if err != nil {
 			return err
 		}
@@ -297,10 +318,15 @@ func (r *run) search(ctx context.Context, src Source, queries []string) error {
 	return nil
 }
 
-// ask sends one request to src after the pause and counts its outcome. A
-// source failure is logged and kept in the result with ok false; err is
+// ask sends one request to the source after the pause and counts its
+// outcome. A source failure is logged and kept in the result with ok
+// false; a refusal is kept once, when the source is done. A source that
+// refused is not asked again: the query is skipped without a pause. err is
 // only the run's cancellation.
-func (r *run) ask(ctx context.Context, src Source, query string) ([]Listing, bool, error) {
+func (r *run) ask(ctx context.Context, src Source, f *Refused, query string) ([]Listing, bool, error) {
+	if f.Skip() {
+		return nil, false, ctx.Err()
+	}
 	if err := r.pause(ctx); err != nil {
 		return nil, false, err
 	}
@@ -311,7 +337,9 @@ func (r *run) ask(ctx context.Context, src Source, query string) ([]Listing, boo
 	ObserveSearch(src, err)
 	if err != nil {
 		r.h.logger.Warn("deal source failed", "source", src.Name(), "query", query, "err", err)
-		r.fail(err.Error())
+		if !f.Note(err) {
+			r.fail(err.Error())
+		}
 		return nil, false, nil
 	}
 	return listings, true, nil
@@ -334,8 +362,13 @@ func (r *run) fail(msg string) {
 	}
 }
 
+// record stores the matching listings of one answer, then sends their
+// pending alerts before the run asks a source again. PendingAlerts checks
+// the refreshed price against the wish's current limit, which may have
+// changed since the run read the wishlist.
 func (r *run) record(ctx context.Context, listings []Listing) error {
 	r.res.Listings += len(listings)
+	refreshed := map[string]bool{}
 	for i := range listings {
 		l := &listings[i]
 		w := pick(r.wants, l, r.rules)
@@ -354,12 +387,20 @@ func (r *run) record(ctx context.Context, listings []Listing) error {
 		if alerted {
 			r.res.Alerts++
 		}
+		refreshed[listingKey(l.Source, l.ExternalID)] = true
 	}
-	return nil
+	if len(refreshed) == 0 {
+		return nil
+	}
+	return r.deliver(ctx, refreshed)
 }
 
-// deliver sends every pending alert; a failed send is retried next run.
-func (r *run) deliver(ctx context.Context) error {
+func listingKey(source, externalID string) string { return source + "\x00" + externalID }
+
+// deliver sends the pending alerts this run has not tried yet, at least
+// telegramPause apart; a failed send is retried next run. A non-nil only
+// limits it to the listings it names.
+func (r *run) deliver(ctx context.Context, only map[string]bool) error {
 	if r.h.notifier == nil {
 		return nil
 	}
@@ -369,12 +410,18 @@ func (r *run) deliver(ctx context.Context) error {
 	}
 	for i := range alerts {
 		a := &alerts[i]
-		if i > 0 {
-			if err := r.h.sleep(ctx, telegramPause); err != nil {
+		if r.tried[a.ObservationID] || only != nil && !only[listingKey(a.Source, a.ExternalID)] {
+			continue
+		}
+		if wait := r.h.sendWait(); wait > 0 {
+			if err := r.h.sleep(ctx, wait); err != nil {
 				return err
 			}
 		}
-		if err := r.h.notifier.Send(ctx, alertText(a)); err != nil {
+		r.tried[a.ObservationID] = true
+		err := r.h.notifier.Send(ctx, alertText(a))
+		r.h.sent()
+		if err != nil {
 			r.h.logger.Warn("telegram alert failed", "observation", a.ObservationID, "err", err)
 			if err := r.h.store.MarkFailed(ctx, a.ObservationID, err.Error()); err != nil {
 				return err
@@ -384,7 +431,7 @@ func (r *run) deliver(ctx context.Context) error {
 		// The message is out: record it even when ctx was canceled during
 		// the send, or the next run sends it again.
 		markCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), markSentTimeout)
-		err := r.h.store.MarkSent(markCtx, a.ObservationID)
+		err = r.h.store.MarkSent(markCtx, a.ObservationID)
 		cancel()
 		if err != nil {
 			return err
@@ -392,6 +439,24 @@ func (r *run) deliver(ctx context.Context) error {
 		r.res.Sent++
 	}
 	return nil
+}
+
+// sendWait is what is left of telegramPause since the notifier last
+// returned.
+func (h *Hunter) sendWait() time.Duration {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.lastSend.IsZero() {
+		return 0
+	}
+	return max(telegramPause-time.Since(h.lastSend), 0)
+}
+
+// sent starts the pause before the next message.
+func (h *Hunter) sent() {
+	h.mu.Lock()
+	h.lastSend = time.Now()
+	h.mu.Unlock()
 }
 
 var (

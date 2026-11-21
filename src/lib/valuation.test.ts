@@ -8,6 +8,7 @@ import {
 	copyRange,
 	missingCeiling,
 	daysAgo,
+	discogsRelease,
 	estimateSource,
 	estimateValue,
 	formatZl,
@@ -502,6 +503,15 @@ describe('copy rows', () => {
 		expect(missingCeiling(copy({ mid: est(2500) }))).toBe('Nowe: brak danych');
 		expect(missingCeiling(copy({ floor: est(500), ceiling: est(900) }))).toBeNull();
 		expect(missingCeiling(copy({}))).toBeNull();
+	});
+
+	it('credits Discogs only for a copy priced from its release', () => {
+		const discogs = { cents: 7098, source: 'discogs' as const, count: 0, trimmed: 0 };
+		expect(discogsRelease(copy({ discogs_release_id: 1873013, mid: discogs }))).toBe(1873013);
+		expect(discogsRelease(copy({ discogs_release_id: 1873013, floor: discogs }))).toBe(1873013);
+		expect(discogsRelease(copy({ discogs_release_id: 1873013, mid: est(2500) }))).toBeNull();
+		expect(discogsRelease(copy({ discogs_release_id: 1873013 }))).toBeNull();
+		expect(discogsRelease(copy({ mid: discogs }))).toBeNull();
 	});
 
 	it('names the format, or the kind, and what was paid', () => {

@@ -2,6 +2,7 @@
 	import { Button, Callout, Field, Skeleton, TextInput } from '@smykla-skalski/sui';
 	import { tick, untrack } from 'svelte';
 	import CollectionCover from '#lib/components/CollectionCover.svelte';
+	import DiscogsCredit from '#lib/components/DiscogsCredit.svelte';
 	import ScanConfirm from '#lib/components/ScanConfirm.svelte';
 	import { sessionExpiredMessage } from '#lib/api.js';
 	import { displayName, editionSummary, kindLabels, type Kind } from '#lib/collection.js';
@@ -43,6 +44,8 @@
 		meta?: string;
 		more?: string;
 		cover?: { kind: Kind; url?: string };
+		/** The Discogs release the found item's data comes from. */
+		discogs?: number | null;
 	};
 
 	/** Whether the title and kind of a found item show as fields. */
@@ -104,7 +107,8 @@
 				tone: candidate ? 'ok' : 'quiet',
 				name: flow.form.name.trim() || undefined,
 				meta: kindLabels[flow.form.kind],
-				cover: { kind: flow.form.kind, url: candidate?.cover_url }
+				cover: { kind: flow.form.kind, url: candidate?.cover_url },
+				discogs: candidate?.edition.discogs_release_id
 			};
 		}
 		if (flow.choosing) {
@@ -127,7 +131,8 @@
 				same ? otherTitle(same.title) : undefined
 			]),
 			more: same?.type === 'music' ? line([same.edition.publisher, same.edition.label]) : undefined,
-			cover: { kind: flow.form.kind, url: c?.cover_url }
+			cover: { kind: flow.form.kind, url: c?.cover_url },
+			discogs: c?.edition.discogs_release_id
 		};
 	}
 
@@ -258,6 +263,7 @@
 			{#if code}
 				<p class="code">{barcodeGroups(code).join(' ')}</p>
 			{/if}
+			<DiscogsCredit release={header.discogs} />
 			{#if flow.phase.kind === 'ready' && item?.target.kind === 'new' && !flow.choosing}
 				<div class="tools">
 					{#if flow.phase.status !== 'missing'}
@@ -338,18 +344,21 @@
 					{/if}
 				</p>
 				{#each item.candidates as c, i (i)}
-					<button
-						type="button"
-						class="candidate"
-						id={`scan-candidate-${i}`}
-						onclick={() => flow.pick(i)}
-					>
-						<span class="thumb"><CollectionCover kind={c.type} url={c.cover_url} /></span>
-						<span class="what">
-							<strong>{candidateParts(c).name}</strong>
-							<span>{candidateDetails(c)}</span>
-						</span>
-					</button>
+					<div class="option">
+						<button
+							type="button"
+							class="candidate"
+							id={`scan-candidate-${i}`}
+							onclick={() => flow.pick(i)}
+						>
+							<span class="thumb"><CollectionCover kind={c.type} url={c.cover_url} /></span>
+							<span class="what">
+								<strong>{candidateParts(c).name}</strong>
+								<span>{candidateDetails(c)}</span>
+							</span>
+						</button>
+						<DiscogsCredit class="option-credit" release={c.edition.discogs_release_id} />
+					</div>
 				{/each}
 			</div>
 			{#if flow.phase.status === 'found'}
@@ -500,6 +509,16 @@
 	.candidates {
 		display: grid;
 		gap: 0.5rem;
+	}
+
+	.option {
+		display: grid;
+		gap: 0.125rem;
+	}
+
+	/* Under the candidate's text: past the card's padding, the thumb and the gap. */
+	.option :global(.option-credit) {
+		padding-inline-start: calc(0.75rem + 2.75rem + 0.75rem);
 	}
 
 	.candidate {

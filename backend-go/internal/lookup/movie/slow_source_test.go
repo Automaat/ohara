@@ -187,3 +187,36 @@ func TestAllegroRefreshOutlivesTheSourceTimeout(t *testing.T) {
 		t.Fatalf("next lookup: %v", err)
 	}
 }
+
+// lateLimitSource reports a rate limit only after the source timeout.
+type lateLimitSource struct{ reset time.Time }
+
+func (lateLimitSource) Name() string { return "upcitemdb" }
+
+func (s lateLimitSource) Products(context.Context, string) ([]Product, error) {
+	time.Sleep(sourceTimeout + 200*time.Millisecond)
+	return nil, &RateLimitError{Reset: s.reset}
+}
+
+// TestLateRateLimitStillPausesTheSource: a 429 that arrives after the
+// lookup stopped waiting still pauses the source until its reset.
+func TestLateRateLimitStillPausesTheSource(t *testing.T) {
+	reset := time.Now().Add(time.Hour)
+	p := &Provider{Sources: []NameSource{lateLimitSource{reset: reset}}, TMDB: &fakeSearcher{}}
+	if _, err := p.Fetch(context.Background(), "5906190326195"); err == nil {
+		t.Fatal("want the timed-out source to fail the fetch")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if until, ok := p.pausedUntil("upcitemdb"); ok {
+			if !until.Equal(reset) {
+				t.Fatalf("paused until %s, want %s", until, reset)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("source not paused after its late 429")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}

@@ -18,6 +18,7 @@ import (
 )
 
 // maxRunErrors bounds the source errors a run keeps for the status view.
+// A refusal, at most one per site, is kept beyond it.
 const maxRunErrors = 20
 
 // firstRunDelay keeps a restart loop from hammering the sources.
@@ -282,11 +283,23 @@ func (x *run) fail(source string, err error) {
 	}
 }
 
+// report keeps a site's refusal, if any, in the run's errors.
+func (x *run) report(site string, f *deals.Refused, unit string) {
+	if msg := f.Message(site, unit); msg != "" {
+		x.res.Errors = append(x.res.Errors, msg)
+	}
+}
+
 func (x *run) search(ctx context.Context, src deals.Source, queries []string) error {
 	if !src.PerQuery() {
 		queries = []string{""}
 	}
+	var f deals.Refused
+	defer x.report(src.Name(), &f, "queries")
 	for _, q := range queries {
+		if f.Skip() {
+			continue
+		}
 		if err := x.pause(ctx); err != nil {
 			return err
 		}
@@ -296,6 +309,10 @@ func (x *run) search(ctx context.Context, src deals.Source, queries []string) er
 		}
 		deals.ObserveSearch(src, err)
 		if err != nil {
+			if f.Note(err) {
+				x.r.logger.Warn("valuation source refused", "source", src.Name(), "err", err)
+				continue
+			}
 			x.fail(src.Name(), err)
 			continue
 		}
@@ -343,9 +360,14 @@ type quoteRaw struct {
 }
 
 func (x *run) quote(ctx context.Context, b BuyBack) error {
+	var f deals.Refused
+	defer x.report(b.Name(), &f, "quotes")
 	for i := range x.holdings {
 		h := &x.holdings[i]
 		if h.Want.Kind != "book" || !isISBN(h.Barcode) {
+			continue
+		}
+		if f.Skip() {
 			continue
 		}
 		if err := x.pause(ctx); err != nil {
@@ -356,6 +378,10 @@ func (x *run) quote(ctx context.Context, b BuyBack) error {
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
+			}
+			if f.Note(err) {
+				x.r.logger.Warn("valuation source refused", "source", b.Name(), "err", err)
+				continue
 			}
 			x.fail(b.Name(), err)
 			continue

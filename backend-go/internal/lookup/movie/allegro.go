@@ -6,14 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
-	"github.com/Automaat/ohara/backend-go/internal/recovery"
 )
 
 // AllegroUserAgent identifies Ohara to Allegro. The Allegro REST API terms
@@ -34,12 +35,29 @@ type Allegro struct {
 	UserAgent string
 	Now       func() time.Time
 
-	mu         sync.Mutex
-	token      *Token
-	refreshing *refreshCall
-	// unsaved is set while the pair in token has not reached Store.
-	unsaved   bool
-	refreshes sync.WaitGroup
+	tokenTimeout time.Duration
+
+	mu      sync.Mutex
+	token   *Token
+	unsaved bool
+	chain   []string
+	op      *tokenOp
+}
+
+// tokenOp is a token refresh, or a retried save of the current pair, that
+// runs on a context detached from the lookup that started it: Allegro
+// retires the old refresh token as soon as it answers, so the new pair has
+// to be kept even when the lookup gave up. One runs at a time, so the
+// store ends with the latest pair. chain lists the refresh tokens of the
+// pairs this process loaded or issued since the store last confirmed one:
+// a stored pair outside it came from another process, such as
+// `api allegro-login`.
+type tokenOp struct {
+	done    chan struct{}
+	refresh bool
+	chain   []string
+	access  string
+	err     error
 }
 
 // Token is an OAuth token pair.
@@ -65,8 +83,8 @@ var (
 // tokenLeeway refreshes a token this long before it expires.
 const tokenLeeway = time.Minute
 
-// refreshTimeout bounds a token refresh and the write of its result.
-const refreshTimeout = 30 * time.Second
+// defaultTokenTimeout bounds one token refresh and one token save.
+const defaultTokenTimeout = 20 * time.Second
 
 // Name is "allegro".
 func (*Allegro) Name() string { return "allegro" }
@@ -83,9 +101,8 @@ type allegroProducts struct {
 // Products runs GET /sale/products?mode=GTIN for barcode. A rejected access
 // token is refreshed once.
 func (a *Allegro) Products(ctx context.Context, code string) ([]Product, error) {
-	rejected := ""
 	for attempt := 0; ; attempt++ {
-		tok, err := a.accessToken(ctx, rejected)
+		tok, err := a.accessToken(ctx, attempt > 0)
 		if err != nil {
 			return nil, err
 		}
@@ -101,7 +118,6 @@ func (a *Allegro) Products(ctx context.Context, code string) ([]Product, error) 
 		_, body, err := get(a.client(), a.Name(), req, http.StatusOK)
 		switch {
 		case isStatus(err, http.StatusUnauthorized) && attempt == 0:
-			rejected = tok
 			continue
 		case isStatus(err, http.StatusForbidden):
 			return nil, fmt.Errorf("%w: %w", ErrAllegroRefused, err)
@@ -123,126 +139,133 @@ func (a *Allegro) Products(ctx context.Context, code string) ([]Product, error) 
 	}
 }
 
-// accessToken returns a usable access token, refreshing it when it is about
-// to expire or when it is rejected, the access token the catalog refused.
-// A token that another lookup already replaced is not refreshed again. A refresh runs in its own goroutine apart from
-// the caller's context: Allegro retires the old refresh token as soon as it
-// answers, so a refresh cut short by a lookup's deadline would lose the new
-// one and, after Allegro's grace period, the authorization. Concurrent
-// callers share one refresh, and each stops waiting at its own deadline.
-func (a *Allegro) accessToken(ctx context.Context, rejected string) (string, error) {
+// accessToken returns an access token, refreshed when it is about to expire
+// or force is set. A lookup that stops waiting leaves the refresh running.
+func (a *Allegro) accessToken(ctx context.Context, force bool) (string, error) {
+	for {
+		access, op, err := a.currentToken(ctx, force)
+		if op == nil {
+			return access, err
+		}
+		select {
+		case <-op.done:
+		case <-ctx.Done():
+			return "", fmt.Errorf("allegro: wait for token refresh: %w", ctx.Err())
+		}
+		if op.refresh {
+			return op.access, op.err
+		}
+	}
+}
+
+// currentToken returns a usable access token, or the operation to wait for
+// before asking again. A pair whose save failed is saved again in the
+// background.
+func (a *Allegro) currentToken(ctx context.Context, force bool) (string, *tokenOp, error) {
 	a.mu.Lock()
+	defer a.mu.Unlock()
 	if a.token == nil {
 		t, ok, err := a.Store.Load(ctx, a.Name())
 		if err != nil {
-			a.mu.Unlock()
-			return "", fmt.Errorf("allegro: load token: %w", err)
+			return "", nil, fmt.Errorf("allegro: load token: %w", err)
 		}
 		if !ok {
-			a.mu.Unlock()
-			return "", ErrAllegroNotAuthorized
+			return "", nil, ErrAllegroNotAuthorized
 		}
 		a.token = &t
+		a.chain = []string{t.Refresh}
 	}
-	force := rejected != "" && rejected == a.token.Access
-	if a.refreshing == nil && !force && a.now().Add(tokenLeeway).Before(a.token.Expiry) {
-		access := a.token.Access
-		a.mu.Unlock()
-		return access, nil
+	if !force && a.now().Add(tokenLeeway).Before(a.token.Expiry) {
+		if a.unsaved && a.op == nil {
+			a.startOp(ctx, *a.token, false)
+		}
+		return a.token.Access, nil, nil
 	}
-	call := a.refreshing
-	if call == nil {
-		// A caller whose deadline passed while it waited for the lock
-		// starts no refresh it cannot use.
+	if a.op == nil {
 		if err := ctx.Err(); err != nil {
-			a.mu.Unlock()
-			return "", fmt.Errorf("allegro: %w", err)
+			return "", nil, fmt.Errorf("allegro: token refresh: %w", err)
 		}
-		call = &refreshCall{done: make(chan struct{})}
-		a.refreshing = call
-		a.refreshes.Add(1)
-		go a.refresh(context.WithoutCancel(ctx), call, a.token.Refresh)
+		a.startOp(ctx, *a.token, true)
 	}
-	a.mu.Unlock()
-	select {
-	case <-call.done:
-		return call.access, call.err
-	case <-ctx.Done():
-		return "", fmt.Errorf("allegro: token refresh: %w", context.Cause(ctx))
-	}
+	return "", a.op, nil
 }
 
-// refreshCall is one token refresh that concurrent callers share. access and
-// err are set before done is closed.
-type refreshCall struct {
-	done   chan struct{}
-	access string
-	err    error
+// startOp runs a refresh of t, or a save of t, in its own goroutine. The
+// caller holds a.mu.
+func (a *Allegro) startOp(ctx context.Context, t Token, refresh bool) {
+	op := &tokenOp{done: make(chan struct{}), refresh: refresh, chain: append(slices.Clone(a.chain), t.Refresh)}
+	a.op = op
+	go a.runOp(context.WithoutCancel(ctx), op, t)
 }
 
-// refresh exchanges refreshToken for a new pair, bounded by refreshTimeout,
-// and stores it. ctx carries no cancellation of the lookup that started it.
-// The new pair replaces the one in memory even when the write fails, since
-// Allegro no longer accepts the old refresh token.
-func (a *Allegro) refresh(ctx context.Context, call *refreshCall, refreshToken string) {
-	defer a.refreshes.Done()
-	ctx, cancel := context.WithTimeout(ctx, refreshTimeout)
-	defer cancel()
-	access, err := recovery.Call(nil, "allegro token refresh panicked", func() (string, error) {
-		q := url.Values{"grant_type": {"refresh_token"}, "refresh_token": {refreshToken}}
-		t, err := a.tokenRequest(ctx, q)
+// runOp drops a refresh token Allegro rejects, so the next lookup loads
+// the pair `api allegro-login` stores.
+func (a *Allegro) runOp(ctx context.Context, op *tokenOp, t Token) {
+	defer close(op.done)
+	if op.refresh {
+		next, err := a.refresh(ctx, t.Refresh)
 		if err != nil {
-			var oe *oauthError
-			if errors.As(err, &oe) && oe.Code == "invalid_grant" {
-				return "", fmt.Errorf("%w: refresh token rejected", ErrAllegroNotAuthorized)
+			op.err = err
+			a.mu.Lock()
+			defer a.mu.Unlock()
+			a.op = nil
+			if errors.Is(err, ErrAllegroNotAuthorized) {
+				a.token, a.chain, a.unsaved = nil, nil, false
 			}
-			return "", err
+			return
 		}
-		a.mu.Lock()
-		a.token, a.unsaved = &t, true
-		a.mu.Unlock()
-		if err := a.save(ctx, t); err != nil {
-			return "", err
-		}
-		return t.Access, nil
-	})
+		t = next
+		op.chain = append(op.chain, t.Refresh)
+	}
+	t, saved := a.persist(ctx, t, op.chain)
+	op.access = t.Access
 	a.mu.Lock()
-	call.access, call.err = access, err
-	a.refreshing = nil
-	a.mu.Unlock()
-	close(call.done)
+	defer a.mu.Unlock()
+	a.op = nil
+	a.token = &t
+	a.unsaved = !saved
+	a.chain = []string{t.Refresh}
+	if !saved {
+		a.chain = op.chain
+	}
 }
 
-// save stores t and clears unsaved unless a newer pair replaced t meanwhile.
-func (a *Allegro) save(ctx context.Context, t Token) error {
-	if err := a.Store.Save(ctx, a.Name(), t); err != nil {
-		return fmt.Errorf("allegro: save token: %w", err)
+// persist stores t and returns the pair to use and whether the store holds
+// it. A stored pair outside chain, stored meanwhile by `api allegro-login`
+// for example, wins over t.
+func (a *Allegro) persist(ctx context.Context, t Token, chain []string) (Token, bool) {
+	ctx, cancel := context.WithTimeout(ctx, a.timeout())
+	defer cancel()
+	stored, ok, err := a.Store.Load(ctx, a.Name())
+	if err == nil && ok && !slices.Contains(chain, stored.Refresh) {
+		return stored, true
 	}
-	a.mu.Lock()
-	if a.token != nil && a.token.Refresh == t.Refresh {
-		a.unsaved = false
+	if err == nil {
+		err = a.Store.Save(ctx, a.Name(), t)
 	}
-	a.mu.Unlock()
-	return nil
+	if err != nil {
+		slog.WarnContext(ctx, "allegro: save token, retrying on the next lookup", "err", err)
+		return t, false
+	}
+	return t, true
 }
 
-// Wait blocks until every token refresh in flight has finished, then stores
-// a rotated pair whose earlier write failed. Call it before closing the
-// TokenStore's database, so a shutdown does not lose a token Allegro has
-// already rotated. A nil Allegro has nothing to wait for.
-func (a *Allegro) Wait(ctx context.Context) error {
-	if a == nil {
-		return nil
+// refresh trades refreshToken for a new pair.
+func (a *Allegro) refresh(ctx context.Context, refreshToken string) (Token, error) {
+	ctx, cancel := context.WithTimeout(ctx, a.timeout())
+	defer cancel()
+	t, err := a.tokenRequest(ctx, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {refreshToken}})
+	if oe, ok := errors.AsType[*oauthError](err); ok && oe.Code == "invalid_grant" {
+		return Token{}, fmt.Errorf("%w: refresh token rejected", ErrAllegroNotAuthorized)
 	}
-	a.refreshes.Wait()
-	a.mu.Lock()
-	if !a.unsaved || a.token == nil {
-		a.mu.Unlock()
-		return nil
+	return t, err
+}
+
+func (a *Allegro) timeout() time.Duration {
+	if a.tokenTimeout > 0 {
+		return a.tokenTimeout
 	}
-	t := *a.token
-	a.mu.Unlock()
-	return a.save(ctx, t)
+	return defaultTokenTimeout
 }
 
 type oauthError struct {
@@ -291,7 +314,7 @@ func (a *Allegro) authPost(ctx context.Context, path string, q url.Values, dst a
 	req.SetBasicAuth(a.ClientID, a.ClientSecret)
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", a.userAgent())
-	status, body, err := get(a.authClient(), "allegro", req, http.StatusOK, http.StatusBadRequest, http.StatusUnauthorized)
+	status, body, err := get(a.client(), "allegro", req, http.StatusOK, http.StatusBadRequest, http.StatusUnauthorized)
 	if err != nil {
 		return err
 	}
@@ -379,15 +402,6 @@ func (a *Allegro) client() *http.Client {
 		return a.Client
 	}
 	return http.DefaultClient
-}
-
-// authClient is the HTTP client without its overall timeout: a token
-// request is bounded by its context alone, refreshTimeout for a refresh, so
-// a shorter client timeout cannot drop an answer that rotated the token.
-func (a *Allegro) authClient() *http.Client {
-	c := *a.client()
-	c.Timeout = 0
-	return &c
 }
 
 func (a *Allegro) userAgent() string {

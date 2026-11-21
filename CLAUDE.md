@@ -94,22 +94,22 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   priority. Every provider gets `ohara_lookup_provider_requests_total`,
   `ohara_lookup_provider_errors_total` and `ohara_lookup_cache_hits_total`.
   Every external request (book providers, the movie chain's sources, deal
-  sources) also counts in the source health metrics through
-  `metrics.ObserveSource`: `ohara_source_requests_total{source,status}`,
+  sources, valuation sources) also counts in the source health metrics
+  through `metrics.ObserveSource`:
+  `ohara_source_requests_total{source,status}`,
   `ohara_source_errors_total{source}`, `ohara_source_parse_errors_total`
   and `ohara_source_last_success_timestamp_seconds`. A request counts as
   ok only once its response parses; it then sets `ohara_source_results` to
-  the products or candidates found. Register each source with
+  the products or candidates found. A SkupSzop quote counts once, as ok
+  when the cart shows the offer or the shop does not buy the book, with
+  results 1 for an offer. Register each source with
   `metrics.InitSource` so its counters exist before the first failure.
   When some of its sources fail but others answered, it returns a
   `*lookup.PartialError`: the lookup reports the failure next to the
   candidates and does not cache the answer. The movie chain waits at most
   4 s for each name source and 6 s for all of them, fallbacks included,
   so a hanging catalog fails as that source and leaves TMDB the rest of
-  the 10 s lookup. An Allegro token refresh runs on past that wait (up to
-  30 s): Allegro retires the old refresh token once it answers. Concurrent
-  lookups share one refresh, each waits only until its own deadline, and
-  shutdown waits for a refresh in flight before closing the pool.
+  the 10 s lookup. An Allegro token refresh runs on past that wait.
 - Music is the kind `music`: an album title whose `authors` are its credited
   artists, editions with a `cd`, `vinyl` or `cassette` format (required, like
   a movie's `dvd`/`bluray`/`uhd`) and an optional `discogs_release_id`. The
@@ -157,6 +157,10 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   queues one `deal_alert` per listing at or below the copy's
   `max_price_cents`; a listing seen again keeps its row, takes the new
   price and `last_seen_at`, and alerts if it has no alert yet. Alerts are retried up to 5 times within a week.
+  A source that answers 403 or 429 is asked nothing more until the next
+  run, in a hunt and in a valuation (SkupSzop quotes too); the run's
+  errors name the refusal once with the requests it skipped, and skipped
+  requests count in no source metric. Other failures do not stop asking.
   Every run also asks each query source the canary query, wishlist or not,
   and sets `ohara_source_canary_ok` (a feed's one request is its canary)
   and `ohara_source_results`. A canary without listings is a broken source.
@@ -214,6 +218,11 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   (`?status=none`) lists titles without one instead, filtered in the client
   from `GET /api/titles`; `/titles` redirects to `/`. `?add=copy` on a title
   or edition page opens the form for its next copy.
+- Discogs data carries `DiscogsCredit`: "Data provided by Discogs." linked
+  to its release page, never `nofollow`, under a quick confirm candidate
+  with a `discogs_release_id` and a copy priced from Discogs on Wartość.
+  `/informacje` shows the API terms' non-affiliation notice. Both stay in
+  English, word for word (`src/lib/discogs.ts`).
 - `static/manifest.webmanifest` is linked with `crossorigin="use-credentials"`
   because Authelia guards every path.
 
@@ -274,7 +283,11 @@ cd backend-go && golangci-lint run ./...
 Allegro authorization is one-time: with the client credentials set, run
 `docker exec -it ohara api allegro-login`, open the printed link and
 confirm the code. The refresh token is stored in `oauth_token` and rotated on
-each refresh.
+each refresh. A refresh runs on its own context, at most 20 s, so a lookup
+that gives up first does not lose the rotated pair; a pair whose save failed
+stays in use and is saved again by the next lookup, unless `allegro-login`
+stored a pair meanwhile, which then wins. A refresh token Allegro rejects is
+dropped, so the next lookup loads the pair a later `allegro-login` stored.
 
 ## Deployment
 

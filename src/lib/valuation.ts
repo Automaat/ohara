@@ -423,9 +423,9 @@ export function copyRange(c: CopyValue): string | null {
 	return null;
 }
 
-/** "Nowe: brak danych" under a range that starts at the buy-back price but has no ceiling. */
+/** "Nowe: brak danych" under a copy that has a value but no ceiling. */
 export function missingCeiling(c: CopyValue): string | null {
-	return c.floor && !c.ceiling
+	return (c.floor || c.mid) && !c.ceiling
 		? `${boundLabels.ceiling}: ${estimateSource('ceiling', null)}`
 		: null;
 }

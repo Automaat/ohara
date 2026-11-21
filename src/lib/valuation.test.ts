@@ -497,10 +497,11 @@ describe('copy rows', () => {
 		expect(copyNote(copy({}))).toBe('brak danych');
 	});
 
-	it('marks a missing ceiling under a range that starts at the buy-back price', () => {
+	it('marks a missing ceiling under every valued copy without one', () => {
 		expect(missingCeiling(copy({ floor: est(500), mid: est(2500) }))).toBe('Nowe: brak danych');
+		expect(missingCeiling(copy({ mid: est(2500) }))).toBe('Nowe: brak danych');
 		expect(missingCeiling(copy({ floor: est(500), ceiling: est(900) }))).toBeNull();
-		expect(missingCeiling(copy({ mid: est(2500) }))).toBeNull();
+		expect(missingCeiling(copy({}))).toBeNull();
 	});
 
 	it('names the format, or the kind, and what was paid', () => {

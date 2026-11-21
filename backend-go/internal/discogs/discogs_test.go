@@ -29,12 +29,18 @@ type seen struct {
 	path, query, auth, userAgent string
 }
 
-// upstream serves status and body for every request and records the last
-// one.
+// upstream serves status and body for every GET and records the last one;
+// like Discogs, it answers any other method with 405.
 func upstream(t *testing.T, status int, body []byte) (*discogs.Client, *seen) {
 	t.Helper()
 	got := &seen{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("method = %s, want GET", r.Method)
+			w.Header().Set("Allow", http.MethodGet)
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
 		got.path = r.URL.Path
 		got.query = r.URL.RawQuery
 		got.auth = r.Header.Get("Authorization")
@@ -108,29 +114,32 @@ func checkHeaders(t *testing.T, got *seen) {
 
 func TestStats(t *testing.T) {
 	cases := []struct {
-		name    string
-		fixture string
-		id      int64
-		want    discogs.Stats
+		name     string
+		fixture  string
+		id       int64
+		currency string
+		want     discogs.Stats
 	}{
 		{
-			name:    "for sale",
-			fixture: "stats_for_sale.json",
-			id:      1873013,
-			want:    discogs.Stats{LowestPrice: &discogs.Money{Currency: "EUR", Value: 70}, NumForSale: 118},
+			name:     "for sale",
+			fixture:  "stats_for_sale.json",
+			id:       1873013,
+			currency: "EUR",
+			want:     discogs.Stats{LowestPrice: &discogs.Money{Currency: "EUR", Value: 70}, NumForSale: 118},
 		},
 		{
-			name:    "none for sale",
-			fixture: "stats_none_for_sale.json",
-			id:      30000001,
-			want:    discogs.Stats{LowestPrice: nil, NumForSale: 0},
+			name:     "none for sale",
+			fixture:  "stats_none_for_sale.json",
+			id:       30000001,
+			currency: "USD",
+			want:     discogs.Stats{LowestPrice: nil, NumForSale: 0},
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			c, got := upstream(t, http.StatusOK, fixture(t, tc.fixture))
 			before := scrape(t)
-			s, err := c.Stats(t.Context(), tc.id, "EUR")
+			s, err := c.Stats(t.Context(), tc.id, tc.currency)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -140,11 +149,11 @@ func TestStats(t *testing.T) {
 			if want := "/marketplace/stats/" + strconv.FormatInt(tc.id, 10); got.path != want {
 				t.Errorf("path = %q, want %q", got.path, want)
 			}
-			if got.query != "curr_abbr=EUR" {
-				t.Errorf("query = %q, want curr_abbr=EUR", got.query)
+			if want := "curr_abbr=" + tc.currency; got.query != want {
+				t.Errorf("query = %q, want %q", got.query, want)
 			}
 			checkHeaders(t, got)
-			wantDelta(t, before, scrape(t), map[string]float64{requestsSeries(metrics.SourceOK): 1, errorsSeries: 0})
+			wantDelta(t, before, scrape(t), map[string]float64{requestsSeries("ok"): 1, errorsSeries: 0})
 		})
 	}
 }
@@ -172,7 +181,7 @@ func TestPriceSuggestions(t *testing.T) {
 		t.Errorf("path = %q", got.path)
 	}
 	checkHeaders(t, got)
-	wantDelta(t, before, scrape(t), map[string]float64{requestsSeries(metrics.SourceOK): 1, errorsSeries: 0})
+	wantDelta(t, before, scrape(t), map[string]float64{requestsSeries("ok"): 1, errorsSeries: 0})
 }
 
 func TestMarketplaceFailuresCountInMetrics(t *testing.T) {
@@ -185,6 +194,7 @@ func TestMarketplaceFailuresCountInMetrics(t *testing.T) {
 		return err
 	}
 	notJSON := []byte("<html>maintenance</html>")
+	trailingGarbage := append(fixture(t, "stats_for_sale.json"), notJSON...)
 	cases := []struct {
 		name       string
 		call       func(context.Context, *discogs.Client) error
@@ -195,6 +205,8 @@ func TestMarketplaceFailuresCountInMetrics(t *testing.T) {
 		{"stats unknown release", stats, http.StatusNotFound, fixture(t, "stats_not_found.json"), false},
 		{"stats rate limited", stats, http.StatusTooManyRequests, []byte(`{"message":"You are making requests too quickly."}`), false},
 		{"stats not JSON", stats, http.StatusOK, notJSON, true},
+		{"stats JSON then garbage", stats, http.StatusOK, trailingGarbage, true},
+		{"stats created, not ok", stats, http.StatusCreated, fixture(t, "stats_for_sale.json"), false},
 		{"suggestions without token", suggestions, http.StatusUnauthorized, fixture(t, "price_suggestions_unauthenticated.json"), false},
 		{"suggestions without seller settings", suggestions, http.StatusUnprocessableEntity, []byte(`{"message":"You must fill out your seller settings first."}`), false},
 		{"suggestions not JSON", suggestions, http.StatusOK, notJSON, true},
@@ -214,10 +226,10 @@ func TestMarketplaceFailuresCountInMetrics(t *testing.T) {
 					t.Fatalf("err = %v, want a parse error", err)
 				}
 				wantDelta(t, before, after, map[string]float64{
-					requestsSeries(metrics.SourceParseError): 1,
-					parseErrorsSeries:                        1,
-					errorsSeries:                             1,
-					requestsSeries(metrics.SourceOK):         0,
+					requestsSeries("parse_error"): 1,
+					parseErrorsSeries:             1,
+					errorsSeries:                  1,
+					requestsSeries("ok"):          0,
 				})
 				return
 			}
@@ -226,9 +238,9 @@ func TestMarketplaceFailuresCountInMetrics(t *testing.T) {
 			}
 			wantDelta(t, before, after, map[string]float64{
 				requestsSeries("http_" + strconv.Itoa(tc.status)): 1,
-				errorsSeries:                     1,
-				parseErrorsSeries:                0,
-				requestsSeries(metrics.SourceOK): 0,
+				errorsSeries:         1,
+				parseErrorsSeries:    0,
+				requestsSeries("ok"): 0,
 			})
 		})
 	}

@@ -52,6 +52,7 @@ func New(cfg Config, logger *slog.Logger, deps Deps) http.Handler {
 		logger = slog.Default()
 	}
 	r := chi.NewRouter()
+	r.Use(securityHeaders)
 	r.Use(middleware.RequestID)
 	r.Use(requestObserver(logger, cfg.AccessLog))
 	r.Use(middleware.Recoverer)
@@ -75,6 +76,24 @@ func New(cfg Config, logger *slog.Logger, deps Deps) http.Handler {
 		r.Handle("/*", web.Handler(deps.Web))
 	}
 	return r
+}
+
+// permissionsPolicy lets only Ohara's own pages open the camera, for the
+// scanner, and denies the other features the SPA never uses.
+const permissionsPolicy = "camera=(self), microphone=(), geolocation=()"
+
+// securityHeaders adds the browser security headers to every response. It
+// runs first, so the recoverer's 500, the timeout's 504 and the router's own
+// 404 and 405 answers carry them too.
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "same-origin")
+		h.Set("Permissions-Policy", permissionsPolicy)
+		next.ServeHTTP(w, r)
+	})
 }
 
 // crossOriginGuard answers 403 to a cross-origin write. Authelia's session

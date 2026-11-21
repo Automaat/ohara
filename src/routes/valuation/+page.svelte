@@ -173,7 +173,7 @@
 	{#if view && !valued}
 		<EmptyState
 			title="Kolekcja nie ma jeszcze wyceny"
-			description="Wycena sprawdza ceny posiadanych egzemplarzy w skupie, w ogłoszeniach z OLX i Vinted oraz w sklepach z Ceneo."
+			description="Wycena sprawdza ceny posiadanych egzemplarzy w skupie, w ogłoszeniach z OLX i Vinted oraz na Discogs."
 			action={runButton}
 		/>
 		{#if status?.last_result}

@@ -84,36 +84,15 @@ func TestParsePepper(t *testing.T) {
 	}
 }
 
-func TestParseCeneo(t *testing.T) {
-	listings := parseCeneo(fixture(t, "ceneo.html"), "https://www.ceneo.pl")
-	if len(listings) != 6 {
-		t.Fatalf("got %d listings, want 6", len(listings))
-	}
-	l := byID(listings)["165912980"]
-	if l.Title != "Łowca androidów (Blade Runner) (Blu-Ray)" || l.PriceCents != 3370 ||
-		l.URL != "https://www.ceneo.pl/165912980" || l.AcquiredAs == nil || *l.AcquiredAs != "new" {
-		t.Fatalf("listing = %+v", l)
-	}
-	if l.PhotoURL != "https://image.ceneostatic.pl/data/products/165912980/f-blade-runner.jpg" ||
-		byID(listings)["148658552"].PhotoURL != "" {
-		t.Fatalf("unexpected Ceneo photos: %+v", listings)
-	}
-	if n := len(parseCeneo([]byte(`<html><div class="cat-prod-row__body"></div></html>`), "")); n != 0 {
-		t.Fatalf("page without tiles gave %d listings", n)
-	}
-}
-
 func TestSourcesSearchOverHTTP(t *testing.T) {
-	var gotPath, gotQuery, gotUA string
+	var gotQuery, gotUA string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath, gotQuery, gotUA = r.URL.Path, r.URL.RawQuery, r.UserAgent()
+		gotQuery, gotUA = r.URL.RawQuery, r.UserAgent()
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/olx"):
 			_, _ = w.Write(fixture(t, "olx.json"))
 		case strings.HasPrefix(r.URL.Path, "/pepper"):
 			_, _ = w.Write(fixture(t, "pepper.xml"))
-		case strings.HasPrefix(r.URL.Path, "/ceneo/"):
-			_, _ = w.Write(fixture(t, "ceneo.html"))
 		default:
 			w.WriteHeader(http.StatusForbidden)
 		}
@@ -131,16 +110,6 @@ func TestSourcesSearchOverHTTP(t *testing.T) {
 	}
 	if pepper, err := (Pepper{Client: client, BaseURL: srv.URL + "/pepper"}).Search(ctx, ""); err != nil || len(pepper) != 4 {
 		t.Fatalf("pepper = %d listings, %v", len(pepper), err)
-	}
-	ceneo, err := Ceneo{Client: client, BaseURL: srv.URL + "/ceneo/"}.Search(ctx, "łowca androidów")
-	if err != nil || len(ceneo) != 6 {
-		t.Fatalf("ceneo = %d listings, %v", len(ceneo), err)
-	}
-	if gotPath != "/ceneo/;szukaj-łowca+androidów" {
-		t.Fatalf("ceneo path = %q", gotPath)
-	}
-	if !strings.HasPrefix(ceneo[0].URL, srv.URL+"/ceneo/") {
-		t.Fatalf("ceneo url = %q", ceneo[0].URL)
 	}
 	if _, err := (OLX{Client: client, BaseURL: srv.URL + "/blocked"}).Search(ctx, "x"); err == nil ||
 		!strings.Contains(err.Error(), "status 403") {

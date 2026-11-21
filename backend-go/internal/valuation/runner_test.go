@@ -90,9 +90,9 @@ func listing(source, id, title string, cents int64, state *string) deals.Listing
 	}
 }
 
-func newTestRunner(pool *pgxpool.Pool, olx, ceneo *fakeSource, bb *fakeBuyBack) *Runner {
+func newTestRunner(pool *pgxpool.Pool, olx, vinted *fakeSource, bb *fakeBuyBack) *Runner {
 	logger := slog.New(slog.DiscardHandler)
-	r := NewRunner(NewStore(pool), []deals.Source{olx, ceneo}, []BuyBack{bb}, nil,
+	r := NewRunner(NewStore(pool), []deals.Source{olx, vinted}, []BuyBack{bb}, nil,
 		Config{Window: 90 * 24 * time.Hour}, logger)
 	r.sleep = func(ctx context.Context, _ time.Duration) error { return ctx.Err() }
 	return r
@@ -111,13 +111,13 @@ func TestRunValuesOwnedCopies(t *testing.T) {
 		listing("olx", "6", "Katedra Dukaj okładka", 100, used()),
 		listing("olx", "7", "Katedra Dukaj nowa w folii", 9000, fresh()),
 	}}
-	ceneo := &fakeSource{name: "ceneo", listings: []deals.Listing{
-		listing("ceneo", "c1", "Katedra - Jacek Dukaj", 4999, fresh()),
+	vinted := &fakeSource{name: "vinted", listings: []deals.Listing{
+		listing("vinted", "v1", "Katedra - Jacek Dukaj", 4999, fresh()),
 	}}
 	bb := &fakeBuyBack{quotes: map[string]Quote{
 		"9788308073209": {Offered: true, Cents: 537, Title: "Katedra", URL: "https://skupszop.test/sprzedaj"},
 	}}
-	r := newTestRunner(pool, olx, ceneo, bb)
+	r := newTestRunner(pool, olx, vinted, bb)
 
 	res, err := r.Run(ctx)
 	if err != nil {
@@ -145,7 +145,7 @@ func TestRunValuesOwnedCopies(t *testing.T) {
 	}
 	book := byEdition[10]
 	if book.Floor == nil || book.Floor.Cents != 537 || book.Mid == nil || *book.Mid != (Estimate{Cents: 2500, Source: SourceOLX, Count: 3}) ||
-		book.Ceiling == nil || book.Ceiling.Cents != 4999 || book.LowConfidence {
+		book.Ceiling != nil || book.LowConfidence {
 		t.Fatalf("book value = %+v %+v %+v low=%v", book.Floor, book.Mid, book.Ceiling, book.LowConfidence)
 	}
 	movie := byEdition[20]
@@ -156,7 +156,6 @@ func TestRunValuesOwnedCopies(t *testing.T) {
 		Copies: 3, SpentCents: 8000,
 		Floor:         Bound{Cents: 537, Copies: 1},
 		Mid:           Bound{Cents: 2500 + 4000 + 4000, Copies: 3},
-		Ceiling:       Bound{Cents: 4999, Copies: 1},
 		LowConfidence: 2,
 	}
 	if sum != wantSum {
@@ -171,7 +170,7 @@ func TestRunValuesOwnedCopies(t *testing.T) {
 	for _, line := range []string{
 		`ohara_collection_value_pln{bound="mid"} 105`,
 		`ohara_collection_value_pln{bound="floor"} 5.37`,
-		`ohara_collection_valued_copies{bound="ceiling"} 1`,
+		`ohara_collection_valued_copies{bound="ceiling"} 0`,
 		`ohara_collection_copies 3`,
 		`ohara_collection_spent_pln 80`,
 		`ohara_collection_low_confidence_copies 2`,
@@ -221,9 +220,9 @@ func TestRunKeepsGoingOnSourceErrors(t *testing.T) {
 	pool := dbtest.Migrated(t)
 	seed(t, pool)
 	olx := &fakeSource{name: "olx", err: errors.New("olx: status 403")}
-	ceneo := &fakeSource{name: "ceneo"}
+	vinted := &fakeSource{name: "vinted"}
 	bb := &fakeBuyBack{quotes: map[string]Quote{}}
-	r := newTestRunner(pool, olx, ceneo, bb)
+	r := newTestRunner(pool, olx, vinted, bb)
 	res, err := r.Run(context.Background())
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -483,12 +482,12 @@ func TestRunValuesEveryOwnedPrinting(t *testing.T) {
 		listing("olx", "2", "Katedra Dukaj twarda oprawa", 3000, used()),
 		listing("olx", "3", "Katedra Dukaj", 4000, used()),
 	}}
-	ceneo := &fakeSource{name: "ceneo"}
+	vinted := &fakeSource{name: "vinted"}
 	bb := &fakeBuyBack{quotes: map[string]Quote{
 		"9788308073209": {Offered: true, Cents: 537},
 		"9788308049396": {Offered: true, Cents: 900},
 	}}
-	r := newTestRunner(pool, olx, ceneo, bb)
+	r := newTestRunner(pool, olx, vinted, bb)
 	if _, err := r.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}

@@ -23,7 +23,7 @@ var (
 const MaxAttempts = 5
 
 // sources are the price_observation sources this package writes.
-var sources = []string{"olx", "vinted", "pepper", "ceneo"}
+var sources = []string{"olx", "vinted", "pepper"}
 
 // Store is the Postgres access layer for deal hunting.
 type Store struct {

@@ -12,6 +12,7 @@
 		Skeleton
 	} from '@smykla-skalski/sui';
 	import { onDestroy } from 'svelte';
+	import { SvelteSet } from 'svelte/reactivity';
 	import { goto, replaceState } from '$app/navigation';
 	import { page } from '$app/state';
 	import { ApiError, errorMessage, request } from '#lib/api.js';
@@ -50,7 +51,14 @@
 	let editing = $state(false);
 	let editionForm = $state(editionToForm(null));
 	let editionIssue = $state<FormIssue | null>(null);
-	let savingEdition = $state(false);
+	/**
+	 * Editions whose save is still on its way, kept across a jump to another edition and back, so
+	 * a second save of the same edition cannot start until the first one has landed.
+	 */
+	const pendingSaves = new SvelteSet<number>();
+	const savingEdition = $derived(detail !== null && pendingSaves.has(detail.id));
+	/** Counts opened edit forms, so a save's answer closes only the form it was sent from. */
+	let editionEdits = 0;
 
 	let adding = $state(false);
 	let copyForm = $state(copyToForm(null));
@@ -85,7 +93,7 @@
 			editing = false;
 			editionForm = editionToForm(null);
 			editionIssue = null;
-			savingEdition = false;
+			editionEdits++;
 			adding = false;
 			copyForm = copyToForm(null);
 			copyIssue = null;
@@ -131,6 +139,13 @@
 		startCopy();
 	}
 
+	function startEdit(d: EditionDetail) {
+		editionForm = editionToForm(d);
+		editionIssue = null;
+		editionEdits++;
+		editing = true;
+	}
+
 	function issueFrom(err: unknown): FormIssue {
 		return { field: err instanceof ApiError ? (err.field ?? '') : '', message: errorMessage(err) };
 	}
@@ -141,16 +156,18 @@
 			editionIssue = parsed.issue;
 			return;
 		}
-		savingEdition = true;
+		if (pendingSaves.has(d.id)) return;
+		const edit = editionEdits;
+		pendingSaves.add(d.id);
 		try {
 			await request<Edition>(fetch, 'PUT', `/api/editions/${d.id}`, parsed.value);
 			if (d.id !== requested) return;
-			editing = false;
+			if (edit === editionEdits) editing = false;
 			await load(d.id);
 		} catch (err) {
-			if (d.id === requested) editionIssue = issueFrom(err);
+			if (edit === editionEdits) editionIssue = issueFrom(err);
 		} finally {
-			if (d.id === requested) savingEdition = false;
+			pendingSaves.delete(d.id);
 		}
 	}
 
@@ -160,16 +177,18 @@
 			copyIssue = parsed.issue;
 			return;
 		}
+		// The key names the open form: another form has its own key, so this answer leaves it alone.
+		const key = copyKey;
 		savingCopy = true;
 		try {
-			await request<Copy>(fetch, 'POST', '/api/copies', { ...parsed.value, request_key: copyKey });
+			await request<Copy>(fetch, 'POST', '/api/copies', { ...parsed.value, request_key: key });
 			if (d.id !== requested) return;
-			adding = false;
+			if (copyKey === key) adding = false;
 			await load(d.id);
 		} catch (err) {
-			if (d.id === requested) copyIssue = issueFrom(err);
+			if (copyKey === key) copyIssue = issueFrom(err);
 		} finally {
-			if (d.id === requested) savingCopy = false;
+			if (copyKey === key) savingCopy = false;
 		}
 	}
 
@@ -325,16 +344,7 @@
 
 		<Section title="Zarządzanie wydaniem">
 			<div class="actions">
-				<Button
-					tone="ghost"
-					onclick={() => (
-						(editionForm = editionToForm(d)),
-						(editionIssue = null),
-						(editing = true)
-					)}
-				>
-					Edytuj wydanie
-				</Button>
+				<Button tone="ghost" onclick={() => startEdit(d)}>Edytuj wydanie</Button>
 				<Button tone="stop-quiet" onclick={() => ((deleteError = null), (confirmDelete = true))}>
 					Usuń wydanie
 				</Button>

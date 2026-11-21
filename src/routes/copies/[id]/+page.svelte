@@ -8,6 +8,7 @@
 		PageHeader,
 		Skeleton
 	} from '@smykla-skalski/sui';
+	import { SvelteSet } from 'svelte/reactivity';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { ApiError, errorMessage, request } from '#lib/api.js';
@@ -31,7 +32,12 @@
 	let busy = $state(false);
 	let form = $state(copyToForm(null));
 	let issue = $state<FormIssue | null>(null);
-	let saving = $state(false);
+	/**
+	 * Copies whose save is still on its way, kept across a jump to another copy and back, so a
+	 * second save of the same copy cannot start until the first one has landed.
+	 */
+	const pendingSaves = new SvelteSet<number>();
+	const saving = $derived(detail !== null && pendingSaves.has(detail.id));
 	let saved = $state(false);
 	let confirmDelete = $state(false);
 	let deleteError = $state<string | null>(null);
@@ -48,7 +54,6 @@
 			failure = null;
 			form = copyToForm(null);
 			issue = null;
-			saving = false;
 			saved = false;
 			confirmDelete = false;
 			deleteError = null;
@@ -79,7 +84,8 @@
 			issue = parsed.issue;
 			return;
 		}
-		saving = true;
+		if (pendingSaves.has(d.id)) return;
+		pendingSaves.add(d.id);
 		saved = false;
 		try {
 			await request<Copy>(fetch, 'PUT', `/api/copies/${d.id}`, parsed.value);
@@ -94,7 +100,7 @@
 				message: errorMessage(err)
 			};
 		} finally {
-			if (d.id === requested) saving = false;
+			pendingSaves.delete(d.id);
 		}
 	}
 

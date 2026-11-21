@@ -48,6 +48,7 @@ import {
 	type Sticky
 } from './scan';
 import { recordAdd, type SessionAdd } from './session.svelte';
+import { keepVisit, storedVisit } from './visit';
 
 /** found and owned have candidates or the edition; missing is filled in by hand. */
 export type ItemStatus = 'found' | 'owned' | 'missing';
@@ -147,13 +148,20 @@ function mediumOf(e: Pick<Edition, 'format' | 'binding'>): string {
 
 /**
  * What one visit carries from an add to the next: the purchase date. It lives in the module, so
- * it outlasts the trips between the scanner and the add page, and resets on a reload.
+ * it outlasts the trips between the scanner and the add page, and the browser's storage keeps it
+ * across reloads until the visit ends.
  */
-const visit = { date: '' };
+const visit = { date: storedVisit().date };
 
-/** Forgets the visit's purchase date, as a reload does. */
+/** Sets the purchase date the visit's next add starts with and keeps it for the next load. */
+function carryDate(date: string) {
+	visit.date = date;
+	keepVisit({ date }, false);
+}
+
+/** Forgets the visit's purchase date, as the end of a visit does. */
 export function resetVisit() {
-	visit.date = '';
+	carryDate('');
 }
 
 /**
@@ -478,7 +486,7 @@ export class ScanFlow {
 			const saved = await saveScan(this.#fetch, target, f, item.key, item.made);
 			const kept = { ...f, status: saved.copy.status ?? f.status };
 			if (kept.status === 'owned') {
-				visit.date = kept.purchased_on;
+				carryDate(kept.purchased_on);
 				this.sticky = stickyAfter(this.#store ? loadSticky(this.#store) : this.sticky, kept);
 				saveSticky(this.#store, this.sticky);
 			}

@@ -1,6 +1,7 @@
 import { ApiError, request } from './api';
 import type { CopyStatus, Kind } from './collection';
 import { retractScan } from './recent.svelte';
+import { keepVisit, storedVisit } from './visit';
 
 /** One copy this visit added through the quick confirm, with what undoing it has to remove. */
 export type SessionAdd = {
@@ -26,22 +27,31 @@ export type SessionAdd = {
 
 /**
  * The copies this visit added, newest first. It lives in the module, so it outlasts the trips
- * between the scanner and the add page, and resets on a reload.
+ * between the scanner and the add page, and the browser's storage keeps it across reloads until
+ * the visit ends.
  */
-export const session = $state<{ adds: SessionAdd[] }>({ adds: [] });
+export const session = $state<{ adds: SessionAdd[] }>({ adds: storedVisit().adds });
 
-let nextID = 0;
+/** The last add's id; a reload goes on from the adds it kept, so no id comes back. */
+let nextID = Math.max(0, ...session.adds.map((a) => a.id));
+
+/** Keeps the visit's adds for the next load; an add restarts the visit's lifetime. */
+function keepAdds(activity: boolean) {
+	keepVisit({ adds: $state.snapshot(session.adds) }, activity);
+}
 
 /** Records an add at the top of the visit's adds. */
 export function recordAdd(add: Omit<SessionAdd, 'id'>): SessionAdd {
 	const recorded: SessionAdd = { ...add, id: ++nextID };
 	session.adds = [recorded, ...session.adds];
+	keepAdds(true);
 	return recorded;
 }
 
-/** Forgets every add, as a reload does. */
+/** Forgets every add, as the end of a visit does. */
 export function resetSession() {
 	session.adds = [];
+	keepAdds(false);
 }
 
 /** What the visit's owned copies cost, in grosze; wishes and blank prices add nothing. */
@@ -98,5 +108,6 @@ export async function undoAdd(fetchFn: typeof fetch, add: SessionAdd): Promise<v
 		if (gone && add.createdTitle) await deleteUnused(fetchFn, `/api/titles/${add.titleID}`);
 	}
 	session.adds = session.adds.filter((a) => a.id !== add.id);
+	keepAdds(false);
 	if (add.recentID !== null) retractScan(add.recentID);
 }

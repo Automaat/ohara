@@ -10,6 +10,7 @@ import {
 	barcodeInputError,
 	cameraErrorMessage,
 	candidateLabel,
+	canonicalBarcode,
 	checkDigitMatches,
 	cleanBarcode,
 	bandCrop,
@@ -1428,5 +1429,21 @@ describe('candidateLabel for search results', () => {
 			confidence: 0.6
 		};
 		expect(candidateLabel(book)).toBe('Stanisław Lem – Solaris · 1961 · openlibrary · 60%');
+	});
+});
+
+describe('canonicalBarcode', () => {
+	it.each([
+		['an EAN-13', '5901234123457', '5901234123457'],
+		['a UPC-A', '036000291452', '0036000291452'],
+		['a GTIN-14 with a leading 0', '00036000291452', '0036000291452'],
+		['a GTIN-14', '10036000291459', '10036000291459'],
+		['an EAN-8', '40170725', '40170725'],
+		['a padded EAN-8', '00000040170725', '40170725'],
+		['an ISBN-10', '8324000011', '9788324000012'],
+		['an ISBN-10 ending in X', '080442957X', '9780804429573'],
+		['a wrong check digit', '5901234123458', '5901234123458']
+	])('stores %s as the server does', (_, code, stored) => {
+		expect(canonicalBarcode(code)).toBe(stored);
 	});
 });

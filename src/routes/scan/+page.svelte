@@ -24,13 +24,14 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { AddToasts } from '#lib/add-toast.js';
-	import { request } from '#lib/api.js';
+	import { request, sessionExpiredMessage } from '#lib/api.js';
 	import { formatPLN } from '#lib/collection.js';
 	import BarcodeCamera from '#lib/components/BarcodeCamera.svelte';
 	import CollectionCover from '#lib/components/CollectionCover.svelte';
 	import ScanItem from '#lib/components/ScanItem.svelte';
 	import SessionTray from '#lib/components/SessionTray.svelte';
 	import { phoneLayout, shortScreen } from '#lib/nav.js';
+	import { pendingScans } from '#lib/pending-scans.svelte.js';
 	import { queueDeletesSettled } from '#lib/queue-deletes.js';
 	import { outcomeLabels, outcomeTones, recentScans } from '#lib/recent.svelte.js';
 	import { ScanFlow, type Added } from '#lib/scan-flow.svelte.js';
@@ -88,6 +89,8 @@
 	/** An add whose toast waits for the sheet to close, so the page's toasts announce it. */
 	let addedOnClose: SessionAdd | null = null;
 	let listOpen = $state(false);
+	/** Codes waiting on the device when last seen, to recount the queue once some went in. */
+	let waitingBefore = 0;
 	const guard = new RepeatGuard(repeatWindow);
 	const flow = new ScanFlow(fetch, browserStore());
 	const addToasts = new AddToasts(
@@ -129,6 +132,10 @@
 				return 'Nieprawidłowy kod';
 			case 'failed':
 				return 'Nie udało się sprawdzić kodu';
+			case 'offline':
+				return 'Zapisano bez połączenia';
+			case 'expired':
+				return 'Sesja wygasła';
 		}
 		if (p.status === 'owned') return 'Masz już to wydanie';
 		return p.status === 'missing' ? 'Dodaj ręcznie' : 'Znaleziono';
@@ -286,6 +293,14 @@
 
 	$effect(() => {
 		if (flow.phase.kind === 'queued') untrack(() => void countQueue());
+	});
+
+	$effect(() => {
+		const waiting = pendingScans.count;
+		untrack(() => {
+			if (waiting < waitingBefore) void countQueue();
+			waitingBefore = waiting;
+		});
 	});
 
 	/*
@@ -446,6 +461,17 @@
 {/snippet}
 
 {#snippet message()}
+	{#if pendingScans.expired}
+		<Callout tone="warning" live>
+			{sessionExpiredMessage}
+			{#snippet actions()}
+				<Button onclick={() => location.reload()}>Odśwież</Button>
+			{/snippet}
+		</Callout>
+	{/if}
+	{#if pendingScans.count > 0}
+		<Callout role="status">Czeka na połączenie: {pendingScans.count}</Callout>
+	{/if}
 	{#if notice}
 		<Callout tone="warning" live>{notice}</Callout>
 	{/if}

@@ -146,9 +146,11 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   A copy's range comes from prices last seen within the window: floor =
   its edition's latest SkupSzop offer (0 when the shop does not buy it);
   mid = median of OLX prices not marked new, outliers beyond 1.5 IQR
-  dropped, pooled over every edition of the same title and format. A mid
-  from fewer than 3 prices is low confidence. Only a Discogs release has a
-  ceiling. An owned album edition with a `discogs_release_id` is
+  dropped, pooled over every edition of the same title and format, owned,
+  wished or without copies; an unowned edition's prices count only when
+  first seen after its last change. A mid from fewer than 3 prices is low
+  confidence. Only a Discogs release has a ceiling. An owned album edition
+  with a `discogs_release_id` is
   priced on Discogs (marketplace stats in EUR, price suggestions in the
   seller-settings currency, converted to PLN at the NBP table A rate): its
   floor is the cheapest copy for sale, its mid and ceiling the suggested
@@ -176,6 +178,13 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   Vite, never loaded from a CDN. A keyboard-wedge scanner types into the
   focused barcode field. The flow lives in `src/lib/scan.ts`: existing
   edition → add a copy, lookup candidates → quick confirm, nothing → queue.
+- A code whose check gets no answer is kept in IndexedDB
+  (`src/lib/pending-scans.svelte.ts`, barcode only, once in the server's
+  normalized form) and posted to `/api/scan-queue` as `lookup_failed` on app
+  start, on `online`, when the app is shown and every 20 s, by one tab at a
+  time (Web Locks), each POST within 15 s. `request` does not follow
+  redirects, so a 401 or Authelia's cross-origin redirect is an expired
+  session ("Odśwież"), not a lost connection; the code is kept either way.
 - Kolekcja's "Dodaj tytuł" (`/titles/new`) is the scanner's quick confirm
   without a barcode (`ScanFlow.start`): search by title or fill in by hand;
   the save creates the title, a barcode-less edition and the copy. Such

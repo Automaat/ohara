@@ -17,6 +17,15 @@ export const invalidBarcodeMessage = 'Nieprawidłowy kod kreskowy: sprawdź cyfr
 /** What the server's 413 for a cover photo means. */
 export const coverTooLargeMessage = 'Wybierz plik o rozmiarze do 8 MiB.';
 
+/** What a request that never got an answer says. */
+export const noAnswerMessage = 'Serwer nie odpowiada.';
+
+/**
+ * What a request the sign-in in front of the app turned away says: a 401, or a redirect to the
+ * sign-in page on another origin.
+ */
+export const sessionExpiredMessage = 'Sesja wygasła. Odśwież, aby zalogować się ponownie.';
+
 const fieldMessages: Record<string, Record<number, string>> = {
 	barcode: {
 		409: 'Wydanie z tym kodem kreskowym już istnieje.',
@@ -52,9 +61,12 @@ export const requestDeadlineMs = 20_000;
 type Method = 'GET' | 'POST' | 'PUT' | 'DELETE';
 
 /**
- * Sends JSON or a binary upload to the API and decodes the response; 204 yields undefined. A
- * request without a whole answer after deadlineMs is aborted and fails as no answer (status 0),
- * like a lost connection: the server may still have done what it asked.
+ * Sends JSON or a binary upload to the API and decodes the response; 204 yields undefined. The
+ * API never redirects, so a redirect is the sign-in turning the request away: followed, one to
+ * another origin would fail as if the server never answered. A response whose body breaks off
+ * counts as no answer: the connection was lost, whatever the status said. A request without a
+ * whole answer after deadlineMs is aborted and fails as no answer (status 0), like a lost
+ * connection: the server may still have done what it asked.
  */
 export async function request<T>(
 	fetchFn: typeof fetch,
@@ -68,7 +80,7 @@ export async function request<T>(
 	const expired = new Promise<never>((_resolve, reject) => {
 		timer = setTimeout(() => {
 			abort.abort();
-			reject(new ApiError(noAnswer, 0));
+			reject(new ApiError(noAnswerMessage, 0));
 		}, deadlineMs);
 	});
 	try {
@@ -77,8 +89,6 @@ export async function request<T>(
 		clearTimeout(timer);
 	}
 }
-
-const noAnswer = 'Serwer nie odpowiada.';
 
 async function exchange<T>(
 	fetchFn: typeof fetch,
@@ -100,15 +110,25 @@ async function exchange<T>(
 							'content-type': binary ? 'application/octet-stream' : 'application/json'
 						},
 			body: binary ? body : JSON.stringify(body),
+			redirect: 'manual',
 			signal
 		});
 	} catch {
-		throw new ApiError(noAnswer, 0);
+		throw new ApiError(noAnswerMessage, 0);
+	}
+	if (res.type === 'opaqueredirect' || res.status === 401) {
+		throw new ApiError(sessionExpiredMessage, 401);
 	}
 	if (res.status === 204) return undefined as T;
+	let text: string;
+	try {
+		text = await res.text();
+	} catch {
+		throw new ApiError(noAnswerMessage, 0);
+	}
 	let parsed: unknown;
 	try {
-		parsed = await res.json();
+		parsed = JSON.parse(text);
 	} catch {
 		throw new ApiError(
 			res.ok ? 'Serwer zwrócił nieczytelną odpowiedź.' : `Serwer zwrócił błąd ${res.status}.`,
@@ -121,6 +141,28 @@ async function exchange<T>(
 		throw new ApiError(messageFor(res.status, errBody), res.status, field);
 	}
 	return parsed as T;
+}
+
+/**
+ * A fetch that aborts each request, its body included, once ms passed, so a request the network
+ * holds open fails as one that got no answer.
+ */
+export function deadlineFetch(fetchFn: typeof fetch, ms: number): typeof fetch {
+	return (input, init) => {
+		const controller = new AbortController();
+		setTimeout(() => controller.abort(), ms);
+		return fetchFn(input, { ...init, signal: controller.signal });
+	};
+}
+
+/** Whether a request got no answer at all, as without a connection. */
+export function isNoAnswer(err: unknown): boolean {
+	return err instanceof ApiError && err.status === 0;
+}
+
+/** Whether the sign-in in front of the app turned a request away. */
+export function isSessionExpired(err: unknown): boolean {
+	return err instanceof ApiError && err.status === 401;
 }
 
 /** The message to show for any thrown value. */

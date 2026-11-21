@@ -78,6 +78,9 @@ type Hunter struct {
 
 	mu     sync.Mutex
 	status Status
+	// lastSend is when the notifier last returned, kept across runs so
+	// messages stay telegramPause apart; guarded by mu.
+	lastSend time.Time
 }
 
 // NewHunter wires the hunter. A nil notifier records listings without
@@ -197,13 +200,13 @@ type run struct {
 	// tried holds the observations whose alert this run sent or failed to
 	// send; a failed one waits for the next run.
 	tried map[int64]bool
-	// lastSend is when this run last called the notifier.
-	lastSend time.Time
 }
 
 // Run searches every source for every wishlist copy, records matching
-// listings and delivers alerts as it goes: alerts earlier runs left pending
-// before the first request, a new one right after the answer that found it.
+// listings and delivers pending alerts. An alert for a listing an answer
+// reports at or under its limit goes out before the run asks a source
+// again; every other pending alert, such as one left by an earlier run,
+// goes out after the last request, once the run has refreshed its price.
 // Source failures are collected in the result; a database failure or
 // cancellation stops the run.
 func (h *Hunter) Run(ctx context.Context) (RunResult, error) {
@@ -218,9 +221,6 @@ func (h *Hunter) Run(ctx context.Context) (RunResult, error) {
 	r := &run{h: h, wants: wants, rules: rules, first: true, tried: map[int64]bool{}}
 	r.res.Wants = len(wants)
 	r.res.Errors = []string{}
-	if err := r.deliver(ctx); err != nil {
-		return r.res, err
-	}
 	var queries []string
 	if len(wants) > 0 {
 		queries = searchQueries(wants)
@@ -232,6 +232,9 @@ func (h *Hunter) Run(ctx context.Context) (RunResult, error) {
 				return r.res, err
 			}
 		}
+	}
+	if err := r.deliver(ctx, nil); err != nil {
+		return r.res, err
 	}
 	return r.res, nil
 }
@@ -343,10 +346,10 @@ func (r *run) fail(msg string) {
 }
 
 // record stores the matching listings of one answer, then sends the alerts
-// they made due before the run asks a source again.
+// of those at or under their limit before the run asks a source again.
 func (r *run) record(ctx context.Context, listings []Listing) error {
 	r.res.Listings += len(listings)
-	due := false
+	due := map[string]bool{}
 	for i := range listings {
 		l := &listings[i]
 		w := pick(r.wants, l, r.rules)
@@ -365,19 +368,22 @@ func (r *run) record(ctx context.Context, listings []Listing) error {
 		if alerted {
 			r.res.Alerts++
 		}
-		// A listing under the limit can also make an older alert due again,
-		// such as one whose price came back under the limit.
-		due = due || alert
+		if alert {
+			due[listingKey(l.Source, l.ExternalID)] = true
+		}
 	}
-	if !due {
+	if len(due) == 0 {
 		return nil
 	}
-	return r.deliver(ctx)
+	return r.deliver(ctx, due)
 }
 
-// deliver sends every pending alert this run has not tried yet, at least
-// telegramPause apart; a failed send is retried next run.
-func (r *run) deliver(ctx context.Context) error {
+func listingKey(source, externalID string) string { return source + "\x00" + externalID }
+
+// deliver sends the pending alerts this run has not tried yet, at least
+// telegramPause apart; a failed send is retried next run. A non-nil only
+// limits it to the listings it names.
+func (r *run) deliver(ctx context.Context, only map[string]bool) error {
 	if r.h.notifier == nil {
 		return nil
 	}
@@ -387,19 +393,18 @@ func (r *run) deliver(ctx context.Context) error {
 	}
 	for i := range alerts {
 		a := &alerts[i]
-		if r.tried[a.ObservationID] {
+		if r.tried[a.ObservationID] || only != nil && !only[listingKey(a.Source, a.ExternalID)] {
 			continue
 		}
-		if !r.lastSend.IsZero() {
-			if wait := telegramPause - time.Since(r.lastSend); wait > 0 {
-				if err := r.h.sleep(ctx, wait); err != nil {
-					return err
-				}
+		if wait := r.h.sendWait(); wait > 0 {
+			if err := r.h.sleep(ctx, wait); err != nil {
+				return err
 			}
 		}
 		r.tried[a.ObservationID] = true
-		r.lastSend = time.Now()
-		if err := r.h.notifier.Send(ctx, alertText(a)); err != nil {
+		err := r.h.notifier.Send(ctx, alertText(a))
+		r.h.sent()
+		if err != nil {
 			r.h.logger.Warn("telegram alert failed", "observation", a.ObservationID, "err", err)
 			if err := r.h.store.MarkFailed(ctx, a.ObservationID, err.Error()); err != nil {
 				return err
@@ -409,7 +414,7 @@ func (r *run) deliver(ctx context.Context) error {
 		// The message is out: record it even when ctx was canceled during
 		// the send, or the next run sends it again.
 		markCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), markSentTimeout)
-		err := r.h.store.MarkSent(markCtx, a.ObservationID)
+		err = r.h.store.MarkSent(markCtx, a.ObservationID)
 		cancel()
 		if err != nil {
 			return err
@@ -417,6 +422,24 @@ func (r *run) deliver(ctx context.Context) error {
 		r.res.Sent++
 	}
 	return nil
+}
+
+// sendWait is what is left of telegramPause since the notifier last
+// returned.
+func (h *Hunter) sendWait() time.Duration {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.lastSend.IsZero() {
+		return 0
+	}
+	return max(telegramPause-time.Since(h.lastSend), 0)
+}
+
+// sent starts the pause before the next message.
+func (h *Hunter) sent() {
+	h.mu.Lock()
+	h.lastSend = time.Now()
+	h.mu.Unlock()
 }
 
 var (

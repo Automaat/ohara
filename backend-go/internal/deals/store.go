@@ -177,6 +177,7 @@ func (s *Store) Record(ctx context.Context, l *Listing, w *Want, alert bool) (bo
 type Alert struct {
 	ObservationID int64
 	Source        string
+	ExternalID    string
 	URL           string
 	ListingTitle  string
 	PriceCents    int64
@@ -190,7 +191,7 @@ type Alert struct {
 // first. Alerts for copies no longer on the wishlist, alerts above the
 // copy's current maximum price and alerts older than a week are skipped.
 func (s *Store) PendingAlerts(ctx context.Context) ([]Alert, error) {
-	rows, err := s.pool.Query(ctx, `SELECT o.id, o.source, o.url, coalesce(o.raw->>'title', ''),
+	rows, err := s.pool.Query(ctx, `SELECT o.id, o.source, coalesce(o.external_id, ''), o.url, coalesce(o.raw->>'title', ''),
 			o.price_cents, o.acquired_as, t.name, e.format, c.max_price_cents
 		FROM deal_alert a
 		JOIN price_observation o ON o.id = a.observation_id
@@ -205,7 +206,7 @@ func (s *Store) PendingAlerts(ctx context.Context) ([]Alert, error) {
 	}
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Alert, error) {
 		var a Alert
-		err := row.Scan(&a.ObservationID, &a.Source, &a.URL, &a.ListingTitle, &a.PriceCents,
+		err := row.Scan(&a.ObservationID, &a.Source, &a.ExternalID, &a.URL, &a.ListingTitle, &a.PriceCents,
 			&a.AcquiredAs, &a.TitleName, &a.Format, &a.MaxPriceCents)
 		return a, err
 	})

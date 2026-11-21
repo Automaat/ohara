@@ -115,7 +115,8 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
 - Every Discogs request in the process (music lookup, title search,
   valuation), and every redirect it follows, waits for one shared
   `discogs.Limiter`: a burst of 4, then one every 1.2 s. Each request
-  has 8 s from its turn (`discogs.RequestTimeout`) and its own HTTP/1.1
+  sent, redirects included, has 8 s from its own turn
+  (`discogs.RequestTimeout`) and its own HTTP/1.1
   connection (`discogs.NewHTTPClient`), so net/http cannot resend it
   outside the budget and no minute of arrivals holds more than the
   token's 60. Waiting scans and title searches go before the valuation's

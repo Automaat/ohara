@@ -325,7 +325,7 @@ func TestStalledSendsStayWithinBudget(t *testing.T) {
 	})
 }
 
-func TestRedirectKeepsRequestDeadline(t *testing.T) {
+func TestRedirectWaitsWithinCallerContext(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		limiter := discogs.NewLimiter()
 		moved := &arrivals{redirect: true}
@@ -336,11 +336,13 @@ func TestRedirectKeepsRequestDeadline(t *testing.T) {
 			}
 		}
 		start := time.Now()
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		defer cancel()
 		var wg sync.WaitGroup
 		var err error
 		var took time.Duration
 		wg.Go(func() {
-			_, err = moved.client(limiter).Stats(t.Context(), 2, "EUR")
+			_, err = moved.client(limiter).Stats(ctx, 2, "EUR")
 			took = time.Since(start)
 		})
 		synctest.Wait()
@@ -359,9 +361,61 @@ func TestRedirectKeepsRequestDeadline(t *testing.T) {
 		if n := len(moved.seen()); n != 1 {
 			t.Fatalf("redirected request sent %d times, want only the first hop", n)
 		}
-		if limit := 1200*time.Millisecond + discogs.RequestTimeout + 100*time.Millisecond; took > limit {
-			t.Fatalf("request gave up after %v, want by %v: its turn plus RequestTimeout", took, limit)
+		if took > 10*time.Second {
+			t.Fatalf("request gave up after %v, want by the caller's 10 s deadline", took)
 		}
+	})
+}
+
+// slowHop answers a redirected request's second hop after delay, as a
+// slow Discogs would.
+type slowHop struct {
+	delay time.Duration
+	api   *arrivals
+}
+
+func (s slowHop) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.URL.Query().Get("hop") != "" {
+		select {
+		case <-time.After(s.delay):
+		case <-r.Context().Done():
+			return nil, r.Context().Err()
+		}
+	}
+	return s.api.RoundTrip(r)
+}
+
+func TestRedirectHopGetsTimeoutFromItsTurn(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		limiter := discogs.NewLimiter()
+		pricing := (&arrivals{}).client(limiter)
+		pricing.Priority = discogs.Background
+		ctx, stop := context.WithCancel(t.Context())
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			for id := int64(1); ctx.Err() == nil; id++ {
+				_, _ = pricing.Stats(ctx, id, "EUR")
+			}
+		}()
+		time.Sleep(time.Minute)
+
+		moved := &arrivals{redirect: true}
+		scan := &discogs.Client{
+			HTTP:    &http.Client{Transport: slowHop{delay: 7 * time.Second, api: moved}},
+			BaseURL: "http://discogs.test", Token: "secret", Limiter: limiter,
+		}
+		lookup, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		defer cancel()
+		rel, err := scan.SearchBarcode(lookup, "5099902894225")
+		if err != nil {
+			t.Fatalf("redirected scan with a 7 s second hop during valuation: %v", err)
+		}
+		if len(rel) != 1 {
+			t.Fatalf("releases = %+v", rel)
+		}
+		stop()
+		<-done
 	})
 }
 

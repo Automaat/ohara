@@ -51,9 +51,9 @@ type Client struct {
 // maxRedirects is how many redirects a request follows, as net/http does.
 const maxRedirects = 10
 
-// RequestTimeout bounds one request, redirects included, from its turn in
-// the budget: a request that has not reached Discogs by then is given up,
-// so it cannot arrive late and crowd a later minute.
+// RequestTimeout bounds every request sent, the first and each redirect,
+// from its own turn in the budget: one that has not reached Discogs by
+// then is given up, so it cannot arrive late and crowd a later minute.
 const RequestTimeout = 8 * time.Second
 
 // NewHTTPClient returns the HTTP client a Client of a Limiter needs: it
@@ -167,16 +167,15 @@ func (c *Client) PriceSuggestions(ctx context.Context, id int64) (Suggestions, e
 }
 
 // httpClient is c.HTTP, or the default client, with every redirect hop
-// waiting for the budget too: net/http resends the token to the same host.
+// waiting for the budget too, since net/http resends the token to the same
+// host, and every request sent bounded by RequestTimeout from its turn.
 func (c *Client) httpClient() *http.Client {
 	client := http.DefaultClient
 	if c.HTTP != nil {
 		client = c.HTTP
 	}
-	if c.Limiter == nil {
-		return client
-	}
 	paced := *client
+	paced.Transport = hopTimeout{next: client.Transport}
 	check := client.CheckRedirect
 	paced.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if check != nil {
@@ -191,7 +190,38 @@ func (c *Client) httpClient() *http.Client {
 	return &paced
 }
 
-// get waits for the token's budget, fetches path within RequestTimeout, decodes the JSON body
+// hopTimeout gives each request it sends RequestTimeout, counted when it
+// starts: right after the request's turn in the budget. The response body
+// keeps the deadline until it is closed.
+type hopTimeout struct{ next http.RoundTripper }
+
+func (h hopTimeout) RoundTrip(r *http.Request) (*http.Response, error) {
+	next := h.next
+	if next == nil {
+		next = http.DefaultTransport
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), RequestTimeout)
+	resp, err := next.RoundTrip(r.WithContext(ctx))
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	resp.Body = cancelOnClose{ReadCloser: resp.Body, cancel: cancel}
+	return resp, nil
+}
+
+// cancelOnClose ends a request's deadline once its body is closed.
+type cancelOnClose struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (b cancelOnClose) Close() error {
+	defer b.cancel()
+	return b.ReadCloser.Close()
+}
+
+// get waits for the token's budget, fetches path, decodes the JSON body
 // into out and runs check on it. The outcome counts in the source health
 // metrics: ok only once the body decodes and passes check; a request the
 // budget kept back was never sent and does not count. Errors name the
@@ -212,9 +242,7 @@ func (c *Client) get(ctx context.Context, path string, out any, check func() err
 	if err := c.Limiter.Wait(ctx, c.Priority); err != nil {
 		return fmt.Errorf("discogs: GET %s: wait for rate budget: %w", req.URL.Path, err)
 	}
-	sendCtx, cancel := context.WithTimeout(ctx, RequestTimeout)
-	defer cancel()
-	resp, err := c.httpClient().Do(req.WithContext(sendCtx))
+	resp, err := c.httpClient().Do(req)
 	if err != nil {
 		metrics.ObserveSource(Source, metrics.SourceError)
 		if uerr, ok := errors.AsType[*url.Error](err); ok {

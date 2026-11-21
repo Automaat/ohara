@@ -49,6 +49,11 @@ func TestHandlerAddsRequestAttrs(t *testing.T) {
 			`level=INFO msg=x g.k=1 g.request_id=host/abc-000001 g.method=GET g.path=/api/titles` + "\n",
 		},
 		{
+			"detached context",
+			func(l *slog.Logger) { l.WarnContext(reqlog.Detach(ctx), "save token", "err", "boom") },
+			`level=WARN msg="save token" err=boom` + "\n",
+		},
+		{
 			"call without a context",
 			func(l *slog.Logger) { l.Warn("lookup failed", "err", "boom") },
 			`level=WARN msg="lookup failed" err=boom` + "\n",

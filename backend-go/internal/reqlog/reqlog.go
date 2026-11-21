@@ -21,6 +21,13 @@ func WithRequest(ctx context.Context, id, method, path string) context.Context {
 	return context.WithValue(ctx, ctxKey{}, request{id: id, method: method, path: path})
 }
 
+// Detach returns ctx without request info, for work that outlives the
+// request, such as a token refresh run on its own context: its lines keep the
+// form of lines logged outside a request.
+func Detach(ctx context.Context) context.Context {
+	return context.WithValue(ctx, ctxKey{}, nil)
+}
+
 // NewHandler wraps next so a record logged with a request's context carries
 // request_id, method and path. Like any record attribute, they land inside a
 // group opened with WithGroup.

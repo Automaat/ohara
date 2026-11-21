@@ -115,7 +115,19 @@ func TestRequestID(t *testing.T) {
 		ids[id] = i
 	}
 
+	// OPTIONS * is answered before routing, so it needs a raw request URI.
+	opts := httptest.NewRequestWithContext(t.Context(), http.MethodOptions, "*", http.NoBody)
+	rec := httptest.NewRecorder()
+	server.New(server.Config{AccessLog: true}, logger, deps).ServeHTTP(rec, opts)
+	optsID := rec.Header().Get("X-Request-Id")
+	if rec.Code != http.StatusOK || optsID == "" {
+		t.Fatalf("OPTIONS * = %d with X-Request-Id %q, want 200 with an ID", rec.Code, optsID)
+	}
+
 	lines := logLines(t, logs)
+	if l := findLine(t, lines, "request", optsID); l["method"] != http.MethodOptions || l["status"] != float64(http.StatusOK) {
+		t.Errorf("OPTIONS * access log = %v", l)
+	}
 	for id, i := range ids {
 		tt := tests[i]
 		access := findLine(t, lines, "request", id)

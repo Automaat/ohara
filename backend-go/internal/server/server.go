@@ -67,8 +67,8 @@ func newRouter(cfg Config, logger *slog.Logger, deps Deps, timeout time.Duration
 	r := chi.NewRouter()
 	r.Use(securityHeaders)
 	r.Use(requestID)
-	r.Use(generalOptions(cfg.RequireRemoteUser))
 	r.Use(requestObserver(logger, cfg.AccessLog))
+	r.Use(generalOptions(cfg.RequireRemoteUser))
 	r.Use(recoverer(logger))
 	r.Use(timeoutAfter(timeout, logger))
 	if cfg.RequireRemoteUser {
@@ -263,9 +263,10 @@ func securityHeaders(next http.Handler) http.Handler {
 
 // generalOptions answers "OPTIONS *" with an empty 200, as net/http does when
 // the server's DisableGeneralOptionsHandler is false. cmd/api sets it, so the
-// request reaches the router and its answer carries the security headers.
-// When the Remote-User check is on, one without the header goes on to the
-// request observer and remoteUserGuard, which answers 401.
+// request reaches the router and its answer carries the security headers and
+// X-Request-Id; the request observer runs first, so it is counted and, with
+// the access log on, logged. When the Remote-User check is on, one without
+// the header goes on to remoteUserGuard, which answers 401.
 func generalOptions(requireRemoteUser bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -6,12 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"regexp"
 	"slices"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/Automaat/ohara/backend-go/internal/metrics"
 )
 
 //go:embed migrations/*.sql
@@ -124,6 +127,37 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, migrations []Migration) ([
 		done = append(done, m.Version)
 	}
 	return done, nil
+}
+
+// CheckUnknown returns the versions in schema_migrations that migrations has
+// no file for, sorted: the schema is newer than this binary, as after a
+// rollback to an older release. It exports their count as
+// ohara_db_unknown_migrations and, when there are any, logs one error naming
+// them and the binary's newest version. The app keeps running: a rollback by
+// image tag must still start.
+func CheckUnknown(ctx context.Context, pool *pgxpool.Pool, migrations []Migration, logger *slog.Logger) ([]string, error) {
+	rows, err := pool.Query(ctx, `SELECT version FROM schema_migrations`)
+	if err != nil {
+		return nil, fmt.Errorf("list applied migrations: %w", err)
+	}
+	applied, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, fmt.Errorf("scan applied migrations: %w", err)
+	}
+	known := make(map[string]bool, len(migrations))
+	newest := ""
+	for _, m := range migrations {
+		known[m.Version] = true
+		newest = max(newest, m.Version)
+	}
+	unknown := slices.DeleteFunc(applied, func(v string) bool { return known[v] })
+	slices.Sort(unknown)
+	metrics.SetUnknownMigrations(len(unknown))
+	if len(unknown) > 0 {
+		logger.Error("database schema is newer than this binary: applied migrations it does not know",
+			"versions", strings.Join(unknown, ","), "binary_newest", newest)
+	}
+	return unknown, nil
 }
 
 func applyOne(ctx context.Context, conn *pgx.Conn, m Migration) error {

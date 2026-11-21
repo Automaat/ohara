@@ -107,6 +107,11 @@ var (
 		Name: "ohara_valuation_last_run_timestamp_seconds",
 		Help: "When the stored collection value was last computed; 0 before the first valuation.",
 	})
+
+	dbUnknownMigrations = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "ohara_db_unknown_migrations",
+		Help: "Migrations applied to the database that this binary has no file for, counted at startup; above 0 after a rollback to an older release.",
+	})
 )
 
 func init() {
@@ -123,6 +128,7 @@ func init() {
 		collectionSpent,
 		collectionLowConfidence,
 		valuationLastRun,
+		dbUnknownMigrations,
 		sourceRequests,
 		sourceErrors,
 		sourceParseErrors,
@@ -280,6 +286,12 @@ func SetCollectionValue(v CollectionValue) {
 	collectionSpent.Set(float64(v.SpentCents) / 100)
 	collectionLowConfidence.Set(float64(v.LowConfidence))
 	valuationLastRun.Set(float64(v.ComputedAt.Unix()))
+}
+
+// SetUnknownMigrations records how many applied migrations the binary has
+// no file for.
+func SetUnknownMigrations(n int) {
+	dbUnknownMigrations.Set(float64(n))
 }
 
 // Source request outcomes for ObserveSource.

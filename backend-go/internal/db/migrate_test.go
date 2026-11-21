@@ -1,14 +1,22 @@
 package db_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
+	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 	"testing/fstest"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
 	"github.com/Automaat/ohara/backend-go/internal/db"
 	"github.com/Automaat/ohara/backend-go/internal/dbtest"
+	"github.com/Automaat/ohara/backend-go/internal/metrics"
 )
 
 func TestLoadMigrations(t *testing.T) {
@@ -191,5 +199,83 @@ func TestRemoveCeneoMigration(t *testing.T) {
 	}
 	if !slices.Equal(cached, []string{"movie/5906190326195", "selection/5903570157561"}) {
 		t.Fatalf("lookup cache %v; want the Allegro lookup and the picked candidate", cached)
+	}
+}
+
+// TestCheckUnknownMigrations runs the startup check on a database migrated
+// by a newer or the same build: versions the binary has no file for are
+// logged once and counted, known pending ones are still applied.
+func TestCheckUnknownMigrations(t *testing.T) {
+	probe := func(versions ...string) []db.Migration {
+		out := make([]db.Migration, 0, len(versions))
+		for _, v := range versions {
+			out = append(out, db.Migration{Version: v, Name: v + "_probe.sql", SQL: "SELECT 1;"})
+		}
+		return out
+	}
+	tests := []struct {
+		name        string
+		before      []string
+		binary      []string
+		wantApplied []string
+		wantUnknown []string
+	}{
+		{name: "fresh database", binary: []string{"0001", "0002"}, wantApplied: []string{"0001", "0002"}},
+		{name: "up to date", before: []string{"0001", "0002"}, binary: []string{"0001", "0002"}},
+		{name: "one unknown", before: []string{"0001", "0002"}, binary: []string{"0001"}, wantUnknown: []string{"0002"}},
+		{name: "two unknown", before: []string{"0001", "0002", "0003"}, binary: []string{"0001"}, wantUnknown: []string{"0002", "0003"}},
+		{
+			name:   "known pending beside unknown",
+			before: []string{"0001", "0003"}, binary: []string{"0001", "0002"},
+			wantApplied: []string{"0002"}, wantUnknown: []string{"0003"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pool := dbtest.Pool(t)
+			ctx := context.Background()
+			if len(tt.before) > 0 {
+				if _, err := db.Migrate(ctx, pool, probe(tt.before...)); err != nil {
+					t.Fatalf("newer build: %v", err)
+				}
+			}
+
+			binary := probe(tt.binary...)
+			applied, err := db.Migrate(ctx, pool, binary)
+			if err != nil {
+				t.Fatalf("migrate: %v", err)
+			}
+			if !slices.Equal(applied, tt.wantApplied) {
+				t.Fatalf("applied %v, want %v", applied, tt.wantApplied)
+			}
+			var logs bytes.Buffer
+			unknown, err := db.CheckUnknown(ctx, pool, binary, slog.New(slog.NewTextHandler(&logs, nil)))
+			if err != nil {
+				t.Fatalf("check: %v", err)
+			}
+			if !slices.Equal(unknown, tt.wantUnknown) {
+				t.Fatalf("unknown %v, want %v", unknown, tt.wantUnknown)
+			}
+
+			lines := strings.Split(strings.TrimSpace(logs.String()), "\n")
+			if len(tt.wantUnknown) == 0 {
+				if logs.Len() != 0 {
+					t.Fatalf("logged %q, want nothing", logs.String())
+				}
+			} else {
+				want := fmt.Sprintf("versions=%s binary_newest=%s", strings.Join(tt.wantUnknown, ","), tt.binary[len(tt.binary)-1])
+				if len(lines) != 1 || !strings.Contains(lines[0], "level=ERROR") || !strings.Contains(lines[0], want) {
+					t.Fatalf("logged %q, want one ERROR line with %q", logs.String(), want)
+				}
+			}
+
+			srv := httptest.NewServer(metrics.Handler())
+			defer srv.Close()
+			gauge := fmt.Sprintf("# HELP ohara_db_unknown_migrations Migrations applied to the database that this binary has no file for, counted at startup; above 0 after a rollback to an older release.\n"+
+				"# TYPE ohara_db_unknown_migrations gauge\nohara_db_unknown_migrations %d\n", len(tt.wantUnknown))
+			if err := testutil.ScrapeAndCompare(srv.URL, strings.NewReader(gauge), "ohara_db_unknown_migrations"); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }

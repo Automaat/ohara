@@ -197,6 +197,10 @@ func openDB(ctx context.Context, dsn string, logger *slog.Logger) (*pgxpool.Pool
 	if len(applied) > 0 {
 		logger.Info("applied migrations", "versions", strings.Join(applied, ","))
 	}
+	if _, err := db.CheckUnknown(ctx, pool, migrations, logger); err != nil {
+		pool.Close()
+		return nil, err
+	}
 	return pool, nil
 }
 

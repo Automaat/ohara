@@ -4,6 +4,7 @@
   "automerge": true,
   "automergeStrategy": "squash",
   "platformAutomerge": true,
+  "osvVulnerabilityAlerts": true,
   "reviewers": ["Automaat"],
   "customManagers": [
     {
@@ -12,6 +13,15 @@
       "fileMatch": ["^scripts/run-nilaway\\.sh$"],
       "matchStrings": [
         "# renovate: datasource=(?<datasource>.*?) depName=(?<depName>.*?)\\s+NILAWAY_VERSION=\"(?<currentValue>.+?)\""
+      ]
+    },
+    {
+      "customType": "regex",
+      "description": "Track the pinned govulncheck and Trivy versions of the vulnerability gates",
+      "fileMatch": ["^scripts/check-vulnerabilities\\.sh$", "^\\.github/workflows/ci\\.yml$"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+[A-Z_]+=\"(?<currentValue>[^\"]+)\"",
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+version: (?<currentValue>\\S+)"
       ]
     }
   ],

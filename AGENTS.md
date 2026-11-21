@@ -230,3 +230,12 @@ home-nas stack file.
   Postgres, golangci-lint, nilaway), image build; `main` pushes
   `:latest` and `:<sha>`. Pushed images (`main` and `release.yml`)
   carry BuildKit's SBOM and max-mode provenance attestations.
+- CI fails on known vulnerabilities (`scripts/check-vulnerabilities.sh`),
+  on every push and PR and nightly: `govulncheck` for Go code the backend
+  calls, under the go.mod toolchain; `npm audit` for high and critical
+  advisories in any package; Trivy for fixable high and critical ones in
+  the image's OS packages, before the push. A finding is accepted only
+  through `.github/vulnerability-allowlist.json` (`go`, `npm`, `image`
+  lists of `id`, `reason` and `expires`, YYYY-MM-DD); an entry stops
+  counting after its expiry. Renovate's `osvVulnerabilityAlerts` opens
+  fix PRs for vulnerable dependencies.

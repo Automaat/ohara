@@ -394,7 +394,10 @@ func (r *run) deliver(ctx context.Context) error {
 }
 
 var (
-	formatLabels = map[string]string{"dvd": "DVD", "bluray": "Blu-ray", "uhd": "4K UHD"}
+	formatLabels = map[string]string{
+		"dvd": "DVD", "bluray": "Blu-ray", "uhd": "4K UHD",
+		"cd": "CD", "vinyl": "Winyl", "cassette": "Kaseta",
+	}
 	sourceLabels = map[string]string{"olx": "OLX", "vinted": "Vinted", "pepper": "Pepper"}
 	stateLabels  = map[string]string{"new": "nowy", "used": "używany"}
 )
@@ -404,7 +407,9 @@ var (
 func alertText(a *Alert) string {
 	head := "🎯 Okazja: " + a.TitleName
 	if a.Format != nil {
-		head += " · " + formatLabels[*a.Format]
+		if label, ok := formatLabels[*a.Format]; ok {
+			head += " · " + label
+		}
 	}
 	price := formatPLN(a.PriceCents)
 	if a.MaxPriceCents != nil {

@@ -163,7 +163,7 @@ func parseCart(page []byte, isbn string) (Quote, bool) {
 // shopDo sends one request in the quote's session and returns a 200 body.
 // A token marks the request as the page's own XHR, which Laravel's CSRF
 // check needs. It also returns the request's ObserveSource status; an
-// error status counts as itself, however long its page.
+// error status counts as itself, however long or unreadable its page.
 func shopDo(ctx context.Context, client *http.Client, method, target string, body io.Reader, token, accept string) ([]byte, string, error) {
 	if body == nil {
 		body = http.NoBody
@@ -185,13 +185,16 @@ func shopDo(ctx context.Context, client *http.Client, method, target string, bod
 		return nil, metrics.SourceError, err
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxShopReply+1))
-	if err != nil {
-		return nil, metrics.SourceError, err
-	}
 	status := metrics.SourceOK
 	if resp.StatusCode != http.StatusOK {
 		status = fmt.Sprintf("http_%d", resp.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxShopReply+1))
+	if err != nil {
+		if status == metrics.SourceOK {
+			status = metrics.SourceError
+		}
+		return nil, status, err
 	}
 	if len(data) > maxShopReply {
 		if status == metrics.SourceOK {

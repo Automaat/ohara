@@ -23,6 +23,7 @@ type fakeShop struct {
 	status  int
 	noToken bool
 	huge    int
+	badGzip int
 
 	mu       sync.Mutex
 	added    map[string]bool
@@ -52,6 +53,12 @@ func (f *fakeShop) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if f.status != 0 {
 		w.WriteHeader(f.status)
+		return
+	}
+	if f.badGzip != 0 {
+		w.Header().Set("Content-Encoding", "gzip")
+		w.WriteHeader(f.badGzip)
+		_, _ = w.Write([]byte("this page is plain text, not gzip"))
 		return
 	}
 	if f.huge != 0 {
@@ -176,6 +183,20 @@ func TestSkupSzopQuote(t *testing.T) {
 			setup:   func(f *fakeShop) { f.huge = http.StatusOK },
 			wantErr: "skupszop: sell page: response too large",
 			status:  "parse_error",
+		},
+		{
+			name:    "shop down with an unreadable page",
+			isbn:    "9788308074770",
+			setup:   func(f *fakeShop) { f.badGzip = http.StatusServiceUnavailable },
+			wantErr: "skupszop: sell page: gzip: invalid header",
+			status:  "http_503",
+		},
+		{
+			name:    "sell page unreadable",
+			isbn:    "9788308074770",
+			setup:   func(f *fakeShop) { f.badGzip = http.StatusOK },
+			wantErr: "skupszop: sell page: gzip: invalid header",
+			status:  "error",
 		},
 		{
 			name:    "shop unreachable",

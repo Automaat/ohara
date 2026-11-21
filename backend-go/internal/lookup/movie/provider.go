@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"math"
 	"sync"
+	"time"
 
 	"github.com/Automaat/ohara/backend-go/internal/barcode"
 	"github.com/Automaat/ohara/backend-go/internal/lookup"
@@ -30,6 +31,10 @@ type Provider struct {
 	// slog.Default().
 	Logger *slog.Logger
 }
+
+// sourceTimeout caps the wait for one name source, so a catalog that hangs
+// leaves the TMDB search at least 6 s of the lookup's 10 s budget.
+const sourceTimeout = 4 * time.Second
 
 // maxQueries bounds TMDB searches per barcode when sources disagree.
 const maxQueries = 3
@@ -55,9 +60,10 @@ func (*Provider) Name() string { return "movie" }
 // Accepts every barcode except ISBNs: books have their own providers.
 func (*Provider) Accepts(code string) bool { return !barcode.IsBook(code) }
 
-// Fetch asks every name source concurrently, then searches TMDB for the
-// distinct titles. With no product found, a failed source fails the fetch so
-// a "no match" built on an outage is not cached. When another source found
+// Fetch asks every name source concurrently, each for at most
+// sourceTimeout, then searches TMDB for the distinct titles. With no
+// product found, a failed source fails the fetch so a "no match" built on
+// an outage is not cached. When another source found
 // the product, the answer comes back as a *lookup.PartialError naming the
 // failed sources (an Allegro refusal included), so the lookup reports them
 // and does not cache the answer.
@@ -104,7 +110,10 @@ func (p *Provider) Fetch(ctx context.Context, code string) (json.RawMessage, err
 
 // products asks one name source. A panic in it, its name included, fails
 // that source with an error naming it, or naming its position when the
-// name itself panicked.
+// name itself panicked. A source that has not answered within
+// sourceTimeout fails with an error naming it; the wait ends then even
+// when the source ignores its context, for example while it waits on a
+// lock.
 func (p *Provider) products(ctx context.Context, i int, s NameSource, code string) ([]Product, error) {
 	name, err := recovery.Call(p.Logger, "movie name source panicked", func() (string, error) {
 		return s.Name(), nil
@@ -112,13 +121,28 @@ func (p *Provider) products(ctx context.Context, i int, s NameSource, code strin
 	if err != nil {
 		return nil, fmt.Errorf("name source %d: %w", i, err)
 	}
-	found, err := recovery.Call(p.Logger, "movie name source panicked", func() ([]Product, error) {
-		return s.Products(ctx, code)
-	}, "source", name, "barcode", code)
-	if pe, ok := errors.AsType[*recovery.PanicError](err); ok {
-		return nil, fmt.Errorf("%s: %w", name, pe)
+	ctx, cancel := context.WithTimeout(ctx, sourceTimeout)
+	defer cancel()
+	type answer struct {
+		found []Product
+		err   error
 	}
-	return found, err
+	done := make(chan answer, 1)
+	go func() {
+		found, err := recovery.Call(p.Logger, "movie name source panicked", func() ([]Product, error) {
+			return s.Products(ctx, code)
+		}, "source", name, "barcode", code)
+		done <- answer{found, err}
+	}()
+	select {
+	case a := <-done:
+		if pe, ok := errors.AsType[*recovery.PanicError](a.err); ok {
+			return nil, fmt.Errorf("%s: %w", name, pe)
+		}
+		return a.found, a.err
+	case <-ctx.Done():
+		return nil, fmt.Errorf("%s: %w", name, context.Cause(ctx))
+	}
 }
 
 // search narrows by year first, then drops the year, then falls back to

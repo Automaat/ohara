@@ -3,6 +3,7 @@ package server_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -82,10 +83,19 @@ func checkJSONError(t *testing.T, got response, code int, msg string) {
 	}
 }
 
+// queryAPI has a route only for chi's QUERY method.
+type queryAPI struct{}
+
+func (queryAPI) Mount(r chi.Router) {
+	r.Method("QUERY", "/search", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+}
+
 func TestRouterErrorBodies(t *testing.T) {
 	logs := &lockedBuffer{}
 	logger := slog.New(slog.NewTextHandler(logs, nil))
-	srv := httptest.NewServer(server.New(server.Config{}, logger, server.Deps{API: []server.Mounter{failingAPI{logger: logger}}}))
+	srv := httptest.NewServer(server.New(server.Config{}, logger, server.Deps{API: []server.Mounter{failingAPI{logger: logger}, queryAPI{}}}))
 	t.Cleanup(srv.Close)
 
 	tests := []struct {
@@ -99,6 +109,8 @@ func TestRouterErrorBodies(t *testing.T) {
 		{"wrong method on status", http.MethodPatch, "/api/status", http.StatusMethodNotAllowed, "method not allowed", []string{http.MethodGet}},
 		{"wrong method on a domain route", http.MethodDelete, "/api/items", http.StatusMethodNotAllowed, "method not allowed", []string{http.MethodGet, http.MethodPost}},
 		{"wrong method on health", http.MethodPost, "/health", http.StatusMethodNotAllowed, "method not allowed", []string{http.MethodGet}},
+		{"wrong method on a QUERY route", http.MethodPatch, "/api/search", http.StatusMethodNotAllowed, "method not allowed", []string{"QUERY"}},
+		{"method chi does not route", "PROPFIND", "/api/status", http.StatusMethodNotAllowed, "method not allowed", nil},
 		{"handler panic", http.MethodGet, "/api/panic", http.StatusInternalServerError, "internal server error", nil},
 		{"handler error", http.MethodGet, "/api/broken", http.StatusInternalServerError, "internal server error", nil},
 		{"unknown API path", http.MethodGet, "/api/nope", http.StatusNotFound, "not found", nil},
@@ -131,6 +143,20 @@ func (a lateAPI) Mount(r chi.Router) {
 		httpx.WriteJSON(w, a.logger, http.StatusOK, map[string]bool{"ok": true})
 		panic("boom")
 	})
+	r.Get("/wrapped-abort", func(http.ResponseWriter, *http.Request) {
+		panic(fmt.Errorf("stream: %w", http.ErrAbortHandler))
+	})
+	r.Get("/abort", func(http.ResponseWriter, *http.Request) {
+		panic(http.ErrAbortHandler)
+	})
+	r.Get("/length-then-panic", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "1")
+		panic("boom")
+	})
+	r.Get("/length-then-silent", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "1")
+		<-r.Context().Done()
+	})
 	r.Get("/silent", func(_ http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done()
 	})
@@ -152,6 +178,26 @@ func TestTimeoutAndLatePanic(t *testing.T) {
 
 	t.Run("handler wrote nothing", func(t *testing.T) {
 		checkJSONError(t, do(t, http.MethodGet, srv.URL+"/api/silent"), http.StatusGatewayTimeout, "gateway timeout")
+	})
+	t.Run("handler set a length and wrote nothing", func(t *testing.T) {
+		checkJSONError(t, do(t, http.MethodGet, srv.URL+"/api/length-then-silent"), http.StatusGatewayTimeout, "gateway timeout")
+	})
+	t.Run("panic after setting a length", func(t *testing.T) {
+		checkJSONError(t, do(t, http.MethodGet, srv.URL+"/api/length-then-panic"), http.StatusInternalServerError, "internal server error")
+	})
+	t.Run("panic with a wrapped abort", func(t *testing.T) {
+		checkJSONError(t, do(t, http.MethodGet, srv.URL+"/api/wrapped-abort"), http.StatusInternalServerError, "internal server error")
+	})
+	t.Run("panic with the abort sentinel", func(t *testing.T) {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/abort", http.NoBody)
+		if err != nil {
+			t.Fatalf("new request: %v", err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			resp.Body.Close()
+			t.Fatalf("GET /api/abort = %d, want the connection aborted", resp.StatusCode)
+		}
 	})
 
 	ok := "{\"ok\":true}\n"

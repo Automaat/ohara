@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"runtime/debug"
+	"slices"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -89,25 +90,29 @@ func newRouter(cfg Config, logger *slog.Logger, deps Deps, timeout time.Duration
 	return r
 }
 
-// allowCandidates are the methods a 405 can list in its Allow header.
-var allowCandidates = []string{
+// routedMethods are the methods chi routes; a 405 lists those a path has a
+// route for in its Allow header.
+var routedMethods = []string{
 	http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch,
-	http.MethodDelete, http.MethodConnect, http.MethodOptions, http.MethodTrace,
+	http.MethodDelete, http.MethodConnect, http.MethodOptions, http.MethodTrace, "QUERY",
 }
 
 // methodNotAllowed answers a known path asked with a method it has no route
 // for, with the API's JSON error. chi does not pass the allowed methods to a
 // custom handler, so the Allow header its own answer carries is rebuilt from
-// the routes.
+// the routes. A method chi does not route at all, like PROPFIND, gets no
+// Allow header, as from chi.
 func methodNotAllowed(routes chi.Routes, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		path := r.URL.RawPath
-		if path == "" {
-			path = r.URL.Path
-		}
-		for _, m := range allowCandidates {
-			if routes.Match(chi.NewRouteContext(), m, path) {
-				w.Header().Add("Allow", m)
+		if slices.Contains(routedMethods, r.Method) {
+			path := r.URL.RawPath
+			if path == "" {
+				path = r.URL.Path
+			}
+			for _, m := range routedMethods {
+				if routes.Match(chi.NewRouteContext(), m, path) {
+					w.Header().Add("Allow", m)
+				}
 			}
 		}
 		httpx.WriteError(w, logger, http.StatusMethodNotAllowed, "method not allowed")
@@ -116,7 +121,7 @@ func methodNotAllowed(routes chi.Routes, logger *slog.Logger) http.HandlerFunc {
 
 // recoverer turns a handler panic into a logged error, with its stack, and a
 // JSON 500 when nothing was written yet. Like chi's Recoverer it lets
-// http.ErrAbortHandler through and sends no 500 on a protocol upgrade.
+// http.ErrAbortHandler itself through and sends no 500 on a protocol upgrade.
 func recoverer(logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -126,7 +131,7 @@ func recoverer(logger *slog.Logger) func(http.Handler) http.Handler {
 				if rvr == nil {
 					return
 				}
-				if err, ok := rvr.(error); ok && errors.Is(err, http.ErrAbortHandler) {
+				if isAbortHandler(rvr) {
 					panic(rvr)
 				}
 				logger.Error("handler panic",
@@ -137,7 +142,7 @@ func recoverer(logger *slog.Logger) func(http.Handler) http.Handler {
 					"stack", string(debug.Stack()),
 				)
 				if ww.Status() == 0 && r.Header.Get("Connection") != "Upgrade" {
-					httpx.WriteError(ww, logger, http.StatusInternalServerError, "internal server error")
+					writeFallback(ww, logger, http.StatusInternalServerError, "internal server error")
 				}
 			}()
 			next.ServeHTTP(ww, r)
@@ -156,12 +161,27 @@ func timeoutAfter(d time.Duration, logger *slog.Logger) func(http.Handler) http.
 			defer func() {
 				cancel()
 				if errors.Is(ctx.Err(), context.DeadlineExceeded) && ww.Status() == 0 {
-					httpx.WriteError(ww, logger, http.StatusGatewayTimeout, "gateway timeout")
+					writeFallback(ww, logger, http.StatusGatewayTimeout, "gateway timeout")
 				}
 			}()
 			next.ServeHTTP(ww, r.WithContext(ctx))
 		})
 	}
+}
+
+// isAbortHandler reports a panic with http.ErrAbortHandler itself, the value
+// net/http and chi's Recoverer compare against; a wrapped one is an ordinary
+// panic. Both sides are compared as panic values, so a value of another
+// dynamic type, comparable or not, is simply unequal.
+func isAbortHandler(rvr any) bool {
+	return rvr == any(http.ErrAbortHandler)
+}
+
+// writeFallback sends the error answer for a handler that wrote nothing. A
+// Content-Length the handler set for its own body would cut this one short.
+func writeFallback(w http.ResponseWriter, logger *slog.Logger, code int, msg string) {
+	w.Header().Del("Content-Length")
+	httpx.WriteError(w, logger, code, msg)
 }
 
 // permissionsPolicy lets only Ohara's own pages open the camera, for the

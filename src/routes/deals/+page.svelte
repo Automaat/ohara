@@ -203,7 +203,7 @@
 	{/if}
 {/snippet}
 
-<PageHeader title="Okazje" description={summary} actions={deals ? headerActions : undefined} />
+<PageHeader title="Okazje" description={summary} actions={headerActions} />
 
 <div class="content">
 	<FormError message={runError} />

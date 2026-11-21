@@ -22,13 +22,14 @@
 	});
 
 	/**
-	 * Opens what went in, or Okazje for a wish added from there, or the scanner for the code a
-	 * wedge scanner typed into the price.
+	 * Leads back to Okazje for a wish added from there; otherwise opens the scanner for the code a
+	 * wedge scanner typed into the price, or what went in.
 	 */
 	async function added(a: Added) {
 		if (!alive) return;
-		if (a.next) await goto(`/scan/${encodeURIComponent(a.next)}`);
-		else await goto(fromDeals ? back.href : `/titles/${a.saved.titleID}`);
+		if (fromDeals) await goto(back.href);
+		else if (a.next) await goto(`/scan/${encodeURIComponent(a.next)}`);
+		else await goto(`/titles/${a.saved.titleID}`);
 	}
 
 	async function leave() {

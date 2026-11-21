@@ -366,3 +366,9 @@ and cuts the GitHub release, in that order. `:latest` comes only from CI on
   Postgres, golangci-lint, nilaway), image build; `main` pushes
   `:latest` and `:<sha>`. Pushed images (`main` and `release.yml`)
   carry BuildKit's SBOM and max-mode provenance attestations.
+- One Go patch release everywhere: `toolchain` in `backend-go/go.mod`
+  (CI's `setup-go` reads it), the Dockerfile's `golang` tag and `go` in
+  `.mise.toml`. Renovate's `go` group bumps them in one PR, opened only
+  once all three have the release (`minimumGroupSize: 3`), and CI's
+  `scripts/check-go-versions.sh` fails when they differ; the `go`
+  language line stays where it is.

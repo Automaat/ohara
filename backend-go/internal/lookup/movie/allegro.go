@@ -36,20 +36,22 @@ type Allegro struct {
 
 	tokenTimeout time.Duration
 
-	mu      sync.Mutex
-	token   *Token
-	unsaved bool
-	op      *tokenOp
+	mu          sync.Mutex
+	token       *Token
+	unsavedOver string
+	op          *tokenOp
 }
 
 // tokenOp is a token refresh, or a retried save of the current pair, that
 // runs on a context detached from the lookup that started it: Allegro
 // retires the old refresh token as soon as it answers, so the new pair has
 // to be kept even when the lookup gave up. One runs at a time, so the
-// store ends with the latest pair.
+// store ends with the latest pair. over is the refresh token of the stored
+// pair the new one replaces; a.unsavedOver keeps it while a save is due.
 type tokenOp struct {
 	done    chan struct{}
 	refresh bool
+	over    string
 	access  string
 	err     error
 }
@@ -169,49 +171,80 @@ func (a *Allegro) currentToken(ctx context.Context, force bool) (string, *tokenO
 		a.token = &t
 	}
 	if !force && a.now().Add(tokenLeeway).Before(a.token.Expiry) {
-		if a.unsaved && a.op == nil {
-			a.startOp(ctx, *a.token, false)
+		if a.unsavedOver != "" && a.op == nil {
+			a.startOp(ctx, *a.token, a.unsavedOver, false)
 		}
 		return a.token.Access, nil, nil
 	}
 	if a.op == nil {
-		a.startOp(ctx, *a.token, true)
+		if err := ctx.Err(); err != nil {
+			return "", nil, fmt.Errorf("allegro: token refresh: %w", err)
+		}
+		over := a.token.Refresh
+		if a.unsavedOver != "" {
+			over = a.unsavedOver
+		}
+		a.startOp(ctx, *a.token, over, true)
 	}
 	return "", a.op, nil
 }
 
 // startOp runs a refresh of t, or a save of t, in its own goroutine. The
 // caller holds a.mu.
-func (a *Allegro) startOp(ctx context.Context, t Token, refresh bool) {
-	op := &tokenOp{done: make(chan struct{}), refresh: refresh}
+func (a *Allegro) startOp(ctx context.Context, t Token, over string, refresh bool) {
+	op := &tokenOp{done: make(chan struct{}), refresh: refresh, over: over}
 	a.op = op
 	go a.runOp(context.WithoutCancel(ctx), op, t)
 }
 
+// runOp drops a refresh token Allegro rejects, so the next lookup loads
+// the pair `api allegro-login` stores.
 func (a *Allegro) runOp(ctx context.Context, op *tokenOp, t Token) {
 	defer close(op.done)
 	if op.refresh {
-		var err error
-		if t, err = a.refresh(ctx, t.Refresh); err != nil {
+		next, err := a.refresh(ctx, t.Refresh)
+		if err != nil {
 			op.err = err
 			a.mu.Lock()
+			defer a.mu.Unlock()
 			a.op = nil
-			a.mu.Unlock()
+			if errors.Is(err, ErrAllegroNotAuthorized) {
+				a.token, a.unsavedOver = nil, ""
+			}
 			return
 		}
-		op.access = t.Access
+		t = next
 	}
-	saveCtx, cancel := context.WithTimeout(ctx, a.timeout())
-	defer cancel()
-	err := a.Store.Save(saveCtx, a.Name(), t)
-	if err != nil {
-		slog.WarnContext(ctx, "allegro: save token, retrying on the next lookup", "err", err)
-	}
+	t, saved := a.persist(ctx, t, op.over)
+	op.access = t.Access
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.op = nil
 	a.token = &t
-	a.unsaved = err != nil
+	a.unsavedOver = ""
+	if !saved {
+		a.unsavedOver = op.over
+	}
+}
+
+// persist stores t in place of the pair whose refresh token is over and
+// returns the pair to use and whether the store holds it. A different pair
+// stored meanwhile, by `api allegro-login` for example, wins over t.
+func (a *Allegro) persist(ctx context.Context, t Token, over string) (Token, bool) {
+	ctx, cancel := context.WithTimeout(ctx, a.timeout())
+	defer cancel()
+	stored, ok, err := a.Store.Load(ctx, a.Name())
+	if err == nil && ok && stored.Refresh != over {
+		return stored, true
+	}
+	if err == nil {
+		err = a.Store.Save(ctx, a.Name(), t)
+	}
+	if err != nil {
+		slog.WarnContext(ctx, "allegro: save token, retrying on the next lookup", "err", err)
+		return t, false
+	}
+	return t, true
 }
 
 // refresh trades refreshToken for a new pair.

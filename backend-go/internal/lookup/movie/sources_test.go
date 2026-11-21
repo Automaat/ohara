@@ -239,6 +239,7 @@ type allegroServer struct {
 	device     []string
 	tokenDelay time.Duration
 	tokenHangs bool
+	tokenCalls int
 }
 
 func (a *allegroServer) refreshCount() int {
@@ -247,10 +248,19 @@ func (a *allegroServer) refreshCount() int {
 	return a.refreshes
 }
 
+func (a *allegroServer) tokenCallCount() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.tokenCalls
+}
+
 func (a *allegroServer) handler(t *testing.T) http.HandlerFunc {
 	t.Helper()
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/auth/oauth/token" {
+			a.mu.Lock()
+			a.tokenCalls++
+			a.mu.Unlock()
 			if a.tokenHangs {
 				<-r.Context().Done()
 				return
@@ -443,7 +453,8 @@ func TestAllegroRetriesAFailedSave(t *testing.T) {
 func TestAllegroBoundsAHangingRefresh(t *testing.T) {
 	now := time.Now()
 	store := &memStore{token: &Token{Access: accessFor(0), Refresh: refreshFor(0), Expiry: now.Add(30 * time.Second)}}
-	a := newAllegro(t, &allegroServer{tokenHangs: true}, store, now)
+	srv := &allegroServer{tokenHangs: true}
+	a := newAllegro(t, srv, store, now)
 	a.tokenTimeout = 300 * time.Millisecond
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -459,8 +470,71 @@ func TestAllegroBoundsAHangingRefresh(t *testing.T) {
 			t.Fatalf("later lookup waited %v", waited)
 		}
 	}
+	if n := srv.tokenCallCount(); n != 2 {
+		t.Fatalf("token requests = %d, want a new one after the first timed out", n)
+	}
 	if got := store.refresh(); got != refreshFor(0) {
 		t.Fatalf("stored refresh token %q", got)
+	}
+}
+
+func TestAllegroCanceledLookupStartsNoRefresh(t *testing.T) {
+	now := time.Now()
+	store := &memStore{token: &Token{Access: accessFor(0), Refresh: refreshFor(0), Expiry: now.Add(30 * time.Second)}}
+	a := newAllegro(t, &allegroServer{}, store, now)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := a.Products(ctx, "5906190326195"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v", err)
+	}
+	a.mu.Lock()
+	started := a.op != nil
+	a.mu.Unlock()
+	if started {
+		t.Fatal("a canceled lookup started a token refresh")
+	}
+}
+
+// otherProcess is a second Allegro on the same server and store, as
+// `api allegro-login` runs beside the API.
+func otherProcess(a *Allegro) *Allegro {
+	return &Allegro{
+		ClientID: a.ClientID, ClientSecret: a.ClientSecret, Store: a.Store, Client: a.Client,
+		APIBase: a.APIBase, AuthBase: a.AuthBase, Now: a.Now,
+	}
+}
+
+func TestAllegroSaveRetryKeepsAPairALoginStored(t *testing.T) {
+	now := time.Now()
+	store := &memStore{token: &Token{Access: accessFor(0), Refresh: refreshFor(0), Expiry: now.Add(30 * time.Second)}, failSaves: 1}
+	srv := &allegroServer{}
+	a := newAllegro(t, srv, store, now)
+	if _, err := a.Products(context.Background(), "5906190326195"); err != nil {
+		t.Fatal(err)
+	}
+	if err := otherProcess(a).Login(context.Background(), &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Products(context.Background(), "5906190326195"); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.refresh(); got != refreshFor(3) {
+		t.Fatalf("stored refresh token %q, want the login's pair refreshed", got)
+	}
+}
+
+func TestAllegroLoadsALoginAfterARejectedRefresh(t *testing.T) {
+	now := time.Now()
+	store := &memStore{token: &Token{Access: "a", Refresh: "stale", Expiry: now}}
+	a := newAllegro(t, &allegroServer{}, store, now)
+	if _, err := a.Products(context.Background(), "5906190326195"); !errors.Is(err, ErrAllegroNotAuthorized) {
+		t.Fatalf("err = %v", err)
+	}
+	if err := otherProcess(a).Login(context.Background(), &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Products(context.Background(), "5906190326195"); err != nil {
+		t.Fatalf("lookup after login: %v", err)
 	}
 }
 

@@ -9,3 +9,5 @@ node_modules
 package-lock.json
 renovate.json
 backend-go
+/test-results
+/playwright-report

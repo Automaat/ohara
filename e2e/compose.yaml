@@ -1,0 +1,53 @@
+# The production image with Postgres for the Playwright smoke suite
+# (scripts/e2e.sh). The app and Postgres sit on an internal network with no
+# way out, so a request to a public provider fails instead of reaching it;
+# only the proxy, on both networks, publishes the app to the host.
+name: ohara-e2e
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: ohara
+      POSTGRES_PASSWORD: ohara
+      POSTGRES_DB: ohara
+    tmpfs:
+      - /var/lib/postgresql
+    networks: [internal]
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ohara']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  app:
+    image: ${OHARA_E2E_IMAGE:-ohara:e2e}
+    build: ..
+    environment:
+      PGHOST: postgres
+      PGUSER: ohara
+      PGPASSWORD: ohara
+      PGDATABASE: ohara
+      PGSSLMODE: disable
+      OHARA_LOOKUP_STUB: 'true'
+      # The only provider a non-ISBN code reaches without keys.
+      OHARA_MUSICBRAINZ: 'false'
+    networks: [internal]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  proxy:
+    image: alpine/socat:1.8.1.1@sha256:7f9a06753033f2b7de18edc2353f2c15153413d95a039163c6db270fc7a6c3b0
+    command: tcp-listen:8000,fork,reuseaddr tcp-connect:app:8000
+    ports:
+      - '127.0.0.1:8100:8000'
+    networks: [internal, edge]
+    depends_on:
+      app:
+        condition: service_healthy
+
+networks:
+  internal:
+    internal: true
+  edge: {}

@@ -11,3 +11,5 @@ coverage
 .idea
 .claude/
 /backend-go/api
+/test-results
+/playwright-report

@@ -335,6 +335,62 @@ func TestRecentUnderLimitKeepsOlderListings(t *testing.T) {
 	}
 }
 
+// TestRecentMatchesRecordedWishBeforeAlert pins which copy matches a listing: the wish it was
+// last recorded for, even when that copy has left the wishlist, and its alert's copy only when
+// it was recorded for none.
+func TestRecentMatchesRecordedWishBeforeAlert(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	first := wishlist(t, pool, wantBluray(new(int64(4000))))
+	second := wishlist(t, pool, wantBluray(new(int64(4000))))
+	wants, err := store.Wants(ctx)
+	if err != nil || len(wants) != 2 {
+		t.Fatalf("wants = %v, %v", wants, err)
+	}
+	listing := Listing{Source: "olx", ExternalID: "bought", Title: "Blade Runner Blu-ray", PriceCents: 3000}
+	if _, alerted, err := store.Record(ctx, &listing, &wants[0], true); err != nil || !alerted {
+		t.Fatalf("record for the first wish: alerted=%t err=%v", alerted, err)
+	}
+	if _, _, err := store.Record(ctx, &listing, &wants[1], false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE copy SET status = 'owned', max_price_cents = NULL WHERE id = $1`, second); err != nil {
+		t.Fatal(err)
+	}
+	var alertOnly int64
+	if err := pool.QueryRow(ctx, `INSERT INTO price_observation (source, external_id, price_cents, edition_id, raw)
+		VALUES ('olx', 'alert-only', 3500, $1, '{"title": "Blade Runner"}') RETURNING id`, wants[0].EditionID).Scan(&alertOnly); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO deal_alert (observation_id, copy_id, sent_at, attempts) VALUES ($1, $2, now(), 1)`,
+		alertOnly, first); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		filter RecentFilter
+		want   []string
+	}{
+		{name: "all", filter: RecentFilter{Limit: 10}, want: []string{"alert-only", "bought"}},
+		{name: "matched", filter: RecentFilter{Limit: 10, Matched: true}, want: []string{"alert-only"}},
+		{name: "under limit", filter: RecentFilter{Limit: 10, UnderLimit: true}, want: []string{"alert-only"}},
+		{name: "sent", filter: RecentFilter{Limit: 10, Sent: true}, want: []string{"alert-only"}},
+	} {
+		got, err := store.Recent(ctx, tc.filter)
+		if err != nil || !slices.Equal(externalIDs(got), tc.want) {
+			t.Fatalf("%s = %v, %v; want %v", tc.name, externalIDs(got), err, tc.want)
+		}
+		for i := range got {
+			matched := got[i].ExternalID == "alert-only"
+			if matched != (got[i].MaxPriceCents != nil) {
+				t.Fatalf("%s: %s max price = %v", tc.name, got[i].ExternalID, got[i].MaxPriceCents)
+			}
+		}
+	}
+}
+
 func externalIDs(obs []Observation) []string {
 	out := make([]string, 0, len(obs))
 	for i := range obs {

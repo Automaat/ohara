@@ -106,6 +106,9 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   queues one `deal_alert` per listing at or below the copy's
   `max_price_cents`; a listing seen again keeps its row, takes the new
   price and `last_seen_at`, and alerts if it has no alert yet. Alerts are retried up to 5 times within a week.
+  The wish a listing was recorded for (`raw.wishlist_copy_id`) is also the
+  generated, indexed column `wishlist_copy_id`, so the deals list's filters
+  start from wished listings instead of reading every observation.
   Every run also asks each query source the canary query, wishlist or not,
   and sets `ohara_source_canary_ok` (a feed's one request is its canary)
   and `ohara_source_results`. A canary without listings is a broken source.

@@ -364,4 +364,5 @@ and cuts the GitHub release, in that order. `:latest` comes only from CI on
 - Conventional commits `type(scope): description`, signed with `-s -S`.
 - CI: frontend (lint, check, coverage, build), Go (vet, test against
   Postgres, golangci-lint, nilaway), image build; `main` pushes
-  `:latest` and `:<sha>`.
+  `:latest` and `:<sha>`. Pushed images (`main` and `release.yml`)
+  carry BuildKit's SBOM and max-mode provenance attestations.

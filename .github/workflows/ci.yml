@@ -56,6 +56,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Go versions match
+        run: ./scripts/check-go-versions.sh
+
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: backend-go/go.mod
@@ -129,3 +132,5 @@ jobs:
             ghcr.io/automaat/ohara:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          sbom: ${{ github.event_name == 'push' }}
+          provenance: mode=max

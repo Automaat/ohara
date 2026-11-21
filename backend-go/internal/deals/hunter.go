@@ -107,6 +107,10 @@ func NewHunter(store *Store, sources []Source, notifier Notifier, cfg Config, lo
 	h.status.Scheduled = cfg.Interval > 0
 	h.status.IntervalSeconds = int64(cfg.Interval.Seconds())
 	h.status.Telegram = notifier != nil
+	metrics.InitBackgroundTask(metrics.TaskDeals)
+	if notifier != nil {
+		metrics.InitDealAlerts()
+	}
 	for _, src := range sources {
 		metrics.InitSource(src.Name())
 	}
@@ -229,6 +233,7 @@ func (h *Hunter) execute(ctx context.Context) {
 	h.status.LastResult = &res
 	h.mu.Unlock()
 	h.saveRun(ctx, func(ctx context.Context) error { return h.store.RunFinished(ctx, started, finished, &res) })
+	metrics.ObserveBackgroundRun(metrics.TaskDeals, finished.Sub(started), err)
 }
 
 // saveRun stores part of a run even after ctx is canceled, so a run cut
@@ -287,6 +292,11 @@ func (h *Hunter) Run(ctx context.Context) (RunResult, error) {
 		}
 	}
 	if err := r.deliver(ctx, nil); err != nil {
+		return r.res, err
+	}
+	// A source that saw the cancellation may have answered without an
+	// error; a run cut short is not a finished one.
+	if err := ctx.Err(); err != nil {
 		return r.res, err
 	}
 	return r.res, nil
@@ -473,6 +483,7 @@ func (r *run) deliver(ctx context.Context, only map[string]bool) error {
 		r.tried[a.ObservationID] = true
 		err := r.h.notifier.Send(ctx, alertText(a))
 		r.h.sent()
+		metrics.ObserveDealAlert(err)
 		if err != nil {
 			r.h.logger.Warn("telegram alert failed", "observation", a.ObservationID, "err", err)
 			if err := r.h.store.MarkFailed(ctx, a.ObservationID, err.Error()); err != nil {

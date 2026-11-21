@@ -90,6 +90,7 @@ func NewRunner(store *Store, sources []deals.Source, buybacks []BuyBack, pricer 
 	}
 	r.status.Scheduled = cfg.Interval > 0
 	r.status.IntervalSeconds = int64(cfg.Interval.Seconds())
+	metrics.InitBackgroundTask(metrics.TaskValuation)
 	return r
 }
 
@@ -193,6 +194,7 @@ func (r *Runner) execute(ctx context.Context) {
 			"releases", res.Releases, "errors", len(res.Errors))
 	}
 	finished := time.Now()
+	metrics.ObserveBackgroundRun(metrics.TaskValuation, finished.Sub(started), err)
 	r.mu.Lock()
 	r.status.LastFinishedAt = &finished
 	r.status.LastResult = &res

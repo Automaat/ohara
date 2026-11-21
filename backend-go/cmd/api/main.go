@@ -82,6 +82,8 @@ func healthcheck() int {
 func run() int {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
+	requireRemoteUser := envOr("OHARA_REQUIRE_REMOTE_USER", "false") == "true"
+	logger.Info("Remote-User check", "enabled", requireRemoteUser)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -138,7 +140,12 @@ func run() int {
 
 	metrics.SetBuildInfo(version)
 	addr := envOr("OHARA_ADDR", ":8000")
-	srv := newHTTPServer(addr, server.New(server.Config{Version: version, AccessLog: envOr("OHARA_ACCESS_LOG", "false") == "true"}, logger, deps))
+	srvCfg := server.Config{
+		Version:           version,
+		AccessLog:         envOr("OHARA_ACCESS_LOG", "false") == "true",
+		RequireRemoteUser: requireRemoteUser,
+	}
+	srv := newHTTPServer(addr, server.New(srvCfg, logger, deps))
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()

@@ -22,6 +22,28 @@
       "matchPackageNames": ["/^svelte/", "/^@sveltejs\\//", "/^vite/", "/^@vitest\\//"]
     },
     {
+      "description": "CI (go.mod toolchain), the image (Dockerfile golang tag) and local dev (.mise.toml) use one Go patch release, so bump them in one PR",
+      "groupName": "go",
+      "minimumGroupSize": 3,
+      "matchManagers": ["gomod"],
+      "matchDepTypes": ["toolchain"],
+      "matchDepNames": ["go"]
+    },
+    {
+      "description": "See the go group above",
+      "groupName": "go",
+      "minimumGroupSize": 3,
+      "matchManagers": ["dockerfile"],
+      "matchPackageNames": ["golang"]
+    },
+    {
+      "description": "See the go group above",
+      "groupName": "go",
+      "minimumGroupSize": 3,
+      "matchManagers": ["mise"],
+      "matchDepNames": ["go"]
+    },
+    {
       "description": "Production runs Postgres 18 (home-nas ohara stack), so a Postgres major waits for a person to upgrade production first",
       "matchDatasources": ["docker"],
       "matchPackageNames": ["postgres"],

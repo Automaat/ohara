@@ -29,10 +29,13 @@ type Pinger interface {
 
 // Config holds the resolved runtime settings; cmd/api owns env loading.
 // Version names the running build in /api/status. AccessLog adds one log line
-// per request; metrics are recorded either way.
+// per request; metrics are recorded either way. RequireRemoteUser answers 401
+// to every request without the Remote-User header Authelia's forward auth
+// sets, except the probes on /health and /metrics.
 type Config struct {
-	Version   string
-	AccessLog bool
+	Version           string
+	AccessLog         bool
+	RequireRemoteUser bool
 }
 
 // Mounter adds a domain's routes to the /api router.
@@ -62,11 +65,14 @@ func newRouter(cfg Config, logger *slog.Logger, deps Deps, timeout time.Duration
 	}
 	r := chi.NewRouter()
 	r.Use(securityHeaders)
-	r.Use(generalOptions)
+	r.Use(generalOptions(cfg.RequireRemoteUser))
 	r.Use(middleware.RequestID)
 	r.Use(requestObserver(logger, cfg.AccessLog))
 	r.Use(recoverer(logger))
 	r.Use(timeoutAfter(timeout, logger))
+	if cfg.RequireRemoteUser {
+		r.Use(remoteUserGuard(logger))
+	}
 	r.Use(crossOriginGuard(logger))
 	r.Use(jsonMethodNotAllowed(r, logger))
 
@@ -235,18 +241,57 @@ func securityHeaders(next http.Handler) http.Handler {
 // generalOptions answers "OPTIONS *" with an empty 200, as net/http does when
 // the server's DisableGeneralOptionsHandler is false. cmd/api sets it, so the
 // request reaches the router and its answer carries the security headers.
-func generalOptions(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodOptions || r.RequestURI != "*" {
+// When the Remote-User check is on, one without the header goes on to the
+// request observer and remoteUserGuard, which answers 401.
+func generalOptions(requireRemoteUser bool) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodOptions || r.RequestURI != "*" ||
+				requireRemoteUser && r.Header.Get("Remote-User") == "" {
+				next.ServeHTTP(w, r)
+				return
+			}
+			w.Header().Set("Content-Length", "0")
+			if r.ContentLength != 0 {
+				_, _ = io.Copy(io.Discard, http.MaxBytesReader(w, r.Body, 4<<10))
+			}
+			w.WriteHeader(http.StatusOK)
+		})
+	}
+}
+
+// remoteUserGuard answers 401 to a request without a Remote-User header, or
+// with an empty one, so a request that reaches the container without passing
+// Authelia gets nothing. The guard checks only that the header is there, so it
+// is worth as much as the proxy that sets it and the firewall that keeps
+// everyone else off the port; the name in it is not used. The Docker
+// healthcheck and Prometheus reach /health and /metrics directly and stay open.
+func remoteUserGuard(logger *slog.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Remote-User") == "" && !probePath(r) {
+				httpx.WriteError(w, logger, http.StatusUnauthorized, "authentication required")
+				return
+			}
 			next.ServeHTTP(w, r)
-			return
-		}
-		w.Header().Set("Content-Length", "0")
-		if r.ContentLength != 0 {
-			_, _ = io.Copy(io.Discard, http.MaxBytesReader(w, r.Body, 4<<10))
-		}
-		w.WriteHeader(http.StatusOK)
-	})
+		})
+	}
+}
+
+// probePath reports a GET of /health or /metrics, the requests served without
+// the Remote-User header. Only GET is exempt: chi has the health probe for GET
+// alone and sends HEAD /health to the frontend. The path is read the way chi
+// routes it, RawPath when set, so an escaped spelling such as /heal%74h, which
+// chi also sends to the frontend, is not exempt.
+func probePath(r *http.Request) bool {
+	if r.Method != http.MethodGet {
+		return false
+	}
+	path := r.URL.RawPath
+	if path == "" {
+		path = r.URL.Path
+	}
+	return path == "/health" || path == "/metrics"
 }
 
 // crossOriginGuard answers 403 to a cross-origin write. Authelia's session

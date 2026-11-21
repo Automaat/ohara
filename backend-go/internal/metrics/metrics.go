@@ -14,6 +14,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
+// runDurationBuckets span a background run from one second to two hours.
+var runDurationBuckets = []float64{1, 5, 15, 30, 60, 120, 300, 600, 1200, 1800, 3600, 5400, 7200}
+
 var (
 	registry = prometheus.NewRegistry()
 
@@ -112,6 +115,27 @@ var (
 		Name: "ohara_db_unknown_migrations",
 		Help: "Migrations applied to the database that this binary has no file for, counted at startup; above 0 after a rollback to an older release.",
 	})
+
+	backgroundRuns = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "ohara_background_runs_total",
+		Help: "Finished background runs, scheduled or manual, by task (deals, valuation) and outcome (ok, failed: the run returned an error).",
+	}, []string{"task", "outcome"})
+
+	backgroundRunDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "ohara_background_run_duration_seconds",
+		Help:    "How long a finished background run took, by task.",
+		Buckets: runDurationBuckets,
+	}, []string{"task"})
+
+	backgroundLastSuccess = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "ohara_background_last_success_timestamp_seconds",
+		Help: "Unix time a background run of the task last ended ok; absent until one does.",
+	}, []string{"task"})
+
+	dealAlerts = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "ohara_deal_alerts_total",
+		Help: "Deal alerts sent to Telegram, by outcome (sent, failed).",
+	}, []string{"outcome"})
 )
 
 func init() {
@@ -129,6 +153,10 @@ func init() {
 		collectionLowConfidence,
 		valuationLastRun,
 		dbUnknownMigrations,
+		backgroundRuns,
+		backgroundRunDuration,
+		backgroundLastSuccess,
+		dealAlerts,
 		sourceRequests,
 		sourceErrors,
 		sourceParseErrors,
@@ -292,6 +320,57 @@ func SetCollectionValue(v CollectionValue) {
 // no file for.
 func SetUnknownMigrations(n int) {
 	dbUnknownMigrations.Set(float64(n))
+}
+
+// Background tasks for ObserveBackgroundRun.
+const (
+	// TaskDeals is the wishlist deal search.
+	TaskDeals = "deals"
+	// TaskValuation is the collection valuation.
+	TaskValuation = "valuation"
+)
+
+// Background run and deal alert outcomes.
+const (
+	outcomeOK     = "ok"
+	outcomeFailed = "failed"
+	outcomeSent   = "sent"
+)
+
+// InitBackgroundTask exports zeroed run counters for task, so increase()
+// sees the first run after a restart.
+func InitBackgroundTask(task string) {
+	backgroundRuns.WithLabelValues(task, outcomeOK)
+	backgroundRuns.WithLabelValues(task, outcomeFailed)
+}
+
+// ObserveBackgroundRun records one finished run of task that took d. A
+// run that returned an error counts as failed; any other run as ok,
+// which also moves the task's last-success timestamp.
+func ObserveBackgroundRun(task string, d time.Duration, err error) {
+	backgroundRunDuration.WithLabelValues(task).Observe(d.Seconds())
+	if err != nil {
+		backgroundRuns.WithLabelValues(task, outcomeFailed).Inc()
+		return
+	}
+	backgroundRuns.WithLabelValues(task, outcomeOK).Inc()
+	backgroundLastSuccess.WithLabelValues(task).SetToCurrentTime()
+}
+
+// InitDealAlerts exports zeroed deal alert counters; call it when
+// Telegram is configured.
+func InitDealAlerts() {
+	dealAlerts.WithLabelValues(outcomeSent)
+	dealAlerts.WithLabelValues(outcomeFailed)
+}
+
+// ObserveDealAlert counts one Telegram send of a deal alert.
+func ObserveDealAlert(err error) {
+	if err != nil {
+		dealAlerts.WithLabelValues(outcomeFailed).Inc()
+		return
+	}
+	dealAlerts.WithLabelValues(outcomeSent).Inc()
 }
 
 // Source request outcomes for ObserveSource.

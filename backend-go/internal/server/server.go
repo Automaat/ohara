@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/url"
 	"runtime/debug"
-	"slices"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -69,7 +68,7 @@ func newRouter(cfg Config, logger *slog.Logger, deps Deps, timeout time.Duration
 	r.Use(recoverer(logger))
 	r.Use(timeoutAfter(timeout, logger))
 	r.Use(crossOriginGuard(logger))
-	r.MethodNotAllowed(methodNotAllowed(r, logger))
+	r.Use(jsonMethodNotAllowed(r, logger))
 
 	r.Get("/health", healthHandler(logger, deps.DB))
 	r.Handle("/metrics", metrics.Handler())
@@ -90,34 +89,57 @@ func newRouter(cfg Config, logger *slog.Logger, deps Deps, timeout time.Duration
 	return r
 }
 
-// routedMethods are the methods chi routes; a 405 lists those a path has a
-// route for in its Allow header.
-var routedMethods = []string{
-	http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch,
-	http.MethodDelete, http.MethodConnect, http.MethodOptions, http.MethodTrace, "QUERY",
-}
-
-// methodNotAllowed answers a known path asked with a method it has no route
-// for, with the API's JSON error. chi does not pass the allowed methods to a
-// custom handler, so the Allow header its own answer carries is rebuilt from
-// the routes. A method chi does not route at all, like PROPFIND, gets no
-// Allow header, as from chi.
-func methodNotAllowed(routes chi.Routes, logger *slog.Logger) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if slices.Contains(routedMethods, r.Method) {
+// jsonMethodNotAllowed gives chi's own 405 the API's JSON error body. Only
+// chi's default handler knows which methods a path allows, including any
+// added with chi.RegisterMethod, and it writes them as Allow headers with an
+// empty body, so its answer is completed on the way out instead of replaced.
+// Only a request no route matches gets the wrapped writer; a handler keeps the
+// writer it had.
+func jsonMethodNotAllowed(routes chi.Routes, logger *slog.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			path := r.URL.RawPath
 			if path == "" {
 				path = r.URL.Path
 			}
-			for _, m := range routedMethods {
-				if routes.Match(chi.NewRouteContext(), m, path) {
-					w.Header().Add("Allow", m)
-				}
+			if routes.Match(chi.NewRouteContext(), r.Method, path) {
+				next.ServeHTTP(w, r)
+				return
 			}
-		}
-		httpx.WriteError(w, logger, http.StatusMethodNotAllowed, "method not allowed")
+			next.ServeHTTP(&methodNotAllowedWriter{ResponseWriter: w, logger: logger}, r)
+		})
 	}
 }
+
+// methodNotAllowedWriter turns a 405 without a body of its own into the JSON
+// error and drops the empty body that follows.
+type methodNotAllowedWriter struct {
+	http.ResponseWriter
+	logger   *slog.Logger
+	wrote    bool
+	replaced bool
+}
+
+func (m *methodNotAllowedWriter) WriteHeader(code int) {
+	if !m.wrote && code == http.StatusMethodNotAllowed && m.Header().Get("Content-Type") == "" {
+		m.wrote, m.replaced = true, true
+		httpx.WriteError(m.ResponseWriter, m.logger, code, "method not allowed")
+		return
+	}
+	m.wrote = true
+	m.ResponseWriter.WriteHeader(code)
+}
+
+func (m *methodNotAllowedWriter) Write(b []byte) (int, error) {
+	if m.replaced {
+		return len(b), nil
+	}
+	m.wrote = true
+	return m.ResponseWriter.Write(b)
+}
+
+// Unwrap lets http.ResponseController reach the underlying writer.
+func (m *methodNotAllowedWriter) Unwrap() http.ResponseWriter { return m.ResponseWriter }
 
 // recoverer turns a handler panic into a logged error, with its stack, and a
 // JSON 500 when nothing was written yet. Like chi's Recoverer it lets
@@ -177,10 +199,18 @@ func isAbortHandler(rvr any) bool {
 	return rvr == any(http.ErrAbortHandler)
 }
 
-// writeFallback sends the error answer for a handler that wrote nothing. A
-// Content-Length the handler set for its own body would cut this one short.
+// bodyHeaders describe a handler's own body; the fallback answer drops them
+// so a length, encoding or validator set for a body never sent does not
+// describe the JSON error instead.
+var bodyHeaders = []string{
+	"Content-Length", "Content-Encoding", "Content-Range", "Content-Disposition", "ETag", "Last-Modified",
+}
+
+// writeFallback sends the error answer for a handler that wrote nothing.
 func writeFallback(w http.ResponseWriter, logger *slog.Logger, code int, msg string) {
-	w.Header().Del("Content-Length")
+	for _, h := range bodyHeaders {
+		w.Header().Del(h)
+	}
 	httpx.WriteError(w, logger, code, msg)
 }
 

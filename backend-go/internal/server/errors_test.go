@@ -157,6 +157,14 @@ func (a lateAPI) Mount(r chi.Router) {
 		w.Header().Set("Content-Length", "1")
 		<-r.Context().Done()
 	})
+	r.Get("/gzip-then-panic", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Encoding", "gzip")
+		panic("boom")
+	})
+	r.Get("/gzip-then-silent", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Encoding", "gzip")
+		<-r.Context().Done()
+	})
 	r.Get("/silent", func(_ http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done()
 	})
@@ -181,6 +189,12 @@ func TestTimeoutAndLatePanic(t *testing.T) {
 	})
 	t.Run("handler set a length and wrote nothing", func(t *testing.T) {
 		checkJSONError(t, do(t, http.MethodGet, srv.URL+"/api/length-then-silent"), http.StatusGatewayTimeout, "gateway timeout")
+	})
+	t.Run("handler set an encoding and wrote nothing", func(t *testing.T) {
+		checkJSONError(t, do(t, http.MethodGet, srv.URL+"/api/gzip-then-silent"), http.StatusGatewayTimeout, "gateway timeout")
+	})
+	t.Run("panic after setting an encoding", func(t *testing.T) {
+		checkJSONError(t, do(t, http.MethodGet, srv.URL+"/api/gzip-then-panic"), http.StatusInternalServerError, "internal server error")
 	})
 	t.Run("panic after setting a length", func(t *testing.T) {
 		checkJSONError(t, do(t, http.MethodGet, srv.URL+"/api/length-then-panic"), http.StatusInternalServerError, "internal server error")
@@ -208,5 +222,45 @@ func TestTimeoutAndLatePanic(t *testing.T) {
 				t.Fatalf("GET %s = %d %q, want 200 %q", path, got.code, got.body, ok)
 			}
 		})
+	}
+}
+
+// reportAPI has a route only for REPORT, a method the test registers with chi.
+type reportAPI struct{}
+
+func (reportAPI) Mount(r chi.Router) {
+	r.Method("REPORT", "/reports", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+}
+
+// TestRegisteredMethodAllow covers a method added with chi.RegisterMethod: it
+// shows in Allow where it has a route, and a request using it on a path
+// without one gets the path's methods, as from chi itself.
+func TestRegisteredMethodAllow(t *testing.T) {
+	chi.RegisterMethod("REPORT")
+	logger := slog.New(slog.DiscardHandler)
+	srv := httptest.NewServer(server.New(server.Config{}, logger, server.Deps{API: []server.Mounter{reportAPI{}}}))
+	t.Cleanup(srv.Close)
+
+	tests := []struct {
+		method string
+		path   string
+		allow  []string
+	}{
+		{http.MethodPatch, "/api/reports", []string{"REPORT"}},
+		{"REPORT", "/api/status", []string{http.MethodGet}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.method+" "+tt.path, func(t *testing.T) {
+			got := do(t, tt.method, srv.URL+tt.path)
+			checkJSONError(t, got, http.StatusMethodNotAllowed, "method not allowed")
+			if allow := got.header.Values("Allow"); !slices.Equal(allow, tt.allow) {
+				t.Errorf("Allow = %v, want %v", allow, tt.allow)
+			}
+		})
+	}
+	if got := do(t, "REPORT", srv.URL+"/api/reports"); got.code != http.StatusNoContent {
+		t.Errorf("REPORT /api/reports = %d, want 204", got.code)
 	}
 }

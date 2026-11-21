@@ -956,10 +956,12 @@ func TestRunKeepsTheRefusalBeyondTheErrorCap(t *testing.T) {
 	}
 }
 
-// requestLog keeps when each site was asked.
+// requestLog keeps when each site was asked and how many requests a fake
+// site received.
 type requestLog struct {
-	mu    sync.Mutex
-	times map[string][]time.Time
+	mu       sync.Mutex
+	times    map[string][]time.Time
+	received map[string]int
 }
 
 func (l *requestLog) add(site string) {
@@ -971,10 +973,19 @@ func (l *requestLog) add(site string) {
 	l.times[site] = append(l.times[site], time.Now())
 }
 
+func (l *requestLog) receive(site string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.received == nil {
+		l.received = map[string]int{}
+	}
+	l.received[site]++
+}
+
 func (l *requestLog) count(site string) int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return len(l.times[site])
+	return l.received[site]
 }
 
 // timedBuyBack declines every book and logs when it was asked.
@@ -989,10 +1000,10 @@ func (b *timedBuyBack) Quote(context.Context, string) (Quote, error) {
 
 const runDelay = 200 * time.Millisecond
 
-// olxSite is a fake OLX that answers with the deals fixture. Requests
-// whose query is held get no answer until the test ends; the first of
-// them signals held.
-func olxSite(t *testing.T, heldQuery string) (string, <-chan struct{}) {
+// olxSite is a fake OLX that answers with the deals fixture and counts
+// the requests it received. Requests whose query is held get no answer
+// until the test ends; the first of them signals held.
+func olxSite(t *testing.T, log *requestLog, heldQuery string) (string, <-chan struct{}) {
 	t.Helper()
 	body, err := os.ReadFile("../deals/testdata/olx.json")
 	if err != nil {
@@ -1000,6 +1011,7 @@ func olxSite(t *testing.T, heldQuery string) (string, <-chan struct{}) {
 	}
 	held := make(chan struct{}, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		log.receive(SourceOLX)
 		if heldQuery != "" && strings.Contains(strings.ToLower(r.URL.Query().Get("query")), heldQuery) {
 			select {
 			case held <- struct{}{}:
@@ -1060,7 +1072,7 @@ func TestOverlappingRunsSpaceRequestsToOneSite(t *testing.T) {
 	pool := dbtest.Migrated(t)
 	seed(t, pool)
 	log := &requestLog{}
-	olxURL, _ := olxSite(t, "")
+	olxURL, _ := olxSite(t, log, "")
 	hunter, runner := pacedRuns(pool, olxURL, log)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -1096,7 +1108,7 @@ func TestRunsDoNotWaitForEachOther(t *testing.T) {
 			pool := dbtest.Migrated(t)
 			seed(t, pool)
 			log := &requestLog{}
-			olxURL, held := olxSite(t, tc.query)
+			olxURL, held := olxSite(t, log, tc.query)
 			hunter, runner := pacedRuns(pool, olxURL, log)
 			heldRun := func(ctx context.Context) error { _, err := runner.Run(ctx); return err }
 			otherRun := func(ctx context.Context) error { _, err := hunter.Run(ctx); return err }
@@ -1131,7 +1143,7 @@ func TestBackToBackRunsKeepTheirPacing(t *testing.T) {
 	pool := dbtest.Migrated(t)
 	seed(t, pool)
 	log := &requestLog{}
-	olxURL, _ := olxSite(t, "")
+	olxURL, _ := olxSite(t, log, "")
 	_, runner := pacedRuns(pool, olxURL, log)
 	runner.sleep = func(ctx context.Context, _ time.Duration) error { return ctx.Err() }
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

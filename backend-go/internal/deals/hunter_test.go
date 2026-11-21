@@ -285,6 +285,44 @@ func TestRunCutShortByShutdownCountsAsFailed(t *testing.T) {
 	}
 }
 
+// cancelingSource cancels the run while it answers, without an error,
+// like a source that read its last answer just before shutdown.
+type cancelingSource struct{ cancel context.CancelFunc }
+
+func (cancelingSource) Name() string   { return "pepper" }
+func (cancelingSource) PerQuery() bool { return false }
+
+func (s cancelingSource) Search(context.Context, string) ([]Listing, error) {
+	s.cancel()
+	return nil, nil
+}
+
+// TestRunCanceledAfterTheLastAnswerFails: shutdown during the last
+// answer fails the run even when no later request notices it.
+func TestRunCanceledAfterTheLastAnswerFails(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	wishlist(t, pool, wantBluray(nil))
+	ctx, cancel := context.WithCancel(t.Context())
+	h := newTestHunter(pool, nil, cancelingSource{cancel: cancel})
+	names := []string{dealRunsOK, dealRunsFailed, dealLastSuccess}
+	before := series(t, names...)
+	h.Start(ctx)
+	if !h.Trigger() {
+		t.Fatal("Trigger = false")
+	}
+	h.Wait()
+
+	if res := h.Status().LastResult; res == nil || !strings.Contains(res.Failure, "context canceled") {
+		t.Fatalf("run = %+v, want it failed by the cancellation", res)
+	}
+	after := series(t, names...)
+	for name, want := range map[string]float64{dealRunsOK: 0, dealRunsFailed: 1, dealLastSuccess: 0} {
+		if got := after[name] - before[name]; got != want {
+			t.Errorf("%s grew by %v, want %v", name, got, want)
+		}
+	}
+}
+
 func TestRunGivesUpAfterMaxAttempts(t *testing.T) {
 	pool := dbtest.Migrated(t)
 	wishlist(t, pool, wantBluray(new(int64(5000))))

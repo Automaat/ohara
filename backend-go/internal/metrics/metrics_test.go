@@ -78,6 +78,12 @@ func TestScanQueueCollector(t *testing.T) {
 
 func TestObserveBackgroundRun(t *testing.T) {
 	const task = "test-background-run"
+	t.Cleanup(func() {
+		backgroundRuns.DeleteLabelValues(task, outcomeOK)
+		backgroundRuns.DeleteLabelValues(task, outcomeFailed)
+		backgroundRunDuration.DeleteLabelValues(task)
+		backgroundLastSuccess.DeleteLabelValues(task)
+	})
 	InitBackgroundTask(task)
 	if n := testutil.CollectAndCount(backgroundRuns); n != 2 {
 		t.Fatalf("runs exported %d series before the first run, want ok and failed", n)
@@ -102,9 +108,42 @@ func TestObserveBackgroundRun(t *testing.T) {
 	if got := testutil.ToFloat64(backgroundLastSuccess.WithLabelValues(task)); got != lastOK {
 		t.Errorf("last success = %v after a failed run, want %v", got, lastOK)
 	}
-	if first, last := runDurationBuckets[0], runDurationBuckets[len(runDurationBuckets)-1]; first != 1 || last < 7200 {
-		t.Errorf("duration buckets span %v..%v s, want 1..at least 7200", first, last)
+	bounds := exportedBuckets(t, "ohara_background_run_duration_seconds", task)
+	if len(bounds) == 0 || bounds[0] != 1 || bounds[len(bounds)-1] < 7200 {
+		t.Errorf("duration buckets = %v s, want 1 to at least 7200", bounds)
 	}
+	if n := testutil.ToFloat64(backgroundRuns.WithLabelValues(task, outcomeOK)) + testutil.ToFloat64(backgroundRuns.WithLabelValues(task, outcomeFailed)); n != 2 {
+		t.Errorf("runs = %v, want 2", n)
+	}
+}
+
+// exportedBuckets reads the bucket upper bounds the registry exports for
+// the histogram name with the given task label.
+func exportedBuckets(t *testing.T, name, task string) []float64 {
+	t.Helper()
+	families, err := registry.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mf := range families {
+		if mf.GetName() != name {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			for _, l := range m.GetLabel() {
+				if l.GetName() != "task" || l.GetValue() != task {
+					continue
+				}
+				var bounds []float64
+				for _, b := range m.GetHistogram().GetBucket() {
+					bounds = append(bounds, b.GetUpperBound())
+				}
+				return bounds
+			}
+		}
+	}
+	t.Fatalf("%s{task=%q} not exported", name, task)
+	return nil
 }
 
 func TestObserveDealAlert(t *testing.T) {

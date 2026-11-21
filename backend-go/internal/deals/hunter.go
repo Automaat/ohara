@@ -228,12 +228,12 @@ func (h *Hunter) execute(ctx context.Context) {
 			"alerts", res.Alerts, "sent", res.Sent, "errors", len(res.Errors))
 	}
 	finished := time.Now().Truncate(time.Microsecond)
-	metrics.ObserveBackgroundRun(metrics.TaskDeals, finished.Sub(started), err)
 	h.mu.Lock()
 	h.status.LastFinishedAt = &finished
 	h.status.LastResult = &res
 	h.mu.Unlock()
 	h.saveRun(ctx, func(ctx context.Context) error { return h.store.RunFinished(ctx, started, finished, &res) })
+	metrics.ObserveBackgroundRun(metrics.TaskDeals, finished.Sub(started), err)
 }
 
 // saveRun stores part of a run even after ctx is canceled, so a run cut
@@ -292,6 +292,11 @@ func (h *Hunter) Run(ctx context.Context) (RunResult, error) {
 		}
 	}
 	if err := r.deliver(ctx, nil); err != nil {
+		return r.res, err
+	}
+	// A source that saw the cancellation may have answered without an
+	// error; a run cut short is not a finished one.
+	if err := ctx.Err(); err != nil {
 		return r.res, err
 	}
 	return r.res, nil

@@ -13,6 +13,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/Automaat/ohara/backend-go/internal/metrics"
 )
 
 // SkupSzopURL is the buy-back shop's site. It has no API: the sell page
@@ -62,52 +64,69 @@ const notWanted = "nie jesteśmy zainteresowani"
 // maxShopReply caps a shop page; the sell page is about 400 KB.
 const maxShopReply = 4 << 20
 
-// Quote implements BuyBack.
+// Quote implements BuyBack. Each quote counts once in the source health
+// metrics: ok once the cart shows the offer or the shop says it does not
+// buy the book, with ohara_source_results 1 for an offer and 0 otherwise.
 func (s SkupSzop) Quote(ctx context.Context, isbn string) (Quote, error) {
+	q, status, err := s.quote(ctx, isbn)
+	metrics.ObserveSource(SourceSkupSzop, status)
+	if status == metrics.SourceOK {
+		offers := 0
+		if q.Offered {
+			offers = 1
+		}
+		metrics.SetSourceResults(SourceSkupSzop, offers)
+	}
+	return q, err
+}
+
+// quote runs one quote and names its outcome for ObserveSource. A shop
+// message it does not know is a parse error: it may be a reworded refusal.
+func (s SkupSzop) quote(ctx context.Context, isbn string) (Quote, string, error) {
 	jar, err := cookiejar.New(nil)
 	if err != nil {
-		return Quote{}, err
+		return Quote{}, metrics.SourceError, err
 	}
 	client := &http.Client{Timeout: s.Client.Timeout, Transport: s.Client.Transport, Jar: jar}
 	sell := s.SellURL()
 
-	page, err := shopDo(ctx, client, http.MethodGet, sell, nil, "", "text/html")
+	page, status, err := shopDo(ctx, client, http.MethodGet, sell, nil, "", "text/html")
 	if err != nil {
-		return Quote{}, fmt.Errorf("skupszop: sell page: %w", err)
+		return Quote{}, status, fmt.Errorf("skupszop: sell page: %w", err)
 	}
 	m := csrfMeta.FindSubmatch(page)
 	if m == nil {
-		return Quote{}, errors.New("skupszop: sell page has no CSRF token")
+		return Quote{}, metrics.SourceParseError, errors.New("skupszop: sell page has no CSRF token")
 	}
-	reply, err := shopDo(ctx, client, http.MethodPost, sell,
+	reply, status, err := shopDo(ctx, client, http.MethodPost, sell,
 		strings.NewReader(url.Values{"isbn": {isbn}}.Encode()), string(m[1]), "application/json")
 	if err != nil {
-		return Quote{}, fmt.Errorf("skupszop: add %s: %w", isbn, err)
+		return Quote{}, status, fmt.Errorf("skupszop: add %s: %w", isbn, err)
 	}
 	var added struct {
 		Response *string `json:"response"`
 	}
 	if err := json.Unmarshal(reply, &added); err != nil {
-		return Quote{}, fmt.Errorf("skupszop: add %s: decode: %w", isbn, err)
+		return Quote{}, metrics.SourceParseError, fmt.Errorf("skupszop: add %s: decode: %w", isbn, err)
 	}
 	if added.Response != nil {
 		if msg := plainText(*added.Response); msg != "" {
 			if strings.Contains(strings.ToLower(msg), notWanted) {
-				return Quote{URL: sell}, nil
+				return Quote{URL: sell}, metrics.SourceOK, nil
 			}
-			return Quote{}, fmt.Errorf("skupszop: add %s: %s", isbn, msg)
+			return Quote{}, metrics.SourceParseError, fmt.Errorf("skupszop: add %s: %s", isbn, msg)
 		}
 	}
-	cart, err := shopDo(ctx, client, http.MethodGet, sell, nil, "", "text/html")
+	cart, status, err := shopDo(ctx, client, http.MethodGet, sell, nil, "", "text/html")
 	if err != nil {
-		return Quote{}, fmt.Errorf("skupszop: cart: %w", err)
+		return Quote{}, status, fmt.Errorf("skupszop: cart: %w", err)
 	}
 	q, ok := parseCart(cart, isbn)
 	if !ok {
-		return Quote{}, fmt.Errorf("skupszop: cart has no offer for %s", isbn)
+		return Quote{}, metrics.SourceParseError, fmt.Errorf("skupszop: cart has no offer for %s", isbn)
 	}
 	q.URL = sell
-	return q, nil
+	return q, metrics.SourceOK, nil
 }
 
 // parseCart finds the offer for isbn in a sell page's cart. A cart row
@@ -143,14 +162,15 @@ func parseCart(page []byte, isbn string) (Quote, bool) {
 
 // shopDo sends one request in the quote's session and returns a 200 body.
 // A token marks the request as the page's own XHR, which Laravel's CSRF
-// check needs.
-func shopDo(ctx context.Context, client *http.Client, method, target string, body io.Reader, token, accept string) ([]byte, error) {
+// check needs. It also returns the request's ObserveSource status; an
+// error status counts as itself, however long or unreadable its page.
+func shopDo(ctx context.Context, client *http.Client, method, target string, body io.Reader, token, accept string) ([]byte, string, error) {
 	if body == nil {
 		body = http.NoBody
 	}
 	req, err := http.NewRequestWithContext(ctx, method, target, body)
 	if err != nil {
-		return nil, err
+		return nil, metrics.SourceError, err
 	}
 	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("Accept", accept)
@@ -162,20 +182,30 @@ func shopDo(ctx context.Context, client *http.Client, method, target string, bod
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, metrics.SourceError, err
 	}
 	defer resp.Body.Close()
+	status := metrics.SourceOK
+	if resp.StatusCode != http.StatusOK {
+		status = fmt.Sprintf("http_%d", resp.StatusCode)
+	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxShopReply+1))
 	if err != nil {
-		return nil, err
+		if status == metrics.SourceOK {
+			status = metrics.SourceError
+		}
+		return nil, status, err
 	}
 	if len(data) > maxShopReply {
-		return nil, errors.New("response too large")
+		if status == metrics.SourceOK {
+			status = metrics.SourceParseError
+		}
+		return nil, status, errors.New("response too large")
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("status %d", resp.StatusCode)
+		return nil, status, fmt.Errorf("status %d", resp.StatusCode)
 	}
-	return data, nil
+	return data, status, nil
 }
 
 // plainText strips tags and collapses spaces.

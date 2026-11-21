@@ -3,7 +3,8 @@
 // wishlist deals from more than one source, a valuation history and scan
 // queue entries. It sends no request anywhere; listing links point at
 // example.com. A database that already holds data is refused, so a run
-// against production cannot mix demo rows into a real collection.
+// against production cannot mix demo rows into a real collection. It
+// seeds no deal run: a running hunter reads that only at startup.
 package seed
 
 import (
@@ -233,31 +234,56 @@ var demoQueue = []queued{
 	{barcode: "59012344", reason: "not_found", scans: 3, hoursAgo: 150},
 }
 
-// Run fills an empty database with the demo collection in one transaction.
-// It returns ErrNotEmpty, having changed nothing, when the database already
-// holds titles, listings, value history, scan queue entries or a deal run.
-// The title lock makes a second seed, or an add from a running app, wait
-// until this one commits, so the emptiness check cannot go stale.
+// dataTables are the tables whose rows make a database not empty.
+var dataTables = []string{"title", "price_observation", "valuation_history", "scan_queue", "deal_run"}
+
+type querier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+// CheckEmpty returns ErrNotEmpty when any data table holds a row. A table
+// that does not exist yet, as before the migrations ran, holds none, so a
+// caller can check a database before migrating it and refuse it unchanged.
+func CheckEmpty(ctx context.Context, q querier) error {
+	for _, table := range dataTables {
+		var exists bool
+		if err := q.QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, table).Scan(&exists); err != nil {
+			return fmt.Errorf("seed: check %s: %w", table, err)
+		}
+		if !exists {
+			continue
+		}
+		var taken bool
+		sql := `SELECT EXISTS (SELECT 1 FROM ` + pgx.Identifier{table}.Sanitize() + `)`
+		if err := q.QueryRow(ctx, sql).Scan(&taken); err != nil {
+			return fmt.Errorf("seed: check %s: %w", table, err)
+		}
+		if taken {
+			return ErrNotEmpty
+		}
+	}
+	return nil
+}
+
+// Run fills an empty, migrated database with the demo collection in one
+// transaction. It returns ErrNotEmpty, having changed nothing, when the
+// database already holds titles, listings, value history, scan queue
+// entries or a deal run. It locks those tables before it checks them, so
+// a second seed, or a write from a running app such as a queued scan,
+// waits until this one commits and cannot slip in after the check.
 func Run(ctx context.Context, pool *pgxpool.Pool) (Counts, error) {
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return Counts{}, fmt.Errorf("seed: begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
-	if _, err := tx.Exec(ctx, `LOCK TABLE title IN EXCLUSIVE MODE`); err != nil {
+	_, err = tx.Exec(ctx, `LOCK TABLE title, price_observation, valuation_history, scan_queue, deal_run
+		IN EXCLUSIVE MODE`)
+	if err != nil {
 		return Counts{}, fmt.Errorf("seed: lock: %w", err)
 	}
-	var taken bool
-	err = tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM title)
-		OR EXISTS (SELECT 1 FROM price_observation)
-		OR EXISTS (SELECT 1 FROM valuation_history)
-		OR EXISTS (SELECT 1 FROM scan_queue)
-		OR EXISTS (SELECT 1 FROM deal_run)`).Scan(&taken)
-	if err != nil {
-		return Counts{}, fmt.Errorf("seed: check empty: %w", err)
-	}
-	if taken {
-		return Counts{}, ErrNotEmpty
+	if err := CheckEmpty(ctx, tx); err != nil {
+		return Counts{}, err
 	}
 	photo, err := coverPhoto()
 	if err != nil {
@@ -273,9 +299,6 @@ func Run(ctx context.Context, pool *pgxpool.Pool) (Counts, error) {
 		return Counts{}, err
 	}
 	if err := s.history(ctx); err != nil {
-		return Counts{}, err
-	}
-	if err := s.dealRun(ctx); err != nil {
 		return Counts{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -459,24 +482,6 @@ func (s *seeder) history(ctx context.Context) error {
 		return fmt.Errorf("seed valuation history: %w", err)
 	}
 	s.counts.HistoryDays = int(tag.RowsAffected())
-	return nil
-}
-
-// dealRun stores a finished hunt three hours ago, so the deals view has a
-// last run to show.
-func (s *seeder) dealRun(ctx context.Context) error {
-	result, err := json.Marshal(map[string]any{
-		"wants": 4, "queries": 8, "listings": 8, "matched": 8, "new": 8,
-		"alerts": 5, "sent": 4, "errors": []string{},
-	})
-	if err != nil {
-		return fmt.Errorf("seed deal run: %w", err)
-	}
-	_, err = s.tx.Exec(ctx, `INSERT INTO deal_run (started_at, finished_at, result)
-		VALUES (now() - interval '3 hours 2 minutes', now() - interval '3 hours', $1)`, result)
-	if err != nil {
-		return fmt.Errorf("seed deal run: %w", err)
-	}
 	return nil
 }
 

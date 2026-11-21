@@ -195,21 +195,29 @@ func openDB(ctx context.Context, dsn string, logger *slog.Logger) (*pgxpool.Pool
 	if err != nil {
 		return nil, err
 	}
-	migrations, err := db.EmbeddedMigrations()
-	if err != nil {
+	if err := migrate(ctx, pool, logger); err != nil {
 		pool.Close()
 		return nil, err
 	}
+	return pool, nil
+}
+
+// migrate applies the embedded migrations and logs what it applied and
+// any version the binary has no file for.
+func migrate(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger) error {
+	migrations, err := db.EmbeddedMigrations()
+	if err != nil {
+		return err
+	}
 	res, err := db.ApplyMigrations(ctx, pool, migrations)
 	if err != nil {
-		pool.Close()
-		return nil, err
+		return err
 	}
 	if len(res.Applied) > 0 {
 		logger.Info("applied migrations", "versions", strings.Join(res.Applied, ","))
 	}
 	db.WarnUnknown(logger, migrations, res.Unknown)
-	return pool, nil
+	return nil
 }
 
 // bookCacheTTL bounds how long a book answer, a miss included, is reused;
@@ -400,9 +408,8 @@ func allegroLogin() int {
 	return 0
 }
 
-// seedDemo fills an empty database with demo data for local work. It
-// applies the migrations first, so it can run before the app ever started,
-// and exits 1 without a change when the database already holds data.
+// seedDemo fills an empty database with demo data for local work and
+// exits 1 without a change when the database already holds data.
 func seedDemo() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -411,14 +418,7 @@ func seedDemo() int {
 		fmt.Fprintln(os.Stderr, "seed: set DATABASE_URL or the PG* variables")
 		return 2
 	}
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	pool, err := openDB(ctx, dsn, logger)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "seed: database:", err)
-		return 2
-	}
-	defer pool.Close()
-	n, err := seed.Run(ctx, pool)
+	n, err := seedDB(ctx, dsn, slog.New(slog.NewTextHandler(os.Stderr, nil)))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "seed:", err)
 		return 1
@@ -427,6 +427,25 @@ func seedDemo() int {
 		"%d days of value history and %d scan queue entries\n",
 		n.Titles, n.Editions, n.Copies, n.Observations, n.Alerts, n.HistoryDays, n.ScanQueue)
 	return 0
+}
+
+// seedDB checks the database is empty before it migrates it, so a refused
+// seed leaves an older database's schema and rows as they were, then
+// applies the migrations, so it can run before the app ever started, and
+// seeds it.
+func seedDB(ctx context.Context, dsn string, logger *slog.Logger) (seed.Counts, error) {
+	pool, err := db.New(ctx, dsn)
+	if err != nil {
+		return seed.Counts{}, fmt.Errorf("database: %w", err)
+	}
+	defer pool.Close()
+	if err := seed.CheckEmpty(ctx, pool); err != nil {
+		return seed.Counts{}, err
+	}
+	if err := migrate(ctx, pool, logger); err != nil {
+		return seed.Counts{}, fmt.Errorf("database: %w", err)
+	}
+	return seed.Run(ctx, pool)
 }
 
 // newRuns configures the deal hunter and the valuation. One pacer spaces

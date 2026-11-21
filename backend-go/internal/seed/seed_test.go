@@ -75,8 +75,8 @@ func TestRunFillsEmptyDatabase(t *testing.T) {
 	if n := rows["scan_queue"]; n < 3 {
 		t.Errorf("scan_queue holds %d entries, want at least 3", n)
 	}
-	if rows["deal_run"] != 1 {
-		t.Errorf("deal_run holds %d rows, want 1", rows["deal_run"])
+	if rows["deal_run"] != 0 {
+		t.Errorf("deal_run holds %d rows, want none: a running hunter would not show it", rows["deal_run"])
 	}
 
 	editionBarcodes, err := pool.Query(ctx, `SELECT barcode FROM edition UNION ALL SELECT barcode FROM scan_queue`)
@@ -138,9 +138,6 @@ func TestRunFillsEmptyDatabase(t *testing.T) {
 	}
 	if len(pending) != 0 {
 		t.Errorf("%d alerts would be sent to Telegram", len(pending))
-	}
-	if _, ok, err := dealStore.LastRun(ctx); err != nil || !ok {
-		t.Errorf("LastRun = %v, %v", ok, err)
 	}
 
 	valueStore := valuation.NewStore(pool)
@@ -208,5 +205,68 @@ func TestRunRefusesExistingData(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestRunWaitsForScanQueueWriter queues a scan in a transaction that is
+// still open when the seed starts. The seed must wait for it, see the
+// committed entry and refuse, instead of seeding past it.
+func TestRunWaitsForScanQueueWriter(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	ctx := context.Background()
+	writer, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() { _ = writer.Rollback(ctx) }()
+	if _, err := writer.Exec(ctx, `INSERT INTO scan_queue (barcode, reason) VALUES ('5903567700015', 'not_found')`); err != nil {
+		t.Fatalf("queue: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := Run(ctx, pool)
+		done <- err
+	}()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var waiting int
+		err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_locks
+			WHERE NOT granted AND relation = 'scan_queue'::regclass`).Scan(&waiting)
+		if err != nil {
+			t.Fatalf("pg_locks: %v", err)
+		}
+		if waiting > 0 {
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("Run finished with %v before the queued scan committed", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Run never waited for the scan queue writer")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := writer.Commit(ctx); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	if err := <-done; !errors.Is(err, ErrNotEmpty) {
+		t.Fatalf("Run = %v, want ErrNotEmpty", err)
+	}
+	if n := scalar(t, pool, `SELECT count(*) FROM scan_queue WHERE barcode = '5903567700015'`); n != 1 {
+		t.Errorf("queued scan rows = %d, want 1", n)
+	}
+	if n := scalar(t, pool, `SELECT count(*) FROM title`); n != 0 {
+		t.Errorf("titles = %d, want 0", n)
+	}
+}
+
+func TestCheckEmptyBeforeMigrations(t *testing.T) {
+	pool := dbtest.Pool(t)
+	if err := CheckEmpty(context.Background(), pool); err != nil {
+		t.Fatalf("CheckEmpty on an unmigrated database = %v, want nil", err)
 	}
 }

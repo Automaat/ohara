@@ -188,9 +188,12 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
 - `api seed` (`internal/seed`) fills an empty database with demo rows for
   every page in one transaction and sends no request; it refuses (exit 1,
   nothing changed) a database holding titles, listings, value history,
-  scan queue entries or a deal run. It never queues a pending deal alert.
-  Its DB test asserts what each page needs, so a schema change that
-  breaks the seed fails CI.
+  scan queue entries or a deal run. It checks before it migrates, so a
+  refused older database keeps its schema and rows, and it locks those
+  tables before the check, so a write from a running app waits for it.
+  It seeds no deal run (a running hunter reads that only at startup) and
+  never a pending deal alert. Its DB test asserts what each page needs,
+  so a schema change that breaks the seed fails CI.
 - Deal sources implement `deals.Source`. A run matches listing titles to
   wishlist copies (all title words, the edition's format for movies, the
   author's surname for books, the artist's words and a fitting medium for

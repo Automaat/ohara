@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { ApiError, errorMessage, request } from './api';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ApiError, errorMessage, request, requestDeadlineMs } from './api';
 
 type Call = { url: string; init: RequestInit | undefined };
 
@@ -86,6 +86,78 @@ describe('request', () => {
 		}) as typeof fetch;
 		const err = await failure(request(offline, 'GET', '/api/x'));
 		expect(err.message).toBe('Serwer nie odpowiada.');
+	});
+});
+
+describe('request deadline', () => {
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	/** A fetch that never settles, not even when its signal aborts; records the signal it got. */
+	function stalled(signals: (AbortSignal | undefined)[] = []): typeof fetch {
+		return (_input, init) => {
+			signals.push(init?.signal ?? undefined);
+			return new Promise<Response>(() => undefined);
+		};
+	}
+
+	/** Tracks a promise's outcome without letting a rejection go unhandled. */
+	function track(p: Promise<unknown>) {
+		const state: { settled: boolean; error?: unknown } = { settled: false };
+		p.then(
+			() => (state.settled = true),
+			(err: unknown) => {
+				state.settled = true;
+				state.error = err;
+			}
+		);
+		return state;
+	}
+
+	it('fails as no answer once 20 seconds pass, and not before', async () => {
+		vi.useFakeTimers();
+		const signals: (AbortSignal | undefined)[] = [];
+		const state = track(request(stalled(signals), 'GET', '/api/lookup/5901234123457'));
+
+		await vi.advanceTimersByTimeAsync(requestDeadlineMs - 1);
+		expect(state.settled).toBe(false);
+		expect(signals[0]?.aborted).toBe(false);
+
+		await vi.advanceTimersByTimeAsync(1);
+		expect(state.error).toBeInstanceOf(ApiError);
+		expect(state.error).toMatchObject({ status: 0, message: 'Serwer nie odpowiada.' });
+		expect(signals[0]?.aborted).toBe(true);
+	});
+
+	it('fails a response whose body never arrives', async () => {
+		vi.useFakeTimers();
+		const headersOnly: typeof fetch = async () =>
+			new Response(new ReadableStream({ start() {} }), { status: 200 });
+		const state = track(request(headersOnly, 'GET', '/api/collection'));
+
+		await vi.advanceTimersByTimeAsync(requestDeadlineMs);
+		expect(state.error).toMatchObject({ status: 0, message: 'Serwer nie odpowiada.' });
+	});
+
+	it('waits as long as a longer deadline allows', async () => {
+		vi.useFakeTimers();
+		const state = track(
+			request(stalled(), 'PUT', '/api/editions/3/cover', new Blob(['x']), 120_000)
+		);
+
+		await vi.advanceTimersByTimeAsync(119_999);
+		expect(state.settled).toBe(false);
+
+		await vi.advanceTimersByTimeAsync(1);
+		expect(state.error).toMatchObject({ status: 0 });
+	});
+
+	it('leaves no timer behind once answered', async () => {
+		vi.useFakeTimers();
+		await expect(request(fake(200, '[]'), 'GET', '/api/titles')).resolves.toEqual([]);
+		await expect(request(fake(500, '{}'), 'GET', '/api/titles')).rejects.toBeInstanceOf(ApiError);
+		expect(vi.getTimerCount()).toBe(0);
 	});
 });
 

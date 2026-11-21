@@ -1,5 +1,5 @@
-import { ApiError, request } from './api';
 import { queueDeletesSettled } from './queue-deletes';
+import { canonicalBarcode } from './scan';
 
 /** What the sheet says about a code the check got no answer for, once the device kept it. */
 export const offlineSavedMessage =
@@ -10,6 +10,56 @@ export const offlineDetail = 'Zeskanowano bez połączenia';
 
 /** How often codes still waiting are sent again, for a weak signal the browser calls online. */
 export const sendInterval = 20_000;
+
+/** How long one code's POST may take before the run counts it as unanswered. */
+export const postTimeout = 15_000;
+
+/**
+ * Runs a send while no other tab of the app sends; false when another tab holds the lock and
+ * nothing ran, as that tab sends the same codes.
+ */
+export type SendLock = (run: () => Promise<void>) => Promise<boolean>;
+
+const lockName = 'ohara-pending-scans';
+
+/** The browser's Web Locks, shared by the app's tabs; without them each tab sends on its own. */
+export const browserLock: SendLock = async (run) => {
+	const locks = globalThis.navigator?.locks;
+	if (!locks) {
+		await run();
+		return true;
+	}
+	return locks.request(lockName, { ifAvailable: true }, async (lock) => {
+		if (!lock) return false;
+		await run();
+		return true;
+	});
+};
+
+/** Runs work with a signal that aborts it after ms, and rejects once ms passed either way. */
+function withDeadline<T>(ms: number, work: (signal: AbortSignal) => Promise<T>): Promise<T> {
+	const controller = new AbortController();
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const deadline = new Promise<never>((_, reject) => {
+		timer = setTimeout(() => {
+			controller.abort();
+			reject(new DOMException('No answer in time', 'TimeoutError'));
+		}, ms);
+	});
+	return Promise.race([work(controller.signal), deadline]).finally(() => clearTimeout(timer));
+}
+
+/** The field an API error body names, if the body is one. */
+async function errorField(res: Response): Promise<string | undefined> {
+	try {
+		const body: unknown = await res.json();
+		const field =
+			body && typeof body === 'object' ? (body as { field?: unknown }).field : undefined;
+		return typeof field === 'string' ? field : undefined;
+	} catch {
+		return undefined;
+	}
+}
 
 /** The barcodes a device keeps until the scan queue takes them, each once. */
 export type PendingStore = {
@@ -109,12 +159,18 @@ export class PendingScans {
 	expired = $state(false);
 	readonly #fetch: typeof fetch;
 	readonly #open: () => Promise<PendingStore | null>;
+	readonly #lock: SendLock;
 	#store: Promise<PendingStore | null> | null = null;
 	#sending: Promise<void> | null = null;
 
-	constructor(fetchFn: typeof fetch, open: () => Promise<PendingStore | null>) {
+	constructor(
+		fetchFn: typeof fetch,
+		open: () => Promise<PendingStore | null>,
+		lock: SendLock = browserLock
+	) {
 		this.#fetch = fetchFn;
 		this.#open = open;
+		this.#lock = lock;
 	}
 
 	/** The store, opened once; a store that failed an operation is opened again next time. */
@@ -145,13 +201,18 @@ export class PendingScans {
 		}
 	}
 
-	/** Keeps a code whose check got no answer; false when the device cannot keep it. */
+	/**
+	 * Keeps a code whose check got no answer, in the form the server stores it, so two spellings of
+	 * one barcode wait once. False when the device cannot keep it; until a later write succeeds,
+	 * the device then counts as keeping no codes.
+	 */
 	async keep(barcode: string): Promise<boolean> {
 		const store = await this.#opened();
 		if (!store) return false;
 		try {
-			await store.add(barcode);
+			await store.add(canonicalBarcode(barcode));
 		} catch {
+			this.available = false;
 			this.#lost();
 			return false;
 		}
@@ -165,17 +226,27 @@ export class PendingScans {
 	}
 
 	/**
-	 * Sends every waiting code to the scan queue, one run at a time, after the queue removals on
-	 * their way, so a removal never races the same code queued again. A code leaves the device
-	 * once the queue took it (200 or 201), an edition carries it (409) or the queue can never take
-	 * it (422); any other answer keeps it for the next run. No answer, or the sign-in turning the
-	 * request away, ends the run.
+	 * Sends every waiting code to the scan queue, one run at a time across the app's tabs, after
+	 * the queue removals on their way, so a removal never races the same code queued again. A code
+	 * leaves the device once the queue took it (200 or 201, even if the body is lost), an edition
+	 * carries it (409 on barcode) or the API refuses it (422); any other answer keeps it for the
+	 * next run. No answer within postTimeout, or the sign-in turning the request away, ends the
+	 * run. While another tab sends, this one only reads the count.
 	 */
 	send(): Promise<void> {
-		this.#sending ??= this.#sendAll().finally(() => {
-			this.#sending = null;
-		});
+		this.#sending ??= this.#lock(() => this.#sendAll())
+			.then(async (ran) => {
+				if (!ran) await this.#refresh();
+			})
+			.finally(() => {
+				this.#sending = null;
+			});
 		return this.#sending;
+	}
+
+	async #refresh() {
+		const store = await this.#opened();
+		if (store) await this.#recount(store);
 	}
 
 	async #sendAll(): Promise<void> {
@@ -210,29 +281,37 @@ export class PendingScans {
 		await this.#sendEach(store, rest);
 	}
 
-	async #post(barcode: string): Promise<Outcome> {
-		try {
-			await request(this.#fetch, 'POST', '/api/scan-queue', {
-				barcode,
-				reason: 'lookup_failed',
-				detail: offlineDetail
+	#post(barcode: string): Promise<Outcome> {
+		return withDeadline(postTimeout, async (signal) => {
+			const res = await this.#fetch('/api/scan-queue', {
+				method: 'POST',
+				headers: { accept: 'application/json', 'content-type': 'application/json' },
+				body: JSON.stringify({ barcode, reason: 'lookup_failed', detail: offlineDetail }),
+				redirect: 'manual',
+				signal
 			});
-		} catch (err) {
-			const status = err instanceof ApiError ? err.status : -1;
-			if (status === 401) {
-				this.expired = true;
-				return 'stop';
-			}
-			if (status === 0) return 'stop';
-			if (status !== 409 && status !== 422) return 'kept';
+			return this.#outcome(res);
+		}).catch((): Outcome => 'stop');
+	}
+
+	/** What the scan queue's answer means for the code; only the API's own refusals settle it. */
+	async #outcome(res: Response): Promise<Outcome> {
+		if (res.type === 'opaqueredirect' || res.status === 401) {
+			this.expired = true;
+			return 'stop';
 		}
-		this.expired = false;
-		return 'settled';
+		const settled =
+			res.status === 200 ||
+			res.status === 201 ||
+			(res.status === 409 && (await errorField(res)) === 'barcode') ||
+			(res.status === 422 && (await errorField(res)) !== undefined);
+		if (settled) this.expired = false;
+		return settled ? 'settled' : 'kept';
 	}
 
 	/**
-	 * Sends now, whenever the browser comes online or the app is shown again, and every interval
-	 * while codes wait. Returns what stops it.
+	 * Sends now, whenever the browser comes online or the app is shown again, and every interval,
+	 * as another tab may have kept codes this one has not counted. Returns what stops it.
 	 */
 	start(
 		win: Pick<EventTarget, 'addEventListener' | 'removeEventListener'>,
@@ -246,9 +325,7 @@ export class PendingScans {
 		send();
 		win.addEventListener('online', send);
 		doc.addEventListener('visibilitychange', shown);
-		const timer = setInterval(() => {
-			if (this.count > 0) send();
-		}, every);
+		const timer = setInterval(send, every);
 		return () => {
 			win.removeEventListener('online', send);
 			doc.removeEventListener('visibilitychange', shown);

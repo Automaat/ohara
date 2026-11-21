@@ -2,8 +2,10 @@ import { IDBFactory } from 'fake-indexeddb';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
 	PendingScans,
+	browserLock,
 	offlineDetail,
 	openPendingStore,
+	postTimeout,
 	type PendingStore
 } from './pending-scans.svelte';
 
@@ -108,15 +110,30 @@ describe('PendingScans.keep', () => {
 		expect(broken.available).toBe(false);
 	});
 
-	it('opens the store again after a write failed', async () => {
+	it('opens the store again after a write failed, counting it unavailable meanwhile', async () => {
 		const device = memory();
 		const pending = new PendingScans(api().fetchFn, device.open);
 		device.state.fail = true;
 		expect(await pending.keep(a)).toBe(false);
+		expect(pending.available).toBe(false);
 		device.state.fail = false;
 		expect(await pending.keep(a)).toBe(true);
+		expect(pending.available).toBe(true);
 		expect(device.state.opened).toBe(2);
 		expect(pending.count).toBe(1);
+	});
+
+	it.each([
+		['a UPC-A and its EAN-13', '036000291452', '0036000291452'],
+		['an ISBN-10 and its ISBN-13', '8324000011', '9788324000012'],
+		['a padded EAN-8', '00000040170725', '40170725']
+	])('keeps %s once, as the server stores it', async (_, first, second) => {
+		const device = memory();
+		const pending = new PendingScans(api().fetchFn, device.open);
+		await pending.keep(first);
+		await pending.keep(second);
+		expect(pending.count).toBe(1);
+		expect([...device.kept]).toEqual([second]);
 	});
 
 	it('keeps codes in the browser database across a new page', async () => {
@@ -212,6 +229,79 @@ describe('PendingScans.send', () => {
 		expect(s.codes()).toEqual([a]);
 	});
 
+	it('settles a code the queue took even when its answer breaks off', async () => {
+		const device = memory([a]);
+		const broken = new ReadableStream({
+			start: (controller) => controller.error(new TypeError('network'))
+		});
+		const pending = new PendingScans(
+			async () => new Response(broken, { status: 201 }),
+			device.open
+		);
+		await pending.send();
+		expect(device.kept.size).toBe(0);
+	});
+
+	it.each([
+		['a 409 without the barcode field', 409, '{"error":"conflict"}'],
+		['a 409 that is not the API', 409, 'Conflict'],
+		['a 422 that is not the API', 422, 'Unprocessable']
+	])('keeps a code on %s', async (_, status, body) => {
+		const device = memory([a]);
+		const pending = new PendingScans(async () => new Response(body, { status }), device.open);
+		await pending.send();
+		expect([...device.kept]).toEqual([a]);
+	});
+
+	it('gives up on a POST that hangs, so later runs still send', async () => {
+		vi.useFakeTimers();
+		const device = memory([a]);
+		let signal: AbortSignal | undefined;
+		let calls = 0;
+		const pending = new PendingScans(async (_, init) => {
+			calls++;
+			signal = init?.signal ?? undefined;
+			if (calls === 1) return new Promise<Response>(() => {});
+			return new Response('{}', { status: 201 });
+		}, device.open);
+		const first = pending.send();
+		await vi.advanceTimersByTimeAsync(postTimeout);
+		await first;
+		expect(signal?.aborted).toBe(true);
+		expect(pending.count).toBe(1);
+		await pending.send();
+		expect(device.kept.size).toBe(0);
+		vi.useRealTimers();
+	});
+
+	it('sends each code once when two tabs come back online together', async () => {
+		const factory = new IDBFactory();
+		const s = api();
+		const tab = () => new PendingScans(s.fetchFn, () => openPendingStore(factory), browserLock);
+		const one = tab();
+		const two = tab();
+		await one.keep(a);
+		await one.keep(b);
+		await Promise.all([one.send(), two.send()]);
+		expect(s.codes().sort()).toEqual([a, b].sort());
+		await two.send();
+		expect(s.codes()).toHaveLength(2);
+		expect(one.count).toBe(0);
+		expect(two.count).toBe(0);
+	});
+
+	it('runs the send where the browser has no Web Locks', async () => {
+		vi.stubGlobal('navigator', {});
+		let ran = false;
+		expect(
+			await browserLock(async () => {
+				ran = true;
+			})
+		).toBe(true);
+		expect(ran).toBe(true);
+		vi.unstubAllGlobals();
+	});
+
 	it('opens the store again after it failed', async () => {
 		const device = memory([a]);
 		const s = api();
@@ -239,6 +329,22 @@ describe('PendingScans.send', () => {
 });
 
 describe('PendingScans.start', () => {
+	it('sends on each tick a code another tab kept, though this tab counted none', async () => {
+		vi.useFakeTimers();
+		const device = memory();
+		const s = api();
+		const here = new PendingScans(s.fetchFn, device.open);
+		const there = new PendingScans(s.fetchFn, device.open);
+		const { win, doc } = page();
+		const stop = here.start(win, doc, 1000);
+		await vi.advanceTimersByTimeAsync(0);
+		await there.keep(a);
+		expect(here.count).toBe(0);
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(s.codes()).toEqual([a]);
+		stop();
+	});
+
 	afterEach(() => {
 		vi.useRealTimers();
 	});

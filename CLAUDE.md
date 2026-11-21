@@ -176,9 +176,10 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   focused barcode field. The flow lives in `src/lib/scan.ts`: existing
   edition → add a copy, lookup candidates → quick confirm, nothing → queue.
 - A code whose check gets no answer is kept in IndexedDB
-  (`src/lib/pending-scans.svelte.ts`, barcode only) and posted to
-  `/api/scan-queue` as `lookup_failed` on app start, on `online`, when the
-  app is shown and every 20 s while codes wait. `request` does not follow
+  (`src/lib/pending-scans.svelte.ts`, barcode only, once in the server's
+  normalized form) and posted to `/api/scan-queue` as `lookup_failed` on app
+  start, on `online`, when the app is shown and every 20 s, by one tab at a
+  time (Web Locks), each POST within 15 s. `request` does not follow
   redirects, so a 401 or Authelia's cross-origin redirect is an expired
   session ("Odśwież"), not a lost connection; the code is kept either way.
 - Kolekcja's "Dodaj tytuł" (`/titles/new`) is the scanner's quick confirm

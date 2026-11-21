@@ -8,11 +8,12 @@ import (
 )
 
 // Discogs allows a token 60 authenticated requests in a moving 60-second
-// window. The limiter lets limitBurst requests through at once and then
-// one every limitInterval, so no 60 seconds hold more than 55: a margin
-// for Discogs measuring its window when the requests arrive.
+// window, counted when they arrive. The limiter lets limitBurst requests
+// through at once and then one every limitInterval. A request reaches
+// Discogs within RequestTimeout of its turn, so the turns of any 68
+// seconds, at most 4 + 68/1.2 = 60, bound the arrivals of any 60.
 const (
-	limitBurst    = 5
+	limitBurst    = 4
 	limitInterval = 1200 * time.Millisecond
 )
 
@@ -54,8 +55,7 @@ type waiter struct {
 	wake     chan struct{}
 }
 
-// NewLimiter returns the budget of one token: 60 requests a minute with a
-// margin.
+// NewLimiter returns the budget of one token: 60 requests a minute.
 func NewLimiter() *Limiter {
 	return &Limiter{burst: limitBurst, interval: limitInterval}
 }
@@ -83,6 +83,11 @@ func (l *Limiter) Wait(ctx context.Context, p Priority) error {
 		var timer *time.Timer
 		var fire <-chan time.Time
 		if l.first() == w {
+			if err := ctx.Err(); err != nil {
+				l.leave(w)
+				l.mu.Unlock()
+				return err
+			}
 			turn := l.turn(now)
 			if !turn.After(now) {
 				l.next = l.full(now).Add(l.interval)

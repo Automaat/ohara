@@ -309,6 +309,10 @@ func titleSearchers() map[string]lookup.TextSearcher {
 // and the valuation draw on it together.
 var discogsBudget = discogs.NewLimiter()
 
+// discogsHTTP sends the Discogs requests, one connection each, so that no
+// resend by net/http escapes discogsBudget.
+var discogsHTTP = discogs.NewHTTPClient()
+
 // newDiscogs is the Discogs client, or nil without OHARA_DISCOGS_TOKEN:
 // every Discogs endpoint needs a token.
 func newDiscogs() *discogs.Client {
@@ -317,7 +321,7 @@ func newDiscogs() *discogs.Client {
 		return nil
 	}
 	return &discogs.Client{
-		HTTP: sourceClient, BaseURL: envOr("OHARA_DISCOGS_URL", discogs.BaseURL), Token: token, Limiter: discogsBudget,
+		HTTP: discogsHTTP, BaseURL: envOr("OHARA_DISCOGS_URL", discogs.BaseURL), Token: token, Limiter: discogsBudget,
 	}
 }
 

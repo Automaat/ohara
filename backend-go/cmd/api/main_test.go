@@ -202,6 +202,9 @@ func TestDiscogsCallersShareOneBudget(t *testing.T) {
 		if c.Limiter == nil || c.Limiter != discogsBudget {
 			t.Errorf("%s: limiter %p, want the shared budget %p", tc.name, c.Limiter, discogsBudget)
 		}
+		if c.HTTP != discogsHTTP {
+			t.Errorf("%s: HTTP client is not discogsHTTP, which keeps no connection to resend on", tc.name)
+		}
 		if c.Priority != tc.priority {
 			t.Errorf("%s: priority %d, want %d", tc.name, c.Priority, tc.priority)
 		}

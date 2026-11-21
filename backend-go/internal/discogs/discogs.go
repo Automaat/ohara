@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"time"
 
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
 )
@@ -35,9 +36,10 @@ const maxResults = 10
 
 // Client calls the Discogs API with a personal access token. The API
 // allows 60 authenticated requests a minute: every request, and every
-// redirect it follows, waits for Limiter at Priority. Every Client of the
-// same token shares one Limiter; a nil Limiter leaves the pacing to the
-// caller.
+// redirect it follows, waits for Limiter at Priority, then has
+// RequestTimeout to finish. Every Client of the same token shares one
+// Limiter, with HTTP from NewHTTPClient; a nil Limiter leaves the pacing
+// to the caller.
 type Client struct {
 	HTTP     *http.Client
 	BaseURL  string
@@ -48,6 +50,26 @@ type Client struct {
 
 // maxRedirects is how many redirects a request follows, as net/http does.
 const maxRedirects = 10
+
+// RequestTimeout bounds one request, redirects included, from its turn in
+// the budget: a request that has not reached Discogs by then is given up,
+// so it cannot arrive late and crowd a later minute.
+const RequestTimeout = 8 * time.Second
+
+// NewHTTPClient returns the HTTP client a Client of a Limiter needs: it
+// speaks HTTP/1.1 on a fresh connection for every request. net/http
+// resends a GET by itself when a reused connection drops, and that resend
+// would skip the budget.
+func NewHTTPClient() *http.Client {
+	var protocols http.Protocols
+	protocols.SetHTTP1(true)
+	return &http.Client{Transport: &http.Transport{
+		Proxy:               http.ProxyFromEnvironment,
+		DisableKeepAlives:   true,
+		Protocols:           &protocols,
+		TLSHandshakeTimeout: 5 * time.Second,
+	}}
+}
 
 // Release is one release a barcode search found. Title is Discogs'
 // "Artist - Album"; Format lists the medium first, then its descriptions
@@ -169,7 +191,7 @@ func (c *Client) httpClient() *http.Client {
 	return &paced
 }
 
-// get waits for the token's budget, fetches path, decodes the JSON body
+// get waits for the token's budget, fetches path within RequestTimeout, decodes the JSON body
 // into out and runs check on it. The outcome counts in the source health
 // metrics: ok only once the body decodes and passes check; a request the
 // budget kept back was never sent and does not count. Errors name the
@@ -190,7 +212,9 @@ func (c *Client) get(ctx context.Context, path string, out any, check func() err
 	if err := c.Limiter.Wait(ctx, c.Priority); err != nil {
 		return fmt.Errorf("discogs: GET %s: wait for rate budget: %w", req.URL.Path, err)
 	}
-	resp, err := c.httpClient().Do(req)
+	sendCtx, cancel := context.WithTimeout(ctx, RequestTimeout)
+	defer cancel()
+	resp, err := c.httpClient().Do(req.WithContext(sendCtx))
 	if err != nil {
 		metrics.ObserveSource(Source, metrics.SourceError)
 		if uerr, ok := errors.AsType[*url.Error](err); ok {

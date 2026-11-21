@@ -3,6 +3,7 @@ package discogs_test
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -277,4 +278,156 @@ func TestNilLimiterSendsAtOnce(t *testing.T) {
 			t.Fatalf("100 requests without a limiter took %v", took)
 		}
 	})
+}
+
+// stalled holds every request sent before clears until clears, as a
+// network stall that ends at once would, then records its arrival.
+type stalled struct {
+	start  time.Time
+	clears time.Duration
+	api    *arrivals
+}
+
+func (s *stalled) RoundTrip(r *http.Request) (*http.Response, error) {
+	if wait := time.Until(s.start.Add(s.clears)); wait > 0 {
+		select {
+		case <-time.After(wait):
+		case <-r.Context().Done():
+			return nil, r.Context().Err()
+		}
+	}
+	return s.api.RoundTrip(r)
+}
+
+func TestStalledSendsStayWithinBudget(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		api := &arrivals{}
+		limiter := discogs.NewLimiter()
+		stall := &stalled{start: time.Now(), clears: discogs.RequestTimeout - 10*time.Millisecond, api: api}
+		c := &discogs.Client{HTTP: &http.Client{Transport: stall}, BaseURL: "http://discogs.test", Token: "secret", Limiter: limiter}
+		const goroutines, perGoroutine = 8, 9
+		var wg sync.WaitGroup
+		for g := range goroutines {
+			wg.Go(func() {
+				for range perGoroutine {
+					if _, err := c.Stats(t.Context(), int64(g), "EUR"); err != nil {
+						t.Errorf("stats: %v", err)
+					}
+				}
+			})
+		}
+		wg.Wait()
+		times := api.seen()
+		if len(times) != goroutines*perGoroutine {
+			t.Fatalf("server saw %d requests, want %d", len(times), goroutines*perGoroutine)
+		}
+		checkMinutes(t, times)
+	})
+}
+
+func TestRedirectKeepsRequestDeadline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		limiter := discogs.NewLimiter()
+		moved := &arrivals{redirect: true}
+		others := (&arrivals{}).client(limiter)
+		for range 4 {
+			if _, err := others.Stats(t.Context(), 1, "EUR"); err != nil {
+				t.Fatalf("burst: %v", err)
+			}
+		}
+		start := time.Now()
+		var wg sync.WaitGroup
+		var err error
+		var took time.Duration
+		wg.Go(func() {
+			_, err = moved.client(limiter).Stats(t.Context(), 2, "EUR")
+			took = time.Since(start)
+		})
+		synctest.Wait()
+		for range 10 {
+			wg.Go(func() {
+				if _, err := others.Stats(t.Context(), 3, "EUR"); err != nil {
+					t.Errorf("queued stats: %v", err)
+				}
+			})
+		}
+		synctest.Wait()
+		wg.Wait()
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("redirect behind 10 waiters: err = %v, want context.DeadlineExceeded", err)
+		}
+		if n := len(moved.seen()); n != 1 {
+			t.Fatalf("redirected request sent %d times, want only the first hop", n)
+		}
+		if limit := 1200*time.Millisecond + discogs.RequestTimeout + 100*time.Millisecond; took > limit {
+			t.Fatalf("request gave up after %v, want by %v: its turn plus RequestTimeout", took, limit)
+		}
+	})
+}
+
+// canceledOnSecondLook passes the first look at its error and is canceled
+// from then on: a caller that gives up just after Wait checked it.
+type canceledOnSecondLook struct {
+	context.Context
+	mu    sync.Mutex
+	looks int
+}
+
+func (c *canceledOnSecondLook) Err() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.looks++
+	if c.looks == 1 {
+		return nil
+	}
+	return context.Canceled
+}
+
+func TestWaitCanceledBeforeTurnSpendsNothing(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		limiter := discogs.NewLimiter()
+		for range 3 {
+			if err := limiter.Wait(t.Context(), discogs.Interactive); err != nil {
+				t.Fatalf("burst: %v", err)
+			}
+		}
+		if err := limiter.Wait(&canceledOnSecondLook{Context: t.Context()}, discogs.Interactive); !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled caller: err = %v, want context.Canceled", err)
+		}
+		start := time.Now()
+		if err := limiter.Wait(t.Context(), discogs.Interactive); err != nil {
+			t.Fatalf("next caller: %v", err)
+		}
+		if waited := time.Since(start); waited != 0 {
+			t.Fatalf("next caller waited %v, want the burst's last turn at once", waited)
+		}
+	})
+}
+
+func TestHTTPClientOpensConnectionPerRequest(t *testing.T) {
+	var mu sync.Mutex
+	conns := 0
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	srv.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			mu.Lock()
+			conns++
+			mu.Unlock()
+		}
+	}
+	srv.Start()
+	t.Cleanup(srv.Close)
+	c := &discogs.Client{HTTP: discogs.NewHTTPClient(), BaseURL: srv.URL, Token: "secret"}
+	for range 3 {
+		if _, err := c.Stats(t.Context(), 1, "EUR"); err != nil {
+			t.Fatalf("stats: %v", err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if conns != 3 {
+		t.Fatalf("3 requests used %d connections, want one each: a reused connection lets net/http resend outside the budget", conns)
+	}
 }

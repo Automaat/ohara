@@ -7,7 +7,7 @@
 	import { sessionExpiredMessage } from '#lib/api.js';
 	import { displayName, editionSummary, kindLabels, type Kind } from '#lib/collection.js';
 	import { offlineSavedMessage } from '#lib/pending-scans.svelte.js';
-	import { resultAnnouncement, type Added, type ScanFlow } from '#lib/scan-flow.svelte.js';
+	import type { Added, ScanFlow } from '#lib/scan-flow.svelte.js';
 	import {
 		barcodeGroups,
 		candidateParts,
@@ -93,7 +93,7 @@
 			const t = e.title;
 			const copies = e.copies.filter((c) => c.status === 'owned').length;
 			return {
-				overline: 'Masz już to wydanie',
+				overline: flow.resultLine,
 				tone: 'owned',
 				name: displayName(t),
 				meta: line([kindLabels[t.kind], t.authors.join(', '), t.year?.toString()]),
@@ -103,7 +103,7 @@
 		}
 		if (p.status === 'missing') {
 			return {
-				overline: candidate ? `Znaleziono · ${providerLabel(candidate)}` : 'Dodaj ręcznie',
+				overline: flow.resultLine,
 				tone: candidate ? 'ok' : 'quiet',
 				name: flow.form.name.trim() || undefined,
 				meta: kindLabels[flow.form.kind],
@@ -112,16 +112,12 @@
 			};
 		}
 		if (flow.choosing) {
-			const n = item?.candidates.length ?? 0;
-			return {
-				overline: n === 1 ? 'Znaleziono propozycję' : `Znaleziono propozycje: ${n}`,
-				tone: 'ok'
-			};
+			return { overline: flow.resultLine, tone: 'ok' };
 		}
 		const c = candidate;
 		const same = c?.type === flow.form.kind ? c : null;
 		return {
-			overline: c ? `Znaleziono · ${providerLabel(c)}` : 'Znaleziono',
+			overline: flow.resultLine,
 			tone: 'ok',
 			name: flow.form.name.trim() || undefined,
 			meta: line([
@@ -184,32 +180,6 @@
 		if (autofocus) untrack(() => landOnNextStep(p, choosing));
 	});
 
-	/** The one candidate waiting for a pick names the item; several are counted by the line. */
-	function spokenName(): string | undefined {
-		if (header.name) return header.name;
-		const only = flow.choosing && item?.candidates.length === 1 ? item.candidates[0] : undefined;
-		return only ? candidateParts(only).name : undefined;
-	}
-
-	/*
-	 * A camera scan leaves focus where it was, so the result is read out from a polite status
-	 * once each code resolves, not again as the user edits the form. The words arrive a moment
-	 * after the region empties, as SUI's live callout does, so a screen reader hears them even
-	 * when the sheet opens with the answer or the same result comes twice.
-	 */
-	const settle = 100;
-	let announcement = $state('');
-
-	$effect(() => {
-		const p = flow.phase;
-		void item?.key;
-		const words = untrack(() => resultAnnouncement(p, code, header.overline, spokenName()));
-		announcement = '';
-		if (!words) return;
-		const timer = setTimeout(() => (announcement = words), settle);
-		return () => clearTimeout(timer);
-	});
-
 	async function save() {
 		const added = await flow.save();
 		if (added) onadded(added);
@@ -251,7 +221,7 @@
 {/snippet}
 
 <div class="item">
-	<VisuallyHidden role="status">{announcement}</VisuallyHidden>
+	<VisuallyHidden role="status">{flow.announcement}</VisuallyHidden>
 	<header class={['found', { covered: header.cover }]}>
 		{#if header.cover}
 			<span class="cover">

@@ -9,6 +9,7 @@ import {
 } from './api';
 import {
 	bindingLabels,
+	displayName,
 	formatLabels,
 	formatPLN,
 	type Edition,
@@ -20,6 +21,7 @@ import { logScan } from './recent.svelte';
 import {
 	FormRejected,
 	LatestLoad,
+	candidateParts,
 	checkDigitMatches,
 	checkScan,
 	cleanBarcode,
@@ -30,6 +32,7 @@ import {
 	looksLikeBarcode,
 	newMade,
 	newRequestKey,
+	providerLabel,
 	quickForm,
 	resolveScan,
 	saveScan,
@@ -75,8 +78,14 @@ export function resultAnnouncement(
 	name?: string
 ): string {
 	if (phase.kind !== 'ready' || !code) return '';
-	return name ? `${line}: ${name}` : line;
+	return name ? `${line}. ${name}` : line;
 }
+
+/**
+ * How long the status stays empty before a result's words arrive: many screen readers skip a
+ * live region whose words change at once, as SUI's live callout waits for the same reason.
+ */
+export const announceSettle = 100;
 
 /**
  * How long one request of a barcode's check may stay open: every API request's deadline, below
@@ -189,6 +198,9 @@ export class ScanFlow {
 	query = $state('');
 	searching = $state(false);
 	sticky = $state<Sticky>({ ...emptySticky, shops: [] });
+	/** What the sheet's polite status reads out for the code that resolved last. */
+	announcement = $state('');
+	#announcing: ReturnType<typeof setTimeout> | undefined;
 	readonly #loads = new LatestLoad();
 	#current: () => boolean = () => false;
 	/** Numbers title searches; a pick or a newer search makes an older answer stale. */
@@ -217,6 +229,45 @@ export class ScanFlow {
 			item.picked === null &&
 			item.candidates.length > 0
 		);
+	}
+
+	/** The result line the sheet shows for a resolved code. */
+	get resultLine(): string {
+		const item = this.item;
+		const c = this.candidate;
+		if (item?.target.kind === 'owned') return 'Masz już to wydanie';
+		if (this.phase.kind === 'ready' && this.phase.status === 'missing')
+			return c ? `Znaleziono · ${providerLabel(c)}` : 'Dodaj ręcznie';
+		if (this.choosing) {
+			const n = item?.candidates.length ?? 0;
+			return n === 1 ? 'Znaleziono propozycję' : `Znaleziono propozycje: ${n}`;
+		}
+		return c ? `Znaleziono · ${providerLabel(c)}` : 'Znaleziono';
+	}
+
+	/** The item's name, or the one name all candidates waiting for a pick share. */
+	#resultName(): string | undefined {
+		const target = this.item?.target;
+		if (target?.kind === 'owned') return displayName(target.edition.title);
+		if (this.choosing) {
+			const names = new Set(this.item?.candidates.map((c) => candidateParts(c).name));
+			return names.size === 1 ? [...names][0] : undefined;
+		}
+		return this.form.name.trim() || undefined;
+	}
+
+	/**
+	 * Reads the resolved code out once: the status empties, then takes the result line and the
+	 * item's name, so the same result twice is heard twice and later edits are not heard.
+	 */
+	#announce() {
+		clearTimeout(this.#announcing);
+		this.announcement = '';
+		const words = resultAnnouncement(this.phase, this.code, this.resultLine, this.#resultName());
+		if (!words) return;
+		this.#announcing = setTimeout(() => {
+			this.announcement = words;
+		}, announceSettle);
 	}
 
 	/** The candidate the form starts from, if any. */
@@ -249,6 +300,8 @@ export class ScanFlow {
 		this.#current = current;
 		this.code = code;
 		this.phase = { kind: 'loading' };
+		clearTimeout(this.#announcing);
+		this.announcement = '';
 		this.item = null;
 		this.issue = null;
 		this.notice = null;
@@ -286,6 +339,7 @@ export class ScanFlow {
 		if (byHand) {
 			this.item = this.#blank(code, true);
 			this.phase = { kind: 'ready', status: 'missing' };
+			this.#announce();
 			return;
 		}
 		try {
@@ -298,6 +352,7 @@ export class ScanFlow {
 				};
 				this.form.kind = r.edition.title.kind;
 				this.phase = { kind: 'ready', status: 'owned' };
+				this.#announce();
 			} else if (r.kind === 'found') {
 				const picked = r.needsConfirmation ? null : 0;
 				const first = r.candidates[0] ?? null;
@@ -315,6 +370,7 @@ export class ScanFlow {
 				this.form = quickForm(picked === null ? null : first, this.sticky, r.barcode, visit.date);
 				if (first) this.form.kind = first.type;
 				this.phase = { kind: 'ready', status: 'found' };
+				this.#announce();
 			} else {
 				this.item = this.#blank(r.entry.barcode, false);
 				this.phase = { kind: 'queued', entry: r.entry };
@@ -414,6 +470,7 @@ export class ScanFlow {
 		if (!item) return;
 		this.item = { ...this.#blank(item.barcode, item.byHand), logged: item.logged };
 		this.phase = { kind: 'ready', status: 'missing' };
+		this.#announce();
 	}
 
 	/** Searches by the typed title; one result fills the form, several wait for a pick. */

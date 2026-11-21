@@ -253,7 +253,7 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   edition → add a copy, lookup candidates → quick confirm, nothing → queue.
   A camera scan leaves focus where it was: the sheet reads each resolved
   result line and the item's name once from a polite `status`
-  (`resultAnnouncement`); the other results speak through their live
+  (`ScanFlow.announcement`); the other results speak through their live
   `Callout`. Only a typed code moves focus to the next step.
 - A code whose check gets no answer is kept in IndexedDB
   (`src/lib/pending-scans.svelte.ts`, barcode only, once in the server's

@@ -2,13 +2,15 @@ import { sveltekit } from '@sveltejs/kit/vite';
 import adapter from '@sveltejs/adapter-static';
 import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
 import { defineConfig } from 'vitest/config';
+import { csp } from './src/lib/csp';
 
 export default defineConfig({
 	plugins: [
 		sveltekit({
 			preprocess: vitePreprocess(),
 			adapter: adapter({ fallback: 'index.html' }),
-			serviceWorker: { register: false }
+			serviceWorker: { register: false },
+			csp
 		})
 	],
 	build: { cssTarget: ['chrome120', 'edge120', 'firefox115', 'safari16.4'] },

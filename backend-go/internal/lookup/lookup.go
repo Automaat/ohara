@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
+	"github.com/Automaat/ohara/backend-go/internal/recovery"
 )
 
 // TitleFields mirrors the title body of POST /api/titles, so a client can
@@ -293,10 +294,14 @@ func (s *Service) query(ctx context.Context, e entry, code string) ([]Candidate,
 			s.logger.Warn("lookup cache read failed", "provider", p.Name(), "err", err)
 		}
 		if ok {
-			cands, err := p.Parse(code, raw)
+			cands, err := s.parse(p, code, raw)
 			if err == nil {
 				metrics.ObserveLookupCacheHit(p.Name())
 				return cands, nil
+			}
+			if _, panicked := errors.AsType[*recovery.PanicError](err); panicked {
+				metrics.ObserveLookupError(p.Name())
+				return nil, fmt.Errorf("parse cached: %w", err)
 			}
 			s.logger.Warn("cached lookup response unreadable, refetching", "provider", p.Name(), "err", err)
 		}
@@ -304,10 +309,10 @@ func (s *Service) query(ctx context.Context, e entry, code string) ([]Candidate,
 	fetchCtx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 	metrics.ObserveLookupRequest(p.Name())
-	raw, err := p.Fetch(fetchCtx, code)
+	raw, err := s.fetch(fetchCtx, p, code)
 	if partial, ok := errors.AsType[*PartialError](err); ok {
 		metrics.ObserveLookupError(p.Name())
-		cands, perr := p.Parse(code, partial.Raw)
+		cands, perr := s.parse(p, code, partial.Raw)
 		if perr != nil {
 			return nil, fmt.Errorf("parse: %w", perr)
 		}
@@ -317,7 +322,7 @@ func (s *Service) query(ctx context.Context, e entry, code string) ([]Candidate,
 		metrics.ObserveLookupError(p.Name())
 		return nil, fmt.Errorf("fetch: %w", err)
 	}
-	cands, err := p.Parse(code, raw)
+	cands, err := s.parse(p, code, raw)
 	if err != nil {
 		metrics.ObserveLookupError(p.Name())
 		return nil, fmt.Errorf("parse: %w", err)
@@ -328,4 +333,20 @@ func (s *Service) query(ctx context.Context, e entry, code string) ([]Candidate,
 		}
 	}
 	return cands, nil
+}
+
+// fetch calls the provider's Fetch; a panic in it, which chi's Recoverer
+// cannot catch in this goroutine, fails the provider like an error.
+func (s *Service) fetch(ctx context.Context, p Provider, code string) (json.RawMessage, error) {
+	return recovery.Call(s.logger, "lookup provider panicked", func() (json.RawMessage, error) {
+		return p.Fetch(ctx, code)
+	}, "provider", p.Name(), "barcode", code, "call", "fetch")
+}
+
+// parse calls the provider's Parse; a panic in it fails the provider like
+// an unreadable answer.
+func (s *Service) parse(p Provider, code string, raw json.RawMessage) ([]Candidate, error) {
+	return recovery.Call(s.logger, "lookup provider panicked", func() ([]Candidate, error) {
+		return p.Parse(code, raw)
+	}, "provider", p.Name(), "barcode", code, "call", "parse")
 }

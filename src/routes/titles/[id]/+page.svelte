@@ -102,6 +102,11 @@
 	let editionForm = $state(editionToForm(null));
 	let editionIssue = $state<FormIssue | null>(null);
 	let savingEdition = $state(false);
+	/**
+	 * The open edition form's key, sent with every attempt to save it, so a retry after a lost
+	 * answer opens the edition instead of adding a second one.
+	 */
+	let editionKey = '';
 
 	let confirmDelete = $state(false);
 	let deleteError = $state<string | null>(null);
@@ -273,6 +278,7 @@
 	function startEdition() {
 		editionForm = editionToForm(null);
 		editionIssue = null;
+		editionKey = newRequestKey();
 		copyAfterEdition = false;
 		adding = true;
 	}
@@ -305,7 +311,10 @@
 		}
 		savingEdition = true;
 		try {
-			const created = await request<Edition>(fetch, 'POST', '/api/editions', parsed.value);
+			const created = await request<Edition>(fetch, 'POST', '/api/editions', {
+				...parsed.value,
+				request_key: editionKey
+			});
 			const edition = `/editions/${created.id}`;
 			await goto(copyAfterEdition ? addCopyHref(edition) : edition);
 		} catch (err) {

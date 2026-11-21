@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -482,5 +483,73 @@ func TestEditionHintsMerge(t *testing.T) {
 	e = editionHints("1", []Product{{Name: "Psy DVD lektor: brak"}, {Name: "Psy Lektor PL"}})
 	if e.PLVoiceover != "yes" {
 		t.Fatalf("edition = %+v", e)
+	}
+}
+
+// panickingSource trips an index past the end of a slice, like a catalog
+// parser meeting a malformed answer.
+type panickingSource struct{}
+
+func (panickingSource) Name() string { return "broken" }
+
+func (panickingSource) Products(context.Context, string) ([]Product, error) {
+	return []Product{{Name: third(strings.Fields(""))}}, nil
+}
+
+// third is a parser that expects at least three fields.
+func third(fields []string) string { return fields[2] }
+
+func TestPanickingSourceIsAFailedSource(t *testing.T) {
+	var logs bytes.Buffer
+	kursk := []Product{{Source: "b", Name: "Kursk [Blu-ray]"}}
+	p := &Provider{
+		Sources: []NameSource{panickingSource{}, fakeSource{name: "b", products: kursk}},
+		TMDB:    &fakeSearcher{},
+		Logger:  slog.New(slog.NewJSONHandler(&logs, nil)),
+	}
+	_, err := p.Fetch(context.Background(), "5906190326195")
+	partial, ok := errors.AsType[*lookup.PartialError](err)
+	if !ok || !strings.Contains(err.Error(), "broken: panic: runtime error: index out of range [2] with length 0") {
+		t.Fatalf("err = %v, want a partial answer naming the panicking source", err)
+	}
+	var r Raw
+	if err := json.Unmarshal(partial.Raw, &r); err != nil || len(r.Products) != 1 {
+		t.Fatalf("raw = %s, %v", partial.Raw, err)
+	}
+	for _, want := range []string{`"level":"ERROR"`, `"source":"broken"`, `"stack":"goroutine `} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("log lacks %s:\n%s", want, logs.String())
+		}
+	}
+}
+
+func TestPanickingSourceAloneFailsTheFetch(t *testing.T) {
+	p := &Provider{
+		Sources: []NameSource{panickingSource{}, fakeSource{name: "b"}},
+		TMDB:    &fakeSearcher{},
+		Logger:  slog.New(slog.DiscardHandler),
+	}
+	if raw, err := p.Fetch(context.Background(), "5906190326195"); err == nil || !strings.Contains(err.Error(), "broken: panic") {
+		t.Fatalf("Fetch = %s, %v; want the panic as an error", raw, err)
+	}
+}
+
+// namelessSource panics when asked its name.
+type namelessSource struct{}
+
+func (namelessSource) Name() string { return third(strings.Fields("")) }
+
+func (namelessSource) Products(context.Context, string) ([]Product, error) { return nil, nil }
+
+func TestSourceWhoseNamePanicsIsAFailedSource(t *testing.T) {
+	kursk := []Product{{Source: "b", Name: "Kursk [Blu-ray]"}}
+	p := &Provider{
+		Sources: []NameSource{namelessSource{}, fakeSource{name: "b", products: kursk}},
+		TMDB:    &fakeSearcher{},
+		Logger:  slog.New(slog.DiscardHandler),
+	}
+	_, err := p.Fetch(context.Background(), "5906190326195")
+	if _, ok := errors.AsType[*lookup.PartialError](err); !ok || !strings.Contains(err.Error(), "name source 0: panic:") {
+		t.Fatalf("err = %v, want a partial answer naming source 0", err)
 	}
 }

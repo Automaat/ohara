@@ -268,7 +268,7 @@ func newMovieProvider(allegro *movie.Allegro, logger *slog.Logger) *movie.Provid
 		logger.Info("movie lookup disabled: OHARA_TMDB_API_KEY not set")
 		return nil
 	}
-	p := &movie.Provider{TMDB: movie.TMDB{Client: sourceClient, Key: key}}
+	p := &movie.Provider{TMDB: movie.TMDB{Client: sourceClient, Key: key}, Logger: logger}
 	if allegro != nil {
 		p.Sources = append(p.Sources, allegro)
 	}

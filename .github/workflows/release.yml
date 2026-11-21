@@ -1,26 +1,57 @@
 name: Release
 
-# Manual: tags vX.Y.Z, cuts a GitHub release and pushes the versioned image.
-# An empty version bumps the minor of the latest tag.
+# Manual, from main only: for a main commit whose CI run passed, pushes the
+# image ghcr.io/<repo>:vX.Y.Z, then tags vX.Y.Z and cuts a GitHub release.
+# An empty version bumps the minor of the newest tag. The image tags that
+# follow main come from ci.yml alone.
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version (e.g. 1.2.3); empty bumps the minor of the latest tag'
+        description: 'Version (e.g. 1.2.3); empty bumps the minor of the newest tag'
         required: false
         type: string
 
 permissions:
+  actions: read
   contents: write
   packages: write
+
+# Two releases at once could pick the same version and overwrite each
+# other's image before either tag exists. The group is per ref, so a
+# dispatch on another ref, which fails at its first step, never replaces
+# a main release waiting in the queue.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   release:
     runs-on: ubuntu-26.04
     steps:
+      - name: Require main
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::releases run only from main, not $GITHUB_REF"
+            exit 1
+          fi
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+
+      - name: Require a green CI run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # The newest CI run of this commit's push to main must have passed;
+          # a red, cancelled or still running one stops the release.
+          RUN=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push&branch=main&per_page=1" \
+            --jq '.workflow_runs[0] // {} | "\(.status // "none") \(.conclusion // "none")"')
+          if [ "$RUN" != "completed success" ]; then
+            echo "::error::CI on $GITHUB_SHA has not passed (newest run: $RUN)"
+            exit 1
+          fi
 
       - name: Compute version
         env:
@@ -43,6 +74,42 @@ jobs:
             exit 1
           fi
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "IMAGE=ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
+
+      - name: Refuse an existing version
+        run: |
+          # Exit code 2 means no such tag on the remote.
+          STATUS=0
+          git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" > /dev/null || STATUS=$?
+          if [ "$STATUS" -eq 0 ]; then
+            echo "::error::tag v$VERSION already exists"
+            exit 1
+          fi
+          if [ "$STATUS" -ne 2 ]; then
+            echo "::error::could not list the remote tags (git exit $STATUS)"
+            exit 1
+          fi
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build and push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          push: true
+          build-args: VERSION=v${{ env.VERSION }}
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          tags: ${{ env.IMAGE }}:v${{ env.VERSION }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Tag and push
         run: |
@@ -62,26 +129,3 @@ jobs:
             NOTES=$(git log --oneline)
           fi
           gh release create "v$VERSION" --title "v$VERSION" --notes "$NOTES"
-
-      - name: Log in to ghcr.io
-        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-
-      - name: Build and push
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          push: true
-          build-args: VERSION=v${{ env.VERSION }}
-          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
-          tags: |
-            ghcr.io/automaat/ohara:latest
-            ghcr.io/automaat/ohara:v${{ env.VERSION }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max

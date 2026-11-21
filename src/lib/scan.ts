@@ -467,24 +467,17 @@ function fitAuthors(authors: readonly string[] | null | undefined): string[] {
 	return fit.length <= maxAuthors && fit.every((a) => fitText(a) !== null) ? fit : [];
 }
 
-/** Go's URL parser refuses control characters and spaces, which the WHATWG one would encode. */
-function controlOrSpace(ch: string): boolean {
-	const code = ch.codePointAt(0) ?? 0;
-	return code <= 0x20 || code === 0x7f;
-}
+/**
+ * An HTTP or HTTPS URL with a host and no credentials, in a stricter form than the API's check
+ * takes: a plain host name, an optional port and RFC 3986 characters with well-formed escapes.
+ * A browser's URL parser takes more than Go's (a bad escape, a missing slash), so it cannot tell.
+ */
+const coverURL =
+	/^https?:\/\/[a-z0-9._~-]+(?::\d+)?(?:[/?#](?:[\w\-.~:/?#[\]@!$&'()*+,;=]|%[0-9a-f]{2}|\P{ASCII})*)?$/iu;
 
-/** An HTTP or HTTPS URL with a host and no credentials, as the API checks a cover. */
 function fitCoverURL(value: string | null | undefined): string | undefined {
 	const raw = value?.trim();
-	if (!raw || byteLength(raw) > maxURLBytes || [...raw].some(controlOrSpace)) return undefined;
-	let url: URL;
-	try {
-		url = new URL(raw);
-	} catch {
-		return undefined;
-	}
-	const web = url.protocol === 'http:' || url.protocol === 'https:';
-	return web && url.hostname && !url.username && !url.password ? raw : undefined;
+	return raw && byteLength(raw) <= maxURLBytes && coverURL.test(raw) ? raw : undefined;
 }
 
 /** The POST /api/titles body: the form's kind and name over the candidate's other fields. */

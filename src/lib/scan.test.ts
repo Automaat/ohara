@@ -617,15 +617,28 @@ describe('scan payloads', () => {
 			'ftp://img.example/a.jpg',
 			'https://img.example/a b.jpg',
 			`https://img.example/${'a'.repeat(10000)}`,
-			'nie adres'
+			'nie adres',
+			// A browser's URL parser takes these; Go's refuses them.
+			'https://img.example/a%zz.jpg',
+			'https://img.example/a.jpg#%',
+			'https://%41.example/a.jpg',
+			'https://@img.example/a.jpg',
+			'https:/img.example/a.jpg',
+			'https:///img.example/a.jpg',
+			'https://img.example\\a.jpg'
 		]) {
 			expect(scanEditionPayload(f, { ...album, cover_url }, '', 1)).toMatchObject({
 				value: { cover_url: undefined }
 			});
 		}
-		expect(scanEditionPayload(f, album, '', 1)).toMatchObject({
-			value: { cover_url: 'https://i.discogs.com/dsotm.jpeg' }
-		});
+		for (const cover_url of [
+			'https://i.discogs.com/dsotm.jpeg',
+			'HTTP://img.example:8080/okładka%20(1).jpg?w=600&h=600#top'
+		]) {
+			expect(scanEditionPayload(f, { ...album, cover_url }, '', 1)).toMatchObject({
+				value: { cover_url }
+			});
+		}
 	});
 });
 

@@ -828,7 +828,6 @@ describe('ScanFlow without a barcode', () => {
 				() => Promise.reject(new TypeError('lost')),
 				copyReply({ id: 60, edition_id: 42 })
 			],
-			'DELETE /api/editions/42': [409, { error: 'edition still has copies' }],
 			'GET /api/titles/10': [200, { id: 10, name: 'Diuna: Część druga', kind: 'movie' }]
 		});
 		const flow = new ScanFlow(s.fetchFn, memory());
@@ -849,6 +848,33 @@ describe('ScanFlow without a barcode', () => {
 			titleName: 'Diuna: Część druga',
 			editionID: 42
 		});
+	});
+
+	it('keeps the key after a lost answer, so a retry reuses the edition it made', async () => {
+		const s = server({
+			'GET /api/search?kind=movie&q=Diuna': [
+				200,
+				{ candidates: [{ ...movie, edition: { barcode: '', format: 'uhd' } }] }
+			],
+			'GET /api/titles?tmdb_id=1': [200, [{ id: 10, name: 'Diuna: Część druga', kind: 'movie' }]],
+			'POST /api/editions': [
+				() => Promise.reject(new TypeError('lost')),
+				[200, { id: 41, title_id: 10, barcode: null, format: 'uhd', binding: null }]
+			],
+			'POST /api/copies?cover=auto': copyReply({ id: 70, edition_id: 41 })
+		});
+		const flow = new ScanFlow(s.fetchFn, memory());
+		flow.start('movie');
+		flow.query = 'Diuna';
+		await flow.search();
+		const key = flow.item?.key;
+		expect(await flow.save()).toBeNull();
+		expect(flow.item?.key).toBe(key);
+		expect(s.paths().some((p) => p.startsWith('DELETE'))).toBe(false);
+		const added = await flow.save();
+		expect(added?.saved).toMatchObject({ titleID: 10, editionID: 41 });
+		const keys = s.calls.filter((c) => c.url === '/api/editions').map((c) => c.body);
+		expect(keys).toMatchObject([{ request_key: key }, { request_key: key }]);
 	});
 
 	it('drops what a barcode was still answering', async () => {

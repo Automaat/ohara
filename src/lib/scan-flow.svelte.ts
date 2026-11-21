@@ -70,6 +70,14 @@ export type FlowItem = {
  */
 export type Added = { saved: Saved; add: SessionAdd; barcode: string; next: string | null };
 
+/**
+ * Whether a save failed on an answer that says the request wrote nothing: a 4xx or the API's own
+ * 500. No answer, or a gateway's 502 to 504, may hide a write the add's key replays.
+ */
+function refused(err: unknown): boolean {
+	return err instanceof ApiError && err.status >= 400 && err.status <= 500;
+}
+
 /** The medium of the edition a save joined: its format or binding. */
 function mediumOf(e: Pick<Edition, 'format' | 'binding'>): string {
 	if (e.format) return formatLabels[e.format];
@@ -330,8 +338,9 @@ export class ScanFlow {
 	 * The copy the server returns decides what is logged: a retry of a save whose answer was
 	 * lost returns the copy the first attempt made, even when the form changed in between. An
 	 * owned copy's shop joins the ones stored when it answers, so another page's save that
-	 * answered meanwhile keeps its shop. A failed add without a barcode removes the title and
-	 * edition it made and starts over with a new key, as no barcode would find them again.
+	 * answered meanwhile keeps its shop. An add without a barcode the server refused removes the
+	 * title and edition it made and starts over with a new key, as no barcode would find them
+	 * again; after a lost answer it keeps the key, so a retry returns what the request made.
 	 */
 	async save(): Promise<Added | null> {
 		const item = this.item;
@@ -377,7 +386,7 @@ export class ScanFlow {
 			});
 			return current() ? { saved, add, barcode: item.barcode, next } : null;
 		} catch (err) {
-			if (!item.barcode && (await discardMade(this.#fetch, item.made))) {
+			if (!item.barcode && refused(err) && (await discardMade(this.#fetch, item.made))) {
 				item.key = newRequestKey();
 				item.made = newMade();
 			}

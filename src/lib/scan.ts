@@ -429,13 +429,68 @@ export function quickForm(
 	};
 }
 
-function opt<T>(v: T | null | undefined): T | null {
-	return v ?? null;
+/** The longest text the API takes in a short field (a name, label or shop), in UTF-8 bytes. */
+const maxTextBytes = 500;
+/** The longest cover URL the API takes, in UTF-8 bytes. */
+const maxURLBytes = 10000;
+/** The most authors the API takes for one title. */
+const maxAuthors = 20;
+
+function byteLength(text: string): number {
+	return new TextEncoder().encode(text).length;
+}
+
+function tooLong(text: string): boolean {
+	return byteLength(text.trim()) > maxTextBytes;
+}
+
+/*
+ * A provider's values as the API takes them, none for one it would refuse: the form shows none of
+ * these, so a refused one would only make the save fail.
+ */
+
+function fitText(text: string | null | undefined): string | null {
+	const t = text?.trim();
+	return t && !t.includes('\0') && byteLength(t) <= maxTextBytes ? t : null;
+}
+
+function fitYear(year: number | null | undefined): number | null {
+	return year != null && Number.isInteger(year) && year >= 1800 && year <= 2200 ? year : null;
+}
+
+function fitID(id: number | null | undefined): number | null {
+	return id != null && Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
+function fitAuthors(authors: readonly string[] | null | undefined): string[] {
+	const fit = (authors ?? []).map((a) => a.trim()).filter(Boolean);
+	return fit.length <= maxAuthors && fit.every((a) => fitText(a) !== null) ? fit : [];
+}
+
+/** Go's URL parser refuses control characters and spaces, which the WHATWG one would encode. */
+function controlOrSpace(ch: string): boolean {
+	const code = ch.codePointAt(0) ?? 0;
+	return code <= 0x20 || code === 0x7f;
+}
+
+/** An HTTP or HTTPS URL with a host and no credentials, as the API checks a cover. */
+function fitCoverURL(value: string | null | undefined): string | undefined {
+	const raw = value?.trim();
+	if (!raw || byteLength(raw) > maxURLBytes || [...raw].some(controlOrSpace)) return undefined;
+	let url: URL;
+	try {
+		url = new URL(raw);
+	} catch {
+		return undefined;
+	}
+	const web = url.protocol === 'http:' || url.protocol === 'https:';
+	return web && url.hostname && !url.username && !url.password ? raw : undefined;
 }
 
 /** The POST /api/titles body: the form's kind and name over the candidate's other fields. */
 export function scanTitlePayload(f: QuickForm, candidate: Candidate | null): Parsed<TitlePayload> {
-	const name = f.name.trim();
+	// Postgres text takes no NUL, which a provider's name can carry into the form.
+	const name = f.name.replaceAll('\0', '').trim();
 	if (!name) return { ok: false, issue: { field: 'name', message: 'Podaj tytuł.' } };
 	const t = candidate?.type === f.kind ? candidate.title : null;
 	const movie = f.kind === 'movie';
@@ -445,13 +500,13 @@ export function scanTitlePayload(f: QuickForm, candidate: Candidate | null): Par
 		value: {
 			kind: f.kind,
 			name,
-			original_title: opt(t?.original_title),
-			polish_title: opt(t?.polish_title),
-			year: opt(t?.year),
-			tmdb_id: movie ? opt(t?.tmdb_id) : null,
-			authors: movie ? [] : (t?.authors ?? []),
-			bn_id: book ? opt(t?.bn_id) : null,
-			openlibrary_id: book ? opt(t?.openlibrary_id) : null,
+			original_title: fitText(t?.original_title),
+			polish_title: fitText(t?.polish_title),
+			year: fitYear(t?.year),
+			tmdb_id: movie ? fitID(t?.tmdb_id) : null,
+			authors: movie ? [] : fitAuthors(t?.authors),
+			bn_id: book ? fitText(t?.bn_id) : null,
+			openlibrary_id: book ? fitText(t?.openlibrary_id) : null,
 			notes: ''
 		}
 	};
@@ -479,17 +534,17 @@ export function scanEditionPayload(
 		value: {
 			title_id: titleID,
 			barcode: barcode || null,
-			label: e?.label ?? '',
-			publisher: e?.publisher ?? '',
-			year: opt(e?.year),
+			label: fitText(e?.label) ?? '',
+			publisher: fitText(e?.publisher) ?? '',
+			year: fitYear(e?.year),
 			format: (movie || music) && f.format ? f.format : null,
 			pl_subtitles: movie ? (e?.pl_subtitles ?? 'unknown') : 'unknown',
 			pl_voiceover: movie ? (e?.pl_voiceover ?? 'unknown') : 'unknown',
 			packaging: movie ? [...f.packaging] : [],
 			binding: f.kind === 'book' && f.binding ? f.binding : null,
 			// The release is one pressing on its own medium; another or an unknown medium is not it.
-			discogs_release_id: music && e?.format === f.format ? opt(e?.discogs_release_id) : null,
-			cover_url: selected?.cover_url,
+			discogs_release_id: music && e?.format === f.format ? fitID(e?.discogs_release_id) : null,
+			cover_url: fitCoverURL(selected?.cover_url),
 			notes: ''
 		}
 	};
@@ -657,13 +712,6 @@ async function titleFor(
 		made.titleUnanswered = false;
 		return reused;
 	}
-}
-
-/** The longest text the API takes in a title's name or a copy's shop, in UTF-8 bytes. */
-const maxTextBytes = 500;
-
-function tooLong(text: string): boolean {
-	return new TextEncoder().encode(text.trim()).length > maxTextBytes;
 }
 
 /** Throws FormRejected for a new item's form the server would refuse, before any request. */

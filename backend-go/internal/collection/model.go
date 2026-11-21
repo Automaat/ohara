@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Automaat/ohara/backend-go/internal/barcode"
 	"github.com/Automaat/ohara/backend-go/internal/httpx"
@@ -163,11 +164,16 @@ type CopyInput struct {
 // maxRequestKey caps a create's RequestKey, in bytes.
 const maxRequestKey = 100
 
-// normalizeRequestKey trims a create's request key; blank is none.
+// normalizeRequestKey trims a create's request key; blank is none. Postgres
+// text takes neither a NUL byte nor invalid UTF-8, which a path can carry.
 func normalizeRequestKey(key *string) (*string, *httpx.FieldError) {
 	trimmed := trimOpt(key)
-	if trimmed != nil && len(*trimmed) > maxRequestKey {
+	switch {
+	case trimmed == nil:
+	case len(*trimmed) > maxRequestKey:
 		return nil, fieldErr("request_key", "is too long")
+	case strings.ContainsRune(*trimmed, 0) || !utf8.ValidString(*trimmed):
+		return nil, fieldErr("request_key", "is not valid")
 	}
 	return trimmed, nil
 }

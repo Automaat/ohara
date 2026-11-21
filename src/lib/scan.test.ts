@@ -571,6 +571,62 @@ describe('scan payloads', () => {
 			issue: { field: 'format', message: 'Wybierz nośnik.' }
 		});
 	});
+
+	it('leaves out provider values the API would refuse', () => {
+		const long = 'ą'.repeat(251);
+		const broken: Candidate = {
+			type: 'music',
+			title: {
+				name: 'Album',
+				original_title: long,
+				polish_title: 'Ok\0',
+				year: 1799,
+				authors: ['Artysta', long]
+			},
+			edition: {
+				barcode: '',
+				label: long,
+				publisher: ` ${'x'.repeat(500)} `,
+				year: 2201,
+				format: 'cd',
+				discogs_release_id: 0
+			},
+			cover_url: 'https://user:pass@img.example/a.jpg',
+			provider: 'music',
+			confidence: 0.9
+		};
+		const f = form({ kind: 'music', name: 'Album\0', format: 'cd' });
+		expect(scanTitlePayload(f, broken)).toMatchObject({
+			ok: true,
+			value: { name: 'Album', original_title: null, polish_title: null, year: null, authors: [] }
+		});
+		expect(scanEditionPayload(f, broken, '', 1)).toMatchObject({
+			ok: true,
+			value: {
+				label: '',
+				publisher: 'x'.repeat(500),
+				year: null,
+				discogs_release_id: null,
+				cover_url: undefined
+			}
+		});
+		const tooMany = { ...book, title: { ...book.title, authors: Array(21).fill('A') } };
+		const bookForm = form({ kind: 'book', name: 'Lalka', format: '' });
+		expect(scanTitlePayload(bookForm, tooMany)).toMatchObject({ value: { authors: [] } });
+		for (const cover_url of [
+			'ftp://img.example/a.jpg',
+			'https://img.example/a b.jpg',
+			`https://img.example/${'a'.repeat(10000)}`,
+			'nie adres'
+		]) {
+			expect(scanEditionPayload(f, { ...album, cover_url }, '', 1)).toMatchObject({
+				value: { cover_url: undefined }
+			});
+		}
+		expect(scanEditionPayload(f, album, '', 1)).toMatchObject({
+			value: { cover_url: 'https://i.discogs.com/dsotm.jpeg' }
+		});
+	});
 });
 
 describe('saveScan', () => {

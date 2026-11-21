@@ -149,36 +149,54 @@ func (s *Store) ListTitles(ctx context.Context, f TitleFilter) ([]Title, error) 
 	return collect(rows, scanTitle, "list titles")
 }
 
+// rowQuerier reads rows from the pool or from a transaction.
+type rowQuerier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
 // GetTitle returns one title or ErrTitleNotFound.
 func (s *Store) GetTitle(ctx context.Context, id int64) (Title, error) {
-	t, err := scanTitle(s.pool.QueryRow(ctx, `SELECT `+titleColumns+` FROM title t WHERE t.id = $1`, id))
+	return getTitle(ctx, s.pool, id)
+}
+
+func getTitle(ctx context.Context, q rowQuerier, id int64) (Title, error) {
+	t, err := scanTitle(q.QueryRow(ctx, `SELECT `+titleColumns+` FROM title t WHERE t.id = $1`, id))
 	return t, mapErr(err, ErrTitleNotFound, "get title")
 }
 
 // CreateTitle inserts a normalized title. With a request key already used,
 // it returns that key's title and false instead of inserting another.
 func (s *Store) CreateTitle(ctx context.Context, in *TitleInput) (Title, bool, error) {
-	var id int64
-	err := s.pool.QueryRow(ctx, `INSERT INTO title
-		(kind, name, original_title, polish_title, year, tmdb_id, authors, bn_id, openlibrary_id, notes,
-		cover_url, request_key)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, ''), $12)
-		ON CONFLICT (request_key) DO NOTHING RETURNING id`,
-		in.Kind, in.Name, in.OriginalTitle, in.PolishTitle, in.Year, in.TMDBID, in.Authors,
-		in.BNID, in.OpenLibraryID, in.Notes, in.CoverURL, in.RequestKey).Scan(&id)
-	if errors.Is(err, pgx.ErrNoRows) && in.RequestKey != nil {
-		err = s.pool.QueryRow(ctx, `SELECT id FROM title WHERE request_key = $1`, *in.RequestKey).Scan(&id)
-		if err != nil {
-			return Title{}, false, mapErr(err, ErrTitleNotFound, "replay title")
+	var t Title
+	created := true
+	err := s.inTx(ctx, func(tx pgx.Tx) error {
+		if err := claimRequestKey(ctx, tx, in.RequestKey); err != nil {
+			return err
 		}
-		t, err := s.GetTitle(ctx, id)
-		return t, false, err
-	}
+		var id int64
+		err := tx.QueryRow(ctx, `INSERT INTO title
+			(kind, name, original_title, polish_title, year, tmdb_id, authors, bn_id, openlibrary_id, notes,
+			cover_url, request_key)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, ''), $12)
+			ON CONFLICT (request_key) DO NOTHING RETURNING id`,
+			in.Kind, in.Name, in.OriginalTitle, in.PolishTitle, in.Year, in.TMDBID, in.Authors,
+			in.BNID, in.OpenLibraryID, in.Notes, in.CoverURL, in.RequestKey).Scan(&id)
+		if errors.Is(err, pgx.ErrNoRows) && in.RequestKey != nil {
+			created = false
+			err = tx.QueryRow(ctx, `SELECT id FROM title WHERE request_key = $1`, *in.RequestKey).Scan(&id)
+			if err != nil {
+				return mapErr(err, ErrTitleNotFound, "replay title")
+			}
+		} else if err != nil {
+			return mapErr(err, ErrTitleNotFound, "create title")
+		}
+		t, err = getTitle(ctx, tx, id)
+		return err
+	})
 	if err != nil {
-		return Title{}, false, mapErr(err, ErrTitleNotFound, "create title")
+		return Title{}, false, err
 	}
-	t, err := s.GetTitle(ctx, id)
-	return t, true, err
+	return t, created, nil
 }
 
 // UpdateTitle replaces a title. The kind cannot change while editions exist,
@@ -253,7 +271,11 @@ func (s *Store) ListEditions(ctx context.Context, titleID int64, code string) ([
 
 // GetEdition returns one edition or ErrEditionNotFound.
 func (s *Store) GetEdition(ctx context.Context, id int64) (Edition, error) {
-	e, err := scanEdition(s.pool.QueryRow(ctx, `SELECT `+editionColumns+` FROM edition e WHERE e.id = $1`, id))
+	return getEdition(ctx, s.pool, id)
+}
+
+func getEdition(ctx context.Context, q rowQuerier, id int64) (Edition, error) {
+	e, err := scanEdition(q.QueryRow(ctx, `SELECT `+editionColumns+` FROM edition e WHERE e.id = $1`, id))
 	return e, mapErr(err, ErrEditionNotFound, "get edition")
 }
 
@@ -276,17 +298,19 @@ func lockTitleKind(ctx context.Context, tx pgx.Tx, in *EditionInput) (string, er
 // request key already used, it returns that key's edition and false instead
 // of inserting another.
 func (s *Store) CreateEdition(ctx context.Context, in *EditionInput) (Edition, bool, error) {
-	var id int64
+	var e Edition
 	created := true
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
 		// The request key's lock comes first, as in DiscardRequest, which then locks the title:
-		// taking the title first would deadlock against it.
-		if err := lockRequestKey(ctx, tx, in.RequestKey); err != nil {
+		// taking the title first would deadlock against it. A discarded key is refused before
+		// the title is checked, which the discard may have removed.
+		if err := claimRequestKey(ctx, tx, in.RequestKey); err != nil {
 			return err
 		}
 		if _, err := lockTitleKind(ctx, tx, in); err != nil {
 			return err
 		}
+		var id int64
 		err := tx.QueryRow(ctx, `INSERT INTO edition (title_id, barcode, label, publisher, year,
 			format, pl_subtitles, pl_voiceover, packaging, binding, discogs_release_id, notes, cover_url,
 			request_key)
@@ -298,15 +322,19 @@ func (s *Store) CreateEdition(ctx context.Context, in *EditionInput) (Edition, b
 		if errors.Is(err, pgx.ErrNoRows) && in.RequestKey != nil {
 			created = false
 			err = tx.QueryRow(ctx, `SELECT id FROM edition WHERE request_key = $1`, *in.RequestKey).Scan(&id)
-			return mapErr(err, ErrEditionNotFound, "replay edition")
+			if err != nil {
+				return mapErr(err, ErrEditionNotFound, "replay edition")
+			}
+		} else if err != nil {
+			return mapErr(err, ErrEditionNotFound, "create edition")
 		}
-		return mapErr(err, ErrEditionNotFound, "create edition")
+		e, err = getEdition(ctx, tx, id)
+		return err
 	})
 	if err != nil {
 		return Edition{}, false, err
 	}
-	e, err := s.GetEdition(ctx, id)
-	return e, created, err
+	return e, created, nil
 }
 
 // UpdateEdition replaces an edition, which may move to another title of the
@@ -458,7 +486,11 @@ func (s *Store) ListCopies(ctx context.Context, editionID int64) ([]Copy, error)
 
 // GetCopy returns one copy or ErrNotFound.
 func (s *Store) GetCopy(ctx context.Context, id int64) (Copy, error) {
-	c, err := scanCopy(s.pool.QueryRow(ctx, `SELECT `+copyColumns+` FROM copy c WHERE c.id = $1`, id))
+	return getCopy(ctx, s.pool, id)
+}
+
+func getCopy(ctx context.Context, q rowQuerier, id int64) (Copy, error) {
+	c, err := scanCopy(q.QueryRow(ctx, `SELECT `+copyColumns+` FROM copy c WHERE c.id = $1`, id))
 	return c, mapErr(err, ErrNotFound, "get copy")
 }
 
@@ -473,29 +505,38 @@ func purchasedOn(in *CopyInput) *time.Time {
 // does not exist. With a request key already used, it returns that key's copy
 // and false instead of inserting another.
 func (s *Store) CreateCopy(ctx context.Context, in *CopyInput) (Copy, bool, error) {
-	var id int64
-	err := s.pool.QueryRow(ctx, `INSERT INTO copy (edition_id, status, price_cents, purchased_on,
-		shop, acquired_as, condition, notes, max_price_cents, request_key)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-		ON CONFLICT (request_key) DO NOTHING RETURNING id`,
-		in.EditionID, in.Status, in.PriceCents, purchasedOn(in), in.Shop, in.AcquiredAs,
-		in.Condition, in.Notes, in.MaxPriceCents, in.RequestKey).Scan(&id)
-	if errors.Is(err, pgx.ErrNoRows) && in.RequestKey != nil {
-		err = s.pool.QueryRow(ctx, `SELECT id FROM copy WHERE request_key = $1`, *in.RequestKey).Scan(&id)
-		if err != nil {
-			return Copy{}, false, mapErr(err, ErrNotFound, "replay copy")
+	var c Copy
+	created := true
+	err := s.inTx(ctx, func(tx pgx.Tx) error {
+		if err := claimRequestKey(ctx, tx, in.RequestKey); err != nil {
+			return err
 		}
-		c, err := s.GetCopy(ctx, id)
-		return c, false, err
-	}
+		var id int64
+		err := tx.QueryRow(ctx, `INSERT INTO copy (edition_id, status, price_cents, purchased_on,
+			shop, acquired_as, condition, notes, max_price_cents, request_key)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			ON CONFLICT (request_key) DO NOTHING RETURNING id`,
+			in.EditionID, in.Status, in.PriceCents, purchasedOn(in), in.Shop, in.AcquiredAs,
+			in.Condition, in.Notes, in.MaxPriceCents, in.RequestKey).Scan(&id)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows) && in.RequestKey != nil:
+			created = false
+			err = tx.QueryRow(ctx, `SELECT id FROM copy WHERE request_key = $1`, *in.RequestKey).Scan(&id)
+			if err != nil {
+				return mapErr(err, ErrNotFound, "replay copy")
+			}
+		case isFKViolation(err, "copy_edition_id_fkey"):
+			return ErrEditionNotFound
+		case err != nil:
+			return mapErr(err, ErrNotFound, "create copy")
+		}
+		c, err = getCopy(ctx, tx, id)
+		return err
+	})
 	if err != nil {
-		if isFKViolation(err, "copy_edition_id_fkey") {
-			return Copy{}, false, ErrEditionNotFound
-		}
-		return Copy{}, false, mapErr(err, ErrNotFound, "create copy")
+		return Copy{}, false, err
 	}
-	c, err := s.GetCopy(ctx, id)
-	return c, true, err
+	return c, created, nil
 }
 
 // UpdateCopy replaces a copy.
@@ -566,6 +607,29 @@ func (s *Store) DiscardRequest(ctx context.Context, key string) error {
 		}
 		return nil
 	})
+}
+
+// claimRequestKey takes key's lock for a create and refuses a key a discard
+// gave up (ErrRequestDiscarded) before the create checks anything else. The
+// create then reads its row back under the lock, so a discard cannot remove
+// it between the insert and the answer. No key, no lock.
+func claimRequestKey(ctx context.Context, tx pgx.Tx, key *string) error {
+	if key == nil {
+		return nil
+	}
+	if err := lockRequestKey(ctx, tx, key); err != nil {
+		return err
+	}
+	var discarded bool
+	err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM discarded_request WHERE request_key = $1)`, *key).
+		Scan(&discarded)
+	if err != nil {
+		return fmt.Errorf("check discarded key: %w", err)
+	}
+	if discarded {
+		return ErrRequestDiscarded
+	}
+	return nil
 }
 
 // lockRequestKey takes the transaction lock the request_key_guard trigger

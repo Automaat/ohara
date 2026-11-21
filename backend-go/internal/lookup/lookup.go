@@ -299,6 +299,10 @@ func (s *Service) query(ctx context.Context, e entry, code string) ([]Candidate,
 				metrics.ObserveLookupCacheHit(p.Name())
 				return cands, nil
 			}
+			if _, panicked := errors.AsType[*recovery.PanicError](err); panicked {
+				metrics.ObserveLookupError(p.Name())
+				return nil, fmt.Errorf("parse cached: %w", err)
+			}
 			s.logger.Warn("cached lookup response unreadable, refetching", "provider", p.Name(), "err", err)
 		}
 	}

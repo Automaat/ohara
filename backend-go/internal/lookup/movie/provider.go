@@ -67,14 +67,7 @@ func (p *Provider) Fetch(ctx context.Context, code string) (json.RawMessage, err
 	errs := make([]error, len(p.Sources))
 	var wg sync.WaitGroup
 	for i, s := range p.Sources {
-		wg.Go(func() {
-			found[i], errs[i] = recovery.Call(p.Logger, "movie name source panicked", func() ([]Product, error) {
-				return s.Products(ctx, code)
-			}, "source", s.Name(), "barcode", code)
-			if pe, ok := errors.AsType[*recovery.PanicError](errs[i]); ok {
-				errs[i] = fmt.Errorf("%s: %w", s.Name(), pe)
-			}
-		})
+		wg.Go(func() { found[i], errs[i] = p.products(ctx, i, s, code) })
 	}
 	wg.Wait()
 	for _, f := range found {
@@ -107,6 +100,25 @@ func (p *Provider) Fetch(ctx context.Context, code string) (json.RawMessage, err
 		return nil, &lookup.PartialError{Raw: data, Err: failed}
 	}
 	return data, nil
+}
+
+// products asks one name source. A panic in it, its name included, fails
+// that source with an error naming it, or naming its position when the
+// name itself panicked.
+func (p *Provider) products(ctx context.Context, i int, s NameSource, code string) ([]Product, error) {
+	name, err := recovery.Call(p.Logger, "movie name source panicked", func() (string, error) {
+		return s.Name(), nil
+	}, "source_index", i, "barcode", code)
+	if err != nil {
+		return nil, fmt.Errorf("name source %d: %w", i, err)
+	}
+	found, err := recovery.Call(p.Logger, "movie name source panicked", func() ([]Product, error) {
+		return s.Products(ctx, code)
+	}, "source", name, "barcode", code)
+	if pe, ok := errors.AsType[*recovery.PanicError](err); ok {
+		return nil, fmt.Errorf("%s: %w", name, pe)
+	}
+	return found, err
 }
 
 // search narrows by year first, then drops the year, then falls back to

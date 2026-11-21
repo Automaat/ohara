@@ -20,17 +20,19 @@ func (e *PanicError) Error() string { return fmt.Sprintf("panic: %v", e.Value) }
 
 // Call runs fn and returns its results. A panic in fn is logged at error
 // level under msg and attrs, with the panic value and its stack, and
-// returned as a *PanicError next to T's zero value. A nil logger logs to
-// slog.Default().
+// returned as a *PanicError next to T's zero value. fn counts as panicking
+// whenever it does not return, so panic(nil) fails it even under
+// GODEBUG=panicnil=1. A nil logger logs to slog.Default().
 func Call[T any](logger *slog.Logger, msg string, fn func() (T, error), attrs ...any) (T, error) {
 	var (
-		v   T
-		err error
+		v        T
+		err      error
+		returned bool
 	)
 	func() {
 		defer func() {
 			r := recover()
-			if r == nil {
+			if returned {
 				return
 			}
 			if logger == nil {
@@ -41,6 +43,7 @@ func Call[T any](logger *slog.Logger, msg string, fn func() (T, error), attrs ..
 			v, err = zero, &PanicError{Value: r}
 		}()
 		v, err = fn()
+		returned = true
 	}()
 	return v, err
 }

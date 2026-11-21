@@ -1,3 +1,6 @@
+// panic(nil) recovers as nil under panicnil=1; Call must still see it.
+//go:debug panicnil=1
+
 package recovery_test
 
 import (
@@ -62,3 +65,20 @@ func TestCallRecoversInAGoroutine(t *testing.T) {
 
 // third is a parser that expects at least three fields.
 func third(fields []string) string { return fields[2] }
+
+func TestCallFailsOnNilPanic(t *testing.T) {
+	var buf bytes.Buffer
+	_, err := recovery.Call(slog.New(slog.NewJSONHandler(&buf, nil)), "parser panicked", func() (int, error) {
+		rethrow(nil)
+		return 0, nil
+	})
+	if _, ok := errors.AsType[*recovery.PanicError](err); !ok {
+		t.Fatalf("err = %v, want a *PanicError for panic(nil)", err)
+	}
+	if !strings.Contains(buf.String(), `"msg":"parser panicked"`) || !strings.Contains(buf.String(), `"stack":"goroutine `) {
+		t.Fatalf("log = %s", buf.String())
+	}
+}
+
+// rethrow re-panics with a value a parser recovered, nil included.
+func rethrow(v any) { panic(v) }

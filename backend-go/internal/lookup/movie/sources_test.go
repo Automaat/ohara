@@ -533,3 +533,23 @@ func TestPanickingSourceAloneFailsTheFetch(t *testing.T) {
 		t.Fatalf("Fetch = %s, %v; want the panic as an error", raw, err)
 	}
 }
+
+// namelessSource panics when asked its name.
+type namelessSource struct{}
+
+func (namelessSource) Name() string { return third(strings.Fields("")) }
+
+func (namelessSource) Products(context.Context, string) ([]Product, error) { return nil, nil }
+
+func TestSourceWhoseNamePanicsIsAFailedSource(t *testing.T) {
+	kursk := []Product{{Source: "b", Name: "Kursk [Blu-ray]"}}
+	p := &Provider{
+		Sources: []NameSource{namelessSource{}, fakeSource{name: "b", products: kursk}},
+		TMDB:    &fakeSearcher{},
+		Logger:  slog.New(slog.DiscardHandler),
+	}
+	_, err := p.Fetch(context.Background(), "5906190326195")
+	if _, ok := errors.AsType[*lookup.PartialError](err); !ok || !strings.Contains(err.Error(), "name source 0: panic:") {
+		t.Fatalf("err = %v, want a partial answer naming source 0", err)
+	}
+}

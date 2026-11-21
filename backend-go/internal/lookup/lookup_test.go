@@ -705,3 +705,30 @@ func (b *syncBuffer) String() string {
 	defer b.mu.Unlock()
 	return b.buf.String()
 }
+
+// cachePanickingProvider parses fresh answers but panics on the cached
+// answer of an older format.
+type cachePanickingProvider struct{ fakeProvider }
+
+func (p *cachePanickingProvider) Parse(code string, raw json.RawMessage) ([]lookup.Candidate, error) {
+	if string(raw) == "{}" {
+		_ = third(strings.Fields(""))
+	}
+	return p.fakeProvider.Parse(code, raw)
+}
+
+func TestCachedAnswerThatPanicsFailsTheProvider(t *testing.T) {
+	p := &cachePanickingProvider{fakeProvider{name: "legacy", confidence: 0.9}}
+	r := &lookup.Registry{}
+	if err := r.Register(p, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	cache := &memCache{entries: map[string]json.RawMessage{"legacy/5906190326195": json.RawMessage("{}")}}
+	res := lookup.NewService(r, cache, discard()).Lookup(context.Background(), "5906190326195")
+	if len(res.Errors) != 1 || res.Errors[0].Provider != "legacy" || !strings.Contains(res.Errors[0].Error, "panic:") {
+		t.Fatalf("errors = %+v", res.Errors)
+	}
+	if len(res.Candidates) != 0 || p.fetchCount() != 0 || string(cache.entries["legacy/5906190326195"]) != "{}" {
+		t.Fatalf("candidates %+v, fetches %d, cache %s", res.Candidates, p.fetchCount(), cache.entries["legacy/5906190326195"])
+	}
+}

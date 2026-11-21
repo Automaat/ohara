@@ -129,6 +129,23 @@ describe('ScanFlow.load', () => {
 		expect(flow.choosing).toBe(false);
 	});
 
+	it('rechecks the sources only when asked', async () => {
+		const s = server({
+			...lookup([movie], false),
+			[`GET /api/lookup/${code}?recheck=1`]: [
+				200,
+				{ barcode: code, candidates: [movie], needs_confirmation: false, errors: [] }
+			]
+		});
+		const flow = new ScanFlow(s.fetchFn, memory());
+		await flow.load(code, false, true);
+		await flow.load(code);
+		expect(s.paths().filter((p) => p.startsWith('GET /api/lookup/'))).toEqual([
+			`GET /api/lookup/${code}?recheck=1`,
+			`GET /api/lookup/${code}`
+		]);
+	});
+
 	it('lists candidates with none picked when the lookup asks for a pick', async () => {
 		const s = server(lookup([book, movie], true));
 		const flow = new ScanFlow(s.fetchFn, memory());

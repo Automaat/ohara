@@ -347,9 +347,14 @@ function providerDetail(errors: LookupResult['errors']): string {
  * else a scan queue entry so the barcode is not lost. Throws an ApiError for a malformed
  * barcode, when the sign-in turns a request away, when not even the queue answers, or when the
  * lookup gets no answer (status 0, a lost connection or the request deadline): nothing was learned
- * about the code, so the caller handles it as a check that got no answer.
+ * about the code, so the caller handles it as a check that got no answer. A recheck asks each
+ * source again when its cached answer is over an hour old.
  */
-export async function resolveScan(fetchFn: typeof fetch, raw: string): Promise<Resolution> {
+export async function resolveScan(
+	fetchFn: typeof fetch,
+	raw: string,
+	recheck = false
+): Promise<Resolution> {
 	const code = cleanBarcode(raw);
 	const editions = await request<Edition[]>(
 		fetchFn,
@@ -365,7 +370,12 @@ export async function resolveScan(fetchFn: typeof fetch, raw: string): Promise<R
 	let lookup: LookupResult | null = null;
 	let failure = '';
 	try {
-		lookup = await request<LookupResult>(fetchFn, 'GET', `/api/lookup/${encodeURIComponent(code)}`);
+		const query = recheck ? '?recheck=1' : '';
+		lookup = await request<LookupResult>(
+			fetchFn,
+			'GET',
+			`/api/lookup/${encodeURIComponent(code)}${query}`
+		);
 	} catch (err) {
 		if (isSessionExpired(err) || isNoAnswer(err)) throw err;
 		failure = errorMessage(err);

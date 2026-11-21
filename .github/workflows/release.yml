@@ -18,9 +18,11 @@ permissions:
   packages: write
 
 # Two releases at once could pick the same version and overwrite each
-# other's image before either tag exists.
+# other's image before either tag exists. The group is per ref, so a
+# dispatch on another ref, which fails at its first step, never replaces
+# a main release waiting in the queue.
 concurrency:
-  group: release
+  group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:

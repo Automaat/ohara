@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -187,9 +188,10 @@ func TestTMDBYearWithoutDate(t *testing.T) {
 }
 
 type memStore struct {
-	mu    sync.Mutex
-	token *Token
-	saves int
+	mu        sync.Mutex
+	token     *Token
+	saves     int
+	failSaves int
 }
 
 func (m *memStore) Load(context.Context, string) (Token, bool, error) {
@@ -201,28 +203,60 @@ func (m *memStore) Load(context.Context, string) (Token, bool, error) {
 	return *m.token, true, nil
 }
 
-func (m *memStore) Save(_ context.Context, _ string, t Token) error {
+// Save fails on a done context, as pgx does.
+func (m *memStore) Save(ctx context.Context, _ string, t Token) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("write oauth token: %w", err)
+	}
+	if m.failSaves > 0 {
+		m.failSaves--
+		return errors.New("write oauth token: connection reset")
+	}
 	m.token = &t
 	m.saves++
 	return nil
 }
 
+func (m *memStore) refresh() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.token == nil {
+		return ""
+	}
+	return m.token.Refresh
+}
+
 // allegroServer accepts access token "access-<n>" for the latest n and
 // rotates the refresh token on each refresh.
 type allegroServer struct {
-	mu        sync.Mutex
-	gen       int
-	refreshes int
-	catalog   int
-	forbid    bool
-	device    []string
+	mu         sync.Mutex
+	gen        int
+	refreshes  int
+	catalog    int
+	forbid     bool
+	device     []string
+	tokenDelay time.Duration
+	tokenHangs bool
+}
+
+func (a *allegroServer) refreshCount() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.refreshes
 }
 
 func (a *allegroServer) handler(t *testing.T) http.HandlerFunc {
 	t.Helper()
 	return func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/auth/oauth/token" {
+			if a.tokenHangs {
+				<-r.Context().Done()
+				return
+			}
+			time.Sleep(a.tokenDelay)
+		}
 		a.mu.Lock()
 		defer a.mu.Unlock()
 		if ua := r.Header.Get("User-Agent"); ua != AllegroUserAgent {
@@ -364,6 +398,80 @@ func TestAllegroErrors(t *testing.T) {
 			t.Fatalf("refreshes = %d", srv.refreshes)
 		}
 	})
+}
+
+func TestAllegroKeepsARefreshTheLookupGaveUpOn(t *testing.T) {
+	now := time.Now()
+	store := &memStore{token: &Token{Access: accessFor(0), Refresh: refreshFor(0), Expiry: now.Add(30 * time.Second)}}
+	srv := &allegroServer{tokenDelay: 300 * time.Millisecond}
+	a := newAllegro(t, srv, store, now)
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if _, err := a.Products(ctx, "5906190326195"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v", err)
+	}
+	if deadline, _ := ctx.Deadline(); time.Since(deadline) > 100*time.Millisecond {
+		t.Fatalf("lookup returned %v after its deadline", time.Since(deadline))
+	}
+	if _, err := a.Products(context.Background(), "5906190326195"); err != nil {
+		t.Fatal(err)
+	}
+	if n := srv.refreshCount(); n != 1 {
+		t.Fatalf("refreshes = %d", n)
+	}
+	if got := store.refresh(); got != refreshFor(1) {
+		t.Fatalf("stored refresh token %q", got)
+	}
+}
+
+func TestAllegroRetriesAFailedSave(t *testing.T) {
+	now := time.Now()
+	store := &memStore{token: &Token{Access: accessFor(0), Refresh: refreshFor(0), Expiry: now.Add(30 * time.Second)}, failSaves: 1}
+	srv := &allegroServer{}
+	a := newAllegro(t, srv, store, now)
+	for range 2 {
+		if _, err := a.Products(context.Background(), "5906190326195"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := srv.refreshCount(); n != 1 {
+		t.Fatalf("refreshes = %d", n)
+	}
+	eventually(t, func() bool { return store.refresh() == refreshFor(1) })
+}
+
+func TestAllegroBoundsAHangingRefresh(t *testing.T) {
+	now := time.Now()
+	store := &memStore{token: &Token{Access: accessFor(0), Refresh: refreshFor(0), Expiry: now.Add(30 * time.Second)}}
+	a := newAllegro(t, &allegroServer{tokenHangs: true}, store, now)
+	a.tokenTimeout = 300 * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if _, err := a.Products(ctx, "5906190326195"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v", err)
+	}
+	for range 2 {
+		start := time.Now()
+		if _, err := a.Products(context.Background(), "5906190326195"); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("err = %v", err)
+		}
+		if waited := time.Since(start); waited > time.Second {
+			t.Fatalf("later lookup waited %v", waited)
+		}
+	}
+	if got := store.refresh(); got != refreshFor(0) {
+		t.Fatalf("stored refresh token %q", got)
+	}
+}
+
+// eventually waits for cond, which a save running in the background makes true.
+func eventually(t *testing.T, cond func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); !cond(); time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("condition not met within 5s")
+		}
+	}
 }
 
 func TestAllegroLogin(t *testing.T) {

@@ -232,7 +232,9 @@ cd backend-go && golangci-lint run ./...
 Allegro authorization is one-time: with the client credentials set, run
 `docker exec -it ohara api allegro-login`, open the printed link and
 confirm the code. The refresh token is stored in `oauth_token` and rotated on
-each refresh.
+each refresh. A refresh runs on its own context, at most 20 s, so a lookup
+that gives up first does not lose the rotated pair; a pair whose save failed
+stays in use and is saved again by the next lookup.
 
 ## Deployment
 

@@ -608,3 +608,100 @@ func TestPartialAnswerIsReportedAndNotCached(t *testing.T) {
 		t.Fatalf("fetches %d, cache %v", p.fetchCount(), cache.entries)
 	}
 }
+
+// panickingProvider trips an index past the end of a slice in Fetch or in
+// Parse, like a parser meeting a malformed answer.
+type panickingProvider struct {
+	fakeProvider
+	inFetch bool
+}
+
+func (p *panickingProvider) Fetch(ctx context.Context, code string) (json.RawMessage, error) {
+	raw, err := p.fakeProvider.Fetch(ctx, code)
+	if p.inFetch {
+		return json.RawMessage(third(strings.Fields(""))), err
+	}
+	return raw, err
+}
+
+func (p *panickingProvider) Parse(code string, raw json.RawMessage) ([]lookup.Candidate, error) {
+	if !p.inFetch {
+		_ = third(strings.Fields(""))
+	}
+	return p.fakeProvider.Parse(code, raw)
+}
+
+func TestPanickingProviderFailsAlone(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		inFetch bool
+	}{{"fetch", true}, {"parse", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			broken := &panickingProvider{fakeProvider: fakeProvider{name: "broken"}, inFetch: tc.inFetch}
+			working := &fakeProvider{name: "working", confidence: 0.9}
+			r := &lookup.Registry{}
+			for _, p := range []lookup.Provider{broken, working} {
+				if err := r.Register(p, time.Hour); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cache := &memCache{}
+			var logs syncBuffer
+			logger := slog.New(slog.NewJSONHandler(&logs, nil))
+			h := lookup.NewHandler(lookup.NewService(r, cache, logger), discard())
+			srv := httptest.NewServer(server.New(server.Config{}, discard(), server.Deps{API: []server.Mounter{h}}))
+			t.Cleanup(srv.Close)
+
+			for i := range 2 {
+				code, body := get(t, srv.URL+"/api/lookup/5906190326195")
+				if code != http.StatusOK {
+					t.Fatalf("lookup %d = %d %s", i, code, body)
+				}
+				var res lookup.Result
+				if err := json.Unmarshal([]byte(body), &res); err != nil {
+					t.Fatal(err)
+				}
+				if len(res.Errors) != 1 || res.Errors[0].Provider != "broken" ||
+					!strings.Contains(res.Errors[0].Error, "panic: runtime error: index out of range [2] with length 0") {
+					t.Fatalf("lookup %d errors = %+v", i, res.Errors)
+				}
+				if len(res.Candidates) != 1 || res.Candidates[0].Provider != "working" {
+					t.Fatalf("lookup %d candidates = %+v", i, res.Candidates)
+				}
+			}
+			if _, ok := cache.entries["broken/5906190326195"]; ok {
+				t.Fatalf("cached the broken provider: %v", cache.entries)
+			}
+			if broken.fetchCount() != 2 {
+				t.Fatalf("broken fetches = %d, want 2", broken.fetchCount())
+			}
+			logged := logs.String()
+			for _, want := range []string{`"level":"ERROR"`, `"provider":"broken"`, `"stack":"goroutine `} {
+				if !strings.Contains(logged, want) {
+					t.Errorf("log lacks %s:\n%s", want, logged)
+				}
+			}
+		})
+	}
+}
+
+// third is a parser that expects at least three fields.
+func third(fields []string) string { return fields[2] }
+
+// syncBuffer is a log sink the lookup goroutines can share.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}

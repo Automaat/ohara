@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -633,5 +634,63 @@ func TestChangedReleaseDropsItsDiscogsPrices(t *testing.T) {
 	exec(t, pool, `UPDATE edition SET discogs_release_id = 100 WHERE id = 80`)
 	if m := mid(); m == nil || m.Cents != vgPlus {
 		t.Fatalf("release 100 named again: mid = %+v", m)
+	}
+}
+
+// panickingSource trips an index past the end of a slice on every search,
+// like a parser meeting a malformed answer.
+type panickingSource struct{ calls atomic.Int32 }
+
+func (*panickingSource) Name() string   { return "olx" }
+func (*panickingSource) PerQuery() bool { return true }
+
+func (p *panickingSource) Search(context.Context, string) ([]deals.Listing, error) {
+	p.calls.Add(1)
+	return []deals.Listing{{Title: third(strings.Fields(""))}}, nil
+}
+
+// third is a parser that expects at least three fields.
+func third(fields []string) string { return fields[2] }
+
+func TestPanickingRunFailsAndTheScheduleGoesOn(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	seed(t, pool)
+	src := &panickingSource{}
+	var logs strings.Builder
+	r := NewRunner(NewStore(pool), []deals.Source{src}, nil, nil,
+		Config{Interval: time.Hour, Window: 90 * 24 * time.Hour}, slog.New(slog.NewJSONHandler(&logs, nil)))
+	var sleeps atomic.Int32
+	r.sleep = func(ctx context.Context, _ time.Duration) error {
+		if sleeps.Add(1) > 2 {
+			return context.Canceled
+		}
+		return ctx.Err()
+	}
+
+	r.Start(t.Context())
+	r.Wait()
+	if got := src.calls.Load(); got != 2 {
+		t.Fatalf("scheduled runs searched %d times, want 2", got)
+	}
+	st := r.Status()
+	if st.Running || st.LastResult == nil || st.LastFinishedAt == nil ||
+		!strings.Contains(st.LastResult.Failure, "panic: runtime error: index out of range [2] with length 0") {
+		t.Fatalf("status = %+v, result %+v", st, st.LastResult)
+	}
+
+	if !r.Trigger() {
+		t.Fatal("Trigger after a panicking run = false")
+	}
+	r.Wait()
+	if got := src.calls.Load(); got != 3 {
+		t.Fatalf("manual run searched %d times in all, want 3", got)
+	}
+	if st := r.Status(); st.Running || st.LastResult == nil || st.LastResult.Failure == "" {
+		t.Fatalf("status after manual run = %+v", st)
+	}
+	for _, want := range []string{`"level":"ERROR"`, `"msg":"valuation panicked"`, `"stack":"goroutine `} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("log lacks %s:\n%s", want, logs.String())
+		}
 	}
 }

@@ -31,6 +31,7 @@ Same layout and tooling as `../baratie`. `package.json` and
     /server/           # router: /health, /metrics, /api/*, SPA fallback
     /web/              # serves the built SPA, index.html for client routes
     /metrics/          # Prometheus collectors on a private registry (ohara_*)
+    /recovery/         # recovery.Call: a panic outside a request handler becomes a logged error
 /src/                  # SvelteKit SPA (adapter-static, ssr off)
   /routes/             # pages; /scan is the scanner, /scan/queue the unresolved barcodes
   /lib/                # nav table, API client, collection types, form helpers, scan flow (pure TS, unit tested)
@@ -121,6 +122,11 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   user types (TMDB films, Google Books or, without a key, Open Library
   books, Discogs albums), answered as candidates for the barcode being
   added; a kind without its key answers 503.
+- Goroutines started outside a request handler, where chi's Recoverer does
+  not reach, call third-party code through `recovery.Call`: a lookup
+  provider's `Fetch` and `Parse`, a movie name source, a deal or valuation
+  run. A panic there is logged at error level with its stack and counts as
+  that provider's, source's or run's failure.
 - DB tests call `dbtest.Migrated(t)`; each gets its own schema.
 - Deal sources implement `deals.Source`. A run matches listing titles to
   wishlist copies (all title words, the edition's format for movies, the

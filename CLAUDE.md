@@ -109,7 +109,10 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   `metrics.InitSource` so its counters exist before the first failure.
   When some of its sources fail but others answered, it returns a
   `*lookup.PartialError`: the lookup reports the failure next to the
-  candidates and does not cache the answer.
+  candidates and does not cache the answer. The movie chain waits at most
+  4 s for each name source and 6 s for all of them, fallbacks included,
+  so a hanging catalog fails as that source and leaves TMDB the rest of
+  the 10 s lookup. An Allegro token refresh runs on past that wait.
 - Music is the kind `music`: an album title whose `authors` are its credited
   artists, editions with a `cd`, `vinyl` or `cassette` format (required, like
   a movie's `dvd`/`bluray`/`uhd`) and an optional `discogs_release_id`. The

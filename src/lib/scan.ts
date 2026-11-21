@@ -1,4 +1,11 @@
-import { ApiError, errorMessage, invalidBarcodeMessage, isSessionExpired, request } from './api';
+import {
+	ApiError,
+	errorMessage,
+	invalidBarcodeMessage,
+	isNoAnswer,
+	isSessionExpired,
+	request
+} from './api';
 import { queueDeletesSettled } from './queue-deletes';
 import {
 	copyPayload,
@@ -338,8 +345,10 @@ function providerDetail(errors: LookupResult['errors']): string {
 /**
  * Resolves a scanned barcode: an edition that already carries it, else the lookup's candidates,
  * else a scan queue entry so the barcode is not lost. Throws an ApiError for a malformed
- * barcode, when the sign-in turns a request away or when not even the queue answers. A recheck
- * asks each source again when its cached answer is over an hour old.
+ * barcode, when the sign-in turns a request away, when not even the queue answers, or when the
+ * lookup gets no answer (status 0, a lost connection or the request deadline): nothing was learned
+ * about the code, so the caller handles it as a check that got no answer. A recheck asks each
+ * source again when its cached answer is over an hour old.
  */
 export async function resolveScan(
 	fetchFn: typeof fetch,
@@ -368,7 +377,7 @@ export async function resolveScan(
 			`/api/lookup/${encodeURIComponent(code)}${query}`
 		);
 	} catch (err) {
-		if (isSessionExpired(err)) throw err;
+		if (isSessionExpired(err) || isNoAnswer(err)) throw err;
 		failure = errorMessage(err);
 	}
 	if (lookup && lookup.candidates.length > 0) {

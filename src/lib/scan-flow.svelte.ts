@@ -4,7 +4,8 @@ import {
 	errorMessage,
 	invalidBarcodeMessage,
 	isNoAnswer,
-	isSessionExpired
+	isSessionExpired,
+	requestDeadlineMs
 } from './api';
 import {
 	bindingLabels,
@@ -63,10 +64,11 @@ export type FlowPhase =
 	| { kind: 'expired'; saved: boolean };
 
 /**
- * How long one request of a barcode's check may stay open. The server ends every request within
- * 30 s, so one still open after this got no answer and the code is kept.
+ * How long one request of a barcode's check may stay open: every API request's deadline, below
+ * the server's 30-second request timeout. One still open after this got no answer and the code
+ * is kept.
  */
-export const checkTimeout = 35_000;
+export const checkTimeout = requestDeadlineMs;
 
 /** Where a code whose check got no answer waits for the connection. */
 export type Keeper = Pick<PendingScans, 'keep' | 'sessionExpired'>;

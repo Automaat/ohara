@@ -3,7 +3,9 @@
 	import { tick, untrack } from 'svelte';
 	import CollectionCover from '#lib/components/CollectionCover.svelte';
 	import ScanConfirm from '#lib/components/ScanConfirm.svelte';
+	import { sessionExpiredMessage } from '#lib/api.js';
 	import { displayName, editionSummary, kindLabels, type Kind } from '#lib/collection.js';
+	import { offlineSavedMessage } from '#lib/pending-scans.svelte.js';
 	import type { Added, ScanFlow } from '#lib/scan-flow.svelte.js';
 	import {
 		barcodeGroups,
@@ -77,6 +79,10 @@
 				return { overline: 'Nie udało się sprawdzić kodu', tone: 'warning' };
 			case 'queued':
 				return { overline: reasonLabels[p.entry.reason], tone: 'warning' };
+			case 'offline':
+				return { overline: 'Brak połączenia', tone: 'warning' };
+			case 'expired':
+				return { overline: 'Sesja wygasła', tone: 'warning' };
 		}
 		const target = item?.target;
 		if (target?.kind === 'owned') {
@@ -287,6 +293,17 @@
 			<Button id="scan-way-on" tone="signal" onclick={() => void flow.load(flow.code)}>
 				Spróbuj ponownie
 			</Button>
+			<Button onclick={close}>Skanuj dalej</Button>
+		</div>
+	{:else if flow.phase.kind === 'offline'}
+		<Callout tone="warning" live>{offlineSavedMessage}</Callout>
+		<div class="ways">
+			<Button id="scan-way-on" tone="signal" onclick={close}>Skanuj dalej</Button>
+		</div>
+	{:else if flow.phase.kind === 'expired'}
+		<Callout tone="warning" live>{sessionExpiredMessage}</Callout>
+		<div class="ways">
+			<Button id="scan-way-on" tone="signal" onclick={() => location.reload()}>Odśwież</Button>
 			<Button onclick={close}>Skanuj dalej</Button>
 		</div>
 	{:else if flow.phase.kind === 'queued'}

@@ -8,7 +8,7 @@
 		ThemeSwitch,
 		registerServiceWorker
 	} from '@smykla-skalski/sui';
-	import type { Snippet } from 'svelte';
+	import { onMount, type Snippet } from 'svelte';
 	import { MediaQuery } from 'svelte/reactivity';
 	import { dev } from '$app/env';
 	import { onNavigate } from '$app/navigation';
@@ -16,6 +16,7 @@
 	import TabBar from '#lib/components/TabBar.svelte';
 	import { carryCover } from '#lib/cover-transition.js';
 	import { currentItem, phoneLayout, sections } from '#lib/nav.js';
+	import { pendingScans } from '#lib/pending-scans.svelte.js';
 
 	let { children }: { children: Snippet } = $props();
 
@@ -24,6 +25,7 @@
 	const worker = registerServiceWorker('/service-worker.js', { dev });
 
 	onNavigate((navigation) => carryCover(navigation));
+	onMount(() => pendingScans.start(window, document));
 </script>
 
 <AppShell
@@ -58,7 +60,9 @@
 	reloadingLabel="Przeładowuję…"
 	laterLabel="Później"
 	offlineTitle="Brak połączenia"
-	offlineDescription="Skanowanie wymaga połączenia z serwerem."
+	offlineDescription={pendingScans.available
+		? 'Zeskanowane kody trafią do kolejki, gdy połączenie wróci.'
+		: 'Skanowanie wymaga połączenia z serwerem.'}
 	onlineTitle="Połączenie wróciło"
 	dismissLabel="Zamknij"
 />

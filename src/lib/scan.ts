@@ -1,4 +1,4 @@
-import { ApiError, errorMessage, invalidBarcodeMessage, request } from './api';
+import { ApiError, errorMessage, invalidBarcodeMessage, isSessionExpired, request } from './api';
 import { queueDeletesSettled } from './queue-deletes';
 import {
 	copyPayload,
@@ -259,6 +259,32 @@ export function checkDigitMatches(code: string): boolean {
 	return (10 - (sum % 10)) % 10 === digit(code, code.length - 1);
 }
 
+/** The GS1 check digit for the digits of a code before its check digit. */
+function gs1CheckDigit(body: string): string {
+	let sum = 0;
+	for (let i = body.length - 1, weight = 3; i >= 0; i--, weight = 4 - weight) {
+		sum += digit(body, i) * weight;
+	}
+	return String((10 - (sum % 10)) % 10);
+}
+
+/**
+ * The form the server stores a barcode in, by the rules of barcode.Normalize: an ISBN-10 becomes
+ * its ISBN-13, a UPC-A its EAN-13 with a leading 0, and any code padded to 14 digits loses the
+ * leading zeros down to an EAN-13, or to an EAN-8 when six lead. A code whose check digit does not
+ * match stays as it is.
+ */
+export function canonicalBarcode(code: string): string {
+	if (!checkDigitMatches(code)) return code;
+	if (code.length === 10) {
+		const body = `978${code.slice(0, 9)}`;
+		return body + gs1CheckDigit(body);
+	}
+	const padded = code.padStart(14, '0');
+	if (padded.startsWith('000000')) return padded.slice(6);
+	return padded.startsWith('0') ? padded.slice(1) : padded;
+}
+
 /**
  * Why typed input cannot be opened: no barcode's shape, or a wrong check digit. Undefined when
  * the code can go to the add page.
@@ -312,8 +338,8 @@ function providerDetail(errors: LookupResult['errors']): string {
 /**
  * Resolves a scanned barcode: an edition that already carries it, else the lookup's candidates,
  * else a scan queue entry so the barcode is not lost. Throws an ApiError for a malformed
- * barcode or when not even the queue answers. A recheck asks each source again when its cached
- * answer is over an hour old.
+ * barcode, when the sign-in turns a request away or when not even the queue answers. A recheck
+ * asks each source again when its cached answer is over an hour old.
  */
 export async function resolveScan(
 	fetchFn: typeof fetch,
@@ -342,6 +368,7 @@ export async function resolveScan(
 			`/api/lookup/${encodeURIComponent(code)}${query}`
 		);
 	} catch (err) {
+		if (isSessionExpired(err)) throw err;
 		failure = errorMessage(err);
 	}
 	if (lookup && lookup.candidates.length > 0) {

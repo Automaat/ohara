@@ -302,6 +302,126 @@ func TestRecordKeepsAnEarlierEdition(t *testing.T) {
 	}
 }
 
+// wishBluray adds a wished Blu-ray edition 22 of "Diuna" next to seed's
+// owned Blu-ray 20 and records found against it, as the deal hunter does.
+func wishBluray(t *testing.T, pool *pgxpool.Pool, found []deals.Listing) {
+	t.Helper()
+	exec(t, pool, `INSERT INTO edition (id, title_id, barcode, format) OVERRIDING SYSTEM VALUE
+		VALUES (22, 2, '5902600069720', 'bluray')`)
+	exec(t, pool, `INSERT INTO copy (edition_id, status) VALUES (22, 'wishlist')`)
+	bluray := "bluray"
+	wish := deals.Want{EditionID: 22, TitleID: 2, Kind: "movie", Name: "Diuna", Format: &bluray}
+	for i := range found {
+		if _, _, err := deals.NewStore(pool).Record(context.Background(), &found[i], &wish, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestWishedEditionListingsPriceTheOwnedEdition(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	seed(t, pool)
+	ctx := context.Background()
+	found := []deals.Listing{
+		listing("b1", "Diuna Blu-ray", 4000, used()),
+		listing("b2", "Diuna Blu-ray PL", 4500, used()),
+		listing("b3", "Diuna Blu-ray stan idealny", 5000, used()),
+	}
+	wishBluray(t, pool, found)
+	r := newTestRunner(pool, &fakeBuyBack{quotes: map[string]Quote{}}, &fakeSource{name: "olx", listings: found})
+	if _, err := r.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	copies, _, err := r.store.Valued(ctx, r.Window())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range copies {
+		if c.EditionID == 20 && (c.Mid == nil || c.Mid.Count != 3) {
+			t.Fatalf("owned Blu-ray mid = %+v, want the 3 OLX Blu-ray prices", c.Mid)
+		}
+	}
+}
+
+func TestPricesPoolOnlyUsedMiddles(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	seed(t, pool)
+	ctx := context.Background()
+	exec(t, pool, `INSERT INTO edition (id, title_id, barcode, binding) OVERRIDING SYSTEM VALUE
+		VALUES (12, 1, '9788308049396', 'hardcover')`)
+	exec(t, pool, `INSERT INTO edition (id, title_id, barcode, format, discogs_release_id)
+		OVERRIDING SYSTEM VALUE VALUES (22, 2, '5902600069720', 'bluray', 77)`)
+	exec(t, pool, `INSERT INTO edition (id, title_id, barcode, format, updated_at) OVERRIDING SYSTEM VALUE
+		VALUES (23, 2, '5902600069737', 'bluray', now() - interval '1 hour')`)
+	exec(t, pool, `INSERT INTO title (id, kind, name) OVERRIDING SYSTEM VALUE VALUES (3, 'movie', 'Solaris')`)
+	exec(t, pool, `INSERT INTO edition (id, title_id, barcode, format) OVERRIDING SYSTEM VALUE
+		VALUES (30, 3, '5902600069744', 'bluray')`)
+	exec(t, pool, `INSERT INTO copy (edition_id, status) VALUES (22, 'wishlist'), (30, 'wishlist')`)
+	exec(t, pool, `INSERT INTO price_observation
+			(source, external_id, price_cents, edition_id, observed_at, last_seen_at)
+		VALUES ('olx', 'printing', 100, 12, now(), now()),
+		       ('olx', 'printing-2', 110, 12, now(), now()),
+		       ('skupszop', '9788308049396', 120, 12, now(), now()),
+		       ('olx', 'wish', 200, 22, now(), now()),
+		       ('discogs_vg_plus', '77/22', 210, 22, now(), now()),
+		       ('olx', 'first-seen-since-edit', 220, 23, now(), now()),
+		       ('olx', 'first-seen-before-edit', 230, 23, now() - interval '2 hours', now()),
+		       ('olx', 'dvd', 300, 21, now(), now()),
+		       ('olx', 'dvd-2', 310, 21, now(), now()),
+		       ('olx', 'other-title', 400, 30, now(), now())`)
+	prices, err := NewStore(pool).Prices(ctx, 90*24*time.Hour)
+	if err != nil {
+		t.Fatalf("Prices: %v", err)
+	}
+	got := make([]int64, 0, len(prices))
+	for _, p := range prices {
+		got = append(got, p.Cents)
+	}
+	slices.Sort(got)
+	if !slices.Equal(got, []int64{100, 110, 200, 220}) {
+		t.Fatalf("Prices = %+v, want only the OLX prices of unowned editions in an owned group first seen since their last edit", prices)
+	}
+}
+
+func TestEditedFormatDropsEarlierListings(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	seed(t, pool)
+	ctx := context.Background()
+	exec(t, pool, `INSERT INTO edition (id, title_id, barcode, format) OVERRIDING SYSTEM VALUE
+		VALUES (24, 2, '5902600069751', 'dvd')`)
+	exec(t, pool, `INSERT INTO copy (edition_id, status) VALUES (24, 'owned')`)
+	record := func(edition int64, format string, found ...deals.Listing) {
+		t.Helper()
+		want := deals.Want{EditionID: edition, TitleID: 2, Kind: "movie", Name: "Diuna", Format: &format}
+		for i := range found {
+			if _, _, err := deals.NewStore(pool).Record(ctx, &found[i], &want, false); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	dvds := []deals.Listing{
+		listing("d1", "Diuna DVD", 1000, used()),
+		listing("d2", "Diuna DVD PL", 2000, used()),
+	}
+	record(21, "dvd", dvds...)
+	exec(t, pool, `UPDATE edition SET format = 'bluray', updated_at = now(), edited_at = now() WHERE id = 21`)
+	record(24, "dvd", dvds...)
+	record(21, "bluray", listing("b1", "Diuna Blu-ray", 4000, used()))
+	prices, err := NewStore(pool).Prices(ctx, 90*24*time.Hour)
+	if err != nil {
+		t.Fatalf("Prices: %v", err)
+	}
+	var bluray []int64
+	for _, p := range prices {
+		if p.Format != nil && *p.Format == "bluray" {
+			bluray = append(bluray, p.Cents)
+		}
+	}
+	if !slices.Equal(bluray, []int64{4000}) {
+		t.Fatalf("Blu-ray prices = %v, want only the listing first seen after the format edit", bluray)
+	}
+}
+
 func TestStartSchedulesAfterTheLastValue(t *testing.T) {
 	pool := dbtest.Migrated(t)
 	ctx := t.Context()

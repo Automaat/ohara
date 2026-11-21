@@ -1,5 +1,13 @@
-import { describe, expect, it } from 'vitest';
-import { ApiError, errorMessage, request } from './api';
+import { describe, expect, it, vi } from 'vitest';
+import {
+	ApiError,
+	deadlineFetch,
+	errorMessage,
+	isNoAnswer,
+	isSessionExpired,
+	request,
+	sessionExpiredMessage
+} from './api';
 
 type Call = { url: string; init: RequestInit | undefined };
 
@@ -86,6 +94,66 @@ describe('request', () => {
 		}) as typeof fetch;
 		const err = await failure(request(offline, 'GET', '/api/x'));
 		expect(err.message).toBe('Serwer nie odpowiada.');
+		expect(isNoAnswer(err)).toBe(true);
+		expect(isSessionExpired(err)).toBe(false);
+	});
+
+	it('takes a body that breaks off for no answer, unlike one that is not JSON', async () => {
+		const broken = (async () =>
+			new Response(
+				new ReadableStream({
+					start: (controller) => controller.error(new TypeError('network'))
+				}),
+				{ status: 200 }
+			)) as typeof fetch;
+		const err = await failure(request(broken, 'GET', '/api/editions'));
+		expect(err).toMatchObject({ status: 0, message: 'Serwer nie odpowiada.' });
+		expect(isNoAnswer(err)).toBe(true);
+	});
+
+	it('aborts a request still open at its deadline', async () => {
+		vi.useFakeTimers();
+		const signals: AbortSignal[] = [];
+		const held = deadlineFetch(
+			(_, init) =>
+				new Promise<Response>((_resolve, reject) => {
+					const signal = init?.signal;
+					if (signal) signals.push(signal);
+					signal?.addEventListener('abort', () => reject(signal.reason));
+				}),
+			1000
+		);
+		const pending = failure(request(held, 'GET', '/api/editions'));
+		await vi.advanceTimersByTimeAsync(999);
+		expect(signals[0]?.aborted).toBe(false);
+		await vi.advanceTimersByTimeAsync(1);
+		expect(await pending).toMatchObject({ status: 0 });
+		vi.useRealTimers();
+	});
+
+	it('leaves a redirect unfollowed, so one to the sign-in is not taken for no answer', async () => {
+		const calls: Call[] = [];
+		await request(fake(200, '[]', calls), 'GET', '/api/titles');
+		expect(calls[0].init?.redirect).toBe('manual');
+	});
+
+	it.each([
+		['a 401', fake(401, 'Unauthorized')],
+		['a 401 with JSON', fake(401, '{"error":"unauthorized"}')],
+		[
+			'a redirect',
+			(async () => {
+				const res = new Response(null, { status: 200 });
+				Object.defineProperty(res, 'type', { value: 'opaqueredirect' });
+				Object.defineProperty(res, 'status', { value: 0 });
+				return res;
+			}) as typeof fetch
+		]
+	])('takes %s for an expired session', async (_, fetchFn) => {
+		const err = await failure(request(fetchFn, 'POST', '/api/scan-queue', {}));
+		expect(err).toMatchObject({ status: 401, message: sessionExpiredMessage });
+		expect(isSessionExpired(err)).toBe(true);
+		expect(isNoAnswer(err)).toBe(false);
 	});
 });
 

@@ -25,6 +25,10 @@
 				return 'Nieprawidłowy kod';
 			case 'failed':
 				return 'Nie udało się sprawdzić kodu';
+			case 'offline':
+				return 'Zapisano bez połączenia';
+			case 'expired':
+				return 'Sesja wygasła';
 		}
 		if (p.status === 'owned') return 'Masz już to wydanie';
 		return p.status === 'missing' ? 'Dodaj ręcznie' : 'Znaleziono';

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -979,5 +980,127 @@ func TestRunSendsAnAlertWhoseLimitRoseDuringTheRun(t *testing.T) {
 	}
 	if want := []string{"search olx", "send", "search olx"}; !slices.Equal(log.list(), want) {
 		t.Fatalf("calls = %q, want the alert sent before the next request", log.list())
+	}
+}
+
+// restarted builds a hunter on a 2h schedule on pool, as a restart would,
+// and starts it; its first scheduled wait arrives on the returned channel.
+func restarted(t *testing.T, pool *pgxpool.Pool) (*Hunter, <-chan time.Duration) {
+	t.Helper()
+	h := NewHunter(NewStore(pool), nil, nil, Config{Interval: 2 * time.Hour}, slog.New(slog.DiscardHandler))
+	waits := make(chan time.Duration, 1)
+	h.sleep = func(_ context.Context, d time.Duration) error {
+		waits <- d
+		return context.Canceled
+	}
+	h.Start(t.Context())
+	h.Wait()
+	return h, waits
+}
+
+func storeRun(t *testing.T, pool *pgxpool.Pool, age string) {
+	t.Helper()
+	if _, err := pool.Exec(t.Context(), `INSERT INTO deal_run (started_at, finished_at, result)
+		VALUES (now() - $1::interval, now() - $1::interval + interval '1 minute', '{"wants": 1}')`, age); err != nil {
+		t.Fatalf("store run: %v", err)
+	}
+}
+
+func TestStartSchedulesAfterTheLastRun(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	storeRun(t, pool, "30 minutes")
+	_, waits := restarted(t, pool)
+	if got := <-waits; got < 80*time.Minute || got > 100*time.Minute {
+		t.Fatalf("first wait = %v, want about 90m after a run started 30m ago", got)
+	}
+}
+
+func TestStartRunsAnOverdueHuntAfterFiveMinutes(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	storeRun(t, pool, "3 hours")
+	_, waits := restarted(t, pool)
+	if got := <-waits; got < 5*time.Minute || got > 6*time.Minute {
+		t.Fatalf("first wait = %v, want the 5m minimum after a run started 3h ago", got)
+	}
+}
+
+func TestStartWithoutHistoryWaitsFiveMinutes(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	_, waits := restarted(t, pool)
+	if got := <-waits; got < 5*time.Minute || got > 6*time.Minute {
+		t.Fatalf("first wait = %v, want about 5m", got)
+	}
+}
+
+// sameStatus fails unless after holds before's last run.
+func sameStatus(t *testing.T, before, after Status) {
+	t.Helper()
+	if before.LastStartedAt == nil || before.LastFinishedAt == nil || before.LastResult == nil {
+		t.Fatalf("status before the restart lacks the run: %+v", before)
+	}
+	if after.LastStartedAt == nil || !after.LastStartedAt.Equal(*before.LastStartedAt) ||
+		after.LastFinishedAt == nil || !after.LastFinishedAt.Equal(*before.LastFinishedAt) ||
+		!reflect.DeepEqual(after.LastResult, before.LastResult) {
+		t.Fatalf("status after the restart = %+v, result %+v; want %+v, result %+v",
+			after, after.LastResult, before, before.LastResult)
+	}
+}
+
+func TestManualRunSurvivesARestart(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	wishlist(t, pool, wantBluray(new(int64(5000))))
+	notifier := &fakeNotifier{}
+	h := newTestHunter(pool, notifier, olxFixture(t))
+	h.Start(t.Context())
+	if !h.Trigger() {
+		t.Fatal("Trigger = false")
+	}
+	h.Wait()
+	before := h.Status()
+	if before.LastResult == nil || before.LastResult.Sent != 1 {
+		t.Fatalf("manual run = %+v", before.LastResult)
+	}
+
+	after, waits := restarted(t, pool)
+	sameStatus(t, before, after.Status())
+	if got := <-waits; got < 105*time.Minute || got > 135*time.Minute {
+		t.Fatalf("first wait = %v, want about 2h after a manual run just now", got)
+	}
+}
+
+// shutdownSource answers only once its request is canceled.
+type shutdownSource struct{ started chan struct{} }
+
+func (shutdownSource) Name() string   { return "olx" }
+func (shutdownSource) PerQuery() bool { return false }
+
+func (s shutdownSource) Search(ctx context.Context, _ string) ([]Listing, error) {
+	s.started <- struct{}{}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestRunCutShortByShutdownCounts(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	wishlist(t, pool, wantBluray(nil))
+	src := shutdownSource{started: make(chan struct{}, 1)}
+	h := newTestHunter(pool, nil, src)
+	ctx, cancel := context.WithCancel(t.Context())
+	h.Start(ctx)
+	if !h.Trigger() {
+		t.Fatal("Trigger = false")
+	}
+	<-src.started
+	cancel()
+	h.Wait()
+	before := h.Status()
+	if before.LastResult == nil || !strings.Contains(before.LastResult.Failure, "context canceled") {
+		t.Fatalf("run cut short = %+v", before.LastResult)
+	}
+
+	after, waits := restarted(t, pool)
+	sameStatus(t, before, after.Status())
+	if got := <-waits; got < 105*time.Minute || got > 135*time.Minute {
+		t.Fatalf("first wait = %v, want about 2h after a run started just now", got)
 	}
 }

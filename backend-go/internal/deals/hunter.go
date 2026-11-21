@@ -28,6 +28,14 @@ const telegramPause = time.Second
 // context is gone.
 const markSentTimeout = 10 * time.Second
 
+// saveRunTimeout bounds storing a run's start or end, which outlives the
+// run's context so a run cut short by shutdown still counts.
+const saveRunTimeout = 10 * time.Second
+
+// firstRunDelay is the least a scheduled run waits after a start, so a
+// restart loop does not hammer the sources.
+const firstRunDelay = 5 * time.Minute
+
 // Config tunes the hunter. Interval 0 disables the schedule; a run can still
 // be started by hand. Delay separates two source requests; both are
 // jittered. CanaryQuery, when set, is asked of every query source on every
@@ -122,16 +130,22 @@ func jitter(d time.Duration, spread float64) time.Duration {
 	return time.Duration(float64(d) * (1 - spread + 2*spread*u))
 }
 
-// Start runs the schedule until ctx ends; manual runs also stop with ctx.
-// The first scheduled run waits up to five minutes so a restart loop does
-// not hammer the sources.
+// Start restores the last stored run, then runs the schedule until ctx
+// ends; manual runs also stop with ctx. The first scheduled run comes one
+// interval after the last run started, or about five minutes after start
+// without one, and never sooner than firstRunDelay.
 func (h *Hunter) Start(ctx context.Context) {
 	h.base = ctx
+	last, ok := h.restore(ctx)
 	if h.cfg.Interval <= 0 {
 		return
 	}
+	due, spread := firstRunDelay, 0.2
+	if ok {
+		due, spread = time.Until(last.Add(h.cfg.Interval)), 0.1
+	}
 	h.wg.Go(func() {
-		wait := jitter(min(h.cfg.Interval, 5*time.Minute), 0.2)
+		wait := max(jitter(due, spread), firstRunDelay)
 		for {
 			if h.sleep(ctx, wait) != nil {
 				return
@@ -142,6 +156,27 @@ func (h *Hunter) Start(ctx context.Context) {
 			wait = jitter(h.cfg.Interval, 0.1)
 		}
 	})
+}
+
+// restore puts the last stored run into the status and returns its start;
+// false when there is none or it cannot be read.
+func (h *Hunter) restore(ctx context.Context) (time.Time, bool) {
+	last, ok, err := h.store.LastRun(ctx)
+	if err != nil {
+		h.logger.Warn("deal search: read last run", "err", err)
+		return time.Time{}, false
+	}
+	if !ok {
+		return time.Time{}, false
+	}
+	h.mu.Lock()
+	if h.status.LastStartedAt == nil {
+		h.status.LastStartedAt = &last.StartedAt
+		h.status.LastFinishedAt = last.FinishedAt
+		h.status.LastResult = last.Result
+	}
+	h.mu.Unlock()
+	return last.StartedAt, true
 }
 
 // Wait blocks until the schedule and any manual run have stopped.
@@ -166,13 +201,16 @@ func (h *Hunter) Status() Status {
 	return s
 }
 
-// execute runs once and records the outcome; the caller holds running.
+// execute runs once and records the outcome, in the status and the
+// database; the caller holds running. Times keep the database's
+// microseconds, so a restart restores the same status.
 func (h *Hunter) execute(ctx context.Context) {
 	defer h.running.Store(false)
-	started := time.Now()
+	started := time.Now().Truncate(time.Microsecond)
 	h.mu.Lock()
 	h.status.LastStartedAt = &started
 	h.mu.Unlock()
+	h.saveRun(ctx, func(ctx context.Context) error { return h.store.RunStarted(ctx, started) })
 
 	res, err := recovery.Call(h.logger, "deal search panicked", func() (RunResult, error) { return h.Run(ctx) })
 	if err != nil {
@@ -183,11 +221,23 @@ func (h *Hunter) execute(ctx context.Context) {
 			"listings", res.Listings, "matched", res.Matched, "new", res.New,
 			"alerts", res.Alerts, "sent", res.Sent, "errors", len(res.Errors))
 	}
-	finished := time.Now()
+	finished := time.Now().Truncate(time.Microsecond)
 	h.mu.Lock()
 	h.status.LastFinishedAt = &finished
 	h.status.LastResult = &res
 	h.mu.Unlock()
+	h.saveRun(ctx, func(ctx context.Context) error { return h.store.RunFinished(ctx, started, finished, &res) })
+}
+
+// saveRun stores part of a run even after ctx is canceled, so a run cut
+// short by shutdown still counts as the last one. A failure only loses
+// the record.
+func (h *Hunter) saveRun(ctx context.Context, save func(context.Context) error) {
+	saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), saveRunTimeout)
+	defer cancel()
+	if err := save(saveCtx); err != nil {
+		h.logger.Warn("deal search: save run", "err", err)
+	}
 }
 
 // run is one search: its counters, pacing between requests and the alerts

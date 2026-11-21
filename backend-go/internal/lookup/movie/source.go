@@ -40,6 +40,7 @@ const maxBody = 4 << 20
 // broken body. Transport errors name the URL without its query, which can
 // carry an API key or a refresh token.
 func get(ctx context.Context, client *http.Client, source string, r fetch.Request) (fetch.Response, error) {
+	r.Source = source
 	r.MaxBody = maxBody
 	resp, err := fetch.Do(ctx, client, r)
 	if err != nil {

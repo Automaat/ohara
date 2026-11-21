@@ -4,7 +4,7 @@ Self-hosted tracker for a physical media collection (movies, books, music):
 barcode scanning from an iPhone, purchase prices, used-deal hunting and
 valuation. Roadmap: umbrella issue #11.
 
-**Stack:** Go (chi + pgx) and PostgreSQL 18 behind a SvelteKit 2 + Svelte 5
+**Stack:** Go (chi + pgx) and PostgreSQL 18 behind a SvelteKit + Svelte 5
 SPA built with [`@smykla-skalski/sui`](https://github.com/smykla-skalski/sui).
 Same layout and tooling as `../baratie`. `package.json` and
 `backend-go/go.mod` are the source of truth for versions.
@@ -113,9 +113,15 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   `ohara_source_errors_total{source}`, `ohara_source_parse_errors_total`
   and `ohara_source_last_success_timestamp_seconds`. A request counts as
   ok only once its response parses; it then sets `ohara_source_results` to
-  the products or candidates found. A SkupSzop quote counts once, as ok
-  when the cart shows the offer or the shop does not buy the book, with
-  results 1 for an offer. Register each source with
+  the products or candidates found. `fetch.Do` times every request whose
+  `fetch.Request` names its `Source` in
+  `ohara_source_request_duration_seconds{source}`, whatever the outcome,
+  from the call until the body is read or the request fails; a pacing
+  or redirect wait inside the client counts, as it does toward the
+  client's timeout. A Discogs base URL that does not parse is timed with
+  its error. A SkupSzop quote counts once, as ok when the cart shows the
+  offer or the shop does not buy the book, with results 1 for an offer,
+  and is timed once over all its requests. Register each source with
   `metrics.InitSource` so its counters exist before the first failure.
   Every finished deal or valuation run, scheduled or manual, counts in
   `ohara_background_runs_total{task="deals"|"valuation",outcome}`: `failed`
@@ -344,16 +350,21 @@ browser's `Host` (`changeOrigin: false`) so dev writes pass this check.
 
 ```bash
 mise run dev                         # Postgres + app from source (docker compose)
-mise run backend                     # API only, needs DATABASE_URL or PG*
+mise run db                          # Postgres only, in the background
+mise run backend                     # API only; the `mise run db` Postgres unless DATABASE_URL or PGHOST is set
 mise run frontend                    # Vite dev server, proxies /api to :8000
+mise run test-backend                # go test ./... with DB tests in ohara_test; args go to go test
 
 npm run lint && npm run check        # oxlint + prettier, svelte-check
 npm run test:coverage                # vitest
 npm run build                        # SPA into build/
-cd backend-go && go test ./...       # set OHARA_TEST_DATABASE_URL for DB tests
+cd backend-go && go test ./...       # DB tests skip unless OHARA_TEST_DATABASE_URL is set
 cd backend-go && golangci-lint run ./...
 ./scripts/run-nilaway.sh backend-go github.com/Automaat/ohara/backend-go
 ```
+
+`OHARA_DB_PORT` (default `5432`) moves the dev Postgres's host port when
+another one holds 5432; `db`, `backend` and `test-backend` follow it.
 
 Allegro authorization is one-time: with the client credentials set, run
 `docker exec -it ohara api allegro-login`, open the printed link and
@@ -384,6 +395,17 @@ and cuts the GitHub release, in that order. `:latest` comes only from CI on
   Postgres, golangci-lint, nilaway), image build; `main` pushes
   `:latest` and `:<sha>`. Pushed images (`main` and `release.yml`)
   carry BuildKit's SBOM and max-mode provenance attestations.
+- CI fails on known vulnerabilities (`scripts/check-vulnerabilities.sh`),
+  on every push and PR and nightly: `govulncheck` for Go code the backend
+  calls, under the go.mod toolchain; `npm audit` for high and critical
+  advisories in any package; Trivy for fixable high and critical ones in
+  the image's OS packages, before the push (the Dockerfile pins the runtime
+  base by digest, so the push rebuild uses the scanned base). govulncheck
+  runs with `GOOS=linux CGO_ENABLED=0`, like the image build. A finding
+  is accepted only through `.github/vulnerability-allowlist.json` (`go`,
+  `npm`, `image` lists of `id`, `reason` and `expires`, YYYY-MM-DD); an
+  entry counts through its expiry day. Renovate's `osvVulnerabilityAlerts` opens
+  fix PRs for vulnerable dependencies.
 - One Go patch release everywhere: `toolchain` in `backend-go/go.mod`
   (CI's `setup-go` reads it), the Dockerfile's `golang` tag and `go` in
   `.mise.toml`. Renovate's `go` group bumps them in one PR, opened only

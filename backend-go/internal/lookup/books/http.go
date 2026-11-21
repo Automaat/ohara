@@ -31,7 +31,7 @@ const (
 // metrics, so a changed response shape is a parse error even with a 200;
 // an ok also records how many candidates parse found.
 func getJSON(ctx context.Context, client *http.Client, source, rawURL string, parse func(json.RawMessage) ([]lookup.Candidate, error)) (json.RawMessage, error) {
-	body, status, err := fetchJSON(ctx, client, rawURL)
+	body, status, err := fetchJSON(ctx, client, source, rawURL)
 	if err != nil {
 		metrics.ObserveSource(source, status)
 		return nil, err
@@ -48,8 +48,9 @@ func getJSON(ctx context.Context, client *http.Client, source, rawURL string, pa
 
 // fetchJSON is getJSON without the metrics; status is its ObserveSource
 // outcome.
-func fetchJSON(ctx context.Context, client *http.Client, rawURL string) (json.RawMessage, string, error) {
+func fetchJSON(ctx context.Context, client *http.Client, source, rawURL string) (json.RawMessage, string, error) {
 	resp, err := fetch.Do(ctx, client, fetch.Request{
+		Source:  source,
 		URL:     rawURL,
 		Header:  http.Header{"Accept": {"application/json"}, "User-Agent": {userAgent}},
 		MaxBody: maxBody,

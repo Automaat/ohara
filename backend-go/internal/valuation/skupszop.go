@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Automaat/ohara/backend-go/internal/fetch"
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
@@ -68,9 +69,12 @@ const maxShopReply = 4 << 20
 // Quote implements BuyBack. Each quote counts once in the source health
 // metrics: ok once the cart shows the offer or the shop says it does not
 // buy the book, with ohara_source_results 1 for an offer and 0 otherwise.
+// Its request duration covers the whole quote, every request in it.
 func (s SkupSzop) Quote(ctx context.Context, isbn string) (Quote, error) {
+	start := time.Now()
 	q, status, err := s.quote(ctx, isbn)
 	metrics.ObserveSource(SourceSkupSzop, status)
+	metrics.ObserveSourceDuration(SourceSkupSzop, time.Since(start))
 	if status == metrics.SourceOK {
 		offers := 0
 		if q.Offered {

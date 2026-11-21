@@ -280,3 +280,118 @@ func TestDoInvalidURLHidesIt(t *testing.T) {
 		t.Errorf("Outcome = %q, want %q", got, metrics.SourceError)
 	}
 }
+
+// sourceDuration reads source's ohara_source_request_duration_seconds from
+// /metrics: how many requests it timed and their total seconds.
+func sourceDuration(t *testing.T, source string) (float64, float64) {
+	t.Helper()
+	var count, sum float64
+	rec := httptest.NewRecorder()
+	metrics.Handler().ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/metrics", nil))
+	series := `{source="` + source + `"}`
+	for line := range strings.Lines(rec.Body.String()) {
+		name, value, _ := strings.Cut(strings.TrimSpace(line), " ")
+		var dst *float64
+		switch name {
+		case "ohara_source_request_duration_seconds_count" + series:
+			dst = &count
+		case "ohara_source_request_duration_seconds_sum" + series:
+			dst = &sum
+		default:
+			continue
+		}
+		v, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			t.Fatalf("%s: %v", line, err)
+		}
+		*dst = v
+	}
+	return count, sum
+}
+
+// closedURL is the address of a port nothing listens on.
+func closedURL(t *testing.T) string {
+	t.Helper()
+	var lc net.ListenConfig
+	ln, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	if err := ln.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return "http://" + addr + "/"
+}
+
+// TestDoTimesRequests checks that a request with a Source is timed once
+// whatever its outcome, a transport error and an unreadable body included.
+// Answers whose body Do reads send their headers before the delay, so the
+// time must run until the body is read; a refusal returns at its headers,
+// so it waits before them.
+func TestDoTimesRequests(t *testing.T) {
+	const delay = 50 * time.Millisecond
+	slowBody := func(status int, contentLength, body string) http.HandlerFunc {
+		return func(w http.ResponseWriter, _ *http.Request) {
+			if contentLength != "" {
+				w.Header().Set("Content-Length", contentLength)
+			}
+			w.WriteHeader(status)
+			w.(http.Flusher).Flush()
+			time.Sleep(delay)
+			_, _ = w.Write([]byte(body))
+		}
+	}
+	slowHeaders := func(status int, body string) http.HandlerFunc {
+		return func(w http.ResponseWriter, _ *http.Request) {
+			time.Sleep(delay)
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(body))
+		}
+	}
+	for _, tc := range []struct {
+		name        string
+		handler     http.HandlerFunc
+		wantOutcome string
+		wantMin     time.Duration
+	}{
+		{name: "ok", handler: slowBody(http.StatusOK, "", "ok"), wantOutcome: metrics.SourceOK, wantMin: delay},
+		{name: "error status", handler: slowBody(http.StatusServiceUnavailable, "", "down"), wantOutcome: "http_503", wantMin: delay},
+		{name: "refusal", handler: slowHeaders(http.StatusTooManyRequests, "slow down"), wantOutcome: "http_429", wantMin: delay},
+		{name: "body over the cap", handler: slowBody(http.StatusOK, "", strings.Repeat("x", testCap+1)), wantOutcome: metrics.SourceParseError, wantMin: delay},
+		{name: "unreadable body", handler: slowBody(http.StatusOK, "100", "short"), wantOutcome: metrics.SourceError, wantMin: delay},
+		{name: "closed port", wantOutcome: metrics.SourceError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := "test-fetch-" + strings.ReplaceAll(tc.name, " ", "-")
+			target := closedURL(t)
+			if tc.handler != nil {
+				srv := httptest.NewServer(tc.handler)
+				t.Cleanup(srv.Close)
+				target = srv.URL
+			}
+			countBefore, sumBefore := sourceDuration(t, source)
+			_, err := Do(t.Context(), nil, Request{Source: source, URL: target, MaxBody: testCap})
+			if got := Outcome(err); got != tc.wantOutcome {
+				t.Fatalf("Outcome = %q (err %v), want %q", got, err, tc.wantOutcome)
+			}
+			count, sum := sourceDuration(t, source)
+			if d := count - countBefore; d != 1 {
+				t.Errorf("timed requests grew by %v, want 1", d)
+			}
+			if d := sum - sumBefore; d < tc.wantMin.Seconds() {
+				t.Errorf("timed seconds grew by %v, want at least %v", d, tc.wantMin.Seconds())
+			}
+		})
+	}
+}
+
+func TestDoWithoutSourceIsNotTimed(t *testing.T) {
+	srv := serve(t, http.StatusOK, "ok")
+	if _, err := Do(t.Context(), srv.Client(), Request{URL: srv.URL, MaxBody: testCap}); err != nil {
+		t.Fatal(err)
+	}
+	if count, _ := sourceDuration(t, ""); count != 0 {
+		t.Errorf("a request without a source was timed %v times", count)
+	}
+}

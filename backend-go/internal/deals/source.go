@@ -143,10 +143,12 @@ func ObserveSearch(src Source, err error) {
 	metrics.ObserveSource(src.Name(), sourceStatus(err))
 }
 
-// get fetches the endpoint and returns the body of a 200 response.
-func get(ctx context.Context, client *http.Client, endpoint, accept string) ([]byte, error) {
+// get fetches the endpoint for source and returns the body of a 200
+// response.
+func get(ctx context.Context, client *http.Client, source, endpoint, accept string) ([]byte, error) {
 	resp, err := fetch.Do(ctx, client, fetch.Request{
-		URL: endpoint,
+		Source: source,
+		URL:    endpoint,
 		Header: http.Header{
 			"User-Agent":      {fetch.BrowserUserAgent},
 			"Accept":          {accept},

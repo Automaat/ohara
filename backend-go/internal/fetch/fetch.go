@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
 )
@@ -38,6 +39,9 @@ func (e StatusError) StatusCode() int { return e.Code }
 
 // Request is one request to a source.
 type Request struct {
+	// Source names the source in ohara_source_request_duration_seconds;
+	// a request without one is not timed.
+	Source string
 	// Method is GET when empty.
 	Method string
 	URL    string
@@ -65,8 +69,13 @@ type Response struct {
 // cannot hold it back. Another status reads its page first: when that
 // fails, the error names the failure and still wraps the StatusError, so
 // the status counts however its page ends. Errors name the method, host
-// and path at most, never a query.
+// and path at most, never a query. A request with a Source is timed from
+// the call to its return, whatever the outcome.
 func Do(ctx context.Context, client *http.Client, r Request) (Response, error) {
+	if r.Source != "" {
+		start := time.Now()
+		defer func() { metrics.ObserveSourceDuration(r.Source, time.Since(start)) }()
+	}
 	method := r.Method
 	if method == "" {
 		method = http.MethodGet

@@ -34,7 +34,7 @@ func (o OLX) Search(ctx context.Context, query string) ([]Listing, error) {
 		"offset": {"0"},
 		"limit":  {"50"},
 	}.Encode()
-	body, err := get(ctx, o.Client, u, "application/json")
+	body, err := get(ctx, o.Client, o.Name(), u, "application/json")
 	if err != nil {
 		return nil, fmt.Errorf("olx: %w", err)
 	}

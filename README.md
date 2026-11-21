@@ -15,8 +15,17 @@ npm ci
 mise run dev      # Postgres + app on http://localhost:8000
 ```
 
-For frontend work, run `mise run backend` against a Postgres and
-`mise run frontend` for the Vite dev server on http://localhost:5173.
+For backend or frontend work, run the parts from source:
+
+```bash
+mise run db             # Postgres only, in the background
+mise run backend        # API on http://localhost:8000
+mise run frontend       # Vite dev server on http://localhost:5173
+mise run test-backend   # Go tests, DB tests in a separate ohara_test database
+mise run down           # stop Postgres
+```
+
+Set `OHARA_DB_PORT` when another Postgres holds port 5432.
 
 ## Personal cover photos
 
@@ -31,5 +40,5 @@ database with `pg_dump` and the corresponding restore tool to preserve them.
 ## Image
 
 `ghcr.io/automaat/ohara` serves the API, the web UI, `/health` and
-`/metrics` on port 8000. See [AGENTS.md](AGENTS.md) for configuration,
+`/metrics` on port 8000. See [CLAUDE.md](CLAUDE.md) for configuration,
 conventions and deployment.

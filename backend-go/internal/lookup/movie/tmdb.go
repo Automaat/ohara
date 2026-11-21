@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+
+	"github.com/Automaat/ohara/backend-go/internal/fetch"
 )
 
 // TMDB searches The Movie Database. Key is either a v3 API key, sent as the
@@ -71,26 +73,18 @@ func (t TMDB) Search(ctx context.Context, query string, year *int) ([]TMDBMovie,
 	if !bearer {
 		q.Set("api_key", t.Key)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/3/search/movie?"+q.Encode(), http.NoBody)
-	if err != nil {
-		return nil, fmt.Errorf("tmdb: %w", err)
-	}
-	req.Header.Set("Accept", "application/json")
+	header := http.Header{"Accept": {"application/json"}}
 	if bearer {
-		req.Header.Set("Authorization", "Bearer "+t.Key)
+		header.Set("Authorization", "Bearer "+t.Key)
 	}
-	client := t.Client
-	if client == nil {
-		client = http.DefaultClient
-	}
-	_, body, err := get(client, "tmdb", req, http.StatusOK)
+	resp, err := get(ctx, t.Client, "tmdb", fetch.Request{URL: base + "/3/search/movie?" + q.Encode(), Header: header})
 	if err != nil {
 		return nil, err
 	}
 	var r struct {
 		Results *[]TMDBMovie `json:"results"`
 	}
-	if err := json.Unmarshal(body, &r); err != nil {
+	if err := json.Unmarshal(resp.Body, &r); err != nil {
 		return nil, parseFailed("tmdb", err)
 	}
 	if r.Results == nil {

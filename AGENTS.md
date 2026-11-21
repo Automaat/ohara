@@ -30,6 +30,7 @@ Same layout and tooling as `../baratie`. `package.json` and
     /valuation/        # daily value of owned copies: OLX, SkupSzop buy-back, Discogs; value history
     /server/           # router: /health, /metrics, /api/*, SPA fallback
     /web/              # serves the built SPA, index.html for client routes
+    /fetch/            # fetch.Do: one request to an outside source, capped body, query-free errors
     /metrics/          # Prometheus collectors on a private registry (ohara_*)
 /src/                  # SvelteKit SPA (adapter-static, ssr off)
   /routes/             # pages; /scan is the scanner, /scan/queue the unresolved barcodes
@@ -227,4 +228,5 @@ home-nas stack file.
 - Conventional commits `type(scope): description`, signed with `-s -S`.
 - CI: frontend (lint, check, coverage, build), Go (vet, test against
   Postgres, golangci-lint, nilaway), image build; `main` pushes
-  `:latest` and `:<sha>`.
+  `:latest` and `:<sha>`. Pushed images (`main` and `release.yml`)
+  carry BuildKit's SBOM and max-mode provenance attestations.

@@ -30,6 +30,7 @@ Same layout and tooling as `../baratie`. `package.json` and
     /valuation/        # daily value of owned copies: OLX, SkupSzop buy-back, Discogs; value history
     /server/           # router: /health, /metrics, /api/*, SPA fallback
     /web/              # serves the built SPA, index.html for client routes
+    /fetch/            # fetch.Do: one request to an outside source, capped body, query-free errors
     /metrics/          # Prometheus collectors on a private registry (ohara_*)
     /recovery/         # recovery.Call: a panic outside a request handler becomes a logged error
 /src/                  # SvelteKit SPA (adapter-static, ssr off)
@@ -107,6 +108,11 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   when the cart shows the offer or the shop does not buy the book, with
   results 1 for an offer. Register each source with
   `metrics.InitSource` so its counters exist before the first failure.
+  Every source request but Telegram's goes through `fetch.Do`: a body
+  over the caller's cap fails (`fetch.Outcome` counts it a parse error),
+  a status the caller does not accept is a `fetch.StatusError` returned
+  with the response headers, and errors never carry the URL's query.
+  Browser-like sites get `fetch.BrowserUserAgent`.
   When some of its sources fail but others answered, it returns a
   `*lookup.PartialError`: the lookup reports the failure next to the
   candidates and does not cache the answer. The movie chain waits at most
@@ -267,10 +273,23 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
 
 None in the app. Production sits behind Traefik with the Authelia forward-auth
 middleware, so the app trusts every request that reaches it. Do not expose
-the container port beyond the LAN. Authelia's session cookie covers every
-`*.mskalski.dev` site, so the router answers 403 to any method but GET, HEAD
-and OPTIONS that a browser marks as cross-origin: a `Sec-Fetch-Site` other
-than `same-origin` or `none`, or an `Origin` whose host is not `Host`.
+the container port beyond the LAN. With `OHARA_REQUIRE_REMOTE_USER=true` the
+router answers 401 (`{"error": "..."}`, never a redirect) to a request
+without a non-empty `Remote-User` header, the one Traefik copies from
+Authelia's answer, so a request that skips the middleware reaches no handler,
+page or file. Only `GET /health` and `GET /metrics` stay open, for the Docker
+healthcheck and Prometheus, with the path matched as chi routes it; a 401
+still counts in `ohara_http_requests_total`. The guard checks only that the
+header is there, so it holds only while Traefik sets it from Authelia's
+answer and the container port accepts nothing but Traefik and Prometheus
+(home-nas firewall); anyone else who can reach the port can send the header. The name is never
+used for authorization or stored. It is off by default (dev, CI and the Vite
+proxy have no Authelia) and the startup log says whether it is on.
+
+Authelia's session cookie covers every `*.mskalski.dev` site, so the router
+answers 403 to any method but GET, HEAD and OPTIONS that a browser marks as
+cross-origin: a `Sec-Fetch-Site` other than `same-origin` or `none`, or an
+`Origin` whose host is not `Host`.
 Requests with neither header, like curl, pass. The Vite dev proxy keeps the
 browser's `Host` (`changeOrigin: false`) so dev writes pass this check.
 
@@ -282,6 +301,7 @@ browser's `Host` (`changeOrigin: false`) so dev writes pass this check.
 | `OHARA_ADDR`                                             | `:8000`                                            | Listen address                                                                                            |
 | `OHARA_WEB_DIR`                                          | unset (`/app/web` in the image)                    | Built SPA to serve                                                                                        |
 | `OHARA_ACCESS_LOG`                                       | `false`                                            | One log line per request                                                                                  |
+| `OHARA_REQUIRE_REMOTE_USER`                              | `false`                                            | Answer 401 to requests without Authelia's `Remote-User` header, except `/health` and `/metrics`           |
 | `OHARA_LOOKUP_STUB`                                      | `false`                                            | Register the stub lookup provider (placeholder candidate for every barcode)                               |
 | `OHARA_GOOGLE_BOOKS_API_KEY`                             | unset                                              | Enable the Google Books provider (keyless clients get no quota)                                           |
 | `OHARA_DEALS_INTERVAL`                                   | `0s` (off)                                         | Deal search schedule, at least `10m` (e.g. `2h`), jittered ±10%; `POST /api/deals/run` works either way   |
@@ -333,16 +353,19 @@ Runs on `custom-workloads` from `home-nas`
 `https://ohara.mskalski.dev` behind Traefik + Authelia. Nightly `pg_dump`
 goes offsite through restic.
 
-Release: run `release.yml` (empty input bumps the minor) → tag `vX.Y.Z`,
-GitHub release, `ghcr.io/automaat/ohara:vX.Y.Z`. Then bump the tag in the
-home-nas stack file.
+Release: run `release.yml` on `main` (empty input bumps the minor). It
+refuses another ref, a commit whose `CI` run has not passed and a version
+whose tag exists, then pushes `ghcr.io/automaat/ohara:vX.Y.Z`, tags `vX.Y.Z`
+and cuts the GitHub release, in that order. `:latest` comes only from CI on
+`main`. Then bump the tag in the home-nas stack file.
 
 ## Git and CI
 
 - Conventional commits `type(scope): description`, signed with `-s -S`.
 - CI: frontend (lint, check, coverage, build), Go (vet, test against
   Postgres, golangci-lint, nilaway), image build; `main` pushes
-  `:latest` and `:<sha>`.
+  `:latest` and `:<sha>`. Pushed images (`main` and `release.yml`)
+  carry BuildKit's SBOM and max-mode provenance attestations.
 - One Go patch release everywhere: `toolchain` in `backend-go/go.mod`
   (CI's `setup-go` reads it), the Dockerfile's `golang` tag and `go` in
   `.mise.toml`. Renovate's `go` group bumps them in one PR, opened only

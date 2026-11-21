@@ -1,6 +1,7 @@
 package valuation
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Automaat/ohara/backend-go/internal/discogs"
+	"github.com/Automaat/ohara/backend-go/internal/fetch"
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
 )
 
@@ -196,35 +198,21 @@ func (n *NBP) fetch(ctx context.Context, code string) (float64, error) {
 		base = NBPURL
 	}
 	u := base + "/api/exchangerates/rates/a/" + url.PathEscape(strings.ToLower(code)) + "/?format=json"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, http.NoBody)
+	resp, err := fetch.Do(ctx, n.Client, fetch.Request{
+		URL:     u,
+		Header:  http.Header{"Accept": {"application/json"}},
+		MaxBody: maxRateBody,
+	})
 	if err != nil {
-		metrics.ObserveSource(SourceNBP, metrics.SourceError)
-		return 0, errors.New("nbp: build request: invalid URL")
-	}
-	req.Header.Set("Accept", "application/json")
-	client := n.Client
-	if client == nil {
-		client = http.DefaultClient
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		metrics.ObserveSource(SourceNBP, metrics.SourceError)
-		if uerr, ok := errors.AsType[*url.Error](err); ok {
-			err = uerr.Err
-		}
+		metrics.ObserveSource(SourceNBP, fetch.Outcome(err))
 		return 0, fmt.Errorf("nbp: %s rate: %w", code, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		metrics.ObserveSource(SourceNBP, fmt.Sprintf("http_%d", resp.StatusCode))
-		return 0, fmt.Errorf("nbp: %s rate: unexpected status %d", code, resp.StatusCode)
 	}
 	var r struct {
 		Rates []struct {
 			Mid float64 `json:"mid"`
 		} `json:"rates"`
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(nil, resp.Body, maxRateBody)).Decode(&r); err != nil {
+	if err := json.NewDecoder(bytes.NewReader(resp.Body)).Decode(&r); err != nil {
 		metrics.ObserveSource(SourceNBP, metrics.SourceParseError)
 		return 0, fmt.Errorf("nbp: %s rate: parse: %w", code, err)
 	}

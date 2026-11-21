@@ -43,16 +43,16 @@ usage() {
 accepted() {
     local gate="$1" today
     today="$(date -u +%Y-%m-%d)"
-    if ! jq -e --arg gate "$gate" 'type == "object" and ((.[$gate] // []) | type == "array")' \
+    if ! jq -e --arg gate "$gate" 'type == "object" and ((has($gate) | not) or (.[$gate] | type == "array"))' \
         "$allowlist" >/dev/null; then
-        echo "error: $allowlist must be a JSON object whose \"$gate\" is a list" >&2
+        echo "error: $allowlist must be a JSON object whose \"$gate\", if present, is a list" >&2
         return 1
     fi
     local invalid
     invalid="$(jq -r --arg gate "$gate" '
         (.[$gate] // [])[]
         | select(
-            (.id | type) != "string" or .id == ""
+            (.id | type) != "string" or (.id | test("^\\s*$"))
             or (.reason | type) != "string" or (.reason | test("^\\s*$"))
             or (.expires | type) != "string"
             or (.expires | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$") | not)
@@ -129,7 +129,8 @@ check_npm() {
     local status=0
     cd "$root"
     # npm audit exits 1 when it finds anything, so read its JSON instead.
-    npm audit --json >"$out" || status=$?
+    # --include=dev overrides an inherited omit=dev (NODE_ENV=production).
+    npm audit --json --include=dev >"$out" || status=$?
     if ! jq -e 'type == "object" and has("vulnerabilities") and (has("error") | not)' "$out" >/dev/null; then
         echo "error: npm audit failed (exit $status):" >&2
         cat "$out" >&2
@@ -148,13 +149,13 @@ check_npm() {
 write_trivyignore() {
     local file="$1" allowed
     allowed="$(accepted image)"
-    # Trivy drops an entry from the start of its expired_at day, so give it
-    # the day after: an entry counts through its expires day in every gate.
+    # A bare date in expired_at means its first instant to Trivy, so give it
+    # the day's last one: an entry counts through its expires day in every
+    # gate, 9999-12-31 included.
     jq -r '
         if length == 0 then "vulnerabilities: []"
         else "vulnerabilities:",
-            (.[] | ((.expires + "T00:00:00Z") | fromdateiso8601 + 86400 | strftime("%Y-%m-%d")) as $until
-                | "  - id: \(.id | tojson)\n    statement: \(.reason | tojson)\n    expired_at: \($until)")
+            (.[] | "  - id: \(.id | tojson)\n    statement: \(.reason | tojson)\n    expired_at: \(.expires)T23:59:59.999999999Z")
         end' <<<"$allowed" >"$file"
     echo "image: $(jq length <<<"$allowed") accepted findings written to $file"
 }

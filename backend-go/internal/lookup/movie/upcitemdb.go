@@ -10,15 +10,16 @@ import (
 	"strings"
 )
 
-// UPCitemdb queries the free UPCitemdb trial endpoint (100 requests a day per
-// IP, no key). It knows mostly US releases.
+// UPCitemdb queries the free UPCitemdb trial endpoint (100 requests a day and
+// 6 a minute per IP, no key). It knows mostly US releases. Past either limit
+// it answers 429, which Products reports as a *RateLimitError.
 type UPCitemdb struct {
 	Client  *http.Client
 	BaseURL string
 }
 
-// ErrQuotaExceeded reports a provider's daily request limit.
-var ErrQuotaExceeded = errors.New("daily quota exceeded")
+// ErrQuotaExceeded reports a source's request limit.
+var ErrQuotaExceeded = errors.New("rate limit exceeded")
 
 type upcResponse struct {
 	Code  string `json:"code"`
@@ -49,7 +50,7 @@ func (u UPCitemdb) Products(ctx context.Context, code string) ([]Product, error)
 	}
 	status, body, err := get(client, u.Name(), req, http.StatusOK, http.StatusBadRequest, http.StatusNotFound)
 	if isStatus(err, http.StatusTooManyRequests) {
-		return nil, fmt.Errorf("upcitemdb: %w", ErrQuotaExceeded)
+		return nil, fmt.Errorf("upcitemdb: %w", &RateLimitError{Reset: limitReset(err)})
 	}
 	if err != nil {
 		return nil, err

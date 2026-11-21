@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"math"
 	"sync"
+	"time"
 
 	"github.com/Automaat/ohara/backend-go/internal/barcode"
 	"github.com/Automaat/ohara/backend-go/internal/lookup"
@@ -25,11 +26,29 @@ type Searcher interface {
 // without any request.
 type Provider struct {
 	Sources []NameSource
-	TMDB    Searcher
+	// Fallbacks are asked only when Sources name no product, so a source
+	// with a small request quota (UPCitemdb) spends it only where it helps.
+	Fallbacks []NameSource
+	TMDB      Searcher
 	// Logger records a name source's recovered panic; nil logs to
 	// slog.Default().
 	Logger *slog.Logger
+	// Now is the clock for rate-limit pauses; nil means time.Now.
+	Now func() time.Time
+
+	mu sync.Mutex
+	// paused holds, per source name, when a source that answered with a
+	// *RateLimitError takes requests again.
+	paused map[string]time.Time
 }
+
+// limitPause is how long a source rests after a rate-limit answer that does
+// not say when the limit resets; maxLimitPause bounds the reset it does
+// give, since the longest limit is a daily one.
+const (
+	limitPause    = time.Hour
+	maxLimitPause = 24 * time.Hour
+)
 
 // maxQueries bounds TMDB searches per barcode when sources disagree.
 const maxQueries = 3
@@ -55,27 +74,26 @@ func (*Provider) Name() string { return "movie" }
 // Accepts every barcode except ISBNs: books have their own providers.
 func (*Provider) Accepts(code string) bool { return !barcode.IsBook(code) }
 
-// Fetch asks every name source concurrently, then searches TMDB for the
-// distinct titles. With no product found, a failed source fails the fetch so
-// a "no match" built on an outage is not cached. When another source found
-// the product, the answer comes back as a *lookup.PartialError naming the
-// failed sources (an Allegro refusal included), so the lookup reports them
-// and does not cache the answer.
+// Fetch asks every name source concurrently, and the fallbacks only when
+// those name no product, then searches TMDB for the distinct titles. A
+// source paused for its rate limit is skipped and counts as failed. With no
+// product found, a failed source fails the fetch so a "no match" built on an
+// outage is not cached. When another source found the product, the answer
+// comes back as a *lookup.PartialError naming the failed sources (an Allegro
+// refusal included), so the lookup reports them and does not cache the
+// answer.
 func (p *Provider) Fetch(ctx context.Context, code string) (json.RawMessage, error) {
 	raw := Raw{Products: []Product{}, Searches: []Search{}}
-	found := make([][]Product, len(p.Sources))
-	errs := make([]error, len(p.Sources))
-	var wg sync.WaitGroup
-	for i, s := range p.Sources {
-		wg.Go(func() { found[i], errs[i] = p.products(ctx, i, s, code) })
-	}
-	wg.Wait()
-	for _, f := range found {
-		raw.Products = append(raw.Products, f...)
+	var errs error
+	raw.Products, errs = p.ask(ctx, raw.Products, p.Sources, 0, code)
+	if len(raw.Products) == 0 && len(p.Fallbacks) > 0 {
+		var fallbackErr error
+		raw.Products, fallbackErr = p.ask(ctx, raw.Products, p.Fallbacks, len(p.Sources), code)
+		errs = errors.Join(errs, fallbackErr)
 	}
 	if len(raw.Products) == 0 {
-		if err := errors.Join(errs...); err != nil {
-			return nil, err
+		if errs != nil {
+			return nil, errs
 		}
 		return json.Marshal(raw)
 	}
@@ -96,15 +114,31 @@ func (p *Provider) Fetch(ctx context.Context, code string) (json.RawMessage, err
 	if err != nil {
 		return nil, fmt.Errorf("encode movie response: %w", err)
 	}
-	if failed := errors.Join(errors.Join(errs...), errors.Join(searchErrs...)); failed != nil {
+	if failed := errors.Join(errs, errors.Join(searchErrs...)); failed != nil {
 		return nil, &lookup.PartialError{Raw: data, Err: failed}
 	}
 	return data, nil
 }
 
-// products asks one name source. A panic in it, its name included, fails
-// that source with an error naming it, or naming its position when the
-// name itself panicked.
+// ask asks sources concurrently and appends what they name to out. first
+// is the position of sources[0] among all the provider's name sources.
+func (p *Provider) ask(ctx context.Context, out []Product, sources []NameSource, first int, code string) ([]Product, error) {
+	found := make([][]Product, len(sources))
+	errs := make([]error, len(sources))
+	var wg sync.WaitGroup
+	for i, s := range sources {
+		wg.Go(func() { found[i], errs[i] = p.products(ctx, first+i, s, code) })
+	}
+	wg.Wait()
+	for _, f := range found {
+		out = append(out, f...)
+	}
+	return out, errors.Join(errs...)
+}
+
+// products asks one name source, unless it is paused for its rate limit. A
+// panic in it, its name included, fails that source with an error naming
+// it, or naming its position when the name itself panicked.
 func (p *Provider) products(ctx context.Context, i int, s NameSource, code string) ([]Product, error) {
 	name, err := recovery.Call(p.Logger, "movie name source panicked", func() (string, error) {
 		return s.Name(), nil
@@ -112,13 +146,62 @@ func (p *Provider) products(ctx context.Context, i int, s NameSource, code strin
 	if err != nil {
 		return nil, fmt.Errorf("name source %d: %w", i, err)
 	}
+	if until, ok := p.pausedUntil(name); ok {
+		return nil, fmt.Errorf("%s: %w, skipped until %s", name, ErrQuotaExceeded, until.UTC().Format(time.RFC3339))
+	}
 	found, err := recovery.Call(p.Logger, "movie name source panicked", func() ([]Product, error) {
 		return s.Products(ctx, code)
 	}, "source", name, "barcode", code)
 	if pe, ok := errors.AsType[*recovery.PanicError](err); ok {
 		return nil, fmt.Errorf("%s: %w", name, pe)
 	}
+	if rl, ok := errors.AsType[*RateLimitError](err); ok {
+		p.pause(name, rl.Reset)
+	}
 	return found, err
+}
+
+func (p *Provider) now() time.Time {
+	if p.Now != nil {
+		return p.Now()
+	}
+	return time.Now()
+}
+
+// pause stops requests to a source until reset, or for limitPause when
+// reset is unknown or already past.
+func (p *Provider) pause(name string, reset time.Time) {
+	now := p.now()
+	until := now.Add(limitPause)
+	if reset.After(now) {
+		until = reset
+	}
+	if longest := now.Add(maxLimitPause); until.After(longest) {
+		until = longest
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.paused == nil {
+		p.paused = map[string]time.Time{}
+	}
+	if until.After(p.paused[name]) {
+		p.paused[name] = until
+	}
+}
+
+// pausedUntil reports when a paused source takes requests again.
+func (p *Provider) pausedUntil(name string) (time.Time, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	until, ok := p.paused[name]
+	if !ok {
+		return time.Time{}, false
+	}
+	if !p.now().Before(until) {
+		delete(p.paused, name)
+		return time.Time{}, false
+	}
+	return until, true
 }
 
 // search narrows by year first, then drops the year, then falls back to

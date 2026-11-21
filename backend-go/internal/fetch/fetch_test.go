@@ -326,14 +326,25 @@ func closedURL(t *testing.T) string {
 
 // TestDoTimesRequests checks that a request with a Source is timed once
 // whatever its outcome, a transport error and an unreadable body included.
+// Answers whose body Do reads send their headers before the delay, so the
+// time must run until the body is read; a refusal returns at its headers,
+// so it waits before them.
 func TestDoTimesRequests(t *testing.T) {
 	const delay = 50 * time.Millisecond
-	slow := func(status int, contentLength, body string) http.HandlerFunc {
+	slowBody := func(status int, contentLength, body string) http.HandlerFunc {
 		return func(w http.ResponseWriter, _ *http.Request) {
-			time.Sleep(delay)
 			if contentLength != "" {
 				w.Header().Set("Content-Length", contentLength)
 			}
+			w.WriteHeader(status)
+			w.(http.Flusher).Flush()
+			time.Sleep(delay)
+			_, _ = w.Write([]byte(body))
+		}
+	}
+	slowHeaders := func(status int, body string) http.HandlerFunc {
+		return func(w http.ResponseWriter, _ *http.Request) {
+			time.Sleep(delay)
 			w.WriteHeader(status)
 			_, _ = w.Write([]byte(body))
 		}
@@ -344,11 +355,11 @@ func TestDoTimesRequests(t *testing.T) {
 		wantOutcome string
 		wantMin     time.Duration
 	}{
-		{name: "ok", handler: slow(http.StatusOK, "", "ok"), wantOutcome: metrics.SourceOK, wantMin: delay},
-		{name: "error status", handler: slow(http.StatusServiceUnavailable, "", "down"), wantOutcome: "http_503", wantMin: delay},
-		{name: "refusal", handler: slow(http.StatusTooManyRequests, "", "slow down"), wantOutcome: "http_429", wantMin: delay},
-		{name: "body over the cap", handler: slow(http.StatusOK, "", strings.Repeat("x", testCap+1)), wantOutcome: metrics.SourceParseError, wantMin: delay},
-		{name: "unreadable body", handler: slow(http.StatusOK, "100", "short"), wantOutcome: metrics.SourceError, wantMin: delay},
+		{name: "ok", handler: slowBody(http.StatusOK, "", "ok"), wantOutcome: metrics.SourceOK, wantMin: delay},
+		{name: "error status", handler: slowBody(http.StatusServiceUnavailable, "", "down"), wantOutcome: "http_503", wantMin: delay},
+		{name: "refusal", handler: slowHeaders(http.StatusTooManyRequests, "slow down"), wantOutcome: "http_429", wantMin: delay},
+		{name: "body over the cap", handler: slowBody(http.StatusOK, "", strings.Repeat("x", testCap+1)), wantOutcome: metrics.SourceParseError, wantMin: delay},
+		{name: "unreadable body", handler: slowBody(http.StatusOK, "100", "short"), wantOutcome: metrics.SourceError, wantMin: delay},
 		{name: "closed port", wantOutcome: metrics.SourceError},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -359,16 +370,17 @@ func TestDoTimesRequests(t *testing.T) {
 				t.Cleanup(srv.Close)
 				target = srv.URL
 			}
+			countBefore, sumBefore := sourceDuration(t, source)
 			_, err := Do(t.Context(), nil, Request{Source: source, URL: target, MaxBody: testCap})
 			if got := Outcome(err); got != tc.wantOutcome {
 				t.Fatalf("Outcome = %q (err %v), want %q", got, err, tc.wantOutcome)
 			}
 			count, sum := sourceDuration(t, source)
-			if count != 1 {
-				t.Errorf("timed requests = %v, want 1", count)
+			if d := count - countBefore; d != 1 {
+				t.Errorf("timed requests grew by %v, want 1", d)
 			}
-			if sum < tc.wantMin.Seconds() {
-				t.Errorf("timed seconds = %v, want at least %v", sum, tc.wantMin.Seconds())
+			if d := sum - sumBefore; d < tc.wantMin.Seconds() {
+				t.Errorf("timed seconds grew by %v, want at least %v", d, tc.wantMin.Seconds())
 			}
 		})
 	}

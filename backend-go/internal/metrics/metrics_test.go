@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -90,7 +91,7 @@ func scrape(t *testing.T) string {
 // client's 30 s timeout cut off, which runs a little past 30 s, lands in a
 // finite bucket.
 func TestSourceDurationBucketsHoldADealTimeout(t *testing.T) {
-	const src = "test-duration"
+	src := "test-duration-" + strconv.FormatInt(time.Now().UnixNano(), 10)
 	InitSource(src)
 	series := `ohara_source_request_duration_seconds_count{source="` + src + `"} `
 	if text := scrape(t); !strings.Contains(text, series+"0\n") {

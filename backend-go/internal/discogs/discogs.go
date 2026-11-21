@@ -225,16 +225,19 @@ func (b cancelOnClose) Close() error {
 // get waits for the token's budget, fetches path, decodes the JSON body
 // into out and runs check on it. The outcome counts in the source health
 // metrics: ok only once the body decodes and passes check; a request the
-// budget kept back was never sent and does not count. Errors name the
+// budget kept back was never sent and does not count. A base URL that does
+// not parse counts as an error and is timed like a sent request. Errors name the
 // path without the query.
 func (c *Client) get(ctx context.Context, path string, out any, check func() error) error {
 	base := c.BaseURL
 	if base == "" {
 		base = BaseURL
 	}
+	start := time.Now()
 	u, err := url.Parse(base + path)
 	if err != nil {
 		metrics.ObserveSource(Source, metrics.SourceError)
+		metrics.ObserveSourceDuration(Source, time.Since(start))
 		return errors.New("discogs: build request: invalid URL")
 	}
 	if err := c.Limiter.Wait(ctx, c.Priority); err != nil {

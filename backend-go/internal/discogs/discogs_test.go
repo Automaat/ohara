@@ -184,6 +184,21 @@ func TestPriceSuggestions(t *testing.T) {
 	wantDelta(t, before, scrape(t), map[string]float64{requestsSeries("ok"): 1, errorsSeries: 0})
 }
 
+// TestInvalidBaseURLIsTimed checks that a base URL that does not parse,
+// which counts as an error without a request sent, is timed as well.
+func TestInvalidBaseURLIsTimed(t *testing.T) {
+	c := &discogs.Client{BaseURL: "http://[", Token: testToken}
+	before := scrape(t)
+	if _, err := c.Stats(t.Context(), 1873013, "EUR"); err == nil {
+		t.Fatal("no error")
+	}
+	wantDelta(t, before, scrape(t), map[string]float64{
+		requestsSeries("error"): 1,
+		errorsSeries:            1,
+		`ohara_source_request_duration_seconds_count{source="discogs"}`: 1,
+	})
+}
+
 func TestMarketplaceFailuresCountInMetrics(t *testing.T) {
 	stats := func(ctx context.Context, c *discogs.Client) error {
 		_, err := c.Stats(ctx, 1873013, "EUR")

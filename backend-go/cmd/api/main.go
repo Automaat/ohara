@@ -103,7 +103,13 @@ func run() int {
 	// One Allegro client serves both chains: it holds the token lock. Its
 	// token refreshes finish before the pool closes.
 	allegro := newAllegro(pool)
-	defer allegro.Wait()
+	defer func() {
+		saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if err := allegro.Wait(saveCtx); err != nil {
+			logger.Error("allegro token", "err", err)
+		}
+	}()
 	lookupService, err := newLookup(pool, allegro, logger)
 	if err != nil {
 		logger.Error("lookup providers", "err", err)

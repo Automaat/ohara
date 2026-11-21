@@ -56,7 +56,7 @@ func TestWaitKeepsTheRotatedTokenThroughShutdown(t *testing.T) {
 	if got := store.refresh(); got != refreshFor(0) {
 		t.Fatalf("token stored before the refresh answered: %q", got)
 	}
-	a.Wait()
+	waitAllegro(t, a)
 	if got := store.refresh(); got != refreshFor(1) {
 		t.Fatalf("after Wait the stored refresh token is %q, want the rotated %q", got, refreshFor(1))
 	}
@@ -77,7 +77,7 @@ func TestAllegroCallerStopsWaitingAtItsDeadline(t *testing.T) {
 	if took := time.Since(start); took > time.Second {
 		t.Fatalf("caller waited %s for the refresh", took)
 	}
-	a.Wait()
+	waitAllegro(t, a)
 	if got := store.refresh(); got != refreshFor(1) {
 		t.Fatalf("stored refresh token %q, want %q", got, refreshFor(1))
 	}
@@ -97,7 +97,7 @@ func TestAllegroCallersShareOneRefresh(t *testing.T) {
 		wg.Go(func() { _, errs[i] = a.Products(context.Background(), "5906190326195") })
 	}
 	wg.Wait()
-	a.Wait()
+	waitAllegro(t, a)
 	if err := errors.Join(errs...); err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestAllegroExpiredCallerStartsNoRefresh(t *testing.T) {
 	if _, err := a.Products(ctx, "5906190326195"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
-	a.Wait()
+	waitAllegro(t, a)
 	if n := srv.refreshCount(); n != 0 || store.refresh() != refreshFor(0) {
 		t.Fatalf("refreshes = %d, stored %q", n, store.refresh())
 	}
@@ -151,5 +151,116 @@ func TestLateRateLimitStillPausesTheSource(t *testing.T) {
 			t.Fatal("source not paused after its late 429")
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// TestAllegroRefreshOutlivesTheClientTimeout: the shared source client's
+// timeout does not cut a refresh short; only refreshTimeout bounds it.
+func TestAllegroRefreshOutlivesTheClientTimeout(t *testing.T) {
+	a, srv, store := slowTokenAllegro(t, 1200*time.Millisecond)
+	client := *a.Client
+	client.Timeout = 500 * time.Millisecond
+	a.Client = &client
+	if _, err := a.Products(context.Background(), "5906190326195"); err != nil {
+		t.Fatalf("lookup: %v", err)
+	}
+	waitAllegro(t, a)
+	if got := store.refresh(); got != refreshFor(1) || srv.refreshCount() != 1 {
+		t.Fatalf("stored %q after %d refreshes, want %q after 1", got, srv.refreshCount(), refreshFor(1))
+	}
+}
+
+// TestAllegroRefreshesARejectedTokenOnce: when two lookups present the same
+// access token and the catalog rejects it, the second, rejected after the
+// first already refreshed, uses the new token instead of refreshing again.
+func TestAllegroRefreshesARejectedTokenOnce(t *testing.T) {
+	now := time.Now()
+	store := &memStore{token: &Token{Access: "revoked", Refresh: refreshFor(0), Expiry: now.Add(time.Hour)}}
+	srv := &allegroServer{}
+	handler := srv.handler(t)
+	var mu sync.Mutex
+	rejected := 0
+	s := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/sale/products" && r.Header.Get("Authorization") == "Bearer revoked" {
+			mu.Lock()
+			rejected++
+			late := rejected == 2
+			mu.Unlock()
+			if late {
+				time.Sleep(500 * time.Millisecond)
+			}
+		}
+		handler(w, r)
+	})
+	a := &Allegro{
+		ClientID: "id", ClientSecret: "secret", Store: store, Client: s.Client(), APIBase: s.URL, AuthBase: s.URL,
+		Now: func() time.Time { return now },
+	}
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	for i := range errs {
+		wg.Go(func() { _, errs[i] = a.Products(context.Background(), "5906190326195") })
+	}
+	wg.Wait()
+	waitAllegro(t, a)
+	if err := errors.Join(errs...); err != nil {
+		t.Fatal(err)
+	}
+	if n := srv.refreshCount(); n != 1 {
+		t.Fatalf("refreshes = %d, want 1", n)
+	}
+}
+
+func waitAllegro(t *testing.T, a *Allegro) {
+	t.Helper()
+	if err := a.Wait(context.Background()); err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+}
+
+// flakyStore fails the first failures writes, like a database that is
+// briefly unreachable.
+type flakyStore struct {
+	memStore
+	failures int
+}
+
+func (f *flakyStore) Save(ctx context.Context, provider string, t Token) error {
+	f.mu.Lock()
+	fail := f.failures > 0
+	if fail {
+		f.failures--
+	}
+	f.mu.Unlock()
+	if fail {
+		return errors.New("database unavailable")
+	}
+	return f.memStore.Save(ctx, provider, t)
+}
+
+// TestWaitStoresATokenWhoseWriteFailed: the store rejects the rotated pair
+// once. Lookups keep using it from memory, and shutdown stores it, since
+// Allegro no longer accepts the refresh token the store still holds.
+func TestWaitStoresATokenWhoseWriteFailed(t *testing.T) {
+	now := time.Now()
+	store := &flakyStore{memStore: memStore{token: &Token{Access: accessFor(0), Refresh: refreshFor(0), Expiry: now.Add(-time.Minute)}}, failures: 1}
+	srv := &allegroServer{}
+	s := serve(t, srv.handler(t))
+	a := &Allegro{
+		ClientID: "id", ClientSecret: "secret", Store: store, Client: s.Client(), APIBase: s.URL, AuthBase: s.URL,
+		Now: func() time.Time { return now },
+	}
+	if _, err := a.Products(context.Background(), "5906190326195"); err == nil || !strings.Contains(err.Error(), "save token") {
+		t.Fatalf("err = %v, want the failed write", err)
+	}
+	if _, err := a.Products(context.Background(), "5906190326195"); err != nil || srv.refreshCount() != 1 {
+		t.Fatalf("next lookup: %v, refreshes %d", err, srv.refreshCount())
+	}
+	if got := store.refresh(); got != refreshFor(0) {
+		t.Fatalf("stored %q before shutdown", got)
+	}
+	waitAllegro(t, a)
+	if got := store.refresh(); got != refreshFor(1) {
+		t.Fatalf("after Wait stored %q, want %q", got, refreshFor(1))
 	}
 }

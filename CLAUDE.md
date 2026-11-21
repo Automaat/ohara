@@ -159,7 +159,8 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   errors name the refusal once with the requests it skipped, and skipped
   requests count in no source metric. Other failures do not stop asking.
   Hunts and valuations share one `deals.Pacer`, built in `cmd/api`, each
-  in a lane of its own: a request to a site is sent at least half of
+  in a lane of its own that paces every request of its HTTP client,
+  redirects too: a request to a host is sent at least half of
   `OHARA_DEALS_DELAY` after the other lane's last one there. A request
   holds the site until it is written, never while it waits for an answer,
   so neither run waits for the other to finish; a lane never waits for

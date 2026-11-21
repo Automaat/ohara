@@ -400,7 +400,7 @@ func newRuns(pool *pgxpool.Pool, logger *slog.Logger) (*deals.Hunter, *deals.Sto
 // newHunter configures the deal hunter from the environment. Polling stays
 // off until OHARA_DEALS_INTERVAL is set; alerts need both Telegram
 // variables. The *_URL variables point the sources at test doubles.
-// lane spaces its source requests from the valuation's.
+// lane spaces its requests from the valuation's.
 func newHunter(pool *pgxpool.Pool, lane *deals.Lane, logger *slog.Logger) (*deals.Hunter, *deals.Store, error) {
 	interval, err := time.ParseDuration(envOr("OHARA_DEALS_INTERVAL", "0s"))
 	if err != nil || interval < 0 {
@@ -413,9 +413,9 @@ func newHunter(pool *pgxpool.Pool, lane *deals.Lane, logger *slog.Logger) (*deal
 	if err != nil {
 		return nil, nil, err
 	}
-	client := deals.NewHTTPClient()
-	sources := usedSources(client, lane)
-	sources = append(sources, lane.Source(deals.Pepper{Client: client, BaseURL: envOr("OHARA_DEALS_PEPPER_URL", deals.PepperURL)}))
+	client := pacedClient(lane)
+	sources := usedSources(client)
+	sources = append(sources, deals.Pepper{Client: client, BaseURL: envOr("OHARA_DEALS_PEPPER_URL", deals.PepperURL)})
 	var notifier deals.Notifier
 	token, chat := os.Getenv("OHARA_TELEGRAM_BOT_TOKEN"), os.Getenv("OHARA_TELEGRAM_CHAT_ID")
 	switch {
@@ -442,16 +442,24 @@ func sourceDelay() (time.Duration, error) {
 	return delay, nil
 }
 
+// pacedClient is the HTTP client of one runner's sources: every request
+// waits its turn in lane.
+func pacedClient(lane *deals.Lane) *http.Client {
+	client := deals.NewHTTPClient()
+	client.Transport = lane.Transport(nil)
+	return client
+}
+
 // usedSources are the marketplaces of used copies: OLX.
-func usedSources(client *http.Client, lane *deals.Lane) []deals.Source {
-	return []deals.Source{lane.Source(deals.OLX{Client: client, BaseURL: envOr("OHARA_DEALS_OLX_URL", deals.OLXURL)})}
+func usedSources(client *http.Client) []deals.Source {
+	return []deals.Source{deals.OLX{Client: client, BaseURL: envOr("OHARA_DEALS_OLX_URL", deals.OLXURL)}}
 }
 
 // newValuation configures the valuation runner from the environment. The
 // daily schedule stays off until OHARA_VALUATION_INTERVAL is set; it asks
 // the deal hunter's OLX, with the same pause, SkupSzop and, with
-// a Discogs token, the Discogs marketplace. lane spaces its OLX requests
-// from the hunter's.
+// a Discogs token, the Discogs marketplace. lane spaces its requests from
+// the hunter's.
 func newValuation(pool *pgxpool.Pool, lane *deals.Lane, logger *slog.Logger) (*valuation.Runner, *valuation.Store, error) {
 	interval, err := time.ParseDuration(envOr("OHARA_VALUATION_INTERVAL", "0s"))
 	if err != nil || interval < 0 {
@@ -468,8 +476,8 @@ func newValuation(pool *pgxpool.Pool, lane *deals.Lane, logger *slog.Logger) (*v
 	if err != nil {
 		return nil, nil, err
 	}
-	client := deals.NewHTTPClient()
-	sources := usedSources(client, lane)
+	client := pacedClient(lane)
+	sources := usedSources(client)
 	buybacks := []valuation.BuyBack{
 		valuation.SkupSzop{Client: client, BaseURL: envOr("OHARA_VALUATION_SKUPSZOP_URL", valuation.SkupSzopURL)},
 	}

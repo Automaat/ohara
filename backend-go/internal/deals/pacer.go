@@ -2,6 +2,7 @@ package deals
 
 import (
 	"context"
+	"net/http"
 	"net/http/httptrace"
 	"sync"
 	"time"
@@ -90,22 +91,32 @@ func (p *Pacer) site(name string) *paceSite {
 	return s
 }
 
-// Source is src with every search waiting its turn in the lane first,
-// under the source's name. The site is released once the search's first
-// HTTP request is written, or when the search returns without one.
-func (l *Lane) Source(src Source) Source { return pacedSource{Source: src, lane: l} }
+// Transport is base with every request waiting its turn in the lane
+// first, under the request's host; base is http.DefaultTransport when nil.
+// Each request a client sends through it is paced, a redirect's next
+// request too. The site is released once the request is written, or when
+// the round trip fails before that.
+func (l *Lane) Transport(base http.RoundTripper) http.RoundTripper {
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	return pacedTransport{base: base, lane: l}
+}
 
-type pacedSource struct {
-	Source
+type pacedTransport struct {
+	base http.RoundTripper
 	lane *Lane
 }
 
-func (s pacedSource) Search(ctx context.Context, query string) ([]Listing, error) {
-	sent, err := s.lane.Wait(ctx, s.Name())
+func (t pacedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	sent, err := t.lane.Wait(req.Context(), req.URL.Host)
 	if err != nil {
+		if req.Body != nil {
+			_ = req.Body.Close()
+		}
 		return nil, err
 	}
 	defer sent()
 	trace := &httptrace.ClientTrace{WroteRequest: func(httptrace.WroteRequestInfo) { sent() }}
-	return s.Source.Search(httptrace.WithClientTrace(ctx, trace), query)
+	return t.base.RoundTrip(req.WithContext(httptrace.WithClientTrace(req.Context(), trace)))
 }

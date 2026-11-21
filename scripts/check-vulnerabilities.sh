@@ -29,8 +29,9 @@ GOVULNCHECK_VERSION="v1.10.0"
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 allowlist="${OHARA_VULN_ALLOWLIST:-$root/.github/vulnerability-allowlist.json}"
-out="$(mktemp)"
-trap 'rm -f "$out"' EXIT
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+out="$tmp/out.json"
 
 usage() {
     echo "Usage: $0 go <module-dir> | npm | trivyignore <out-file>" >&2
@@ -55,6 +56,7 @@ accepted() {
             or (.reason | type) != "string" or (.reason | test("^\\s*$"))
             or (.expires | type) != "string"
             or (.expires | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$") | not)
+            or (try ((.expires + "T00:00:00Z") | fromdateiso8601 | strftime("%Y-%m-%d")) catch "") != .expires
           )
         | tojson' "$allowlist")"
     if [[ -n "$invalid" ]]; then
@@ -100,11 +102,15 @@ report() {
 check_go() {
     local dir="$1"
     cd "$dir"
-    # The standard library's findings depend on the Go that runs the check;
-    # CI's setup-go installs the go.mod toolchain, the image's Go.
-    echo "$(go version), govulncheck $GOVULNCHECK_VERSION"
+    # The standard library's findings depend on the Go that runs the check
+    # and on the build configuration: CI's setup-go installs the go.mod
+    # toolchain, the image's Go, and the image builds a Linux binary without
+    # cgo, which takes other code paths (os/user, net) than a cgo build.
+    # The tool itself is built for the host, so only its run gets them.
+    GOBIN="$tmp" go install "golang.org/x/vuln/cmd/govulncheck@$GOVULNCHECK_VERSION"
+    echo "$(go version), GOOS=linux CGO_ENABLED=0, govulncheck $GOVULNCHECK_VERSION"
     # JSON output exits 0 with findings and non-zero only on an error.
-    go run "golang.org/x/vuln/cmd/govulncheck@$GOVULNCHECK_VERSION" -format json ./... >"$out"
+    GOOS=linux CGO_ENABLED=0 "$tmp/govulncheck" -format json ./... >"$out"
     local findings
     # Only a trace that starts at a function is reachable from our code;
     # without one the module is only required or the package only imported.
@@ -142,11 +148,13 @@ check_npm() {
 write_trivyignore() {
     local file="$1" allowed
     allowed="$(accepted image)"
-    # Trivy also drops an entry past its expired_at by itself.
+    # Trivy drops an entry from the start of its expired_at day, so give it
+    # the day after: an entry counts through its expires day in every gate.
     jq -r '
         if length == 0 then "vulnerabilities: []"
         else "vulnerabilities:",
-            (.[] | "  - id: \(.id | tojson)\n    statement: \(.reason | tojson)\n    expired_at: \(.expires)")
+            (.[] | ((.expires + "T00:00:00Z") | fromdateiso8601 + 86400 | strftime("%Y-%m-%d")) as $until
+                | "  - id: \(.id | tojson)\n    statement: \(.reason | tojson)\n    expired_at: \($until)")
         end' <<<"$allowed" >"$file"
     echo "image: $(jq length <<<"$allowed") accepted findings written to $file"
 }

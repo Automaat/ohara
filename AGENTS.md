@@ -234,8 +234,10 @@ home-nas stack file.
   on every push and PR and nightly: `govulncheck` for Go code the backend
   calls, under the go.mod toolchain; `npm audit` for high and critical
   advisories in any package; Trivy for fixable high and critical ones in
-  the image's OS packages, before the push. A finding is accepted only
-  through `.github/vulnerability-allowlist.json` (`go`, `npm`, `image`
-  lists of `id`, `reason` and `expires`, YYYY-MM-DD); an entry stops
-  counting after its expiry. Renovate's `osvVulnerabilityAlerts` opens
+  the image's OS packages, before the push (the Dockerfile pins the runtime
+  base by digest, so the push rebuild uses the scanned base). govulncheck
+  runs with `GOOS=linux CGO_ENABLED=0`, like the image build. A finding
+  is accepted only through `.github/vulnerability-allowlist.json` (`go`,
+  `npm`, `image` lists of `id`, `reason` and `expires`, YYYY-MM-DD); an
+  entry counts through its expiry day. Renovate's `osvVulnerabilityAlerts` opens
   fix PRs for vulnerable dependencies.

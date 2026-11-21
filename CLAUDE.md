@@ -118,11 +118,17 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   answers later scans of that barcode without provider requests.
 - The movie chain asks UPCitemdb (free: 100 requests a day, 6 a minute)
   only after Allegro's catalog names no product with a searchable title.
-  After a 429 it skips UPCitemdb until the
-  `X-RateLimit-Reset` time, or for an hour when that header is missing or
-  more than two days ahead; a reset already past needs no pause. A skipped
-  UPCitemdb counts as a failed source, so a lookup that finds nothing is
-  not cached.
+  After a 429 it skips UPCitemdb until the `X-RateLimit-Reset` time, or
+  for an hour when that header is missing or more than two days ahead; a
+  reset already past needs no pause. A skipped UPCitemdb counts as a
+  failed source, so a lookup that finds nothing is not cached.
+- `GET /api/lookup/{barcode}?recheck=1`, sent only by the queue's "Szukaj
+  ponownie" (`/scan/{barcode}?recheck=1`), asks a provider again when its
+  cached answer is older than `lookup.RecheckAfter` (1 hour). The server
+  keeps that floor: it remembers each recheck request in memory, so
+  repeated taps cost one request per provider and code per hour even
+  while one is in flight or after it failed. The page drops the flag
+  from the address once used, so a reload reads the cache.
 - A music barcode no source knows falls back to a Discogs text search for
   Allegro's product name.
 - `GET /api/search?kind=&q=&barcode=&format=` searches by the title the
@@ -153,9 +159,11 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   A copy's range comes from prices last seen within the window: floor =
   its edition's latest SkupSzop offer (0 when the shop does not buy it);
   mid = median of OLX prices not marked new, outliers beyond 1.5 IQR
-  dropped, pooled over every edition of the same title and format. A mid
-  from fewer than 3 prices is low confidence. Only a Discogs release has a
-  ceiling. An owned album edition with a `discogs_release_id` is
+  dropped, pooled over every edition of the same title and format, owned,
+  wished or without copies; an unowned edition's prices count only when
+  first seen after its last change. A mid from fewer than 3 prices is low
+  confidence. Only a Discogs release has a ceiling. An owned album edition
+  with a `discogs_release_id` is
   priced on Discogs (marketplace stats in EUR, price suggestions in the
   seller-settings currency, converted to PLN at the NBP table A rate): its
   floor is the cheapest copy for sale, its mid and ceiling the suggested
@@ -183,6 +191,13 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   Vite, never loaded from a CDN. A keyboard-wedge scanner types into the
   focused barcode field. The flow lives in `src/lib/scan.ts`: existing
   edition → add a copy, lookup candidates → quick confirm, nothing → queue.
+- A code whose check gets no answer is kept in IndexedDB
+  (`src/lib/pending-scans.svelte.ts`, barcode only, once in the server's
+  normalized form) and posted to `/api/scan-queue` as `lookup_failed` on app
+  start, on `online`, when the app is shown and every 20 s, by one tab at a
+  time (Web Locks), each POST within 15 s. `request` does not follow
+  redirects, so a 401 or Authelia's cross-origin redirect is an expired
+  session ("Odśwież"), not a lost connection; the code is kept either way.
 - Kolekcja's "Dodaj tytuł" (`/titles/new`) is the scanner's quick confirm
   without a barcode (`ScanFlow.start`): search by title or fill in by hand;
   the save creates the title, a barcode-less edition and the copy. Such

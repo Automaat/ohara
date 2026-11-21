@@ -10,6 +10,7 @@ import {
 	barcodeInputError,
 	cameraErrorMessage,
 	candidateLabel,
+	canonicalBarcode,
 	checkDigitMatches,
 	cleanBarcode,
 	bandCrop,
@@ -338,6 +339,19 @@ describe('resolveScan', () => {
 		const got = await resolveScan(s.fetchFn, '5901234123457');
 		expect(got).toEqual({ kind: 'queued', barcode: '5901234123457', entry });
 		expect(s.calls.at(-1)?.body).toEqual(queued);
+	});
+
+	it.each([
+		['a scan', false, 'GET /api/lookup/5901234123457'],
+		['a recheck', true, 'GET /api/lookup/5901234123457?recheck=1']
+	])('asks the lookup for %s', async (_, recheck, path) => {
+		const s = server({
+			'GET /api/editions?barcode=5901234123457': [200, []],
+			[path]: [200, { barcode: '5901234123457', candidates: [movie], errors: [] }]
+		});
+		const got = await resolveScan(s.fetchFn, '5901234123457', recheck);
+		expect(got.kind).toBe('found');
+		expect(s.paths()).toEqual(['GET /api/editions?barcode=5901234123457', path]);
 	});
 
 	it('queues a rescanned barcode only after a queue removal on its way has settled', async () => {
@@ -1400,5 +1414,21 @@ describe('candidateLabel for search results', () => {
 			confidence: 0.6
 		};
 		expect(candidateLabel(book)).toBe('Stanisław Lem – Solaris · 1961 · openlibrary · 60%');
+	});
+});
+
+describe('canonicalBarcode', () => {
+	it.each([
+		['an EAN-13', '5901234123457', '5901234123457'],
+		['a UPC-A', '036000291452', '0036000291452'],
+		['a GTIN-14 with a leading 0', '00036000291452', '0036000291452'],
+		['a GTIN-14', '10036000291459', '10036000291459'],
+		['an EAN-8', '40170725', '40170725'],
+		['a padded EAN-8', '00000040170725', '40170725'],
+		['an ISBN-10', '8324000011', '9788324000012'],
+		['an ISBN-10 ending in X', '080442957X', '9780804429573'],
+		['a wrong check digit', '5901234123458', '5901234123458']
+	])('stores %s as the server does', (_, code, stored) => {
+		expect(canonicalBarcode(code)).toBe(stored);
 	});
 });

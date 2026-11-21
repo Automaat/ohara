@@ -1,8 +1,8 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { invalidBarcodeMessage } from './api';
 import { formatPLN, type EditionDetail } from './collection';
 import { recentScans } from './recent.svelte';
-import { ScanFlow, resetVisit } from './scan-flow.svelte';
+import { ScanFlow, checkTimeout, resetVisit, type Keeper } from './scan-flow.svelte';
 import { resetSession, session } from './session.svelte';
 import type { Candidate, KeyValueStore } from './scan';
 
@@ -55,6 +55,24 @@ const book: Candidate = {
 	provider: 'bn',
 	confidence: 0.5
 };
+
+/** The device's waiting codes; can is false where it keeps none. */
+function device(can = true): Keeper & { kept: string[]; expired: number } {
+	const d = {
+		kept: [] as string[],
+		expired: 0,
+		keep: async (barcode: string) => {
+			if (can) d.kept.push(barcode);
+			return can;
+		},
+		sessionExpired: () => {
+			d.expired++;
+		}
+	};
+	return d;
+}
+
+const noAnswer: Reply = () => Promise.reject(new TypeError('Failed to fetch'));
 
 const owned = {
 	id: 5,
@@ -109,6 +127,23 @@ describe('ScanFlow.load', () => {
 		expect(flow.item?.target).toEqual({ kind: 'owned', edition: owned });
 		expect(flow.form).toMatchObject({ kind: 'movie', price: '', purchased_on: '' });
 		expect(flow.choosing).toBe(false);
+	});
+
+	it('rechecks the sources only when asked', async () => {
+		const s = server({
+			...lookup([movie], false),
+			[`GET /api/lookup/${code}?recheck=1`]: [
+				200,
+				{ barcode: code, candidates: [movie], needs_confirmation: false, errors: [] }
+			]
+		});
+		const flow = new ScanFlow(s.fetchFn, memory());
+		await flow.load(code, false, true);
+		await flow.load(code);
+		expect(s.paths().filter((p) => p.startsWith('GET /api/lookup/'))).toEqual([
+			`GET /api/lookup/${code}?recheck=1`,
+			`GET /api/lookup/${code}`
+		]);
 	});
 
 	it('lists candidates with none picked when the lookup asks for a pick', async () => {
@@ -208,6 +243,155 @@ describe('ScanFlow.load', () => {
 		await first.catch(() => undefined);
 		expect(flow.item?.barcode).toBe(other);
 		expect(flow.code).toBe(other);
+	});
+});
+
+describe('ScanFlow.load without a connection', () => {
+	it('keeps a code whose check gets no answer and logs it as waiting', async () => {
+		const kept = device();
+		const flow = new ScanFlow(
+			server({ [`GET /api/editions?barcode=${code}`]: noAnswer }).fetchFn,
+			memory(),
+			kept
+		);
+		await flow.load(code);
+		expect(flow.phase).toEqual({ kind: 'offline' });
+		expect(kept.kept).toEqual([code]);
+		flow.dismiss();
+		flow.dismiss();
+		expect(recentScans.list).toMatchObject([
+			{ barcode: code, outcome: 'waiting', label: 'Zapisano bez połączenia' }
+		]);
+	});
+
+	it('keeps a code whose queue entry gets no answer after the lookup failed', async () => {
+		const kept = device();
+		const s = server({
+			...noEdition,
+			[`GET /api/lookup/${code}`]: noAnswer,
+			'POST /api/scan-queue': noAnswer
+		});
+		const flow = new ScanFlow(s.fetchFn, memory(), kept);
+		await flow.load(code);
+		expect(flow.phase).toEqual({ kind: 'offline' });
+		expect(kept.kept).toEqual([code]);
+	});
+
+	it('reports the failure as before and logs nothing where the device keeps no codes', async () => {
+		const flow = new ScanFlow(
+			server({ [`GET /api/editions?barcode=${code}`]: noAnswer }).fetchFn,
+			memory(),
+			device(false)
+		);
+		await flow.load(code);
+		expect(flow.phase).toEqual({ kind: 'failed', message: 'Serwer nie odpowiada.' });
+		flow.dismiss();
+		expect(recentScans.list).toHaveLength(0);
+	});
+
+	it.each([
+		[true, [{ barcode: code, outcome: 'waiting', label: 'Zapisano, sesja wygasła' }]],
+		[false, []]
+	])(
+		'keeps the code and asks to sign in again when the sign-in turns the check away (stored: %s)',
+		async (can, logged) => {
+			const kept = device(can);
+			const s = server({ [`GET /api/editions?barcode=${code}`]: [401, null] });
+			const flow = new ScanFlow(s.fetchFn, memory(), kept);
+			await flow.load(code);
+			expect(flow.phase).toEqual({ kind: 'expired', saved: can });
+			expect(kept.expired).toBe(1);
+			flow.dismiss();
+			expect(recentScans.list).toMatchObject(logged);
+		}
+	);
+
+	it('keeps a code whose check answer breaks off after its status', async () => {
+		const kept = device();
+		const fetchFn: typeof fetch = async () =>
+			new Response(
+				new ReadableStream({
+					start: (controller) => controller.error(new TypeError('network'))
+				}),
+				{ status: 200 }
+			);
+		const flow = new ScanFlow(fetchFn, memory(), kept);
+		await flow.load(code);
+		expect(flow.phase).toEqual({ kind: 'offline' });
+		expect(kept.kept).toEqual([code]);
+	});
+
+	it('keeps a code whose check the network holds open past its deadline', async () => {
+		vi.useFakeTimers();
+		const kept = device();
+		const fetchFn: typeof fetch = (_, init) =>
+			new Promise<Response>((_resolve, reject) => {
+				init?.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+			});
+		const flow = new ScanFlow(fetchFn, memory(), kept);
+		const loading = flow.load(code);
+		await vi.advanceTimersByTimeAsync(checkTimeout - 1);
+		expect(flow.phase).toEqual({ kind: 'loading' });
+		await vi.advanceTimersByTimeAsync(1);
+		await loading;
+		expect(flow.phase).toEqual({ kind: 'offline' });
+		expect(kept.kept).toEqual([code]);
+		vi.useRealTimers();
+	});
+
+	it('asks to sign in again when the lookup is turned away and the queue fails', async () => {
+		const kept = device();
+		const s = server({
+			...noEdition,
+			[`GET /api/lookup/${code}`]: [401, null],
+			'POST /api/scan-queue': [503, { error: 'down' }]
+		});
+		const flow = new ScanFlow(s.fetchFn, memory(), kept);
+		await flow.load(code);
+		expect(flow.phase).toEqual({ kind: 'expired', saved: true });
+		expect(kept.kept).toEqual([code]);
+		expect(kept.expired).toBe(1);
+		expect(s.paths()).not.toContain('POST /api/scan-queue');
+	});
+
+	it('keeps nothing for a check the server answered', async () => {
+		const kept = device();
+		const down = server({ [`GET /api/editions?barcode=${code}`]: [502, null] });
+		const a = new ScanFlow(down.fetchFn, memory(), kept);
+		await a.load(code);
+		expect(a.phase).toEqual({ kind: 'failed', message: 'Serwer zwrócił błąd 502.' });
+		const refused = server({
+			[`GET /api/editions?barcode=${code}`]: [422, { error: 'zły kod', field: 'barcode' }]
+		});
+		const b = new ScanFlow(refused.fetchFn, memory(), kept);
+		await b.load(code);
+		expect(b.phase).toMatchObject({ kind: 'invalid' });
+		expect(kept.kept).toEqual([]);
+		expect(kept.expired).toBe(0);
+	});
+
+	it('keeps a code the user moved on from, without touching the newer one', async () => {
+		let drop: () => void = () => {};
+		const slow = new Promise<[number, unknown]>((_, reject) => {
+			drop = () => reject(new TypeError('Failed to fetch'));
+		});
+		const kept = device();
+		const s = server({
+			[`GET /api/editions?barcode=${code}`]: () => slow,
+			[`GET /api/editions?barcode=${other}`]: [200, []],
+			[`GET /api/lookup/${other}`]: [
+				200,
+				{ barcode: other, candidates: [book], needs_confirmation: true, errors: [] }
+			]
+		});
+		const flow = new ScanFlow(s.fetchFn, memory(), kept);
+		const first = flow.load(code);
+		await flow.load(other);
+		drop();
+		await first;
+		expect(kept.kept).toEqual([code]);
+		expect(flow.phase).toEqual({ kind: 'ready', status: 'found' });
+		expect(flow.item?.barcode).toBe(other);
 	});
 });
 

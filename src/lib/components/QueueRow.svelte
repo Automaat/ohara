@@ -146,7 +146,11 @@ and "Usuń" wait in the "…" menu. On a touch screen a swipe to the left slides
 			icon="more"
 			align="end"
 			items={[
-				{ label: 'Szukaj ponownie', icon: 'search', onselect: () => void goto(lookup) },
+				{
+					label: 'Szukaj ponownie',
+					icon: 'search',
+					onselect: () => void goto(`${lookup}?recheck=1`)
+				},
 				{ label: 'Usuń', icon: 'trash', tone: 'stop', onselect: () => onremove('menu') }
 			]}
 		/>

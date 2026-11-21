@@ -64,20 +64,32 @@ func (s *Store) Record(ctx context.Context, l *deals.Listing, h *Holding) (bool,
 	return isNew, err
 }
 
-// Prices returns the valuation sources' observations of owned editions
-// last seen within window. A Discogs price counts only for the release
-// the edition names now: its external ID is "<release>/<edition>", so a
-// changed or cleared release stops valuing the edition at once.
+// Prices returns the valuation sources' observations last seen within
+// window that value an owned edition. OLX prices of an edition without an
+// owned copy count when an edition of the same title and format is owned,
+// as middles pool that group and a listing keeps the edition it was first
+// stored against, often a wished one. Such a price counts only when first seen after the edition last
+// changed: a listing matched before an edit, such as a new format, may not
+// fit it, and a match for another edition later keeps it on this one.
+// Floors and Discogs bounds are per edition, so those count only for an
+// owned edition. A Discogs price counts only for the release the edition
+// names now: its external ID is "<release>/<edition>", so a changed or
+// cleared release stops valuing the edition at once.
 func (s *Store) Prices(ctx context.Context, window time.Duration) ([]Price, error) {
 	rows, err := s.pool.Query(ctx, `SELECT o.edition_id, e.title_id, e.format, o.source,
 			o.price_cents, o.acquired_as, o.last_seen_at
 		FROM price_observation o JOIN edition e ON e.id = o.edition_id
 		WHERE o.source = ANY ($1)
 			AND o.last_seen_at > now() - make_interval(secs => $2)
-			AND o.edition_id IN (SELECT edition_id FROM copy WHERE status = 'owned')
+			AND (o.edition_id IN (SELECT edition_id FROM copy WHERE status = 'owned')
+				OR o.source = ANY ($4) AND o.observed_at > e.updated_at
+					AND (e.title_id, coalesce(e.format, '')) IN (
+						SELECT owned.title_id, coalesce(owned.format, '')
+						FROM copy c JOIN edition owned ON owned.id = c.edition_id
+						WHERE c.status = 'owned'))
 			AND (o.source <> ALL ($3)
 				OR o.external_id = e.discogs_release_id::text || '/' || e.id::text)`,
-		valuationSources, window.Seconds(), discogsSources)
+		valuationSources, window.Seconds(), discogsSources, pooledSources)
 	if err != nil {
 		return nil, fmt.Errorf("prices: %w", err)
 	}

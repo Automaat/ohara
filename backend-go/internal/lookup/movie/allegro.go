@@ -60,6 +60,13 @@ var (
 // tokenLeeway refreshes a token this long before it expires.
 const tokenLeeway = time.Minute
 
+// refreshTimeout bounds a token refresh and the write of its result. The
+// refresh runs apart from the caller's context: Allegro retires the old
+// refresh token as soon as it answers, so a refresh cut short by a lookup's
+// deadline would lose the new one and, after Allegro's grace period, the
+// authorization.
+const refreshTimeout = 30 * time.Second
+
 // Name is "allegro".
 func (*Allegro) Name() string { return "allegro" }
 
@@ -129,6 +136,8 @@ func (a *Allegro) accessToken(ctx context.Context, force bool) (string, error) {
 	if !force && a.now().Add(tokenLeeway).Before(a.token.Expiry) {
 		return a.token.Access, nil
 	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), refreshTimeout)
+	defer cancel()
 	q := url.Values{"grant_type": {"refresh_token"}, "refresh_token": {a.token.Refresh}}
 	t, err := a.tokenRequest(ctx, q)
 	if err != nil {

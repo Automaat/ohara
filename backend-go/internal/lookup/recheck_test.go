@@ -3,9 +3,11 @@ package lookup_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -56,6 +58,12 @@ func (c *clockCache) seedMiss(provider string, age time.Duration) {
 	c.entries[provider+"/"+recheckCode] = clockEntry{raw: json.RawMessage(missAnswer), fetchedAt: c.now.Add(-age)}
 }
 
+func (c *clockCache) clock() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
 func (c *clockCache) advance(d time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -91,12 +99,52 @@ const (
 func recheckService(t *testing.T) (*lookup.Service, *learnedProvider, *clockCache) {
 	t.Helper()
 	p := &learnedProvider{fakeProvider{name: "discogs", confidence: 0.9}}
+	svc, cache := serviceWith(t, p)
+	return svc, p, cache
+}
+
+// serviceWith registers p with a week's TTL over a cache and service that
+// share one clock.
+func serviceWith(t *testing.T, p lookup.Provider) (*lookup.Service, *clockCache) {
+	t.Helper()
 	r := &lookup.Registry{}
 	if err := r.Register(p, weekTTL); err != nil {
 		t.Fatal(err)
 	}
 	cache := newClockCache()
-	return lookup.NewService(r, cache, discard()), p, cache
+	svc := lookup.NewService(r, cache, discard())
+	lookup.SetClock(svc, cache.clock)
+	return svc, cache
+}
+
+// partialLearned's every source but one fails: its answer is a miss
+// together with the failure.
+type partialLearned struct {
+	learnedProvider
+}
+
+func (p *partialLearned) Fetch(ctx context.Context, code string) (json.RawMessage, error) {
+	if _, err := p.learnedProvider.Fetch(ctx, code); err != nil {
+		return nil, err
+	}
+	return nil, &lookup.PartialError{Raw: json.RawMessage(missAnswer), Err: errors.New("one source down")}
+}
+
+// gatedProvider reports each Fetch on started; the first answers once
+// release closes, later ones at once.
+type gatedProvider struct {
+	learnedProvider
+	started chan struct{}
+	release chan struct{}
+	calls   atomic.Int32
+}
+
+func (p *gatedProvider) Fetch(ctx context.Context, code string) (json.RawMessage, error) {
+	p.started <- struct{}{}
+	if p.calls.Add(1) == 1 {
+		<-p.release
+	}
+	return p.learnedProvider.Fetch(ctx, code)
 }
 
 func TestRecheckAsksAgainOnlyPastTheFloor(t *testing.T) {
@@ -159,6 +207,74 @@ func TestRecheckReplacesTheCachedAnswer(t *testing.T) {
 	}
 }
 
+func TestRecheckFloorHoldsAfterAFailure(t *testing.T) {
+	type counted interface {
+		lookup.Provider
+		fetchCount() int
+	}
+	tests := []struct {
+		name string
+		p    counted
+	}{
+		{name: "fetch fails", p: &learnedProvider{fakeProvider{name: "discogs", fetchErr: errors.New("timeout")}}},
+		{name: "fetch answers in part", p: &partialLearned{learnedProvider{fakeProvider{name: "discogs"}}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, cache := serviceWith(t, tt.p)
+			ctx := context.Background()
+			cache.seedMiss("discogs", 2*time.Hour)
+
+			if res := svc.Recheck(ctx, recheckCode); len(res.Errors) != 1 {
+				t.Fatalf("first recheck must report the failure: %+v", res)
+			}
+			for range 2 {
+				cache.advance(10 * time.Minute)
+				if res := svc.Recheck(ctx, recheckCode); len(res.Errors) != 0 || len(res.Candidates) != 0 {
+					t.Fatalf("recheck within the hour must serve the cached miss: %+v", res)
+				}
+			}
+			if got := tt.p.fetchCount(); got != 1 {
+				t.Fatalf("three rechecks within an hour made %d fetches, want 1", got)
+			}
+
+			cache.advance(lookup.RecheckAfter)
+			svc.Recheck(ctx, recheckCode)
+			if got := tt.p.fetchCount(); got != 2 {
+				t.Fatalf("recheck an hour after the failed one made %d fetches in all, want 2", got)
+			}
+		})
+	}
+}
+
+func TestRecheckInFlightServesTheCache(t *testing.T) {
+	p := &gatedProvider{
+		learnedProvider: learnedProvider{fakeProvider{name: "discogs", confidence: 0.9}},
+		started:         make(chan struct{}, 2),
+		release:         make(chan struct{}),
+	}
+	svc, cache := serviceWith(t, p)
+	ctx := context.Background()
+	cache.seedMiss("discogs", 2*time.Hour)
+
+	first := make(chan lookup.Result)
+	go func() { first <- svc.Recheck(ctx, recheckCode) }()
+	<-p.started
+	if res := svc.Recheck(ctx, recheckCode); len(res.Candidates) != 0 || len(res.Errors) != 0 {
+		t.Fatalf("second recheck while the first is in flight = %+v, want the cached miss", res)
+	}
+	if n := len(p.started); n != 0 {
+		t.Fatalf("second recheck fetched too (%d more)", n)
+	}
+	close(p.release)
+	if res := <-first; len(res.Candidates) != 1 {
+		t.Fatalf("first recheck = %+v", res)
+	}
+	if res := svc.Lookup(ctx, recheckCode); len(res.Candidates) != 1 || p.fetchCount() != 1 {
+		t.Fatalf("lookup after the recheck = %+v, fetches %d", res, p.fetchCount())
+	}
+}
+
 func TestRecheckKeepsAShorterTTL(t *testing.T) {
 	p := &learnedProvider{fakeProvider{name: "upc", confidence: 0.9}}
 	r := &lookup.Registry{}
@@ -167,6 +283,7 @@ func TestRecheckKeepsAShorterTTL(t *testing.T) {
 	}
 	cache := newClockCache()
 	svc := lookup.NewService(r, cache, discard())
+	lookup.SetClock(svc, cache.clock)
 	cache.seedMiss("upc", 20*time.Minute)
 	svc.Recheck(context.Background(), recheckCode)
 	if got := p.fetchCount(); got != 1 {

@@ -118,9 +118,11 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   answers later scans of that barcode without provider requests.
 - `GET /api/lookup/{barcode}?recheck=1`, sent only by the queue's "Szukaj
   ponownie" (`/scan/{barcode}?recheck=1`), asks a provider again when its
-  cached answer is older than `lookup.RecheckAfter` (1 hour); the server
-  keeps that floor, so repeated taps cost one request per provider and
-  code per hour.
+  cached answer is older than `lookup.RecheckAfter` (1 hour). The server
+  keeps that floor: it remembers each recheck request in memory, so
+  repeated taps cost one request per provider and code per hour even
+  while one is in flight or after it failed. The page drops the flag
+  from the address once used, so a reload reads the cache.
 - A music barcode no source knows falls back to a Discogs text search for
   Allegro's product name.
 - `GET /api/search?kind=&q=&barcode=&format=` searches by the title the

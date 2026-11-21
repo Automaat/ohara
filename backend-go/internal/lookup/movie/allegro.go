@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -36,22 +37,25 @@ type Allegro struct {
 
 	tokenTimeout time.Duration
 
-	mu          sync.Mutex
-	token       *Token
-	unsavedOver string
-	op          *tokenOp
+	mu      sync.Mutex
+	token   *Token
+	unsaved bool
+	chain   []string
+	op      *tokenOp
 }
 
 // tokenOp is a token refresh, or a retried save of the current pair, that
 // runs on a context detached from the lookup that started it: Allegro
 // retires the old refresh token as soon as it answers, so the new pair has
 // to be kept even when the lookup gave up. One runs at a time, so the
-// store ends with the latest pair. over is the refresh token of the stored
-// pair the new one replaces; a.unsavedOver keeps it while a save is due.
+// store ends with the latest pair. chain lists the refresh tokens of the
+// pairs this process loaded or issued since the store last confirmed one:
+// a stored pair outside it came from another process, such as
+// `api allegro-login`.
 type tokenOp struct {
 	done    chan struct{}
 	refresh bool
-	over    string
+	chain   []string
 	access  string
 	err     error
 }
@@ -169,10 +173,11 @@ func (a *Allegro) currentToken(ctx context.Context, force bool) (string, *tokenO
 			return "", nil, ErrAllegroNotAuthorized
 		}
 		a.token = &t
+		a.chain = []string{t.Refresh}
 	}
 	if !force && a.now().Add(tokenLeeway).Before(a.token.Expiry) {
-		if a.unsavedOver != "" && a.op == nil {
-			a.startOp(ctx, *a.token, a.unsavedOver, false)
+		if a.unsaved && a.op == nil {
+			a.startOp(ctx, *a.token, false)
 		}
 		return a.token.Access, nil, nil
 	}
@@ -180,19 +185,15 @@ func (a *Allegro) currentToken(ctx context.Context, force bool) (string, *tokenO
 		if err := ctx.Err(); err != nil {
 			return "", nil, fmt.Errorf("allegro: token refresh: %w", err)
 		}
-		over := a.token.Refresh
-		if a.unsavedOver != "" {
-			over = a.unsavedOver
-		}
-		a.startOp(ctx, *a.token, over, true)
+		a.startOp(ctx, *a.token, true)
 	}
 	return "", a.op, nil
 }
 
 // startOp runs a refresh of t, or a save of t, in its own goroutine. The
 // caller holds a.mu.
-func (a *Allegro) startOp(ctx context.Context, t Token, over string, refresh bool) {
-	op := &tokenOp{done: make(chan struct{}), refresh: refresh, over: over}
+func (a *Allegro) startOp(ctx context.Context, t Token, refresh bool) {
+	op := &tokenOp{done: make(chan struct{}), refresh: refresh, chain: append(slices.Clone(a.chain), t.Refresh)}
 	a.op = op
 	go a.runOp(context.WithoutCancel(ctx), op, t)
 }
@@ -209,32 +210,34 @@ func (a *Allegro) runOp(ctx context.Context, op *tokenOp, t Token) {
 			defer a.mu.Unlock()
 			a.op = nil
 			if errors.Is(err, ErrAllegroNotAuthorized) {
-				a.token, a.unsavedOver = nil, ""
+				a.token, a.chain, a.unsaved = nil, nil, false
 			}
 			return
 		}
 		t = next
+		op.chain = append(op.chain, t.Refresh)
 	}
-	t, saved := a.persist(ctx, t, op.over)
+	t, saved := a.persist(ctx, t, op.chain)
 	op.access = t.Access
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.op = nil
 	a.token = &t
-	a.unsavedOver = ""
+	a.unsaved = !saved
+	a.chain = []string{t.Refresh}
 	if !saved {
-		a.unsavedOver = op.over
+		a.chain = op.chain
 	}
 }
 
-// persist stores t in place of the pair whose refresh token is over and
-// returns the pair to use and whether the store holds it. A different pair
-// stored meanwhile, by `api allegro-login` for example, wins over t.
-func (a *Allegro) persist(ctx context.Context, t Token, over string) (Token, bool) {
+// persist stores t and returns the pair to use and whether the store holds
+// it. A stored pair outside chain, stored meanwhile by `api allegro-login`
+// for example, wins over t.
+func (a *Allegro) persist(ctx context.Context, t Token, chain []string) (Token, bool) {
 	ctx, cancel := context.WithTimeout(ctx, a.timeout())
 	defer cancel()
 	stored, ok, err := a.Store.Load(ctx, a.Name())
-	if err == nil && ok && stored.Refresh != over {
+	if err == nil && ok && !slices.Contains(chain, stored.Refresh) {
 		return stored, true
 	}
 	if err == nil {

@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -188,10 +189,11 @@ func TestTMDBYearWithoutDate(t *testing.T) {
 }
 
 type memStore struct {
-	mu        sync.Mutex
-	token     *Token
-	saves     int
-	failSaves int
+	mu          sync.Mutex
+	token       *Token
+	saves       int
+	failSaves   int
+	lostReplies int
 }
 
 func (m *memStore) Load(context.Context, string) (Token, bool, error) {
@@ -216,6 +218,10 @@ func (m *memStore) Save(ctx context.Context, _ string, t Token) error {
 	}
 	m.token = &t
 	m.saves++
+	if m.lostReplies > 0 {
+		m.lostReplies--
+		return errors.New("write oauth token: connection reset after commit")
+	}
 	return nil
 }
 
@@ -423,11 +429,12 @@ func TestAllegroKeepsARefreshTheLookupGaveUpOn(t *testing.T) {
 	if deadline, _ := ctx.Deadline(); time.Since(deadline) > 100*time.Millisecond {
 		t.Fatalf("lookup returned %v after its deadline", time.Since(deadline))
 	}
+	eventually(t, func() bool { return store.refresh() == refreshFor(1) })
 	if _, err := a.Products(context.Background(), "5906190326195"); err != nil {
 		t.Fatal(err)
 	}
-	if n := srv.refreshCount(); n != 1 {
-		t.Fatalf("refreshes = %d", n)
+	if n, calls := srv.refreshCount(), srv.tokenCallCount(); n != 1 || calls != 1 {
+		t.Fatalf("refreshes = %d, token requests = %d", n, calls)
 	}
 	if got := store.refresh(); got != refreshFor(1) {
 		t.Fatalf("stored refresh token %q", got)
@@ -520,6 +527,24 @@ func TestAllegroSaveRetryKeepsAPairALoginStored(t *testing.T) {
 	}
 	if got := store.refresh(); got != refreshFor(3) {
 		t.Fatalf("stored refresh token %q, want the login's pair refreshed", got)
+	}
+}
+
+func TestAllegroKeepsRotatingAfterASaveThatCommittedButFailed(t *testing.T) {
+	now := time.Now()
+	store := &memStore{token: &Token{Access: accessFor(0), Refresh: refreshFor(0), Expiry: now.Add(30 * time.Second)}, lostReplies: 1}
+	srv := &allegroServer{}
+	a := newAllegro(t, srv, store, now)
+	var elapsed atomic.Int64
+	a.Now = func() time.Time { return now.Add(time.Duration(elapsed.Load())) }
+	for i := range 3 {
+		if _, err := a.Products(context.Background(), "5906190326195"); err != nil {
+			t.Fatalf("lookup %d: %v", i, err)
+		}
+		elapsed.Add(int64(12 * time.Hour))
+	}
+	if got := store.refresh(); got != refreshFor(3) {
+		t.Fatalf("stored refresh token %q", got)
 	}
 }
 

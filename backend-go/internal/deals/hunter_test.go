@@ -793,15 +793,18 @@ func TestRunRetriesAnAlertOnlyAtItsRefreshedPrice(t *testing.T) {
 	}
 }
 
-// hookSource calls before once, ahead of its first search.
+// hookSource calls before once, ahead of its first search, and logs each
+// search.
 type hookSource struct {
 	*fakeSource
 	before func()
 	once   sync.Once
+	log    *callLog
 }
 
 func (s *hookSource) Search(ctx context.Context, query string) ([]Listing, error) {
 	s.once.Do(s.before)
+	s.log.add("search " + s.name)
 	return s.fakeSource.Search(ctx, query)
 }
 
@@ -819,8 +822,12 @@ func TestRunSendsAnAlertWhoseLimitRoseDuringTheRun(t *testing.T) {
 		}
 	}
 	setLimit(3000)
-	olx := &hookSource{fakeSource: &fakeSource{name: "olx", perQuery: true, listings: []Listing{listing}}, before: func() { setLimit(5000) }}
-	if res := mustRun(t, newTestHunter(pool, notifier, olx)); res.Sent != 1 {
+	log := &callLog{}
+	olx := &hookSource{fakeSource: &fakeSource{name: "olx", perQuery: true, listings: []Listing{listing}}, before: func() { setLimit(5000) }, log: log}
+	if res := mustRun(t, newTestHunter(pool, &loggedNotifier{log: log}, olx)); res.Sent != 1 {
 		t.Fatalf("run with the limit raised during it = %+v, want the pending alert sent", res)
+	}
+	if want := []string{"search olx", "send", "search olx"}; !slices.Equal(log.list(), want) {
+		t.Fatalf("calls = %q, want the alert sent before the next request", log.list())
 	}
 }

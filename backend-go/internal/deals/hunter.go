@@ -204,9 +204,9 @@ type run struct {
 
 // Run searches every source for every wishlist copy, records matching
 // listings and delivers pending alerts. An alert for a listing an answer
-// reports at or under its limit goes out before the run asks a source
-// again; every other pending alert, such as one left by an earlier run,
-// goes out after the last request, once the run has refreshed its price.
+// matched goes out before the run asks a source again; every other pending
+// alert, such as one for a listing no answer matched, goes out after the
+// last request.
 // Source failures are collected in the result; a database failure or
 // cancellation stops the run.
 func (h *Hunter) Run(ctx context.Context) (RunResult, error) {
@@ -345,11 +345,13 @@ func (r *run) fail(msg string) {
 	}
 }
 
-// record stores the matching listings of one answer, then sends the alerts
-// of those at or under their limit before the run asks a source again.
+// record stores the matching listings of one answer, then sends their
+// pending alerts before the run asks a source again. PendingAlerts checks
+// the refreshed price against the wish's current limit, which may have
+// changed since the run read the wishlist.
 func (r *run) record(ctx context.Context, listings []Listing) error {
 	r.res.Listings += len(listings)
-	due := map[string]bool{}
+	refreshed := map[string]bool{}
 	for i := range listings {
 		l := &listings[i]
 		w := pick(r.wants, l, r.rules)
@@ -368,14 +370,12 @@ func (r *run) record(ctx context.Context, listings []Listing) error {
 		if alerted {
 			r.res.Alerts++
 		}
-		if alert {
-			due[listingKey(l.Source, l.ExternalID)] = true
-		}
+		refreshed[listingKey(l.Source, l.ExternalID)] = true
 	}
-	if len(due) == 0 {
+	if len(refreshed) == 0 {
 		return nil
 	}
-	return r.deliver(ctx, due)
+	return r.deliver(ctx, refreshed)
 }
 
 func listingKey(source, externalID string) string { return source + "\x00" + externalID }

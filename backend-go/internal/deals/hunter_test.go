@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -843,41 +844,72 @@ func TestRunTriesAFailedAlertOncePerRun(t *testing.T) {
 	}
 }
 
-// slowNotifier takes delay to deliver each message, as a slow Telegram
-// answer does.
+// fakeClock moves only when a test advances it, so the database work
+// between two messages takes no time on it.
+type fakeClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *fakeClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *fakeClock) advance(d time.Duration) {
+	c.mu.Lock()
+	c.t = c.t.Add(d)
+	c.mu.Unlock()
+}
+
+func newFakeClock() *fakeClock {
+	return &fakeClock{t: time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)}
+}
+
+// useClock makes h read clock and its sleeps advance clock instead of
+// waiting.
+func useClock(h *Hunter, clock *fakeClock) {
+	h.now = clock.now
+	h.sleep = func(ctx context.Context, d time.Duration) error {
+		clock.advance(d)
+		return ctx.Err()
+	}
+}
+
+// slowNotifier takes delay on clock to deliver each message, as a slow
+// Telegram answer does, and keeps when each message started.
 type slowNotifier struct {
 	fakeNotifier
+	clock *fakeClock
 	delay time.Duration
+
+	startMu sync.Mutex
+	starts  []time.Time
 }
 
 func (n *slowNotifier) Send(ctx context.Context, text string) error {
-	time.Sleep(n.delay)
+	n.startMu.Lock()
+	n.starts = append(n.starts, n.clock.now())
+	n.startMu.Unlock()
+	n.clock.advance(n.delay)
 	return n.fakeNotifier.Send(ctx, text)
 }
 
-// recordWaits makes h's sleeps return at once and keeps their lengths.
-func recordWaits(h *Hunter) func() []time.Duration {
-	var mu sync.Mutex
-	var waits []time.Duration
-	h.sleep = func(ctx context.Context, d time.Duration) error {
-		mu.Lock()
-		waits = append(waits, d)
-		mu.Unlock()
-		return ctx.Err()
+// checkPacedFromReturn fails t unless the second message started a full
+// telegramPause, and at least Telegram's one second, after the first
+// message returned, not after it started.
+func checkPacedFromReturn(t *testing.T, n *slowNotifier) {
+	t.Helper()
+	n.startMu.Lock()
+	starts := append([]time.Time(nil), n.starts...)
+	n.startMu.Unlock()
+	if len(starts) != 2 {
+		t.Fatalf("sent %d messages, want 2", len(starts))
 	}
-	return func() []time.Duration {
-		mu.Lock()
-		defer mu.Unlock()
-		return append([]time.Duration(nil), waits...)
+	if gap := starts[1].Sub(starts[0]) - n.delay; gap < time.Second || gap > telegramPause {
+		t.Fatalf("second message started %v after the first returned, want telegramPause, at least 1s", gap)
 	}
-}
-
-// pacedFromReturn reports whether a wait began a full telegramPause after a
-// send that took delay returned, not after it started.
-func pacedFromReturn(waits []time.Duration, delay time.Duration) bool {
-	return slices.ContainsFunc(waits, func(d time.Duration) bool {
-		return d > telegramPause-delay/2 && d <= telegramPause
-	})
 }
 
 func TestRunAlertsOnceForAListingInTwoAnswersAndPacesMessages(t *testing.T) {
@@ -888,10 +920,10 @@ func TestRunAlertsOnceForAListingInTwoAnswersAndPacesMessages(t *testing.T) {
 	other := &fakeSource{name: "other", perQuery: true, listings: []Listing{{
 		Source: "other", ExternalID: "2", Title: "Blade Runner Blu-ray PL", URL: "https://example.com/2", PriceCents: 4500,
 	}}}
-	const delay = 200 * time.Millisecond
-	notifier := &slowNotifier{delay: delay}
+	clock := newFakeClock()
+	notifier := &slowNotifier{clock: clock, delay: 200 * time.Millisecond}
 	h := newTestHunter(pool, notifier, olx, other)
-	waits := recordWaits(h)
+	useClock(h, clock)
 	res := mustRun(t, h)
 	if len(olx.queries) != 2 || res.Alerts != 2 || res.Sent != 2 {
 		t.Fatalf("run = %+v, olx asked %q", res, olx.queries)
@@ -899,9 +931,7 @@ func TestRunAlertsOnceForAListingInTwoAnswersAndPacesMessages(t *testing.T) {
 	if got := len(notifier.messages()); got != 2 {
 		t.Fatalf("sent %d messages, want one per listing", got)
 	}
-	if !pacedFromReturn(waits(), delay) {
-		t.Fatalf("waits = %v, want about telegramPause after the first send returned", waits())
-	}
+	checkPacedFromReturn(t, notifier)
 }
 
 func TestRunPacesMessagesAcrossRuns(t *testing.T) {
@@ -910,10 +940,10 @@ func TestRunPacesMessagesAcrossRuns(t *testing.T) {
 	olx := &fakeSource{name: "olx", perQuery: true, listings: []Listing{
 		{Source: "olx", ExternalID: "1", Title: "Blade Runner Blu-ray", URL: "https://www.olx.pl/d/oferta/z-ID1.html", PriceCents: 4000},
 	}}
-	const delay = 200 * time.Millisecond
-	notifier := &slowNotifier{delay: delay}
+	clock := newFakeClock()
+	notifier := &slowNotifier{clock: clock, delay: 200 * time.Millisecond}
 	h := newTestHunter(pool, notifier, olx)
-	waits := recordWaits(h)
+	useClock(h, clock)
 	if res := mustRun(t, h); res.Sent != 1 {
 		t.Fatalf("first run = %+v", res)
 	}
@@ -921,9 +951,7 @@ func TestRunPacesMessagesAcrossRuns(t *testing.T) {
 	if res := mustRun(t, h); res.Sent != 1 {
 		t.Fatalf("second run = %+v", res)
 	}
-	if !pacedFromReturn(waits(), delay) {
-		t.Fatalf("waits = %v, want about telegramPause before the second run's message", waits())
-	}
+	checkPacedFromReturn(t, notifier)
 }
 
 func TestRunRetriesAnAlertOnlyAtItsRefreshedPrice(t *testing.T) {
@@ -979,5 +1007,127 @@ func TestRunSendsAnAlertWhoseLimitRoseDuringTheRun(t *testing.T) {
 	}
 	if want := []string{"search olx", "send", "search olx"}; !slices.Equal(log.list(), want) {
 		t.Fatalf("calls = %q, want the alert sent before the next request", log.list())
+	}
+}
+
+// restarted builds a hunter on a 2h schedule on pool, as a restart would,
+// and starts it; its first scheduled wait arrives on the returned channel.
+func restarted(t *testing.T, pool *pgxpool.Pool) (*Hunter, <-chan time.Duration) {
+	t.Helper()
+	h := NewHunter(NewStore(pool), nil, nil, Config{Interval: 2 * time.Hour}, slog.New(slog.DiscardHandler))
+	waits := make(chan time.Duration, 1)
+	h.sleep = func(_ context.Context, d time.Duration) error {
+		waits <- d
+		return context.Canceled
+	}
+	h.Start(t.Context())
+	h.Wait()
+	return h, waits
+}
+
+func storeRun(t *testing.T, pool *pgxpool.Pool, age string) {
+	t.Helper()
+	if _, err := pool.Exec(t.Context(), `INSERT INTO deal_run (started_at, finished_at, result)
+		VALUES (now() - $1::interval, now() - $1::interval + interval '1 minute', '{"wants": 1}')`, age); err != nil {
+		t.Fatalf("store run: %v", err)
+	}
+}
+
+func TestStartSchedulesAfterTheLastRun(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	storeRun(t, pool, "30 minutes")
+	_, waits := restarted(t, pool)
+	if got := <-waits; got < 80*time.Minute || got > 100*time.Minute {
+		t.Fatalf("first wait = %v, want about 90m after a run started 30m ago", got)
+	}
+}
+
+func TestStartRunsAnOverdueHuntAfterFiveMinutes(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	storeRun(t, pool, "3 hours")
+	_, waits := restarted(t, pool)
+	if got := <-waits; got < 5*time.Minute || got > 6*time.Minute {
+		t.Fatalf("first wait = %v, want the 5m minimum after a run started 3h ago", got)
+	}
+}
+
+func TestStartWithoutHistoryWaitsFiveMinutes(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	_, waits := restarted(t, pool)
+	if got := <-waits; got < 5*time.Minute || got > 6*time.Minute {
+		t.Fatalf("first wait = %v, want about 5m", got)
+	}
+}
+
+// sameStatus fails unless after holds before's last run.
+func sameStatus(t *testing.T, before, after Status) {
+	t.Helper()
+	if before.LastStartedAt == nil || before.LastFinishedAt == nil || before.LastResult == nil {
+		t.Fatalf("status before the restart lacks the run: %+v", before)
+	}
+	if after.LastStartedAt == nil || !after.LastStartedAt.Equal(*before.LastStartedAt) ||
+		after.LastFinishedAt == nil || !after.LastFinishedAt.Equal(*before.LastFinishedAt) ||
+		!reflect.DeepEqual(after.LastResult, before.LastResult) {
+		t.Fatalf("status after the restart = %+v, result %+v; want %+v, result %+v",
+			after, after.LastResult, before, before.LastResult)
+	}
+}
+
+func TestManualRunSurvivesARestart(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	wishlist(t, pool, wantBluray(new(int64(5000))))
+	notifier := &fakeNotifier{}
+	h := newTestHunter(pool, notifier, olxFixture(t))
+	h.Start(t.Context())
+	if !h.Trigger() {
+		t.Fatal("Trigger = false")
+	}
+	h.Wait()
+	before := h.Status()
+	if before.LastResult == nil || before.LastResult.Sent != 1 {
+		t.Fatalf("manual run = %+v", before.LastResult)
+	}
+
+	after, waits := restarted(t, pool)
+	sameStatus(t, before, after.Status())
+	if got := <-waits; got < 105*time.Minute || got > 135*time.Minute {
+		t.Fatalf("first wait = %v, want about 2h after a manual run just now", got)
+	}
+}
+
+// shutdownSource answers only once its request is canceled.
+type shutdownSource struct{ started chan struct{} }
+
+func (shutdownSource) Name() string   { return "olx" }
+func (shutdownSource) PerQuery() bool { return false }
+
+func (s shutdownSource) Search(ctx context.Context, _ string) ([]Listing, error) {
+	s.started <- struct{}{}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestRunCutShortByShutdownCounts(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	wishlist(t, pool, wantBluray(nil))
+	src := shutdownSource{started: make(chan struct{}, 1)}
+	h := newTestHunter(pool, nil, src)
+	ctx, cancel := context.WithCancel(t.Context())
+	h.Start(ctx)
+	if !h.Trigger() {
+		t.Fatal("Trigger = false")
+	}
+	<-src.started
+	cancel()
+	h.Wait()
+	before := h.Status()
+	if before.LastResult == nil || !strings.Contains(before.LastResult.Failure, "context canceled") {
+		t.Fatalf("run cut short = %+v", before.LastResult)
+	}
+
+	after, waits := restarted(t, pool)
+	sameStatus(t, before, after.Status())
+	if got := <-waits; got < 105*time.Minute || got > 135*time.Minute {
+		t.Fatalf("first wait = %v, want about 2h after a run started just now", got)
 	}
 }

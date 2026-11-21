@@ -105,14 +105,9 @@ func run() int {
 		logger.Error("lookup providers", "err", err)
 		return 2
 	}
-	hunter, dealStore, err := newHunter(pool, logger)
+	hunter, dealStore, valuer, valueStore, err := newRuns(pool, logger)
 	if err != nil {
-		logger.Error("deal hunter", "err", err)
-		return 2
-	}
-	valuer, valueStore, err := newValuation(pool, logger)
-	if err != nil {
-		logger.Error("valuation", "err", err)
+		logger.Error("deal hunter and valuation", "err", err)
 		return 2
 	}
 	huntCtx, stopHunt := context.WithCancel(ctx)
@@ -393,10 +388,31 @@ func allegroLogin() int {
 	return 0
 }
 
+// newRuns configures the deal hunter and the valuation. One pacer spaces
+// the requests they send to a site they share while their runs overlap:
+// at least half the source delay apart, the shortest pause one run makes.
+func newRuns(pool *pgxpool.Pool, logger *slog.Logger) (*deals.Hunter, *deals.Store, *valuation.Runner, *valuation.Store, error) {
+	delay, err := sourceDelay()
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	pacer := deals.NewPacer(delay / 2)
+	hunter, dealStore, err := newHunter(pool, pacer.Lane(), logger)
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("deal hunter: %w", err)
+	}
+	valuer, valueStore, err := newValuation(pool, pacer.Lane(), logger)
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("valuation: %w", err)
+	}
+	return hunter, dealStore, valuer, valueStore, nil
+}
+
 // newHunter configures the deal hunter from the environment. Polling stays
 // off until OHARA_DEALS_INTERVAL is set; alerts need both Telegram
 // variables. The *_URL variables point the sources at test doubles.
-func newHunter(pool *pgxpool.Pool, logger *slog.Logger) (*deals.Hunter, *deals.Store, error) {
+// lane spaces its requests from the valuation's.
+func newHunter(pool *pgxpool.Pool, lane *deals.Lane, logger *slog.Logger) (*deals.Hunter, *deals.Store, error) {
 	interval, err := time.ParseDuration(envOr("OHARA_DEALS_INTERVAL", "0s"))
 	if err != nil || interval < 0 {
 		return nil, nil, fmt.Errorf("OHARA_DEALS_INTERVAL: want a duration such as 2h, got %q", os.Getenv("OHARA_DEALS_INTERVAL"))
@@ -408,7 +424,7 @@ func newHunter(pool *pgxpool.Pool, logger *slog.Logger) (*deals.Hunter, *deals.S
 	if err != nil {
 		return nil, nil, err
 	}
-	client := deals.NewHTTPClient()
+	client := pacedClient(lane)
 	sources := usedSources(client)
 	sources = append(sources, deals.Pepper{Client: client, BaseURL: envOr("OHARA_DEALS_PEPPER_URL", deals.PepperURL)})
 	var notifier deals.Notifier
@@ -437,6 +453,14 @@ func sourceDelay() (time.Duration, error) {
 	return delay, nil
 }
 
+// pacedClient is the HTTP client of one runner's sources: every request
+// waits its turn in lane.
+func pacedClient(lane *deals.Lane) *http.Client {
+	client := deals.NewHTTPClient()
+	client.Transport = lane.Transport(nil)
+	return client
+}
+
 // usedSources are the marketplaces of used copies: OLX.
 func usedSources(client *http.Client) []deals.Source {
 	return []deals.Source{deals.OLX{Client: client, BaseURL: envOr("OHARA_DEALS_OLX_URL", deals.OLXURL)}}
@@ -445,8 +469,9 @@ func usedSources(client *http.Client) []deals.Source {
 // newValuation configures the valuation runner from the environment. The
 // daily schedule stays off until OHARA_VALUATION_INTERVAL is set; it asks
 // the deal hunter's OLX, with the same pause, SkupSzop and, with
-// a Discogs token, the Discogs marketplace.
-func newValuation(pool *pgxpool.Pool, logger *slog.Logger) (*valuation.Runner, *valuation.Store, error) {
+// a Discogs token, the Discogs marketplace. lane spaces its requests from
+// the hunter's.
+func newValuation(pool *pgxpool.Pool, lane *deals.Lane, logger *slog.Logger) (*valuation.Runner, *valuation.Store, error) {
 	interval, err := time.ParseDuration(envOr("OHARA_VALUATION_INTERVAL", "0s"))
 	if err != nil || interval < 0 {
 		return nil, nil, fmt.Errorf("OHARA_VALUATION_INTERVAL: want a duration such as 24h, got %q", os.Getenv("OHARA_VALUATION_INTERVAL"))
@@ -462,7 +487,7 @@ func newValuation(pool *pgxpool.Pool, logger *slog.Logger) (*valuation.Runner, *
 	if err != nil {
 		return nil, nil, err
 	}
-	client := deals.NewHTTPClient()
+	client := pacedClient(lane)
 	sources := usedSources(client)
 	buybacks := []valuation.BuyBack{
 		valuation.SkupSzop{Client: client, BaseURL: envOr("OHARA_VALUATION_SKUPSZOP_URL", valuation.SkupSzopURL)},

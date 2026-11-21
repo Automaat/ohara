@@ -178,9 +178,19 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   run, in a hunt and in a valuation (SkupSzop quotes too); the run's
   errors name the refusal once with the requests it skipped, and skipped
   requests count in no source metric. Other failures do not stop asking.
+  Hunts and valuations share one `deals.Pacer`, built in `cmd/api`, each
+  in a lane of its own that paces every request of its HTTP client,
+  redirects too: a request to a host is sent at least half of
+  `OHARA_DEALS_DELAY` after the other lane's last one there. A request
+  holds the site until it is written, never while it waits for an answer,
+  so neither run waits for the other to finish; a lane never waits for
+  itself, so a run on its own keeps its pacing.
   Every run also asks each query source the canary query, wishlist or not,
   and sets `ohara_source_canary_ok` (a feed's one request is its canary)
   and `ohara_source_results`. A canary without listings is a broken source.
+  The last run, scheduled, manual or cut short by shutdown, is kept in
+  `deal_run`: after a restart the status shows it and the first scheduled
+  run comes one interval after it started, at least 5 minutes on.
 - Valuation reuses the deal matcher, store and the OLX source for owned
   editions, and quotes owned books (ISBN barcodes) at SkupSzop.
   A copy's range comes from prices last seen within the window: floor =

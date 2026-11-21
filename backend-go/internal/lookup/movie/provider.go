@@ -51,6 +51,14 @@ const (
 	maxLimitReset = 48 * time.Hour
 )
 
+// sourceTimeout caps the wait for one name source and namesTimeout the
+// wait for all of them, fallbacks included, so a catalog that hangs leaves
+// the TMDB search at least 4 s of the lookup's 10 s budget.
+const (
+	sourceTimeout = 4 * time.Second
+	namesTimeout  = 6 * time.Second
+)
+
 // maxQueries bounds TMDB searches per barcode when sources disagree.
 const maxQueries = 3
 
@@ -77,10 +85,10 @@ func (*Provider) Accepts(code string) bool { return !barcode.IsBook(code) }
 
 // Fetch asks every name source concurrently, and the fallbacks only when
 // those name nothing searchable, then searches TMDB for the distinct
-// titles. A
-// source paused for its rate limit is skipped and counts as failed. With no
-// product found, a failed source fails the fetch so a "no match" built on an
-// outage is not cached. When another source found the product, the answer
+// titles. A source paused for its rate limit is skipped and counts as
+// failed, and so does one that has not answered within sourceTimeout or
+// namesTimeout. With no product found, a failed source fails the fetch so
+// a "no match" built on an outage is not cached. When another source found the product, the answer
 // comes back as a *lookup.PartialError naming the failed sources (an Allegro
 // refusal included), so the lookup reports them and does not cache the
 // answer.
@@ -105,7 +113,7 @@ func (p *Provider) Fetch(ctx context.Context, code string) (json.RawMessage, err
 		raw.Searches = append(raw.Searches, s)
 	}
 	if len(raw.Searches) == 0 && len(searchErrs) > 0 {
-		return nil, errors.Join(searchErrs...)
+		return nil, errors.Join(errs, errors.Join(searchErrs...))
 	}
 	data, err := json.Marshal(raw)
 	if err != nil {
@@ -122,6 +130,8 @@ func (p *Provider) Fetch(ctx context.Context, code string) (json.RawMessage, err
 // can leave them too little of the lookup's deadline, which then fails
 // uncached rather than spending their quota on a product the sources name.
 func (p *Provider) names(ctx context.Context, code string) ([]Product, error) {
+	ctx, cancel := context.WithTimeout(ctx, namesTimeout)
+	defer cancel()
 	found, err := p.ask(ctx, nil, p.Sources, 0, code)
 	if len(p.Fallbacks) == 0 || len(queries(found)) > 0 {
 		return found, err
@@ -148,7 +158,10 @@ func (p *Provider) ask(ctx context.Context, out []Product, sources []NameSource,
 
 // products asks one name source, unless it is paused for its rate limit. A
 // panic in it, its name included, fails that source with an error naming
-// it, or naming its position when the name itself panicked.
+// it, or naming its position when the name itself panicked. A source that
+// has not answered within sourceTimeout fails with an error naming it; the
+// wait ends then even when the source ignores its context, for example
+// while it waits on a lock.
 func (p *Provider) products(ctx context.Context, i int, s NameSource, code string) ([]Product, error) {
 	name, err := recovery.Call(p.Logger, "movie name source panicked", func() (string, error) {
 		return s.Name(), nil
@@ -159,16 +172,39 @@ func (p *Provider) products(ctx context.Context, i int, s NameSource, code strin
 	if until, ok := p.pausedUntil(name); ok {
 		return nil, fmt.Errorf("%s: %w, skipped until %s", name, ErrQuotaExceeded, until.UTC().Format(time.RFC3339))
 	}
-	found, err := recovery.Call(p.Logger, "movie name source panicked", func() ([]Product, error) {
-		return s.Products(ctx, code)
-	}, "source", name, "barcode", code)
+	found, err := p.within(ctx, s, name, code)
 	if pe, ok := errors.AsType[*recovery.PanicError](err); ok {
 		return nil, fmt.Errorf("%s: %w", name, pe)
 	}
-	if rl, ok := errors.AsType[*RateLimitError](err); ok {
-		p.pause(name, rl.Reset)
-	}
 	return found, err
+}
+
+// within asks s for at most sourceTimeout and returns its answer, or an
+// error naming it when the time runs out first. A rate limit the source
+// reports pauses it even when its answer comes after the wait ended.
+func (p *Provider) within(ctx context.Context, s NameSource, name, code string) ([]Product, error) {
+	ctx, cancel := context.WithTimeout(ctx, sourceTimeout)
+	defer cancel()
+	type answer struct {
+		found []Product
+		err   error
+	}
+	done := make(chan answer, 1)
+	go func() {
+		found, err := recovery.Call(p.Logger, "movie name source panicked", func() ([]Product, error) {
+			return s.Products(ctx, code)
+		}, "source", name, "barcode", code)
+		if rl, ok := errors.AsType[*RateLimitError](err); ok {
+			p.pause(name, rl.Reset)
+		}
+		done <- answer{found, err}
+	}()
+	select {
+	case a := <-done:
+		return a.found, a.err
+	case <-ctx.Done():
+		return nil, fmt.Errorf("%s: %w", name, context.Cause(ctx))
+	}
 }
 
 func (p *Provider) now() time.Time {

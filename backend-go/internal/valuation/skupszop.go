@@ -187,7 +187,13 @@ func shopDo(ctx context.Context, client *http.Client, method, target string, bod
 	defer resp.Body.Close()
 	status := metrics.SourceOK
 	if resp.StatusCode != http.StatusOK {
-		status = fmt.Sprintf("http_%d", resp.StatusCode)
+		status = "http_" + strconv.Itoa(resp.StatusCode)
+	}
+	// A refusal comes before the body: one whose body breaks off is still
+	// a refusal, and the run stops asking.
+	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxShopReply))
+		return nil, status, statusError{resp.StatusCode}
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxShopReply+1))
 	if err != nil {
@@ -203,10 +209,19 @@ func shopDo(ctx context.Context, client *http.Client, method, target string, bod
 		return nil, status, errors.New("response too large")
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, status, fmt.Errorf("status %d", resp.StatusCode)
+		return nil, status, statusError{resp.StatusCode}
 	}
 	return data, status, nil
 }
+
+// statusError is a shop answer with a status other than 200. Its
+// StatusCode lets a run tell a refusal (403, 429) from other failures.
+type statusError struct{ code int }
+
+func (e statusError) Error() string { return "status " + strconv.Itoa(e.code) }
+
+// StatusCode is the status the shop answered.
+func (e statusError) StatusCode() int { return e.code }
 
 // plainText strips tags and collapses spaces.
 func plainText(s string) string {

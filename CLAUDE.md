@@ -106,9 +106,15 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   `ohara_source_errors_total{source}`, `ohara_source_parse_errors_total`
   and `ohara_source_last_success_timestamp_seconds`. A request counts as
   ok only once its response parses; it then sets `ohara_source_results` to
-  the products or candidates found. A SkupSzop quote counts once, as ok
-  when the cart shows the offer or the shop does not buy the book, with
-  results 1 for an offer. Register each source with
+  the products or candidates found. `fetch.Do` times every request whose
+  `fetch.Request` names its `Source` in
+  `ohara_source_request_duration_seconds{source}`, whatever the outcome,
+  from the call until the body is read or the request fails; a pacing
+  or redirect wait inside the client counts, as it does toward the
+  client's timeout. A Discogs base URL that does not parse is timed with
+  its error. A SkupSzop quote counts once, as ok when the cart shows the
+  offer or the shop does not buy the book, with results 1 for an offer,
+  and is timed once over all its requests. Register each source with
   `metrics.InitSource` so its counters exist before the first failure.
   Every finished deal or valuation run, scheduled or manual, counts in
   `ohara_background_runs_total{task="deals"|"valuation",outcome}`: `failed`

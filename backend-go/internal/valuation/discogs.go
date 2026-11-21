@@ -199,6 +199,7 @@ func (n *NBP) fetch(ctx context.Context, code string) (float64, error) {
 	}
 	u := base + "/api/exchangerates/rates/a/" + url.PathEscape(strings.ToLower(code)) + "/?format=json"
 	resp, err := fetch.Do(ctx, n.Client, fetch.Request{
+		Source:  SourceNBP,
 		URL:     u,
 		Header:  http.Header{"Accept": {"application/json"}},
 		MaxBody: maxRateBody,

@@ -28,7 +28,7 @@ func (Pepper) PerQuery() bool { return false }
 
 // Search implements Source; the query is ignored.
 func (p Pepper) Search(ctx context.Context, _ string) ([]Listing, error) {
-	body, err := get(ctx, p.Client, p.BaseURL, "application/rss+xml, application/xml, text/xml")
+	body, err := get(ctx, p.Client, p.Name(), p.BaseURL, "application/rss+xml, application/xml, text/xml")
 	if err != nil {
 		return nil, fmt.Errorf("pepper: %w", err)
 	}

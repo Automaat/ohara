@@ -14,6 +14,11 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
+// sourceDurationBuckets reach past the lookup client's 8 s timeout and the
+// deal client's 30 s one, so a request cut off by either lands in a finite
+// bucket.
+var sourceDurationBuckets = []float64{0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 7.5, 10, 20, 30, 60}
+
 // runDurationBuckets span a background run from one second to two hours.
 var runDurationBuckets = []float64{1, 5, 15, 30, 60, 120, 300, 600, 1200, 1800, 3600, 5400, 7200}
 
@@ -49,6 +54,12 @@ var (
 	sourceParseErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "ohara_source_parse_errors_total",
 		Help: "Responses from an external source that could not be read (status parse_error).",
+	}, []string{"source"})
+
+	sourceDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "ohara_source_request_duration_seconds",
+		Help:    "Time from sending a request to an external source to its last body byte read or its failure, whatever the outcome.",
+		Buckets: sourceDurationBuckets,
 	}, []string{"source"})
 
 	sourceLastSuccess = prometheus.NewGaugeVec(prometheus.GaugeOpts{
@@ -160,6 +171,7 @@ func init() {
 		sourceRequests,
 		sourceErrors,
 		sourceParseErrors,
+		sourceDuration,
 		sourceLastSuccess,
 		sourceResults,
 		sourceCanary,
@@ -383,12 +395,14 @@ const (
 	SourceParseError = "parse_error"
 )
 
-// InitSource exports zeroed counters for source, so increase() and alert
-// queries see the first failure after a restart.
+// InitSource exports zeroed counters and an empty request duration
+// histogram for source, so increase() and alert queries see the first
+// failure after a restart.
 func InitSource(source string) {
 	sourceRequests.WithLabelValues(source, SourceOK)
 	sourceErrors.WithLabelValues(source)
 	sourceParseErrors.WithLabelValues(source)
+	sourceDuration.WithLabelValues(source)
 }
 
 // ObserveSource counts one request to an external source. status is
@@ -406,6 +420,12 @@ func ObserveSource(source, status string) {
 		sourceParseErrors.WithLabelValues(source).Inc()
 	}
 	sourceErrors.WithLabelValues(source).Inc()
+}
+
+// ObserveSourceDuration records how long one request to source took,
+// whatever its outcome.
+func ObserveSourceDuration(source string, d time.Duration) {
+	sourceDuration.WithLabelValues(source).Observe(d.Seconds())
 }
 
 // SetSourceResults records how many results source returned: listings in a

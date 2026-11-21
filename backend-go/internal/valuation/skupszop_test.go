@@ -376,3 +376,37 @@ func TestSkupSzopRefusalWithABrokenBody(t *testing.T) {
 		t.Fatalf("Quote err = %v, want a 429 refusal", err)
 	}
 }
+
+// TestSkupSzopQuoteIsTimedOnce checks that a quote, which sends several
+// requests but counts once in the source health metrics, is timed once
+// whatever its outcome.
+func TestSkupSzopQuoteIsTimedOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(*fakeShop)
+		down  bool
+	}{
+		{name: "offer"},
+		{name: "undecodable reply", setup: func(f *fakeShop) { f.reply = `<html>` }},
+		{name: "shop unreachable", down: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			shop := newFakeShop(t)
+			if tc.setup != nil {
+				tc.setup(shop)
+			}
+			srv := httptest.NewServer(shop)
+			t.Cleanup(srv.Close)
+			if tc.down {
+				srv.Close()
+			}
+			s := SkupSzop{Client: srv.Client(), BaseURL: srv.URL + "/"}
+			const series = `ohara_source_request_duration_seconds_count{source="skupszop"}`
+			before := scrape(t)
+			_, _ = s.Quote(context.Background(), "9788308074770")
+			if got := metricValue(scrape(t), series) - metricValue(before, series); got != 1 {
+				t.Errorf("%s moved by %v, want 1", series, got)
+			}
+		})
+	}
+}

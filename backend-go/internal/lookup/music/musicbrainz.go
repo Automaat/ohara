@@ -194,6 +194,7 @@ func upcA(code string) (string, bool) {
 // name the URL without its query.
 func get(ctx context.Context, client *http.Client, source, rawURL string, ok ...int) ([]byte, error) {
 	resp, err := fetch.Do(ctx, client, fetch.Request{
+		Source:  source,
 		URL:     rawURL,
 		Header:  http.Header{"Accept": {"application/json"}, "User-Agent": {userAgent}},
 		MaxBody: maxBody,

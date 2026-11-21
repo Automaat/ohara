@@ -158,6 +158,9 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   run, in a hunt and in a valuation (SkupSzop quotes too); the run's
   errors name the refusal once with the requests it skipped, and skipped
   requests count in no source metric. Other failures do not stop asking.
+  Hunts and valuations share one `deals.Pacer`, built in `cmd/api`: while
+  their runs overlap, two requests to one site start at least half of
+  `OHARA_DEALS_DELAY` apart, and neither run waits for the other to finish.
   Every run also asks each query source the canary query, wishlist or not,
   and sets `ohara_source_canary_ok` (a feed's one request is its canary)
   and `ohara_source_results`. A canary without listings is a broken source.

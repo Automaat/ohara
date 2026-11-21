@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/Automaat/ohara/backend-go/internal/dbtest"
+	"github.com/Automaat/ohara/backend-go/internal/deals"
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
 )
 
@@ -134,7 +135,7 @@ func checkSources(t *testing.T) {
 func TestHunterAsksOnlyItsSources(t *testing.T) {
 	pool := dbtest.Migrated(t)
 	u := newUpstreams(t)
-	h, _, err := newHunter(pool, slog.New(slog.DiscardHandler))
+	h, _, err := newHunter(pool, deals.NewPacer(0), slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatalf("newHunter: %v", err)
 	}
@@ -170,7 +171,7 @@ func TestValuationAsksOnlyItsSources(t *testing.T) {
 	const errorsSeries = `ohara_source_errors_total{source="skupszop"}`
 	const unavailableSeries = `ohara_source_requests_total{source="skupszop",status="http_503"}`
 	errorsBefore, _ := sample(scrape(t), errorsSeries)
-	r, _, err := newValuation(pool, slog.New(slog.DiscardHandler))
+	r, _, err := newValuation(pool, deals.NewPacer(0), slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatalf("newValuation: %v", err)
 	}

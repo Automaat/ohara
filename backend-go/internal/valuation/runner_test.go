@@ -953,3 +953,134 @@ func TestRunKeepsTheRefusalBeyondTheErrorCap(t *testing.T) {
 		t.Fatalf("errors = %q", x.res.Errors)
 	}
 }
+
+// requestLog keeps when each site was asked.
+type requestLog struct {
+	mu    sync.Mutex
+	times map[string][]time.Time
+}
+
+func (l *requestLog) add(site string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.times == nil {
+		l.times = map[string][]time.Time{}
+	}
+	l.times[site] = append(l.times[site], time.Now())
+}
+
+func (l *requestLog) count(site string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.times[site])
+}
+
+// timedSource answers with listings and logs when it was asked.
+type timedSource struct {
+	name     string
+	perQuery bool
+	listings []deals.Listing
+	log      *requestLog
+}
+
+func (s *timedSource) Name() string   { return s.name }
+func (s *timedSource) PerQuery() bool { return s.perQuery }
+
+func (s *timedSource) Search(context.Context, string) ([]deals.Listing, error) {
+	s.log.add(s.name)
+	return s.listings, nil
+}
+
+// timedBuyBack declines every book and logs when it was asked.
+type timedBuyBack struct{ log *requestLog }
+
+func (*timedBuyBack) Name() string { return SourceSkupSzop }
+
+func (b *timedBuyBack) Quote(context.Context, string) (Quote, error) {
+	b.log.add(SourceSkupSzop)
+	return Quote{}, nil
+}
+
+const runDelay = 200 * time.Millisecond
+
+// pacedRuns builds a hunt and a valuation that share one pacer, as
+// cmd/api does, with runDelay between their own requests.
+func pacedRuns(pool *pgxpool.Pool, pacer *deals.Pacer, huntOLX, valueOLX deals.Source, log *requestLog) (*deals.Hunter, *Runner) {
+	logger := slog.New(slog.DiscardHandler)
+	hunter := deals.NewHunter(deals.NewStore(pool), []deals.Source{
+		pacer.Source(huntOLX), pacer.Source(&timedSource{name: "pepper", log: log}),
+	}, nil, deals.Config{Delay: runDelay, CanaryQuery: "dvd"}, logger)
+	runner := NewRunner(NewStore(pool), []deals.Source{pacer.Source(valueOLX)},
+		[]BuyBack{&timedBuyBack{log: log}}, nil, Config{Delay: runDelay, Window: 90 * 24 * time.Hour}, logger)
+	return hunter, runner
+}
+
+func TestOverlappingRunsSpaceRequestsToOneSite(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	seed(t, pool)
+	log := &requestLog{}
+	found := []deals.Listing{listing("1", "Diuna DVD", 1000, used())}
+	hunter, runner := pacedRuns(pool, deals.NewPacer(runDelay/2),
+		&timedSource{name: SourceOLX, perQuery: true, listings: found, log: log},
+		&timedSource{name: SourceOLX, perQuery: true, listings: found, log: log}, log)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var wg sync.WaitGroup
+	var huntErr, valueErr error
+	wg.Go(func() { _, huntErr = hunter.Run(ctx) })
+	wg.Go(func() { _, valueErr = runner.Run(ctx) })
+	wg.Wait()
+	if huntErr != nil || valueErr != nil {
+		t.Fatalf("hunt: %v, valuation: %v", huntErr, valueErr)
+	}
+
+	if n := log.count(SourceOLX); n < 4 {
+		t.Fatalf("OLX asked %d times, want the hunt's canary and wanted DVD and the valuation's book and Blu-ray", n)
+	}
+	for site, times := range log.times {
+		slices.SortFunc(times, func(a, b time.Time) int { return a.Compare(b) })
+		for i := 1; i < len(times); i++ {
+			if gap := times[i].Sub(times[i-1]); gap < runDelay/2 {
+				t.Errorf("%s asked %v after the previous request, want at least %v", site, gap, runDelay/2)
+			}
+		}
+	}
+}
+
+func TestRunsDoNotWaitForEachOther(t *testing.T) {
+	for _, held := range []string{"valuation", "hunt"} {
+		t.Run(held+" held in an OLX request", func(t *testing.T) {
+			pool := dbtest.Migrated(t)
+			seed(t, pool)
+			log := &requestLog{}
+			blocking := blockingSource{started: make(chan struct{}, 1), release: make(chan struct{})}
+			var huntOLX, valueOLX deals.Source = blocking, &timedSource{name: SourceOLX, perQuery: true, log: log}
+			if held == "valuation" {
+				huntOLX, valueOLX = valueOLX, huntOLX
+			}
+			hunter, runner := pacedRuns(pool, deals.NewPacer(runDelay/2), huntOLX, valueOLX, log)
+			heldRun := func(ctx context.Context) error { _, err := runner.Run(ctx); return err }
+			otherRun := func(ctx context.Context) error { _, err := hunter.Run(ctx); return err }
+			if held == "hunt" {
+				heldRun, otherRun = otherRun, heldRun
+			}
+
+			var wg sync.WaitGroup
+			defer wg.Wait()
+			heldCtx, stopHeld := context.WithCancel(context.Background())
+			defer stopHeld()
+			wg.Go(func() { _ = heldRun(heldCtx) })
+			<-blocking.started
+
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := otherRun(ctx); err != nil {
+				t.Fatalf("run beside the held %s: %v", held, err)
+			}
+			if log.count(SourceOLX) == 0 {
+				t.Fatalf("the run beside the held %s never asked OLX", held)
+			}
+		})
+	}
+}

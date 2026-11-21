@@ -185,23 +185,25 @@
 			? `Kolejne wyszukiwanie ${intervalLabel(status)}.`
 			: 'Wyszukaj oferty przyciskiem „Szukaj teraz”.'
 	);
+
+	/** The add page started as a wish, searching titles the same way the scanner does. */
+	const addWish = '/titles/new?from=deals';
 </script>
 
 <svelte:head>
 	<title>Okazje · Ohara</title>
 </svelte:head>
 
-{#snippet searchButton()}
-	<Button tone="signal" loading={busy} onclick={runNow}>
-		{status?.running ? 'Szukam…' : 'Szukaj teraz'}
-	</Button>
+{#snippet headerActions()}
+	<Button href={addWish}>Dodaj pozycję</Button>
+	{#if deals && deals.wishes > 0}
+		<Button tone="signal" loading={busy} onclick={runNow}>
+			{status?.running ? 'Szukam…' : 'Szukaj teraz'}
+		</Button>
+	{/if}
 {/snippet}
 
-<PageHeader
-	title="Okazje"
-	description={summary}
-	actions={deals && deals.wishes > 0 ? searchButton : undefined}
-/>
+<PageHeader title="Okazje" description={summary} actions={headerActions} />
 
 <div class="content">
 	<FormError message={runError} />
@@ -236,7 +238,7 @@
 				description="Okazji szukamy dla pozycji z listy życzeń."
 			>
 				{#snippet action()}
-					<Button tone="signal" href="/titles/new">Dodaj pozycję</Button>
+					<Button tone="signal" href={addWish}>Dodaj pozycję</Button>
 				{/snippet}
 			</EmptyState>
 		{:else}

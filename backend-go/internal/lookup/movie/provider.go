@@ -113,7 +113,7 @@ func (p *Provider) Fetch(ctx context.Context, code string) (json.RawMessage, err
 		raw.Searches = append(raw.Searches, s)
 	}
 	if len(raw.Searches) == 0 && len(searchErrs) > 0 {
-		return nil, errors.Join(searchErrs...)
+		return nil, errors.Join(errs, errors.Join(searchErrs...))
 	}
 	data, err := json.Marshal(raw)
 	if err != nil {

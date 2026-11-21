@@ -24,6 +24,7 @@ const (
 var (
 	discogsSources   = []string{SourceDiscogsLowest, SourceDiscogsVGPlus, SourceDiscogsMint}
 	valuationSources = append([]string{SourceOLX, SourceSkupSzop}, discogsSources...)
+	pooledSources    = []string{SourceOLX}
 )
 
 // MinObservations is the fewest used prices a middle value needs before it

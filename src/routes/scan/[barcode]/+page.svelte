@@ -5,17 +5,9 @@
 	import { page } from '$app/state';
 	import ScanItem from '#lib/components/ScanItem.svelte';
 	import { ScanFlow, type Added } from '#lib/scan-flow.svelte.js';
-	import { cleanBarcode } from '#lib/scan.js';
+	import { browserStore, cleanBarcode } from '#lib/scan.js';
 
-	function storage(): Storage | undefined {
-		try {
-			return localStorage;
-		} catch {
-			return undefined;
-		}
-	}
-
-	const flow = new ScanFlow(fetch, storage());
+	const flow = new ScanFlow(fetch, browserStore());
 	let alive = true;
 
 	const barcode = $derived(cleanBarcode(page.params.barcode ?? ''));

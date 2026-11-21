@@ -1,63 +1,50 @@
 <script lang="ts">
 	import { BackLink, PageHeader } from '@smykla-skalski/sui';
+	import { onDestroy } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { ApiError, errorMessage, request } from '#lib/api.js';
-	import { titlePayload, titleToForm, type FormIssue, type Title } from '#lib/collection.js';
-	import TitleFormFields from '#lib/components/TitleFormFields.svelte';
+	import ScanItem from '#lib/components/ScanItem.svelte';
+	import { ScanFlow, type Added } from '#lib/scan-flow.svelte.js';
+	import { browserStore } from '#lib/scan.js';
 
 	const requested = page.url.searchParams.get('kind');
-	let form = $state(
-		titleToForm(null, requested === 'book' || requested === 'music' ? requested : 'movie')
-	);
-	let issue = $state<FormIssue | null>(null);
-	let saving = $state(false);
+	const flow = new ScanFlow(fetch, browserStore());
+	flow.start(requested === 'book' || requested === 'music' ? requested : 'movie');
+	let alive = true;
 
-	async function save() {
-		const parsed = titlePayload(form);
-		if (!parsed.ok) {
-			issue = parsed.issue;
-			return;
-		}
-		saving = true;
-		try {
-			const created = await request<Title>(fetch, 'POST', '/api/titles', parsed.value);
-			await goto(`/titles/${created.id}`);
-		} catch (err) {
-			issue = {
-				field: err instanceof ApiError ? (err.field ?? '') : '',
-				message: errorMessage(err)
-			};
-		} finally {
-			saving = false;
-		}
+	onDestroy(() => {
+		alive = false;
+		flow.detach();
+	});
+
+	/** Opens what went in, or the scanner for the code a wedge scanner typed into the price. */
+	async function added(a: Added) {
+		if (!alive) return;
+		await goto(a.next ? `/scan/${encodeURIComponent(a.next)}` : `/titles/${a.saved.titleID}`);
+	}
+
+	async function leave() {
+		if (alive) await goto('/');
 	}
 </script>
 
 <svelte:head>
-	<title>Nowy tytuł · Ohara</title>
+	<title>Dodaj pozycję · Ohara</title>
 </svelte:head>
 
-<PageHeader title="Nowy tytuł" description="Po zapisaniu tytułu możesz dodać wydanie i egzemplarz.">
+<PageHeader title="Dodaj pozycję" description="Wyszukaj po tytule albo wpisz dane ręcznie.">
 	{#snippet kicker()}
 		<BackLink href="/" label="Kolekcja" />
 	{/snippet}
 </PageHeader>
 
 <div class="content">
-	<TitleFormFields
-		bind:form
-		{issue}
-		{saving}
-		collapseDetails
-		submitLabel="Zapisz tytuł"
-		onsubmit={save}
-		oncancel={() => goto('/')}
-	/>
+	<ScanItem {flow} onadded={added} onclose={leave} onmanual={() => flow.manual()} />
 </div>
 
 <style>
 	.content {
 		padding: var(--sui-pane-gutter, 1.5rem);
+		max-width: 40rem;
 	}
 </style>

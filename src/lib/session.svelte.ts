@@ -2,7 +2,7 @@ import { ApiError, request } from './api';
 import type { CopyStatus, Kind } from './collection';
 import { retractScan } from './recent.svelte';
 
-/** One copy this visit added from the scanner, with what undoing it has to remove. */
+/** One copy this visit added through the quick confirm, with what undoing it has to remove. */
 export type SessionAdd = {
 	id: number;
 	copyID: number;
@@ -20,8 +20,8 @@ export type SessionAdd = {
 	status: CopyStatus;
 	/** What an owned copy cost; null for a wish or a price left blank. */
 	priceCents: number | null;
-	/** The add's line in the recent scans. */
-	recentID: number;
+	/** The add's line in the recent scans; null for an add without a barcode, which is no scan. */
+	recentID: number | null;
 };
 
 /**
@@ -98,5 +98,5 @@ export async function undoAdd(fetchFn: typeof fetch, add: SessionAdd): Promise<v
 		if (gone && add.createdTitle) await deleteUnused(fetchFn, `/api/titles/${add.titleID}`);
 	}
 	session.adds = session.adds.filter((a) => a.id !== add.id);
-	retractScan(add.recentID);
+	if (add.recentID !== null) retractScan(add.recentID);
 }

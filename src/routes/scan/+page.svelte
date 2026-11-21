@@ -38,6 +38,7 @@
 	import {
 		RepeatGuard,
 		barcodeInputError,
+		browserStore,
 		cleanBarcode,
 		looksLikeBarcode,
 		type QueueEntry
@@ -65,14 +66,6 @@
 	/** How much of the scan band stays in view above the sheet. */
 	const bandPeek = 56;
 
-	function storage(): Storage | undefined {
-		try {
-			return localStorage;
-		} catch {
-			return undefined;
-		}
-	}
-
 	let code = $state('');
 	let leaving = $state(false);
 	let typing = $state(false);
@@ -96,7 +89,7 @@
 	let addedOnClose: SessionAdd | null = null;
 	let listOpen = $state(false);
 	const guard = new RepeatGuard(repeatWindow);
-	const flow = new ScanFlow(fetch, storage());
+	const flow = new ScanFlow(fetch, browserStore());
 	const addToasts = new AddToasts(
 		{
 			toast,

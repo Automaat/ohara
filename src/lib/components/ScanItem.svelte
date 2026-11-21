@@ -47,6 +47,8 @@
 	let editing = $state(false);
 
 	const item = $derived(flow.item);
+	/** Empty for an item added without a barcode. */
+	const code = $derived(item?.barcode ?? flow.code);
 	const candidate = $derived(flow.candidate);
 	const albums = $derived(item?.candidates.every((c) => c.type === 'music') ?? false);
 	const sources = $derived(item?.errors.map((e) => e.provider).join(', ') ?? '');
@@ -239,7 +241,9 @@
 			{#if header.more}
 				<p class="meta">{header.more}</p>
 			{/if}
-			<p class="code">{barcodeGroups(item?.barcode ?? flow.code).join(' ')}</p>
+			{#if code}
+				<p class="code">{barcodeGroups(code).join(' ')}</p>
+			{/if}
 			{#if flow.phase.kind === 'ready' && item?.target.kind === 'new' && !flow.choosing}
 				<div class="tools">
 					{#if flow.phase.status !== 'missing'}

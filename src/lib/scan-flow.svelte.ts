@@ -1,5 +1,12 @@
 import { ApiError, errorMessage, invalidBarcodeMessage } from './api';
-import { bindingLabels, formatLabels, formatPLN, type Edition, type FormIssue } from './collection';
+import {
+	bindingLabels,
+	formatLabels,
+	formatPLN,
+	type Edition,
+	type FormIssue,
+	type Kind
+} from './collection';
 import { logScan } from './recent.svelte';
 import {
 	FormRejected,
@@ -81,8 +88,9 @@ export function resetVisit() {
 
 /**
  * The quick confirm for one barcode after another: resolves it, lets the user pick a candidate or
- * search by title, and saves the copy. The scanner's sheet and the add page share it, so both
- * offer the same fields. Only the newest barcode applies what it answers.
+ * search by title, and saves the copy. The scanner's sheet, its add page and the collection's add
+ * page, which starts without a barcode, share it, so all offer the same fields. Only the newest
+ * barcode applies what it answers.
  */
 export class ScanFlow {
 	/** The barcode as read or typed, cleaned; the item's barcode is the server's form of it. */
@@ -141,11 +149,10 @@ export class ScanFlow {
 		};
 	}
 
-	/** Resolves a barcode, or opens a blank form for one typed by hand. */
-	async load(raw: string, byHand = false): Promise<void> {
+	/** Drops what the last item answered and starts a new one; the result tells it is current. */
+	#restart(code: string): () => boolean {
 		const current = this.#loads.start();
 		this.#current = current;
-		const code = cleanBarcode(raw);
 		this.code = code;
 		this.phase = { kind: 'loading' };
 		this.item = null;
@@ -155,6 +162,21 @@ export class ScanFlow {
 		this.saving = false;
 		this.searching = false;
 		this.sticky = loadSticky(this.#store);
+		return current;
+	}
+
+	/** Opens a blank item without a barcode, to search by title or fill in by hand. */
+	start(kind: Kind) {
+		this.#restart('');
+		this.item = this.#blank('', true);
+		this.form.kind = kind;
+		this.phase = { kind: 'ready', status: 'missing' };
+	}
+
+	/** Resolves a barcode, or opens a blank form for one typed by hand. */
+	async load(raw: string, byHand = false): Promise<void> {
+		const code = cleanBarcode(raw);
+		const current = this.#restart(code);
 		if (!looksLikeBarcode(code)) {
 			this.phase = { kind: 'invalid', message: `„${raw.trim()}” nie wygląda na kod kreskowy.` };
 			return;
@@ -301,8 +323,9 @@ export class ScanFlow {
 	}
 
 	/**
-	 * Saves the form. A copy that went through is logged and its shop, new or used and date
-	 * carry over even when the user has moved on; only the barcode still shown gets the result.
+	 * Saves the form. A copy that went through is logged, in the recent scans only when it has a
+	 * barcode, and its shop, new or used and date carry over even when the user has moved on; only
+	 * the barcode still shown gets the result.
 	 * The copy the server returns decides what is logged: a retry of a save whose answer was
 	 * lost returns the copy the first attempt made, even when the form changed in between. An
 	 * owned copy's shop joins the ones stored when it answers, so another page's save that
@@ -327,12 +350,14 @@ export class ScanFlow {
 			}
 			const price = formatPLN(saved.copy.price_cents ?? saved.copy.max_price_cents);
 			const what = kept.status === 'owned' ? '' : ' · lista życzeń';
-			const recentID = logScan(
-				item.barcode,
-				'added',
-				saved.titleName + (price ? ` · ${price}` : '') + what,
-				`/copies/${saved.copy.id}`
-			);
+			const recentID = item.barcode
+				? logScan(
+						item.barcode,
+						'added',
+						saved.titleName + (price ? ` · ${price}` : '') + what,
+						`/copies/${saved.copy.id}`
+					)
+				: null;
 			item.logged = true;
 			const add = recordAdd({
 				copyID: saved.copy.id,

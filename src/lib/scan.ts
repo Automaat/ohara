@@ -457,7 +457,10 @@ export function scanTitlePayload(f: QuickForm, candidate: Candidate | null): Par
 	};
 }
 
-/** The POST /api/editions body for barcode: the form's medium over the candidate's details. */
+/**
+ * The POST /api/editions body for barcode, none when it is empty: the form's medium over the
+ * candidate's details.
+ */
 export function scanEditionPayload(
 	f: QuickForm,
 	candidate: Candidate | null,
@@ -475,7 +478,7 @@ export function scanEditionPayload(
 		ok: true,
 		value: {
 			title_id: titleID,
-			barcode,
+			barcode: barcode || null,
 			label: e?.label ?? '',
 			publisher: e?.publisher ?? '',
 			year: opt(e?.year),
@@ -570,7 +573,10 @@ export function newMade(): Made {
 	return { titles: [], editions: [], titleUnanswered: false };
 }
 
-/** What a quick confirm saves: a copy of an owned edition, or a new item for a barcode. */
+/**
+ * What a quick confirm saves: a copy of an owned edition, or a new item for a barcode, empty for
+ * one added without.
+ */
 export type SaveTarget =
 	| { kind: 'owned'; edition: EditionDetail }
 	| { kind: 'new'; barcode: string; candidate: Candidate | null };
@@ -825,6 +831,15 @@ export function cameraErrorMessage(err: unknown): string {
 
 /** The subset of Storage the scanner keeps its settings in. */
 export type KeyValueStore = Pick<Storage, 'getItem' | 'setItem'>;
+
+/** The browser's local storage, or none where it is off, as in a private window. */
+export function browserStore(): KeyValueStore | undefined {
+	try {
+		return localStorage;
+	} catch {
+		return undefined;
+	}
+}
 
 const stickyKey = 'ohara.scan.sticky';
 

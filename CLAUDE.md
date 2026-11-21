@@ -35,7 +35,7 @@ Same layout and tooling as `../baratie`. `package.json` and
   /routes/             # pages; /scan is the scanner, /scan/queue the unresolved barcodes
   /lib/                # nav table, API client, collection types, form helpers, scan flow (pure TS, unit tested)
   /lib/components/     # forms shared by create and edit pages, camera and quick confirm
-  service-worker.ts    # SUI service worker: precache, update only on the reader's consent
+  /service-worker/     # SUI service worker (index.ts): precache, update only on the reader's consent
 /static/               # icons, web app manifest, robots.txt
 ```
 
@@ -43,6 +43,16 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
 `/metrics` and the SPA from `OHARA_WEB_DIR`.
 
 ## Conventions
+
+### Working rules
+
+- Change only what the task needs; no unrelated refactors or renames.
+- Tests are the contract. Never edit a test to make it pass; if a spec and
+  a test disagree, stop and report.
+- Ask before a one-way change: a migration that rewrites or deletes data,
+  an API response change, or a production setting.
+- Add an outside source only when its terms (regulamin) allow automated
+  access; robots.txt alone does not settle it.
 
 ### Backend
 

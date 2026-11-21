@@ -30,6 +30,7 @@ Same layout and tooling as `../baratie`. `package.json` and
     /valuation/        # daily value of owned copies: OLX, SkupSzop buy-back, Discogs; value history
     /server/           # router: /health, /metrics, /api/*, SPA fallback
     /web/              # serves the built SPA, index.html for client routes
+    /fetch/            # fetch.Do: one request to an outside source, capped body, query-free errors
     /metrics/          # Prometheus collectors on a private registry (ohara_*)
     /recovery/         # recovery.Call: a panic outside a request handler becomes a logged error
 /src/                  # SvelteKit SPA (adapter-static, ssr off)
@@ -107,6 +108,11 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   when the cart shows the offer or the shop does not buy the book, with
   results 1 for an offer. Register each source with
   `metrics.InitSource` so its counters exist before the first failure.
+  Every source request but Telegram's goes through `fetch.Do`: a body
+  over the caller's cap fails (`fetch.Outcome` counts it a parse error),
+  a status the caller does not accept is a `fetch.StatusError` returned
+  with the response headers, and errors never carry the URL's query.
+  Browser-like sites get `fetch.BrowserUserAgent`.
   When some of its sources fail but others answered, it returns a
   `*lookup.PartialError`: the lookup reports the failure next to the
   candidates and does not cache the answer. The movie chain waits at most

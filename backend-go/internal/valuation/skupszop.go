@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Automaat/ohara/backend-go/internal/fetch"
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
 )
 
@@ -165,63 +166,28 @@ func parseCart(page []byte, isbn string) (Quote, bool) {
 // check needs. It also returns the request's ObserveSource status; an
 // error status counts as itself, however long or unreadable its page.
 func shopDo(ctx context.Context, client *http.Client, method, target string, body io.Reader, token, accept string) ([]byte, string, error) {
-	if body == nil {
-		body = http.NoBody
+	header := http.Header{
+		"User-Agent":      {fetch.BrowserUserAgent},
+		"Accept":          {accept},
+		"Accept-Language": {"pl-PL,pl;q=0.9"},
 	}
-	req, err := http.NewRequestWithContext(ctx, method, target, body)
-	if err != nil {
-		return nil, metrics.SourceError, err
-	}
-	req.Header.Set("User-Agent", userAgent)
-	req.Header.Set("Accept", accept)
-	req.Header.Set("Accept-Language", "pl-PL,pl;q=0.9")
 	if token != "" {
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
-		req.Header.Set("X-CSRF-TOKEN", token)
-		req.Header.Set("X-Requested-With", "XMLHttpRequest")
+		header.Set("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+		header.Set("X-CSRF-TOKEN", token)
+		header.Set("X-Requested-With", "XMLHttpRequest")
 	}
-	resp, err := client.Do(req)
+	resp, err := fetch.Do(ctx, client, fetch.Request{
+		Method:  method,
+		URL:     target,
+		Body:    body,
+		Header:  header,
+		MaxBody: maxShopReply,
+	})
 	if err != nil {
-		return nil, metrics.SourceError, err
+		return nil, fetch.Outcome(err), err
 	}
-	defer resp.Body.Close()
-	status := metrics.SourceOK
-	if resp.StatusCode != http.StatusOK {
-		status = "http_" + strconv.Itoa(resp.StatusCode)
-	}
-	// A refusal comes before the body: one whose body breaks off is still
-	// a refusal, and the run stops asking.
-	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxShopReply))
-		return nil, status, statusError{resp.StatusCode}
-	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxShopReply+1))
-	if err != nil {
-		if status == metrics.SourceOK {
-			status = metrics.SourceError
-		}
-		return nil, status, err
-	}
-	if len(data) > maxShopReply {
-		if status == metrics.SourceOK {
-			status = metrics.SourceParseError
-		}
-		return nil, status, errors.New("response too large")
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, status, statusError{resp.StatusCode}
-	}
-	return data, status, nil
+	return resp.Body, metrics.SourceOK, nil
 }
-
-// statusError is a shop answer with a status other than 200. Its
-// StatusCode lets a run tell a refusal (403, 429) from other failures.
-type statusError struct{ code int }
-
-func (e statusError) Error() string { return "status " + strconv.Itoa(e.code) }
-
-// StatusCode is the status the shop answered.
-func (e statusError) StatusCode() int { return e.code }
 
 // plainText strips tags and collapses spaces.
 func plainText(s string) string {
@@ -251,8 +217,3 @@ func parsePLN(s string) (int64, bool) {
 
 // maxPriceCents mirrors the price_observation cap (1 000 000 zł).
 const maxPriceCents = 100_000_000
-
-// userAgent is a browser's: the shops answer library defaults with a
-// challenge page.
-const userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 " +
-	"(KHTML, like Gecko) Chrome/130.0 Safari/537.36"

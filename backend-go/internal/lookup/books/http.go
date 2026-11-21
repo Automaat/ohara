@@ -9,15 +9,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
-	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
 
 	"golang.org/x/text/unicode/norm"
 
+	"github.com/Automaat/ohara/backend-go/internal/fetch"
 	"github.com/Automaat/ohara/backend-go/internal/lookup"
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
 )
@@ -26,8 +25,6 @@ const (
 	userAgent = "ohara/1.0 (self-hosted media catalog)"
 	maxBody   = 4 << 20
 )
-
-var errTooLarge = errors.New("response too large")
 
 // getJSON fetches rawURL and returns its body, which must be JSON that
 // parse reads. The outcome counts under source in the source health
@@ -52,43 +49,18 @@ func getJSON(ctx context.Context, client *http.Client, source, rawURL string, pa
 // fetchJSON is getJSON without the metrics; status is its ObserveSource
 // outcome.
 func fetchJSON(ctx context.Context, client *http.Client, rawURL string) (json.RawMessage, string, error) {
-	if client == nil {
-		client = http.DefaultClient
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, http.NoBody)
+	resp, err := fetch.Do(ctx, client, fetch.Request{
+		URL:     rawURL,
+		Header:  http.Header{"Accept": {"application/json"}, "User-Agent": {userAgent}},
+		MaxBody: maxBody,
+	})
 	if err != nil {
-		return nil, metrics.SourceError, errors.New("build request: invalid URL")
+		return nil, fetch.Outcome(err), err
 	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", userAgent)
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, metrics.SourceError, fmt.Errorf("request: %w", withoutURL(err))
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
-	if err != nil {
-		return nil, metrics.SourceError, fmt.Errorf("read response: %w", withoutURL(err))
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, "http_" + strconv.Itoa(resp.StatusCode), fmt.Errorf("status %d", resp.StatusCode)
-	}
-	if len(body) > maxBody {
-		return nil, metrics.SourceError, errTooLarge
-	}
-	if !json.Valid(body) {
+	if !json.Valid(resp.Body) {
 		return nil, metrics.SourceParseError, errors.New("response is not JSON")
 	}
-	return body, metrics.SourceOK, nil
-}
-
-// withoutURL drops the request URL from a client error: it can carry an API
-// key, and provider errors reach logs and the lookup response.
-func withoutURL(err error) error {
-	if uerr, ok := errors.AsType[*url.Error](err); ok {
-		return uerr.Err
-	}
-	return err
+	return resp.Body, metrics.SourceOK, nil
 }
 
 // clean normalizes a catalog string and drops the ISBD punctuation that

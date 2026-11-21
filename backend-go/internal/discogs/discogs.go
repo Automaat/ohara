@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/Automaat/ohara/backend-go/internal/fetch"
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
 )
 
@@ -231,36 +232,31 @@ func (c *Client) get(ctx context.Context, path string, out any, check func() err
 	if base == "" {
 		base = BaseURL
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+path, http.NoBody)
+	u, err := url.Parse(base + path)
 	if err != nil {
 		metrics.ObserveSource(Source, metrics.SourceError)
 		return errors.New("discogs: build request: invalid URL")
 	}
-	req.Header.Set("Accept", "application/vnd.discogs.v2.discogs+json")
-	req.Header.Set("User-Agent", UserAgent)
-	req.Header.Set("Authorization", "Discogs token="+c.Token)
 	if err := c.Limiter.Wait(ctx, c.Priority); err != nil {
-		return fmt.Errorf("discogs: GET %s: wait for rate budget: %w", req.URL.Path, err)
+		return fmt.Errorf("discogs: GET %s: wait for rate budget: %w", u.Path, err)
 	}
-	resp, err := c.httpClient().Do(req)
+	resp, err := fetch.Do(ctx, c.httpClient(), fetch.Request{
+		URL: base + path,
+		Header: http.Header{
+			"Accept":        {"application/vnd.discogs.v2.discogs+json"},
+			"User-Agent":    {UserAgent},
+			"Authorization": {"Discogs token=" + c.Token},
+		},
+		MaxBody: maxBody,
+	})
 	if err != nil {
-		metrics.ObserveSource(Source, metrics.SourceError)
-		if uerr, ok := errors.AsType[*url.Error](err); ok {
-			err = uerr.Err
+		metrics.ObserveSource(Source, fetch.Outcome(err))
+		if se, ok := errors.AsType[fetch.StatusError](err); ok {
+			return StatusError{Code: se.Code}
 		}
-		return fmt.Errorf("discogs: GET %s: %w", req.URL.Path, err)
+		return fmt.Errorf("discogs: %w", err)
 	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
-	if err != nil {
-		metrics.ObserveSource(Source, metrics.SourceError)
-		return fmt.Errorf("discogs: read body: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		metrics.ObserveSource(Source, "http_"+strconv.Itoa(resp.StatusCode))
-		return StatusError{Code: resp.StatusCode}
-	}
-	if err := json.Unmarshal(body, out); err != nil {
+	if err := json.Unmarshal(resp.Body, out); err != nil {
 		metrics.ObserveSource(Source, metrics.SourceParseError)
 		return fmt.Errorf("discogs: parse: %w", err)
 	}

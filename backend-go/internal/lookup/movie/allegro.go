@@ -2,6 +2,7 @@ package movie
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Automaat/ohara/backend-go/internal/fetch"
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
 )
 
@@ -107,15 +109,15 @@ func (a *Allegro) Products(ctx context.Context, code string) ([]Product, error) 
 			return nil, err
 		}
 		q := url.Values{"phrase": {code}, "mode": {"GTIN"}, "language": {"pl-PL"}}
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.apiBase()+"/sale/products?"+q.Encode(), http.NoBody)
-		if err != nil {
-			return nil, fmt.Errorf("allegro: %w", err)
-		}
-		req.Header.Set("Accept", "application/vnd.allegro.public.v1+json")
-		req.Header.Set("Accept-Language", "pl-PL")
-		req.Header.Set("Authorization", "Bearer "+tok)
-		req.Header.Set("User-Agent", a.userAgent())
-		_, body, err := get(a.client(), a.Name(), req, http.StatusOK)
+		resp, err := get(ctx, a.client(), a.Name(), fetch.Request{
+			URL: a.apiBase() + "/sale/products?" + q.Encode(),
+			Header: http.Header{
+				"Accept":          {"application/vnd.allegro.public.v1+json"},
+				"Accept-Language": {"pl-PL"},
+				"Authorization":   {"Bearer " + tok},
+				"User-Agent":      {a.userAgent()},
+			},
+		})
 		switch {
 		case isStatus(err, http.StatusUnauthorized) && attempt == 0:
 			continue
@@ -125,7 +127,7 @@ func (a *Allegro) Products(ctx context.Context, code string) ([]Product, error) 
 			return nil, err
 		}
 		var r allegroProducts
-		if err := json.Unmarshal(body, &r); err != nil {
+		if err := json.Unmarshal(resp.Body, &r); err != nil {
 			return nil, parseFailed(a.Name(), err)
 		}
 		products := []Product{}
@@ -307,26 +309,28 @@ func (a *Allegro) tokenRequest(ctx context.Context, q url.Values) (Token, error)
 // authPost sends an authenticated POST to the OAuth server and decodes a 200
 // answer into dst, or an OAuth error answer into *oauthError.
 func (a *Allegro) authPost(ctx context.Context, path string, q url.Values, dst any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.authBase()+path+"?"+q.Encode(), http.NoBody)
-	if err != nil {
-		return fmt.Errorf("allegro: %w", err)
-	}
-	req.SetBasicAuth(a.ClientID, a.ClientSecret)
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", a.userAgent())
-	status, body, err := get(a.client(), "allegro", req, http.StatusOK, http.StatusBadRequest, http.StatusUnauthorized)
+	resp, err := get(ctx, a.client(), "allegro", fetch.Request{
+		Method: http.MethodPost,
+		URL:    a.authBase() + path + "?" + q.Encode(),
+		Header: http.Header{
+			"Authorization": {"Basic " + base64.StdEncoding.EncodeToString([]byte(a.ClientID+":"+a.ClientSecret))},
+			"Accept":        {"application/json"},
+			"User-Agent":    {a.userAgent()},
+		},
+		OK: []int{http.StatusOK, http.StatusBadRequest, http.StatusUnauthorized},
+	})
 	if err != nil {
 		return err
 	}
-	if status != http.StatusOK {
+	if resp.Status != http.StatusOK {
 		metrics.ObserveSource("allegro", "oauth_error")
 		oe := &oauthError{}
-		if json.Unmarshal(body, oe) != nil || oe.Code == "" {
-			oe.Code = fmt.Sprintf("status %d", status)
+		if json.Unmarshal(resp.Body, oe) != nil || oe.Code == "" {
+			oe.Code = fmt.Sprintf("status %d", resp.Status)
 		}
 		return oe
 	}
-	if err := json.Unmarshal(body, dst); err != nil {
+	if err := json.Unmarshal(resp.Body, dst); err != nil {
 		return parseFailed("allegro", err)
 	}
 	return nil

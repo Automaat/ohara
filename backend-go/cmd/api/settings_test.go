@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Automaat/ohara/backend-go/internal/deals"
 )
 
 // unsetSettings unsets every variable the hunter and the valuation read,
@@ -98,7 +100,7 @@ func TestNewHunterSettings(t *testing.T) {
 			for k, v := range tc.env {
 				t.Setenv(k, v)
 			}
-			h, _, err := newHunter(nil, slog.New(slog.DiscardHandler))
+			h, _, err := newHunter(nil, deals.NewPacer(0).Lane(), slog.New(slog.DiscardHandler))
 			checkErr(t, err, tc.wantErr)
 			if err != nil {
 				return
@@ -139,7 +141,7 @@ func TestNewValuationSettings(t *testing.T) {
 			for k, v := range tc.env {
 				t.Setenv(k, v)
 			}
-			r, _, err := newValuation(nil, slog.New(slog.DiscardHandler))
+			r, _, err := newValuation(nil, deals.NewPacer(0).Lane(), slog.New(slog.DiscardHandler))
 			checkErr(t, err, tc.wantErr)
 			if err != nil {
 				return
@@ -164,7 +166,7 @@ const discogsChild = "OHARA_TEST_DISCOGS_CHILD"
 // process-wide metrics, which the source checks of the other tests reject.
 func TestNewValuationDiscogs(t *testing.T) {
 	if os.Getenv(discogsChild) == "1" {
-		if _, _, err := newValuation(nil, slog.New(slog.DiscardHandler)); err != nil {
+		if _, _, err := newValuation(nil, deals.NewPacer(0).Lane(), slog.New(slog.DiscardHandler)); err != nil {
 			t.Fatalf("newValuation: %v", err)
 		}
 		if got := metricSources(t, "ohara_source_"); !slices.Contains(got, "nbp") {

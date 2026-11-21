@@ -166,7 +166,9 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
 - Kolekcja's "Dodaj tytuł" (`/titles/new`) is the scanner's quick confirm
   without a barcode (`ScanFlow.start`): search by title or fill in by hand;
   the save creates the title, a barcode-less edition and the copy. Such
-  adds stay out of the scanner's recent scans.
+  adds stay out of the scanner's recent scans. Okazje's "Dodaj pozycję"
+  opens it as `/titles/new?from=deals`: the item starts as a wish and the
+  page leads back to `/deals`.
 - Kolekcja (`/`) lists copies. Its filter sheet's "Bez egzemplarzy"
   (`?status=none`) lists titles without one instead, filtered in the client
   from `GET /api/titles`; `/titles` redirects to `/`. `?add=copy` on a title

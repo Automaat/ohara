@@ -8,8 +8,12 @@
 	import { browserStore } from '#lib/scan.js';
 
 	const requested = page.url.searchParams.get('kind');
+	/** Opened from Okazje: the item starts as a wish and the page leads back there. */
+	const fromDeals = page.url.searchParams.get('from') === 'deals';
+	const back = fromDeals ? { href: '/deals', label: 'Okazje' } : { href: '/', label: 'Kolekcja' };
 	const flow = new ScanFlow(fetch, browserStore());
 	flow.start(requested === 'book' || requested === 'music' ? requested : 'movie');
+	if (fromDeals) flow.wish(true);
 	let alive = true;
 
 	onDestroy(() => {
@@ -17,14 +21,19 @@
 		flow.detach();
 	});
 
-	/** Opens what went in, or the scanner for the code a wedge scanner typed into the price. */
+	/**
+	 * Leads back to Okazje for a wish added from there; otherwise opens the scanner for the code a
+	 * wedge scanner typed into the price, or what went in.
+	 */
 	async function added(a: Added) {
 		if (!alive) return;
-		await goto(a.next ? `/scan/${encodeURIComponent(a.next)}` : `/titles/${a.saved.titleID}`);
+		if (fromDeals) await goto(back.href);
+		else if (a.next) await goto(`/scan/${encodeURIComponent(a.next)}`);
+		else await goto(`/titles/${a.saved.titleID}`);
 	}
 
 	async function leave() {
-		if (alive) await goto('/');
+		if (alive) await goto(back.href);
 	}
 </script>
 
@@ -34,7 +43,7 @@
 
 <PageHeader title="Dodaj pozycję" description="Wyszukaj po tytule albo wpisz dane ręcznie.">
 	{#snippet kicker()}
-		<BackLink href="/" label="Kolekcja" />
+		<BackLink href={back.href} label={back.label} />
 	{/snippet}
 </PageHeader>
 

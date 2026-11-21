@@ -12,8 +12,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Automaat/ohara/backend-go/internal/dbtest"
+	"github.com/Automaat/ohara/backend-go/internal/deals"
 	"github.com/Automaat/ohara/backend-go/internal/discogs"
 	"github.com/Automaat/ohara/backend-go/internal/lookup/music"
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
@@ -22,10 +24,11 @@ import (
 
 // upstreams stands in for every outside source the deal hunter and the
 // valuation ask, serving recorded answers under one path prefix per source
-// and keeping each request's path.
+// and keeping each request's path and arrival time.
 type upstreams struct {
 	mu    sync.Mutex
 	paths []string
+	times []time.Time
 	srv   *httptest.Server
 }
 
@@ -40,6 +43,7 @@ func newUpstreams(t *testing.T) *upstreams {
 	u.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u.mu.Lock()
 		u.paths = append(u.paths, r.URL.Path)
+		u.times = append(u.times, time.Now())
 		u.mu.Unlock()
 		for prefix, file := range fixtures {
 			if !strings.HasPrefix(r.URL.Path, prefix) {
@@ -137,7 +141,7 @@ func checkSources(t *testing.T) {
 func TestHunterAsksOnlyItsSources(t *testing.T) {
 	pool := dbtest.Migrated(t)
 	u := newUpstreams(t)
-	h, _, err := newHunter(pool, slog.New(slog.DiscardHandler))
+	h, _, err := newHunter(pool, deals.NewPacer(0).Lane(), slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatalf("newHunter: %v", err)
 	}
@@ -173,7 +177,7 @@ func TestValuationAsksOnlyItsSources(t *testing.T) {
 	const errorsSeries = `ohara_source_errors_total{source="skupszop"}`
 	const unavailableSeries = `ohara_source_requests_total{source="skupszop",status="http_503"}`
 	errorsBefore, _ := sample(scrape(t), errorsSeries)
-	r, _, err := newValuation(pool, slog.New(slog.DiscardHandler))
+	r, _, err := newValuation(pool, deals.NewPacer(0).Lane(), slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatalf("newValuation: %v", err)
 	}
@@ -194,6 +198,53 @@ func TestValuationAsksOnlyItsSources(t *testing.T) {
 	checkSources(t)
 }
 
+func TestHuntAndValuationSpaceTheirRequestsToOneSite(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	ctx := context.Background()
+	for _, sql := range []string{
+		`INSERT INTO title (id, kind, name, authors) OVERRIDING SYSTEM VALUE VALUES (1, 'book', 'Katedra', '{"Jacek Dukaj"}')`,
+		`INSERT INTO edition (id, title_id, barcode, binding) OVERRIDING SYSTEM VALUE VALUES (10, 1, '9788308073209', 'paperback')`,
+		`INSERT INTO copy (edition_id, status, price_cents) VALUES (10, 'owned', 3000)`,
+	} {
+		if _, err := pool.Exec(ctx, sql); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+	}
+	u := newUpstreams(t)
+	h, _, r, _, err := newRuns(pool, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatalf("newRuns: %v", err)
+	}
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		if _, err := h.Run(ctx); err != nil {
+			t.Errorf("hunt: %v", err)
+		}
+	})
+	wg.Go(func() {
+		if _, err := r.Run(ctx); err != nil {
+			t.Errorf("valuation: %v", err)
+		}
+	})
+	wg.Wait()
+
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	var olx []time.Time
+	for i, p := range u.paths {
+		if strings.HasPrefix(p, "/olx/") {
+			olx = append(olx, u.times[i])
+		}
+	}
+	if len(olx) != 2 {
+		t.Fatalf("OLX asked %d times, want the hunt's canary and the valuation's book", len(olx))
+	}
+	slices.SortFunc(olx, func(a, b time.Time) int { return a.Compare(b) })
+	if gap := olx[1].Sub(olx[0]); gap < 500*time.Millisecond {
+		t.Fatalf("OLX asked twice %v apart, want at least half of the 1s source delay", gap)
+	}
+}
+
 func TestDiscogsCallersShareOneBudget(t *testing.T) {
 	t.Setenv("OHARA_DISCOGS_TOKEN", "secret")
 	t.Setenv("OHARA_MUSICBRAINZ", "false")
@@ -207,7 +258,7 @@ func TestDiscogsCallersShareOneBudget(t *testing.T) {
 	if provider == nil {
 		t.Fatal("no music provider with a Discogs token")
 	}
-	runner, _, err := newValuation(nil, logger)
+	runner, _, err := newValuation(nil, deals.NewPacer(0).Lane(), logger)
 	if err != nil {
 		t.Fatalf("newValuation: %v", err)
 	}

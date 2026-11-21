@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -951,5 +952,185 @@ func TestRunKeepsTheRefusalBeyondTheErrorCap(t *testing.T) {
 	x.report("olx", &f, "queries")
 	if len(x.res.Errors) != maxRunErrors+1 || x.res.Errors[maxRunErrors] != "olx: refused with status 429, skipped 1 queries" {
 		t.Fatalf("errors = %q", x.res.Errors)
+	}
+}
+
+// requestLog keeps when each site was asked.
+type requestLog struct {
+	mu    sync.Mutex
+	times map[string][]time.Time
+}
+
+func (l *requestLog) add(site string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.times == nil {
+		l.times = map[string][]time.Time{}
+	}
+	l.times[site] = append(l.times[site], time.Now())
+}
+
+func (l *requestLog) count(site string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.times[site])
+}
+
+// timedBuyBack declines every book and logs when it was asked.
+type timedBuyBack struct{ log *requestLog }
+
+func (*timedBuyBack) Name() string { return SourceSkupSzop }
+
+func (b *timedBuyBack) Quote(context.Context, string) (Quote, error) {
+	b.log.add(SourceSkupSzop)
+	return Quote{}, nil
+}
+
+const runDelay = 200 * time.Millisecond
+
+// olxSite is a fake OLX that answers with the deals fixture and logs when
+// each request arrived. Requests whose query is held get no answer until
+// the test ends; the first of them signals held.
+func olxSite(t *testing.T, log *requestLog, heldQuery string) (string, <-chan struct{}) {
+	t.Helper()
+	body, err := os.ReadFile("../deals/testdata/olx.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	held := make(chan struct{}, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		log.add(SourceOLX)
+		if heldQuery != "" && strings.Contains(strings.ToLower(r.URL.Query().Get("query")), heldQuery) {
+			select {
+			case held <- struct{}{}:
+			default:
+			}
+			<-r.Context().Done()
+			return
+		}
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL + "/", held
+}
+
+// pacedRuns builds a hunt and a valuation that ask OLX at olxURL through
+// one pacer in lanes of their own, as cmd/api does, with runDelay between
+// their own requests.
+func pacedRuns(pool *pgxpool.Pool, olxURL string, log *requestLog) (*deals.Hunter, *Runner) {
+	logger := slog.New(slog.DiscardHandler)
+	pacer := deals.NewPacer(runDelay / 2)
+	client := func() *http.Client {
+		c := deals.NewHTTPClient()
+		c.Transport = pacer.Lane().Transport(nil)
+		return c
+	}
+	hunter := deals.NewHunter(deals.NewStore(pool), []deals.Source{
+		deals.OLX{Client: client(), BaseURL: olxURL}, &timedPepper{log: log},
+	}, nil, deals.Config{Delay: runDelay, CanaryQuery: "dvd"}, logger)
+	runner := NewRunner(NewStore(pool), []deals.Source{deals.OLX{Client: client(), BaseURL: olxURL}},
+		[]BuyBack{&timedBuyBack{log: log}}, nil, Config{Delay: runDelay, Window: 90 * 24 * time.Hour}, logger)
+	return hunter, runner
+}
+
+// timedPepper is an empty feed that logs when it was asked.
+type timedPepper struct{ log *requestLog }
+
+func (*timedPepper) Name() string   { return "pepper" }
+func (*timedPepper) PerQuery() bool { return false }
+
+func (p *timedPepper) Search(context.Context, string) ([]deals.Listing, error) {
+	p.log.add("pepper")
+	return nil, nil
+}
+
+func TestOverlappingRunsSpaceRequestsToOneSite(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	seed(t, pool)
+	log := &requestLog{}
+	olxURL, _ := olxSite(t, log, "")
+	hunter, runner := pacedRuns(pool, olxURL, log)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var wg sync.WaitGroup
+	var huntErr, valueErr error
+	wg.Go(func() { _, huntErr = hunter.Run(ctx) })
+	wg.Go(func() { _, valueErr = runner.Run(ctx) })
+	wg.Wait()
+	if huntErr != nil || valueErr != nil {
+		t.Fatalf("hunt: %v, valuation: %v", huntErr, valueErr)
+	}
+
+	if n := log.count(SourceOLX); n < 4 {
+		t.Fatalf("OLX asked %d times, want the hunt's canary and wanted DVD and the valuation's book and Blu-ray", n)
+	}
+	for site, times := range log.times {
+		slices.SortFunc(times, func(a, b time.Time) int { return a.Compare(b) })
+		for i := 1; i < len(times); i++ {
+			if gap := times[i].Sub(times[i-1]); gap < runDelay/2 {
+				t.Errorf("%s asked %v after the previous request, want at least %v", site, gap, runDelay/2)
+			}
+		}
+	}
+}
+
+func TestRunsDoNotWaitForEachOther(t *testing.T) {
+	for _, tc := range []struct{ held, query string }{
+		{held: "valuation", query: "dukaj"},
+		{held: "hunt", query: "dvd"},
+	} {
+		t.Run(tc.held+" held in an OLX request", func(t *testing.T) {
+			pool := dbtest.Migrated(t)
+			seed(t, pool)
+			log := &requestLog{}
+			olxURL, held := olxSite(t, log, tc.query)
+			hunter, runner := pacedRuns(pool, olxURL, log)
+			heldRun := func(ctx context.Context) error { _, err := runner.Run(ctx); return err }
+			otherRun := func(ctx context.Context) error { _, err := hunter.Run(ctx); return err }
+			if tc.held == "hunt" {
+				heldRun, otherRun = otherRun, heldRun
+			}
+
+			var wg sync.WaitGroup
+			defer wg.Wait()
+			heldCtx, stopHeld := context.WithCancel(context.Background())
+			defer stopHeld()
+			wg.Go(func() { _ = heldRun(heldCtx) })
+			select {
+			case <-held:
+			case <-time.After(10 * time.Second):
+				t.Fatalf("the %s never asked OLX for %q", tc.held, tc.query)
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := otherRun(ctx); err != nil {
+				t.Fatalf("run beside the held %s: %v", tc.held, err)
+			}
+			if n := log.count(SourceOLX); n < 2 {
+				t.Fatalf("the run beside the held %s never asked OLX", tc.held)
+			}
+		})
+	}
+}
+
+func TestBackToBackRunsKeepTheirPacing(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	seed(t, pool)
+	log := &requestLog{}
+	olxURL, _ := olxSite(t, log, "")
+	_, runner := pacedRuns(pool, olxURL, log)
+	runner.sleep = func(ctx context.Context, _ time.Duration) error { return ctx.Err() }
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	start := time.Now()
+	for i := range 2 {
+		if _, err := runner.Run(ctx); err != nil {
+			t.Fatalf("run %d: %v", i, err)
+		}
+	}
+	if d := time.Since(start); d >= runDelay/2 {
+		t.Fatalf("two valuations without their own pauses took %v, want them not to wait for each other's requests", d)
 	}
 }

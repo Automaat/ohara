@@ -273,7 +273,15 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
 
 None in the app. Production sits behind Traefik with the Authelia forward-auth
 middleware, so the app trusts every request that reaches it. Do not expose
-the container port beyond the LAN. Authelia's session cookie covers every
+the container port beyond the LAN. With `OHARA_REQUIRE_REMOTE_USER=true` the
+router answers 401 (`{"error": "..."}`, never a redirect) to a request
+without a non-empty `Remote-User` header, the one Traefik copies from
+Authelia's answer, so a request that skips the middleware reaches no handler,
+page or file. `/health` and `/metrics` stay open for the Docker healthcheck
+and Prometheus; the request still counts in `ohara_http_requests_total`. The
+header only proves the request passed Authelia: the name is never used for
+authorization or stored. It is off by default (dev, CI and the Vite proxy
+have no Authelia) and the startup log says whether it is on. Authelia's session cookie covers every
 `*.mskalski.dev` site, so the router answers 403 to any method but GET, HEAD
 and OPTIONS that a browser marks as cross-origin: a `Sec-Fetch-Site` other
 than `same-origin` or `none`, or an `Origin` whose host is not `Host`.
@@ -288,6 +296,7 @@ browser's `Host` (`changeOrigin: false`) so dev writes pass this check.
 | `OHARA_ADDR`                                             | `:8000`                                            | Listen address                                                                                            |
 | `OHARA_WEB_DIR`                                          | unset (`/app/web` in the image)                    | Built SPA to serve                                                                                        |
 | `OHARA_ACCESS_LOG`                                       | `false`                                            | One log line per request                                                                                  |
+| `OHARA_REQUIRE_REMOTE_USER`                              | `false`                                            | Answer 401 to requests without Authelia's `Remote-User` header, except `/health` and `/metrics`           |
 | `OHARA_LOOKUP_STUB`                                      | `false`                                            | Register the stub lookup provider (placeholder candidate for every barcode)                               |
 | `OHARA_GOOGLE_BOOKS_API_KEY`                             | unset                                              | Enable the Google Books provider (keyless clients get no quota)                                           |
 | `OHARA_DEALS_INTERVAL`                                   | `0s` (off)                                         | Deal search schedule, at least `10m` (e.g. `2h`), jittered ±10%; `POST /api/deals/run` works either way   |

@@ -29,10 +29,13 @@ type Pinger interface {
 
 // Config holds the resolved runtime settings; cmd/api owns env loading.
 // Version names the running build in /api/status. AccessLog adds one log line
-// per request; metrics are recorded either way.
+// per request; metrics are recorded either way. RequireRemoteUser answers 401
+// to every request without the Remote-User header Authelia's forward auth
+// sets, except the probes on /health and /metrics.
 type Config struct {
-	Version   string
-	AccessLog bool
+	Version           string
+	AccessLog         bool
+	RequireRemoteUser bool
 }
 
 // Mounter adds a domain's routes to the /api router.
@@ -67,6 +70,9 @@ func newRouter(cfg Config, logger *slog.Logger, deps Deps, timeout time.Duration
 	r.Use(requestObserver(logger, cfg.AccessLog))
 	r.Use(recoverer(logger))
 	r.Use(timeoutAfter(timeout, logger))
+	if cfg.RequireRemoteUser {
+		r.Use(remoteUserGuard(logger))
+	}
 	r.Use(crossOriginGuard(logger))
 	r.Use(jsonMethodNotAllowed(r, logger))
 
@@ -247,6 +253,28 @@ func generalOptions(next http.Handler) http.Handler {
 		}
 		w.WriteHeader(http.StatusOK)
 	})
+}
+
+// remoteUserGuard answers 401 to a request without a Remote-User header, or
+// with an empty one, so a request that reaches the container without passing
+// Authelia gets nothing. The header only proves the request came through the
+// forward auth; the name in it is not used. The Docker healthcheck and
+// Prometheus reach /health and /metrics directly and stay open.
+func remoteUserGuard(logger *slog.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Remote-User") == "" && !probePath(r.URL.Path) {
+				httpx.WriteError(w, logger, http.StatusUnauthorized, "authentication required")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// probePath reports the paths served without the Remote-User header.
+func probePath(path string) bool {
+	return path == "/health" || path == "/metrics"
 }
 
 // crossOriginGuard answers 403 to a cross-origin write. Authelia's session

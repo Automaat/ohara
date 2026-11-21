@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"os"
 	"slices"
 	"strconv"
@@ -922,6 +923,62 @@ func TestRunStopsAskingSitesThatRefused(t *testing.T) {
 	}
 }
 
+// TestRunsCountInMetrics: a run that finishes, even with failing
+// sources, counts as ok and moves the last success; a run that panics
+// counts as failed.
+func TestRunsCountInMetrics(t *testing.T) {
+	const (
+		ok        = `ohara_background_runs_total{outcome="ok",task="valuation"}`
+		failed    = `ohara_background_runs_total{outcome="failed",task="valuation"}`
+		durations = `ohara_background_run_duration_seconds_count{task="valuation"}`
+		last      = `ohara_background_last_success_timestamp_seconds{task="valuation"}`
+	)
+	pool := dbtest.Migrated(t)
+	seed(t, pool)
+	r := newTestRunner(pool, &fakeBuyBack{quotes: map[string]Quote{}}, &fakeSource{name: "olx", err: errors.New("olx: status 403")})
+	for _, name := range []string{ok, failed} {
+		if !strings.Contains(scrape(t), name+" ") {
+			t.Errorf("%s not exported before the first run", name)
+		}
+	}
+	okBefore, failedBefore, runsBefore := counter(t, ok), counter(t, failed), counter(t, durations)
+	start := float64(time.Now().UnixNano()) / 1e9
+
+	if !r.Trigger() {
+		t.Fatal("Trigger = false")
+	}
+	r.Wait()
+	if res := r.Status().LastResult; res == nil || res.Failure != "" || len(res.Errors) == 0 {
+		t.Fatalf("run = %+v, want one that finished with source errors", res)
+	}
+	if got := counter(t, ok) - okBefore; got != 1 {
+		t.Errorf("ok runs grew by %v, want 1", got)
+	}
+	lastOK := counter(t, last)
+	if lastOK < start {
+		t.Errorf("last success = %v, want at least %v", lastOK, start)
+	}
+
+	panicking := NewRunner(NewStore(pool), []deals.Source{&panickingSource{}}, nil, nil,
+		Config{Window: 90 * 24 * time.Hour}, slog.New(slog.DiscardHandler))
+	if !panicking.Trigger() {
+		t.Fatal("Trigger = false")
+	}
+	panicking.Wait()
+	if got := counter(t, failed) - failedBefore; got != 1 {
+		t.Errorf("failed runs grew by %v, want 1", got)
+	}
+	if got := counter(t, ok) - okBefore; got != 1 {
+		t.Errorf("ok runs grew by %v after a failed run, want 1", got)
+	}
+	if got := counter(t, durations) - runsBefore; got != 2 {
+		t.Errorf("run durations grew by %v, want 2", got)
+	}
+	if got := counter(t, last); got != lastOK {
+		t.Errorf("last success = %v after a failed run, want %v", got, lastOK)
+	}
+}
+
 // counter reads one series from /metrics, 0 when it is absent.
 func counter(t *testing.T, series string) float64 {
 	t.Helper()
@@ -955,10 +1012,12 @@ func TestRunKeepsTheRefusalBeyondTheErrorCap(t *testing.T) {
 	}
 }
 
-// requestLog keeps when each site was asked.
+// requestLog keeps when each site was asked and how many requests a fake
+// site received.
 type requestLog struct {
-	mu    sync.Mutex
-	times map[string][]time.Time
+	mu       sync.Mutex
+	times    map[string][]time.Time
+	received map[string]int
 }
 
 func (l *requestLog) add(site string) {
@@ -970,10 +1029,19 @@ func (l *requestLog) add(site string) {
 	l.times[site] = append(l.times[site], time.Now())
 }
 
+func (l *requestLog) receive(site string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.received == nil {
+		l.received = map[string]int{}
+	}
+	l.received[site]++
+}
+
 func (l *requestLog) count(site string) int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return len(l.times[site])
+	return l.received[site]
 }
 
 // timedBuyBack declines every book and logs when it was asked.
@@ -988,9 +1056,9 @@ func (b *timedBuyBack) Quote(context.Context, string) (Quote, error) {
 
 const runDelay = 200 * time.Millisecond
 
-// olxSite is a fake OLX that answers with the deals fixture and logs when
-// each request arrived. Requests whose query is held get no answer until
-// the test ends; the first of them signals held.
+// olxSite is a fake OLX that answers with the deals fixture and counts
+// the requests it received. Requests whose query is held get no answer
+// until the test ends; the first of them signals held.
 func olxSite(t *testing.T, log *requestLog, heldQuery string) (string, <-chan struct{}) {
 	t.Helper()
 	body, err := os.ReadFile("../deals/testdata/olx.json")
@@ -999,7 +1067,7 @@ func olxSite(t *testing.T, log *requestLog, heldQuery string) (string, <-chan st
 	}
 	held := make(chan struct{}, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log.add(SourceOLX)
+		log.receive(SourceOLX)
 		if heldQuery != "" && strings.Contains(strings.ToLower(r.URL.Query().Get("query")), heldQuery) {
 			select {
 			case held <- struct{}{}:
@@ -1016,13 +1084,13 @@ func olxSite(t *testing.T, log *requestLog, heldQuery string) (string, <-chan st
 
 // pacedRuns builds a hunt and a valuation that ask OLX at olxURL through
 // one pacer in lanes of their own, as cmd/api does, with runDelay between
-// their own requests.
+// their own requests. log gets the time each OLX request was sent.
 func pacedRuns(pool *pgxpool.Pool, olxURL string, log *requestLog) (*deals.Hunter, *Runner) {
 	logger := slog.New(slog.DiscardHandler)
 	pacer := deals.NewPacer(runDelay / 2)
 	client := func() *http.Client {
 		c := deals.NewHTTPClient()
-		c.Transport = pacer.Lane().Transport(nil)
+		c.Transport = pacer.Lane().Transport(sentLog{log: log})
 		return c
 	}
 	hunter := deals.NewHunter(deals.NewStore(pool), []deals.Source{
@@ -1031,6 +1099,18 @@ func pacedRuns(pool *pgxpool.Pool, olxURL string, log *requestLog) (*deals.Hunte
 	runner := NewRunner(NewStore(pool), []deals.Source{deals.OLX{Client: client(), BaseURL: olxURL}},
 		[]BuyBack{&timedBuyBack{log: log}}, nil, Config{Delay: runDelay, Window: 90 * 24 * time.Hour}, logger)
 	return hunter, runner
+}
+
+// sentLog logs an OLX request once it is written, the moment the pacer
+// spaces; the fake site's handler starts a varying time later.
+type sentLog struct{ log *requestLog }
+
+func (s sentLog) RoundTrip(r *http.Request) (*http.Response, error) {
+	var once sync.Once
+	trace := &httptrace.ClientTrace{WroteRequest: func(httptrace.WroteRequestInfo) {
+		once.Do(func() { s.log.add(SourceOLX) })
+	}}
+	return http.DefaultTransport.RoundTrip(r.WithContext(httptrace.WithClientTrace(r.Context(), trace)))
 }
 
 // timedPepper is an empty feed that logs when it was asked.

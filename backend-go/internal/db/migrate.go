@@ -6,12 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"regexp"
 	"slices"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/Automaat/ohara/backend-go/internal/metrics"
 )
 
 //go:embed migrations/*.sql
@@ -79,18 +82,36 @@ func EmbeddedMigrations() ([]Migration, error) {
 }
 
 // Migrate applies every migration not yet recorded in schema_migrations, each
-// in its own transaction, and returns the versions it applied. The advisory
-// lock is released on a context detached from ctx, so cancellation never
-// leaves it held on a pooled connection.
+// in its own transaction, and returns the versions it applied.
 func Migrate(ctx context.Context, pool *pgxpool.Pool, migrations []Migration) ([]string, error) {
+	res, err := ApplyMigrations(ctx, pool, migrations)
+	return res.Applied, err
+}
+
+// MigrateResult is what one migration run found and did.
+type MigrateResult struct {
+	// Applied holds the versions this run applied, in order.
+	Applied []string
+	// Unknown holds the versions in schema_migrations that the run's
+	// migrations have no file for, sorted: the schema is newer than this
+	// binary, as after a rollback to an older release.
+	Unknown []string
+}
+
+// ApplyMigrations is Migrate that also reports the unknown versions, read
+// from the same query that decides what to apply. The advisory lock is
+// released on a context detached from ctx, so cancellation never leaves it
+// held on a pooled connection.
+func ApplyMigrations(ctx context.Context, pool *pgxpool.Pool, migrations []Migration) (MigrateResult, error) {
+	var res MigrateResult
 	conn, err := pool.Acquire(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("acquire migration conn: %w", err)
+		return res, fmt.Errorf("acquire migration conn: %w", err)
 	}
 	defer conn.Release()
 
 	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, migrationLockID); err != nil {
-		return nil, fmt.Errorf("take migration lock: %w", err)
+		return res, fmt.Errorf("take migration lock: %w", err)
 	}
 	defer func() {
 		_, _ = conn.Exec(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock($1)`, migrationLockID)
@@ -101,29 +122,56 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, migrations []Migration) ([
 		name text NOT NULL,
 		applied_at timestamptz NOT NULL DEFAULT now()
 	)`); err != nil {
-		return nil, fmt.Errorf("create schema_migrations: %w", err)
+		return res, fmt.Errorf("create schema_migrations: %w", err)
 	}
 
 	rows, err := conn.Query(ctx, `SELECT version FROM schema_migrations`)
 	if err != nil {
-		return nil, fmt.Errorf("list applied migrations: %w", err)
+		return res, fmt.Errorf("list applied migrations: %w", err)
 	}
 	applied, err := pgx.CollectRows(rows, pgx.RowTo[string])
 	if err != nil {
-		return nil, fmt.Errorf("scan applied migrations: %w", err)
+		return res, fmt.Errorf("scan applied migrations: %w", err)
 	}
 
-	var done []string
+	known := make(map[string]bool, len(migrations))
+	for _, m := range migrations {
+		known[m.Version] = true
+	}
+	for _, v := range applied {
+		if !known[v] {
+			res.Unknown = append(res.Unknown, v)
+		}
+	}
+	slices.Sort(res.Unknown)
+
 	for _, m := range migrations {
 		if slices.Contains(applied, m.Version) {
 			continue
 		}
 		if err := applyOne(ctx, conn.Conn(), m); err != nil {
-			return done, err
+			return res, err
 		}
-		done = append(done, m.Version)
+		res.Applied = append(res.Applied, m.Version)
 	}
-	return done, nil
+	return res, nil
+}
+
+// WarnUnknown exports len(unknown) as ohara_db_unknown_migrations and, when
+// there are any, logs one error naming them and the newest version among
+// migrations. It reads nothing, so it adds no way for startup to fail: a
+// rollback by image tag must still start.
+func WarnUnknown(logger *slog.Logger, migrations []Migration, unknown []string) {
+	metrics.SetUnknownMigrations(len(unknown))
+	if len(unknown) == 0 {
+		return
+	}
+	newest := ""
+	for _, m := range migrations {
+		newest = max(newest, m.Version)
+	}
+	logger.Error("database schema is newer than this binary: applied migrations it does not know",
+		"versions", strings.Join(unknown, ","), "binary_newest", newest)
 }
 
 func applyOne(ctx context.Context, conn *pgx.Conn, m Migration) error {

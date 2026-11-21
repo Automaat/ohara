@@ -202,6 +202,127 @@ func TestRunRetriesFailedAlerts(t *testing.T) {
 	}
 }
 
+// series reads every named series from /metrics; an absent one is 0.
+func series(t *testing.T, names ...string) map[string]float64 {
+	t.Helper()
+	got := make(map[string]float64, len(names))
+	for _, name := range names {
+		got[name], _ = metric(t, name)
+	}
+	return got
+}
+
+const (
+	dealRunsOK       = `ohara_background_runs_total{outcome="ok",task="deals"}`
+	dealRunsFailed   = `ohara_background_runs_total{outcome="failed",task="deals"}`
+	dealRunDurations = `ohara_background_run_duration_seconds_count{task="deals"}`
+	dealLastSuccess  = `ohara_background_last_success_timestamp_seconds{task="deals"}`
+	dealAlertsSent   = `ohara_deal_alerts_total{outcome="sent"}`
+	dealAlertsFailed = `ohara_deal_alerts_total{outcome="failed"}`
+)
+
+// TestRunsAndAlertsCountInMetrics: a run whose Telegram send fails and
+// the run that retries it both finish ok, and each send counts once by
+// its outcome.
+func TestRunsAndAlertsCountInMetrics(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	wishlist(t, pool, wantBluray(new(int64(5000))))
+	h := newTestHunter(pool, &fakeNotifier{fail: 1}, olxFixture(t))
+	names := []string{dealRunsOK, dealRunsFailed, dealRunDurations, dealAlertsSent, dealAlertsFailed}
+	before := series(t, names...)
+	for _, name := range []string{dealRunsOK, dealRunsFailed, dealAlertsSent, dealAlertsFailed} {
+		if _, ok := metric(t, name); !ok {
+			t.Errorf("%s not exported before the first run", name)
+		}
+	}
+	start := float64(time.Now().UnixNano()) / 1e9
+
+	for range 2 {
+		if !h.Trigger() {
+			t.Fatal("Trigger = false")
+		}
+		h.Wait()
+	}
+	if res := h.Status().LastResult; res == nil || res.Failure != "" || res.Sent != 1 {
+		t.Fatalf("retry run = %+v, want the alert delivered", res)
+	}
+	after := series(t, names...)
+	for name, want := range map[string]float64{
+		dealRunsOK: 2, dealRunsFailed: 0, dealRunDurations: 2, dealAlertsSent: 1, dealAlertsFailed: 1,
+	} {
+		if got := after[name] - before[name]; got != want {
+			t.Errorf("%s grew by %v, want %v", name, got, want)
+		}
+	}
+	if last := mustMetric(t, dealLastSuccess); last < start {
+		t.Errorf("%s = %v, want at least %v", dealLastSuccess, last, start)
+	}
+}
+
+// TestRunCutShortByShutdownCountsAsFailed: a run that returns an error
+// counts as failed and leaves the last success alone.
+func TestRunCutShortByShutdownCountsAsFailed(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	wishlist(t, pool, wantBluray(nil))
+	src := shutdownSource{started: make(chan struct{}, 1)}
+	h := newTestHunter(pool, nil, src)
+	names := []string{dealRunsOK, dealRunsFailed, dealRunDurations, dealLastSuccess}
+	before := series(t, names...)
+	ctx, cancel := context.WithCancel(t.Context())
+	h.Start(ctx)
+	if !h.Trigger() {
+		t.Fatal("Trigger = false")
+	}
+	<-src.started
+	cancel()
+	h.Wait()
+
+	after := series(t, names...)
+	for name, want := range map[string]float64{dealRunsOK: 0, dealRunsFailed: 1, dealRunDurations: 1, dealLastSuccess: 0} {
+		if got := after[name] - before[name]; got != want {
+			t.Errorf("%s grew by %v, want %v", name, got, want)
+		}
+	}
+}
+
+// cancelingSource cancels the run while it answers, without an error,
+// like a source that read its last answer just before shutdown.
+type cancelingSource struct{ cancel context.CancelFunc }
+
+func (cancelingSource) Name() string   { return "pepper" }
+func (cancelingSource) PerQuery() bool { return false }
+
+func (s cancelingSource) Search(context.Context, string) ([]Listing, error) {
+	s.cancel()
+	return nil, nil
+}
+
+// TestRunCanceledAfterTheLastAnswerFails: shutdown during the last
+// answer fails the run even when no later request notices it.
+func TestRunCanceledAfterTheLastAnswerFails(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	wishlist(t, pool, wantBluray(nil))
+	ctx, cancel := context.WithCancel(t.Context())
+	h := newTestHunter(pool, nil, cancelingSource{cancel: cancel})
+	names := []string{dealRunsOK, dealRunsFailed, dealLastSuccess}
+	before := series(t, names...)
+	h.Start(ctx)
+	if !h.Trigger() {
+		t.Fatal("Trigger = false")
+	}
+	h.Wait()
+
+	if res := h.Status().LastResult; res == nil || !strings.Contains(res.Failure, "context canceled") {
+		t.Fatalf("run = %+v, want it failed by the cancellation", res)
+	}
+	after := series(t, names...)
+	for name, want := range map[string]float64{dealRunsOK: 0, dealRunsFailed: 1, dealLastSuccess: 0} {
+		if got := after[name] - before[name]; got != want {
+			t.Errorf("%s grew by %v, want %v", name, got, want)
+		}
+	}
+}
+
 func TestRunGivesUpAfterMaxAttempts(t *testing.T) {
 	pool := dbtest.Migrated(t)
 	wishlist(t, pool, wantBluray(new(int64(5000))))

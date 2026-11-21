@@ -196,14 +196,15 @@ func openDB(ctx context.Context, dsn string, logger *slog.Logger) (*pgxpool.Pool
 		pool.Close()
 		return nil, err
 	}
-	applied, err := db.Migrate(ctx, pool, migrations)
+	res, err := db.ApplyMigrations(ctx, pool, migrations)
 	if err != nil {
 		pool.Close()
 		return nil, err
 	}
-	if len(applied) > 0 {
-		logger.Info("applied migrations", "versions", strings.Join(applied, ","))
+	if len(res.Applied) > 0 {
+		logger.Info("applied migrations", "versions", strings.Join(res.Applied, ","))
 	}
+	db.WarnUnknown(logger, migrations, res.Unknown)
 	return pool, nil
 }
 

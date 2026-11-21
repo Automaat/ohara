@@ -139,8 +139,9 @@ func TestMigrateAgainstPostgres(t *testing.T) {
 }
 
 // TestRemoveCeneoMigration stores a Ceneo listing with a deal alert beside
-// an OLX one before 0012, then applies it: the Ceneo listing and its alert
-// are gone, the OLX ones stay.
+// an OLX one, and movie lookups cached with and without a Ceneo product
+// name beside a picked candidate, before 0012, then applies it: the Ceneo
+// listing, its alert and the lookup built on Ceneo are gone, the rest stay.
 func TestRemoveCeneoMigration(t *testing.T) {
 	pool := dbtest.Pool(t)
 	ctx := context.Background()
@@ -162,6 +163,12 @@ func TestRemoveCeneoMigration(t *testing.T) {
 	if _, err := pool.Exec(ctx, `INSERT INTO deal_alert (observation_id) SELECT id FROM price_observation`); err != nil {
 		t.Fatalf("alerts: %v", err)
 	}
+	if _, err := pool.Exec(ctx, `INSERT INTO lookup_cache (provider, barcode, response) VALUES
+		('movie', '5903570157561', '{"products":[{"source":"ceneo","name":"Incepcja [Blu-Ray]"}],"searches":[]}'),
+		('movie', '5906190326195', '{"products":[{"source":"allegro","name":"Kursk [Blu-ray]"}],"searches":[]}'),
+		('selection', '5903570157561', '{"provider":"selection"}')`); err != nil {
+		t.Fatalf("lookup cache: %v", err)
+	}
 	if _, err := db.Migrate(ctx, pool, all); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
@@ -176,5 +183,13 @@ func TestRemoveCeneoMigration(t *testing.T) {
 	}
 	if !slices.Equal(sources, []string{"olx"}) || !slices.Equal(alerts, []string{"olx"}) {
 		t.Fatalf("observations %v, alerts %v; want only the OLX listing and its alert", sources, alerts)
+	}
+	var cached []string
+	if err := pool.QueryRow(ctx, `SELECT array_agg(provider || '/' || barcode ORDER BY provider, barcode)
+		FROM lookup_cache`).Scan(&cached); err != nil {
+		t.Fatalf("lookup cache: %v", err)
+	}
+	if !slices.Equal(cached, []string{"movie/5906190326195", "selection/5903570157561"}) {
+		t.Fatalf("lookup cache %v; want the Allegro lookup and the picked candidate", cached)
 	}
 }

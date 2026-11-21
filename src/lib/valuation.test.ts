@@ -6,6 +6,7 @@ import {
 	copyMeta,
 	copyNote,
 	copyRange,
+	missingCeiling,
 	daysAgo,
 	estimateSource,
 	estimateValue,
@@ -494,6 +495,12 @@ describe('copy rows', () => {
 		);
 		expect(copyNote(copy({ mid: est(7900, 2) }))).toBe('OLX · 2 oferty');
 		expect(copyNote(copy({}))).toBe('brak danych');
+	});
+
+	it('marks a missing ceiling under a range that starts at the buy-back price', () => {
+		expect(missingCeiling(copy({ floor: est(500), mid: est(2500) }))).toBe('Nowe: brak danych');
+		expect(missingCeiling(copy({ floor: est(500), ceiling: est(900) }))).toBeNull();
+		expect(missingCeiling(copy({ mid: est(2500) }))).toBeNull();
 	});
 
 	it('names the format, or the kind, and what was paid', () => {

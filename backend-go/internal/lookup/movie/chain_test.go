@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/Automaat/ohara/backend-go/internal/lookup"
 	"github.com/Automaat/ohara/backend-go/internal/lookup/movie"
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
@@ -57,7 +59,7 @@ const refusedEAN = "5900058301379"
 
 // unlistedEAN is a Blu-ray neither Allegro nor UPCitemdb names; the chain
 // used to find it only on a shop's search page, which it no longer asks.
-const unlistedEAN = "5903570157564"
+const unlistedEAN = "5903570157561"
 
 type upstream struct {
 	t      *testing.T
@@ -242,7 +244,14 @@ func TestPolishEANsResolveToTMDB(t *testing.T) {
 
 	t.Run("a code no catalog names is not found", func(t *testing.T) {
 		before := u.count("tmdb")
-		res := svc.Lookup(context.Background(), unlistedEAN)
+		router := chi.NewRouter()
+		lookup.NewHandler(svc, slog.New(slog.DiscardHandler)).Mount(router)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/lookup/"+unlistedEAN, http.NoBody))
+		var res lookup.Result
+		if err := json.NewDecoder(rec.Body).Decode(&res); err != nil || rec.Code != http.StatusOK {
+			t.Fatalf("GET /lookup/%s = %d, %v", unlistedEAN, rec.Code, err)
+		}
 		if len(res.Errors) != 0 || len(res.Candidates) != 0 || !res.NeedsConfirmation {
 			t.Fatalf("result = %+v", res)
 		}

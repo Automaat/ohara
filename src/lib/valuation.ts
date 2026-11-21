@@ -423,6 +423,13 @@ export function copyRange(c: CopyValue): string | null {
 	return null;
 }
 
+/** "Nowe: brak danych" under a range that starts at the buy-back price but has no ceiling. */
+export function missingCeiling(c: CopyValue): string | null {
+	return c.floor && !c.ceiling
+		? `${boundLabels.ceiling}: ${estimateSource('ceiling', null)}`
+		: null;
+}
+
 /** The line under a copy's value: its range, else where its used value comes from. */
 export function copyNote(c: CopyValue): string {
 	return copyRange(c) ?? estimateSource('mid', c.mid);

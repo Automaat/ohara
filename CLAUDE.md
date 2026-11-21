@@ -195,6 +195,11 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   (`?status=none`) lists titles without one instead, filtered in the client
   from `GET /api/titles`; `/titles` redirects to `/`. `?add=copy` on a title
   or edition page opens the form for its next copy.
+- Discogs data carries `DiscogsCredit`: "Data provided by Discogs." linked
+  to its release page, never `nofollow`, under a quick confirm candidate
+  with a `discogs_release_id` and a copy priced from Discogs on Wartość.
+  `/informacje` shows the API terms' non-affiliation notice. Both stay in
+  English, word for word (`src/lib/discogs.ts`).
 - `static/manifest.webmanifest` is linked with `crossorigin="use-credentials"`
   because Authelia guards every path.
 

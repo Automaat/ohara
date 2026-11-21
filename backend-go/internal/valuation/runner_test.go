@@ -688,6 +688,10 @@ func TestRunPricesAlbumsOnDiscogs(t *testing.T) {
 		byEdition[c.EditionID] = c
 	}
 	cd := byEdition[70]
+	if cd.DiscogsReleaseID == nil || *cd.DiscogsReleaseID != 1873013 || byEdition[71].DiscogsReleaseID != nil {
+		t.Fatalf("release IDs = %v, %v: want the CD's 1873013 and none for the vinyl",
+			cd.DiscogsReleaseID, byEdition[71].DiscogsReleaseID)
+	}
 	if cd.Floor == nil || cd.Floor.Cents != lowest || cd.Floor.Source != SourceDiscogs ||
 		cd.Mid == nil || cd.Mid.Cents != vgPlus || cd.Ceiling == nil || cd.Ceiling.Cents != mint || cd.LowConfidence {
 		t.Fatalf("CD value = %+v", cd)

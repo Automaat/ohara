@@ -15,6 +15,8 @@ export type CopyValue = {
 	barcode: string | null;
 	price_cents: number | null;
 	cover_url?: string;
+	/** The Discogs release of an album edition, when it names one. */
+	discogs_release_id?: number | null;
 	floor: Estimate | null;
 	mid: Estimate | null;
 	ceiling: Estimate | null;
@@ -431,6 +433,12 @@ export function missingCeiling(c: CopyValue): string | null {
 /** The line under a copy's value: its range, else where its used value comes from. */
 export function copyNote(c: CopyValue): string {
 	return copyRange(c) ?? estimateSource('mid', c.mid);
+}
+
+/** The Discogs release a copy's shown prices come from, or null when none is from Discogs. */
+export function discogsRelease(c: CopyValue): number | null {
+	const priced = [c.floor, c.mid, c.ceiling].some((e) => e?.source === 'discogs');
+	return priced ? (c.discogs_release_id ?? null) : null;
 }
 
 /** A copy's format, or its kind, and what was paid for it: "Winyl · kupiono za 189,99 zł". */

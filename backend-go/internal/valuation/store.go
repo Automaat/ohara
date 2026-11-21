@@ -99,7 +99,7 @@ func (s *Store) Prices(ctx context.Context, window time.Duration) ([]Price, erro
 // Copies returns every owned copy with its edition and title, by title.
 func (s *Store) Copies(ctx context.Context) ([]CopyValue, error) {
 	rows, err := s.pool.Query(ctx, `SELECT c.id, e.id, t.id, t.name, t.kind, e.format, e.barcode,
-			c.price_cents, `+collection.CoverURL+`
+			c.price_cents, `+collection.CoverURL+`, e.discogs_release_id
 		FROM copy c JOIN edition e ON e.id = c.edition_id JOIN title t ON t.id = e.title_id
 		WHERE c.status = 'owned'
 		ORDER BY lower(t.name), c.id`)
@@ -109,7 +109,7 @@ func (s *Store) Copies(ctx context.Context) ([]CopyValue, error) {
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (CopyValue, error) {
 		var c CopyValue
 		err := row.Scan(&c.CopyID, &c.EditionID, &c.TitleID, &c.TitleName, &c.Kind, &c.Format,
-			&c.Barcode, &c.PriceCents, &c.CoverURL)
+			&c.Barcode, &c.PriceCents, &c.CoverURL, &c.DiscogsReleaseID)
 		return c, err
 	})
 }

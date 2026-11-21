@@ -64,6 +64,21 @@ export type FlowPhase =
 	| { kind: 'expired'; saved: boolean };
 
 /**
+ * What a screen reader hears once a code resolves: the sheet's result line, then the item's name
+ * when it has one. Nothing while the code is checked or for a form opened without a code; the
+ * other results speak through their own live callout, so each result is heard once.
+ */
+export function resultAnnouncement(
+	phase: FlowPhase,
+	code: string,
+	line: string,
+	name?: string
+): string {
+	if (phase.kind !== 'ready' || !code) return '';
+	return name ? `${line}: ${name}` : line;
+}
+
+/**
  * How long one request of a barcode's check may stay open: every API request's deadline, below
  * the server's 30-second request timeout. One still open after this got no answer and the code
  * is kept.

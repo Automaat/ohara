@@ -2,7 +2,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { invalidBarcodeMessage } from './api';
 import { formatPLN, type EditionDetail } from './collection';
 import { recentScans } from './recent.svelte';
-import { ScanFlow, checkTimeout, resetVisit, type Keeper } from './scan-flow.svelte';
+import {
+	ScanFlow,
+	checkTimeout,
+	resetVisit,
+	resultAnnouncement,
+	type Keeper
+} from './scan-flow.svelte';
 import { resetSession, session } from './session.svelte';
 import type { Candidate, KeyValueStore } from './scan';
 
@@ -1365,5 +1371,55 @@ describe('ScanFlow.manual and dismiss', () => {
 		flow.dismiss();
 		flow.manual();
 		expect(recentScans.list).toHaveLength(0);
+	});
+});
+
+describe('resultAnnouncement', () => {
+	const ready = { kind: 'ready', status: 'found' } as const;
+
+	it('reads the result line, then the name', () => {
+		expect(resultAnnouncement(ready, '5901234123457', 'Znaleziono · TMDB', 'Matrix')).toBe(
+			'Znaleziono · TMDB: Matrix'
+		);
+		expect(
+			resultAnnouncement(
+				{ kind: 'ready', status: 'owned' },
+				'5901234123457',
+				'Masz już to wydanie',
+				'Matrix'
+			)
+		).toBe('Masz już to wydanie: Matrix');
+	});
+
+	it('reads the line alone for a result without a name', () => {
+		expect(resultAnnouncement(ready, '5901234123457', 'Znaleziono propozycje: 3')).toBe(
+			'Znaleziono propozycje: 3'
+		);
+	});
+
+	it('stays silent while checking, for results with a live callout and without a code', () => {
+		const silent = [
+			{ kind: 'loading' },
+			{ kind: 'invalid', message: 'x' },
+			{ kind: 'failed', message: 'x' },
+			{ kind: 'offline' },
+			{ kind: 'expired', saved: true },
+			{
+				kind: 'queued',
+				entry: {
+					id: 1,
+					barcode: '5901234123457',
+					reason: 'lookup_failed',
+					detail: '',
+					scans: 1,
+					created_at: '',
+					last_scanned_at: ''
+				}
+			}
+		] as const;
+		for (const phase of silent) {
+			expect(resultAnnouncement(phase, '5901234123457', 'Linia', 'Matrix')).toBe('');
+		}
+		expect(resultAnnouncement(ready, '', 'Dodaj ręcznie')).toBe('');
 	});
 });

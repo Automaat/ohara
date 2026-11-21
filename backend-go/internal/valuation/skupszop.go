@@ -173,10 +173,19 @@ func shopDo(ctx context.Context, client *http.Client, method, target string, bod
 		return nil, errors.New("response too large")
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("status %d", resp.StatusCode)
+		return nil, statusError{resp.StatusCode}
 	}
 	return data, nil
 }
+
+// statusError is a shop answer with a status other than 200. Its
+// StatusCode lets a run tell a refusal (403, 429) from other failures.
+type statusError struct{ code int }
+
+func (e statusError) Error() string { return "status " + strconv.Itoa(e.code) }
+
+// StatusCode is the status the shop answered.
+func (e statusError) StatusCode() int { return e.code }
 
 // plainText strips tags and collapses spaces.
 func plainText(s string) string {

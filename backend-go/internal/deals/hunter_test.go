@@ -3,6 +3,7 @@ package deals
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -614,5 +615,118 @@ func TestPanickingRunFailsAndTheScheduleGoesOn(t *testing.T) {
 		if !strings.Contains(logs.String(), want) {
 			t.Errorf("log lacks %s:\n%s", want, logs.String())
 		}
+	}
+}
+
+// refusingSource answers every query with no listings until its
+// refuseFrom-th request, counted over all runs, and with refusal from then
+// on.
+type refusingSource struct {
+	name       string
+	refuseFrom int
+	refusal    error
+	queries    []string
+}
+
+func (f *refusingSource) Name() string   { return f.name }
+func (f *refusingSource) PerQuery() bool { return true }
+
+func (f *refusingSource) Search(_ context.Context, query string) ([]Listing, error) {
+	f.queries = append(f.queries, query)
+	if len(f.queries) >= f.refuseFrom {
+		return nil, f.refusal
+	}
+	return nil, nil
+}
+
+// fiveWants wishes five DVDs, one query each.
+func fiveWants(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	for _, name := range []string{"Alien", "Aliens", "Predator", "Terminator", "Robocop"} {
+		wishlist(t, pool, &Want{Kind: "movie", Name: name, Format: new("dvd")})
+	}
+}
+
+func TestRunStopsAskingASourceThatRefused(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	fiveWants(t, pool)
+	refusing := &refusingSource{name: "refusing-source", refuseFrom: 2, refusal: statusError{http.StatusTooManyRequests}}
+	next := &fakeSource{name: "after-refusal", perQuery: true}
+	h := newTestHunter(pool, nil, refusing, next)
+	pauses := 0
+	h.sleep = func(ctx context.Context, _ time.Duration) error {
+		pauses++
+		return ctx.Err()
+	}
+	okBefore, _ := metric(t, `ohara_source_requests_total{source="refusing-source",status="ok"}`)
+	refusedBefore, _ := metric(t, `ohara_source_requests_total{source="refusing-source",status="http_429"}`)
+
+	res := mustRun(t, h)
+	if res.Queries != 5 {
+		t.Fatalf("queries = %d, want 5", res.Queries)
+	}
+	if len(refusing.queries) != 2 {
+		t.Fatalf("refusing source asked %q, want 2 queries", refusing.queries)
+	}
+	if len(next.queries) != 5 {
+		t.Fatalf("next source asked %q, want all 5 queries", next.queries)
+	}
+	want := []string{"refusing-source: refused with status 429, skipped 3 queries"}
+	if !slices.Equal(res.Errors, want) {
+		t.Fatalf("errors = %q, want %q", res.Errors, want)
+	}
+	if pauses != 6 {
+		t.Fatalf("pauses = %d, want one between each of the 7 requests", pauses)
+	}
+	if d := mustMetric(t, `ohara_source_requests_total{source="refusing-source",status="ok"}`) - okBefore; d != 1 {
+		t.Fatalf("ok requests grew by %v, want 1", d)
+	}
+	if d := mustMetric(t, `ohara_source_requests_total{source="refusing-source",status="http_429"}`) - refusedBefore; d != 1 {
+		t.Fatalf("http_429 requests grew by %v, want 1", d)
+	}
+
+	res = mustRun(t, h)
+	if len(refusing.queries) != 3 || refusing.queries[2] != refusing.queries[0] {
+		t.Fatalf("second run asked %q, want the first query again", refusing.queries[2:])
+	}
+	want = []string{"refusing-source: refused with status 429, skipped 4 queries"}
+	if !slices.Equal(res.Errors, want) {
+		t.Fatalf("second run errors = %q, want %q", res.Errors, want)
+	}
+	if d := mustMetric(t, `ohara_source_requests_total{source="refusing-source",status="http_429"}`) - refusedBefore; d != 2 {
+		t.Fatalf("http_429 requests grew by %v over two runs, want 2", d)
+	}
+}
+
+func TestRunTreatsOnly403And429AsRefusals(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	fiveWants(t, pool)
+	tests := []struct {
+		name    string
+		err     error
+		refused bool
+	}{
+		{name: "forbidden", err: statusError{http.StatusForbidden}, refused: true},
+		{name: "too many requests", err: fmt.Errorf("olx: %w", statusError{http.StatusTooManyRequests}), refused: true},
+		{name: "server error", err: statusError{http.StatusServiceUnavailable}},
+		{name: "not found", err: statusError{http.StatusNotFound}},
+		{name: "timeout", err: context.DeadlineExceeded},
+		{name: "parse error", err: parseError{errors.New("olx: decode")}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			src := &refusingSource{name: "refusal-kind", refuseFrom: 1, refusal: tt.err}
+			res := mustRun(t, newTestHunter(pool, nil, src))
+			asked := 5
+			if tt.refused {
+				asked = 1
+			}
+			if len(src.queries) != asked {
+				t.Fatalf("asked %d queries, want %d", len(src.queries), asked)
+			}
+			if tt.refused != (len(res.Errors) == 1) {
+				t.Fatalf("errors = %q", res.Errors)
+			}
+		})
 	}
 }

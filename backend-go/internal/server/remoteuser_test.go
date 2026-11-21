@@ -49,6 +49,8 @@ func TestRemoteUserRequired(t *testing.T) {
 		{"API read with empty header", http.MethodGet, "/api/titles", "", []string{""}, http.StatusUnauthorized, ""},
 		{"health below its path", http.MethodGet, "/health/x", "", nil, http.StatusUnauthorized, ""},
 		{"metrics with a trailing slash", http.MethodGet, "/metrics/", "", nil, http.StatusUnauthorized, ""},
+		{"health spelled with an escape", http.MethodGet, "/heal%74h", "", nil, http.StatusUnauthorized, ""},
+		{"metrics spelled with an escape", http.MethodGet, "/metric%73", "", nil, http.StatusUnauthorized, ""},
 
 		{"health without header", http.MethodGet, "/health", "", nil, http.StatusOK, ""},
 		{"metrics without header", http.MethodGet, "/metrics", "", nil, http.StatusOK, ""},
@@ -130,6 +132,49 @@ func TestRemoteUserNotRequired(t *testing.T) {
 				t.Fatalf("handlers run = %v, want [%s]", api.called, tt.wantHandler)
 			}
 		})
+	}
+}
+
+// TestRemoteUserGeneralOptions checks "OPTIONS *": an empty 200 with the
+// header, a counted JSON 401 without it.
+func TestRemoteUserGeneralOptions(t *testing.T) {
+	h, _ := remoteUserRouter(true)
+	const series = `ohara_http_requests_total{method="OPTIONS",route="unmatched",status="4xx"}`
+	before := scrapeCounter(t, h, series)
+
+	for _, tt := range []struct {
+		name       string
+		remoteUser string
+		wantCode   int
+	}{
+		{"without header", "", http.StatusUnauthorized},
+		{"with header", "someone", http.StatusOK},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodOptions, "*", http.NoBody)
+			if tt.remoteUser != "" {
+				req.Header.Set("Remote-User", tt.remoteUser)
+			}
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			if rec.Code != tt.wantCode {
+				t.Fatalf("OPTIONS * = %d %q, want %d", rec.Code, rec.Body.String(), tt.wantCode)
+			}
+			if tt.wantCode == http.StatusOK && rec.Body.Len() != 0 {
+				t.Fatalf("OPTIONS * body = %q, want empty", rec.Body.String())
+			}
+			if tt.wantCode != http.StatusUnauthorized {
+				return
+			}
+			var body httpx.Error
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body.Error == "" {
+				t.Fatalf("401 body = %q, want {\"error\": ...} (%v)", rec.Body.String(), err)
+			}
+		})
+	}
+
+	if after := scrapeCounter(t, h, series); after != before+1 {
+		t.Fatalf("%s went from %v to %v, want one more", series, before, after)
 	}
 }
 

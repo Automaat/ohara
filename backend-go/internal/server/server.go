@@ -65,7 +65,7 @@ func newRouter(cfg Config, logger *slog.Logger, deps Deps, timeout time.Duration
 	}
 	r := chi.NewRouter()
 	r.Use(securityHeaders)
-	r.Use(generalOptions)
+	r.Use(generalOptions(cfg.RequireRemoteUser))
 	r.Use(middleware.RequestID)
 	r.Use(requestObserver(logger, cfg.AccessLog))
 	r.Use(recoverer(logger))
@@ -241,29 +241,35 @@ func securityHeaders(next http.Handler) http.Handler {
 // generalOptions answers "OPTIONS *" with an empty 200, as net/http does when
 // the server's DisableGeneralOptionsHandler is false. cmd/api sets it, so the
 // request reaches the router and its answer carries the security headers.
-func generalOptions(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodOptions || r.RequestURI != "*" {
-			next.ServeHTTP(w, r)
-			return
-		}
-		w.Header().Set("Content-Length", "0")
-		if r.ContentLength != 0 {
-			_, _ = io.Copy(io.Discard, http.MaxBytesReader(w, r.Body, 4<<10))
-		}
-		w.WriteHeader(http.StatusOK)
-	})
+// When the Remote-User check is on, one without the header goes on to the
+// request observer and remoteUserGuard, which answers 401.
+func generalOptions(requireRemoteUser bool) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodOptions || r.RequestURI != "*" ||
+				requireRemoteUser && r.Header.Get("Remote-User") == "" {
+				next.ServeHTTP(w, r)
+				return
+			}
+			w.Header().Set("Content-Length", "0")
+			if r.ContentLength != 0 {
+				_, _ = io.Copy(io.Discard, http.MaxBytesReader(w, r.Body, 4<<10))
+			}
+			w.WriteHeader(http.StatusOK)
+		})
+	}
 }
 
 // remoteUserGuard answers 401 to a request without a Remote-User header, or
 // with an empty one, so a request that reaches the container without passing
-// Authelia gets nothing. The header only proves the request came through the
-// forward auth; the name in it is not used. The Docker healthcheck and
-// Prometheus reach /health and /metrics directly and stay open.
+// Authelia gets nothing. The guard checks only that the header is there, so it
+// is worth as much as the proxy that sets it and the firewall that keeps
+// everyone else off the port; the name in it is not used. The Docker
+// healthcheck and Prometheus reach /health and /metrics directly and stay open.
 func remoteUserGuard(logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Header.Get("Remote-User") == "" && !probePath(r.URL.Path) {
+			if r.Header.Get("Remote-User") == "" && !probePath(r) {
 				httpx.WriteError(w, logger, http.StatusUnauthorized, "authentication required")
 				return
 			}
@@ -272,8 +278,15 @@ func remoteUserGuard(logger *slog.Logger) func(http.Handler) http.Handler {
 	}
 }
 
-// probePath reports the paths served without the Remote-User header.
-func probePath(path string) bool {
+// probePath reports a request for /health or /metrics, the paths served
+// without the Remote-User header. It reads the path the way chi routes it,
+// RawPath when set, so an escaped spelling such as /heal%74h, which chi sends
+// to the frontend instead of the probe, is not exempt.
+func probePath(r *http.Request) bool {
+	path := r.URL.RawPath
+	if path == "" {
+		path = r.URL.Path
+	}
 	return path == "/health" || path == "/metrics"
 }
 

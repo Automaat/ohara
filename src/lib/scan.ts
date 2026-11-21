@@ -440,8 +440,13 @@ function byteLength(text: string): number {
 	return new TextEncoder().encode(text).length;
 }
 
+/** Trims like Go's strings.TrimSpace, which also takes U+0085 (next line) for a space. */
+function trimSpace(text: string): string {
+	return text.replace(/^[\s\u0085]+|[\s\u0085]+$/gu, '');
+}
+
 function tooLong(text: string): boolean {
-	return byteLength(text.trim()) > maxTextBytes;
+	return byteLength(trimSpace(text)) > maxTextBytes;
 }
 
 /*
@@ -450,7 +455,7 @@ function tooLong(text: string): boolean {
  */
 
 function fitText(text: string | null | undefined): string | null {
-	const t = text?.trim();
+	const t = text == null ? '' : trimSpace(text);
 	return t && !t.includes('\0') && byteLength(t) <= maxTextBytes ? t : null;
 }
 
@@ -463,7 +468,7 @@ function fitID(id: number | null | undefined): number | null {
 }
 
 function fitAuthors(authors: readonly string[] | null | undefined): string[] {
-	const fit = (authors ?? []).map((a) => a.trim()).filter(Boolean);
+	const fit = (authors ?? []).map(trimSpace).filter(Boolean);
 	return fit.length <= maxAuthors && fit.every((a) => fitText(a) !== null) ? fit : [];
 }
 
@@ -476,14 +481,14 @@ const coverURL =
 	/^https?:\/\/[a-z0-9._~-]+(?::\d+)?(?:[/?#](?:[\w\-.~:/?#[\]@!$&'()*+,;=]|%[0-9a-f]{2}|\P{ASCII})*)?$/iu;
 
 function fitCoverURL(value: string | null | undefined): string | undefined {
-	const raw = value?.trim();
+	const raw = value == null ? '' : trimSpace(value);
 	return raw && byteLength(raw) <= maxURLBytes && coverURL.test(raw) ? raw : undefined;
 }
 
 /** The POST /api/titles body: the form's kind and name over the candidate's other fields. */
 export function scanTitlePayload(f: QuickForm, candidate: Candidate | null): Parsed<TitlePayload> {
 	// Postgres text takes no NUL, which a provider's name can carry into the form.
-	const name = f.name.replaceAll('\0', '').trim();
+	const name = trimSpace(f.name.replaceAll('\0', ''));
 	if (!name) return { ok: false, issue: { field: 'name', message: 'Podaj tytuł.' } };
 	const t = candidate?.type === f.kind ? candidate.title : null;
 	const movie = f.kind === 'movie';

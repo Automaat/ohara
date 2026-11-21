@@ -595,7 +595,7 @@ describe('scan payloads', () => {
 			provider: 'music',
 			confidence: 0.9
 		};
-		const f = form({ kind: 'music', name: 'Album\0', format: 'cd' });
+		const f = form({ kind: 'music', name: 'Album\0\u0085', format: 'cd' });
 		expect(scanTitlePayload(f, broken)).toMatchObject({
 			ok: true,
 			value: { name: 'Album', original_title: null, polish_title: null, year: null, authors: [] }
@@ -610,6 +610,8 @@ describe('scan payloads', () => {
 				cover_url: undefined
 			}
 		});
+		// Go trims U+0085 as space, so a name of it alone is empty there.
+		expect(scanTitlePayload(form({ name: '\u0085 ' }), movie)).toMatchObject({ ok: false });
 		const tooMany = { ...book, title: { ...book.title, authors: Array(21).fill('A') } };
 		const bookForm = form({ kind: 'book', name: 'Lalka', format: '' });
 		expect(scanTitlePayload(bookForm, tooMany)).toMatchObject({ value: { authors: [] } });

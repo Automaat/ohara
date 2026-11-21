@@ -16,7 +16,9 @@ RUN go mod download
 COPY backend-go ./
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/api ./cmd/api
 
-FROM gcr.io/distroless/static-debian12:nonroot
+# Pinned by digest: CI scans this image and then rebuilds it to push, so
+# both builds must start from the same base. Renovate bumps the digest.
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 COPY --from=api /out/api /usr/local/bin/api
 COPY --from=web /src/build /app/web
 ENV OHARA_ADDR=:8000 \

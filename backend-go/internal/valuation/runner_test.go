@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"os"
 	"slices"
 	"strconv"
@@ -988,10 +989,10 @@ func (b *timedBuyBack) Quote(context.Context, string) (Quote, error) {
 
 const runDelay = 200 * time.Millisecond
 
-// olxSite is a fake OLX that answers with the deals fixture and logs when
-// each request arrived. Requests whose query is held get no answer until
-// the test ends; the first of them signals held.
-func olxSite(t *testing.T, log *requestLog, heldQuery string) (string, <-chan struct{}) {
+// olxSite is a fake OLX that answers with the deals fixture. Requests
+// whose query is held get no answer until the test ends; the first of
+// them signals held.
+func olxSite(t *testing.T, heldQuery string) (string, <-chan struct{}) {
 	t.Helper()
 	body, err := os.ReadFile("../deals/testdata/olx.json")
 	if err != nil {
@@ -999,7 +1000,6 @@ func olxSite(t *testing.T, log *requestLog, heldQuery string) (string, <-chan st
 	}
 	held := make(chan struct{}, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log.add(SourceOLX)
 		if heldQuery != "" && strings.Contains(strings.ToLower(r.URL.Query().Get("query")), heldQuery) {
 			select {
 			case held <- struct{}{}:
@@ -1016,13 +1016,13 @@ func olxSite(t *testing.T, log *requestLog, heldQuery string) (string, <-chan st
 
 // pacedRuns builds a hunt and a valuation that ask OLX at olxURL through
 // one pacer in lanes of their own, as cmd/api does, with runDelay between
-// their own requests.
+// their own requests. log gets the time each OLX request was sent.
 func pacedRuns(pool *pgxpool.Pool, olxURL string, log *requestLog) (*deals.Hunter, *Runner) {
 	logger := slog.New(slog.DiscardHandler)
 	pacer := deals.NewPacer(runDelay / 2)
 	client := func() *http.Client {
 		c := deals.NewHTTPClient()
-		c.Transport = pacer.Lane().Transport(nil)
+		c.Transport = pacer.Lane().Transport(sentLog{log: log})
 		return c
 	}
 	hunter := deals.NewHunter(deals.NewStore(pool), []deals.Source{
@@ -1031,6 +1031,18 @@ func pacedRuns(pool *pgxpool.Pool, olxURL string, log *requestLog) (*deals.Hunte
 	runner := NewRunner(NewStore(pool), []deals.Source{deals.OLX{Client: client(), BaseURL: olxURL}},
 		[]BuyBack{&timedBuyBack{log: log}}, nil, Config{Delay: runDelay, Window: 90 * 24 * time.Hour}, logger)
 	return hunter, runner
+}
+
+// sentLog logs an OLX request once it is written, the moment the pacer
+// spaces; the fake site's handler starts a varying time later.
+type sentLog struct{ log *requestLog }
+
+func (s sentLog) RoundTrip(r *http.Request) (*http.Response, error) {
+	var once sync.Once
+	trace := &httptrace.ClientTrace{WroteRequest: func(httptrace.WroteRequestInfo) {
+		once.Do(func() { s.log.add(SourceOLX) })
+	}}
+	return http.DefaultTransport.RoundTrip(r.WithContext(httptrace.WithClientTrace(r.Context(), trace)))
 }
 
 // timedPepper is an empty feed that logs when it was asked.
@@ -1048,7 +1060,7 @@ func TestOverlappingRunsSpaceRequestsToOneSite(t *testing.T) {
 	pool := dbtest.Migrated(t)
 	seed(t, pool)
 	log := &requestLog{}
-	olxURL, _ := olxSite(t, log, "")
+	olxURL, _ := olxSite(t, "")
 	hunter, runner := pacedRuns(pool, olxURL, log)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -1084,7 +1096,7 @@ func TestRunsDoNotWaitForEachOther(t *testing.T) {
 			pool := dbtest.Migrated(t)
 			seed(t, pool)
 			log := &requestLog{}
-			olxURL, held := olxSite(t, log, tc.query)
+			olxURL, held := olxSite(t, tc.query)
 			hunter, runner := pacedRuns(pool, olxURL, log)
 			heldRun := func(ctx context.Context) error { _, err := runner.Run(ctx); return err }
 			otherRun := func(ctx context.Context) error { _, err := hunter.Run(ctx); return err }
@@ -1119,7 +1131,7 @@ func TestBackToBackRunsKeepTheirPacing(t *testing.T) {
 	pool := dbtest.Migrated(t)
 	seed(t, pool)
 	log := &requestLog{}
-	olxURL, _ := olxSite(t, log, "")
+	olxURL, _ := olxSite(t, "")
 	_, runner := pacedRuns(pool, olxURL, log)
 	runner.sleep = func(ctx context.Context, _ time.Duration) error { return ctx.Err() }
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

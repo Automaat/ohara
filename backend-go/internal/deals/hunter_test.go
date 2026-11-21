@@ -310,8 +310,8 @@ func TestRunRecordsAlertSentBeforeCancellation(t *testing.T) {
 	defer cancel()
 	notifier := &cancellingNotifier{cancel: cancel}
 	h := newTestHunter(pool, notifier, olxFixture(t))
-	if res, err := h.Run(ctx); err != nil || res.Sent != 1 {
-		t.Fatalf("canceled run = %+v, %v; want the delivered alert recorded", res, err)
+	if res, err := h.Run(ctx); (err != nil && !errors.Is(err, context.Canceled)) || res.Sent != 1 {
+		t.Fatalf("canceled run = %+v, %v; want the delivered alert recorded and at most the cancellation", res, err)
 	}
 	if n := count(t, pool, `SELECT count(*) FROM deal_alert WHERE sent_at IS NOT NULL`); n != 1 {
 		t.Fatalf("sent alerts = %d, want 1", n)

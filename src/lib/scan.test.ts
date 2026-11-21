@@ -341,6 +341,19 @@ describe('resolveScan', () => {
 		expect(s.calls.at(-1)?.body).toEqual(queued);
 	});
 
+	it.each([
+		['a scan', false, 'GET /api/lookup/5901234123457'],
+		['a recheck', true, 'GET /api/lookup/5901234123457?recheck=1']
+	])('asks the lookup for %s', async (_, recheck, path) => {
+		const s = server({
+			'GET /api/editions?barcode=5901234123457': [200, []],
+			[path]: [200, { barcode: '5901234123457', candidates: [movie], errors: [] }]
+		});
+		const got = await resolveScan(s.fetchFn, '5901234123457', recheck);
+		expect(got.kind).toBe('found');
+		expect(s.paths()).toEqual(['GET /api/editions?barcode=5901234123457', path]);
+	});
+
 	it('queues a rescanned barcode only after a queue removal on its way has settled', async () => {
 		let answer: () => void = () => {};
 		vi.stubGlobal(

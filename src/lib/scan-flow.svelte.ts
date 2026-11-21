@@ -252,9 +252,10 @@ export class ScanFlow {
 
 	/**
 	 * Resolves a barcode, or opens a blank form for one typed by hand. A check that gets no answer,
-	 * or that the sign-in turns away, keeps the code on the device, even once the user moved on.
+	 * or that the sign-in turns away, keeps the code on the device, even once the user moved on. A
+	 * recheck asks each source again when its cached answer is over an hour old.
 	 */
-	async load(raw: string, byHand = false): Promise<void> {
+	async load(raw: string, byHand = false, recheck = false): Promise<void> {
 		const code = cleanBarcode(raw);
 		const current = this.#restart(code);
 		if (!looksLikeBarcode(code)) {
@@ -271,7 +272,7 @@ export class ScanFlow {
 			return;
 		}
 		try {
-			const r = await resolveScan(deadlineFetch(this.#fetch, checkTimeout), code);
+			const r = await resolveScan(deadlineFetch(this.#fetch, checkTimeout), code, recheck);
 			if (!current()) return;
 			if (r.kind === 'owned') {
 				this.item = {

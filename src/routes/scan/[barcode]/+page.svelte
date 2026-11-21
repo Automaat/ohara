@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { BackLink, PageHeader } from '@smykla-skalski/sui';
 	import { onDestroy, untrack } from 'svelte';
-	import { goto } from '$app/navigation';
+	import { goto, replaceState } from '$app/navigation';
 	import { page } from '$app/state';
 	import ScanItem from '#lib/components/ScanItem.svelte';
 	import { ScanFlow, type Added } from '#lib/scan-flow.svelte.js';
@@ -37,8 +37,20 @@
 	$effect(() => {
 		const code = barcode;
 		const byHand = manual;
-		untrack(() => void flow.load(code, byHand));
+		untrack(() => void flow.load(code, byHand, takeRecheck()));
 	});
+
+	/**
+	 * Whether the queue's "Szukaj ponownie" asked to ask the sources again. The request leaves the
+	 * address, so a reload looks the code up from the cache.
+	 */
+	function takeRecheck(): boolean {
+		if (page.url.searchParams.get('recheck') !== '1') return false;
+		const url = new URL(page.url.href);
+		url.searchParams.delete('recheck');
+		replaceState(url, page.state);
+		return true;
+	}
 
 	onDestroy(() => {
 		alive = false;

@@ -11,7 +11,8 @@ import (
 	"github.com/Automaat/ohara/backend-go/internal/httpx"
 )
 
-// Handler serves GET /api/lookup/{barcode}.
+// Handler serves GET /api/lookup/{barcode}. With ?recheck=1 the lookup asks
+// each provider again when its cached answer is older than RecheckAfter.
 type Handler struct {
 	service *Service
 	logger  *slog.Logger
@@ -37,7 +38,11 @@ func (h *Handler) lookup(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteFieldError(w, h.logger, &httpx.FieldError{Field: "barcode", Msg: err.Error()})
 		return
 	}
-	httpx.WriteJSON(w, h.logger, http.StatusOK, h.service.Lookup(r.Context(), code))
+	lookup := h.service.Lookup
+	if r.URL.Query().Get("recheck") == "1" {
+		lookup = h.service.Recheck
+	}
+	httpx.WriteJSON(w, h.logger, http.StatusOK, lookup(r.Context(), code))
 }
 
 // selectCandidate stores the candidate the user picked, so the next scan of

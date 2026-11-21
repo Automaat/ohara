@@ -527,3 +527,34 @@ func TestSourceStatusCountsBlocking(t *testing.T) {
 		t.Fatalf("blocked canary = %v", v)
 	}
 }
+
+func TestAlertTextNamesTheMedium(t *testing.T) {
+	tests := []struct {
+		name   string
+		format *string
+		head   string
+	}{
+		{"cd", new("cd"), "🎯 Okazja: The Wall · CD"},
+		{"vinyl", new("vinyl"), "🎯 Okazja: The Wall · Winyl"},
+		{"cassette", new("cassette"), "🎯 Okazja: The Wall · Kaseta"},
+		{"movie", new("bluray"), "🎯 Okazja: The Wall · Blu-ray"},
+		{"no format", nil, "🎯 Okazja: The Wall"},
+		{"unknown format", new("laserdisc"), "🎯 Okazja: The Wall"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := alertText(&Alert{
+				Source: "olx", URL: "https://www.olx.pl/d/oferta/the-wall", ListingTitle: "Pink Floyd The Wall",
+				PriceCents: 4500, AcquiredAs: new("used"), TitleName: "The Wall", Format: tt.format,
+				MaxPriceCents: new(int64(5000)),
+			})
+			want := strings.Join([]string{
+				tt.head, "45,00 zł (limit 50,00 zł) · OLX · używany",
+				"Pink Floyd The Wall", "https://www.olx.pl/d/oferta/the-wall",
+			}, "\n")
+			if got != want {
+				t.Errorf("alertText = %q, want %q", got, want)
+			}
+		})
+	}
+}

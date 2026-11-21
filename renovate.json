@@ -20,6 +20,13 @@
       "description": "Group the Svelte / Vite / Vitest toolchain",
       "groupName": "svelte toolchain",
       "matchPackageNames": ["/^svelte/", "/^@sveltejs\\//", "/^vite/", "/^@vitest\\//"]
+    },
+    {
+      "description": "Production runs Postgres 18 (home-nas ohara stack), so a Postgres major waits for a person to upgrade production first",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["postgres"],
+      "matchUpdateTypes": ["major"],
+      "automerge": false
     }
   ]
 }

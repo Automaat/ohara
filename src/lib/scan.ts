@@ -487,9 +487,8 @@ export function scanEditionPayload(
 			pl_voiceover: movie ? (e?.pl_voiceover ?? 'unknown') : 'unknown',
 			packaging: movie ? [...f.packaging] : [],
 			binding: f.kind === 'book' && f.binding ? f.binding : null,
-			// The release is one pressing; another medium is another release.
-			discogs_release_id:
-				music && (!e?.format || e.format === f.format) ? opt(e?.discogs_release_id) : null,
+			// The release is one pressing on its own medium; another or an unknown medium is not it.
+			discogs_release_id: music && e?.format === f.format ? opt(e?.discogs_release_id) : null,
 			cover_url: selected?.cover_url,
 			notes: ''
 		}

@@ -506,7 +506,7 @@ describe('scan payloads', () => {
 		expect(!noMedium.ok && noMedium.issue.field).toBe('format');
 	});
 
-	it('drops the Discogs release of a pressing on another medium', () => {
+	it('drops the Discogs release of a pressing on another or an unknown medium', () => {
 		const vinyl = form({ kind: 'music', name: 'The Dark Side Of The Moon', format: 'vinyl' });
 		expect(scanEditionPayload(vinyl, album, '', 7)).toMatchObject({
 			ok: true,
@@ -515,7 +515,7 @@ describe('scan payloads', () => {
 		const unknown = { ...album, edition: { ...album.edition, format: null } };
 		expect(scanEditionPayload(vinyl, unknown, '', 7)).toMatchObject({
 			ok: true,
-			value: { discogs_release_id: 1873013 }
+			value: { discogs_release_id: null }
 		});
 	});
 

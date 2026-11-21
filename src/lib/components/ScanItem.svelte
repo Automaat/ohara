@@ -331,7 +331,7 @@
 				{@render titleSearch()}
 			{/if}
 			<div class="ways">
-				{#if flow.phase.status === 'missing'}
+				{#if item.searched}
 					<Button onclick={() => flow.typeIn()}>Wpisz ręcznie</Button>
 				{/if}
 				<Button onclick={close}>Pomiń</Button>

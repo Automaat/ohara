@@ -506,6 +506,19 @@ describe('scan payloads', () => {
 		expect(!noMedium.ok && noMedium.issue.field).toBe('format');
 	});
 
+	it('drops the Discogs release of a pressing on another or an unknown medium', () => {
+		const vinyl = form({ kind: 'music', name: 'The Dark Side Of The Moon', format: 'vinyl' });
+		expect(scanEditionPayload(vinyl, album, '', 7)).toMatchObject({
+			ok: true,
+			value: { format: 'vinyl', discogs_release_id: null }
+		});
+		const unknown = { ...album, edition: { ...album.edition, format: null } };
+		expect(scanEditionPayload(vinyl, unknown, '', 7)).toMatchObject({
+			ok: true,
+			value: { discogs_release_id: null }
+		});
+	});
+
 	it('labels an album candidate with the details that tell pressings apart', () => {
 		expect(candidateLabel(album)).toBe(
 			'Pink Floyd – The Dark Side Of The Moon · CD · 2011 · EMI · Reissue, Remastered · Europe · music · 90%'

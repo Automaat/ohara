@@ -62,7 +62,28 @@ export type FlowItem = {
 	logged: boolean;
 	/** What saves of this item created, kept across retries. */
 	made: Made;
+	/** The candidates came from a title search, which the user may leave for the draft. */
+	searched: boolean;
+	/** What the user had in the form when the first search answered, to go back to. */
+	draft: Draft | null;
 };
+
+/** The title and medium the user fills in, which a picked candidate replaces. */
+type Draft = Pick<QuickForm, 'kind' | 'name' | 'format' | 'binding' | 'packaging'>;
+
+function draftOf(f: QuickForm): Draft {
+	return {
+		kind: f.kind,
+		name: f.name,
+		format: f.format,
+		binding: f.binding,
+		packaging: [...f.packaging]
+	};
+}
+
+function sameDraft(a: Draft, b: Draft): boolean {
+	return JSON.stringify(a) === JSON.stringify(b);
+}
 
 /**
  * A save that went through: the copy, the visit's record of it and, when a wedge scanner typed
@@ -154,7 +175,9 @@ export class ScanFlow {
 			picked: null,
 			errors: [],
 			logged: false,
-			made: newMade()
+			made: newMade(),
+			searched: false,
+			draft: null
 		};
 	}
 
@@ -276,6 +299,29 @@ export class ScanFlow {
 		this.issue = null;
 	}
 
+	/**
+	 * Leaves the results of a title search for the form as the user had it when the search first
+	 * answered; the purchase fields stay as they are now.
+	 */
+	typeIn() {
+		const item = this.item;
+		if (!item || item.target.kind !== 'new' || !item.searched) return;
+		this.#settleSearch();
+		if (item.draft) this.form = { ...this.form, ...item.draft };
+		item.candidates = [];
+		item.picked = null;
+		item.target = { kind: 'new', barcode: item.barcode, candidate: null };
+		item.searched = false;
+		item.draft = null;
+		this.notice = null;
+		this.issue = null;
+	}
+
+	/** The user changed the form or the query: a search still on its way answers nothing. */
+	edited() {
+		if (this.searching) this.#settleSearch();
+	}
+
 	/** Drops the answer of a title search still on its way. */
 	#settleSearch() {
 		this.#search++;
@@ -303,10 +349,10 @@ export class ScanFlow {
 		if (!item || item.target.kind !== 'new' || this.searching || !query) return;
 		const current = this.#current;
 		const search = ++this.#search;
-		const kind = this.form.kind;
+		const asked = draftOf(this.form);
 		const latest = () => current() && search === this.#search;
-		// A search for another kind than the form now shows answers nothing.
-		const fresh = () => latest() && this.form.kind === kind;
+		// The user changed the title or medium meanwhile: the answer is for a form no longer shown.
+		const fresh = () => latest() && sameDraft(draftOf(this.form), asked);
 		this.searching = true;
 		try {
 			const found = await searchTitles(
@@ -322,6 +368,8 @@ export class ScanFlow {
 				return;
 			}
 			this.notice = null;
+			if (!item.searched || item.target.candidate === null) item.draft = asked;
+			item.searched = true;
 			item.candidates = found;
 			item.errors = [];
 			item.picked = null;

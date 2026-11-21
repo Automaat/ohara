@@ -65,11 +65,10 @@ func (s *Store) Record(ctx context.Context, l *deals.Listing, h *Holding) (bool,
 }
 
 // Prices returns the valuation sources' observations last seen within
-// window that value an owned edition. OLX, Vinted and Ceneo prices of an
-// edition without an owned copy count when an edition of the same title
-// and format is owned, as middles and ceilings pool that group and a
-// listing keeps the edition it was first stored against, often a wished
-// one. Such a price counts only when first seen after the edition last
+// window that value an owned edition. OLX prices of an edition without an
+// owned copy count when an edition of the same title and format is owned,
+// as middles pool that group and a listing keeps the edition it was first
+// stored against, often a wished one. Such a price counts only when first seen after the edition last
 // changed: a listing matched before an edit, such as a new format, may not
 // fit it, and a match for another edition later keeps it on this one.
 // Floors and Discogs bounds are per edition, so those count only for an

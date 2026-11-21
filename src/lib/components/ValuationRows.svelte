@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { copyMeta, copyNote, wholeZl, type CopyValue } from '#lib/valuation.js';
+	import { copyMeta, copyNote, missingCeiling, wholeZl, type CopyValue } from '#lib/valuation.js';
 	import CollectionCover from './CollectionCover.svelte';
 
 	let { copies }: { copies: readonly CopyValue[] } = $props();
@@ -22,6 +22,9 @@
 				<span class="value">
 					{c.mid ? wholeZl(c.mid.cents) : '—'}
 					<small>{copyNote(c)}</small>
+					{#if missingCeiling(c)}
+						<small>{missingCeiling(c)}</small>
+					{/if}
 				</span>
 			</a>
 		</li>

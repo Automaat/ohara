@@ -14,10 +14,10 @@ func TestParseName(t *testing.T) {
 		subs, lekt string
 		packaging  []string
 	}{
-		{name: "ceneo bracket", in: "Incepcja [Blu-Ray]", title: "Incepcja", format: new("bluray"), subs: "unknown", lekt: "unknown"},
+		{name: "bracketed format", in: "Incepcja [Blu-Ray]", title: "Incepcja", format: new("bluray"), subs: "unknown", lekt: "unknown"},
 		{name: "original title in parens", in: "Incepcja (Inception) (2Blu-ray)", title: "Incepcja", alt: "Inception", format: new("bluray"), subs: "unknown", lekt: "unknown"},
 		{name: "4k wins over blu-ray", in: "Incepcja [Blu-Ray 4K]+[Blu-Ray]", title: "Incepcja", format: new("uhd"), subs: "unknown", lekt: "unknown"},
-		{name: "ceneo page prefix", in: "Film Blu-ray Kursk [Blu-Ray]", title: "Kursk", format: new("bluray"), subs: "unknown", lekt: "unknown"},
+		{name: "category prefix", in: "Film Blu-ray Kursk [Blu-Ray]", title: "Kursk", format: new("bluray"), subs: "unknown", lekt: "unknown"},
 		{name: "year and subtitles", in: "Matrix (1999) DVD napisy PL", title: "Matrix", year: new(1999), format: new("dvd"), subs: "yes", lekt: "unknown"},
 		{name: "lektor and subtitle colon kept", in: "Władca Pierścieni: Drużyna Pierścienia (DVD) Lektor PL", title: "Władca Pierścieni: Drużyna Pierścienia", format: new("dvd"), subs: "unknown", lekt: "yes"},
 		{name: "packaging", in: "Joker (Steelbook) [Blu-Ray 4K] digipack", title: "Joker", format: new("uhd"), subs: "unknown", lekt: "unknown", packaging: []string{"steelbook", "digipak"}},

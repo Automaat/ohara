@@ -8,6 +8,7 @@ import (
 	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -89,16 +90,34 @@ var sourceSeries = regexp.MustCompile(`(?m)^(ohara_source_[a-z_]+)\{[^}]*\bsourc
 // reached the test server.
 func metricSources(t *testing.T, prefix string) []string {
 	t.Helper()
-	rec := httptest.NewRecorder()
-	metrics.Handler().ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/metrics", http.NoBody))
 	var out []string
-	for _, m := range sourceSeries.FindAllStringSubmatch(rec.Body.String(), -1) {
+	for _, m := range sourceSeries.FindAllStringSubmatch(scrape(t), -1) {
 		if strings.HasPrefix(m[1], prefix) && !slices.Contains(out, m[2]) {
 			out = append(out, m[2])
 		}
 	}
 	slices.Sort(out)
 	return out
+}
+
+// scrape returns the metrics page.
+func scrape(t *testing.T) string {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	metrics.Handler().ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/metrics", http.NoBody))
+	return rec.Body.String()
+}
+
+// sample returns the value of series in a scrape and whether it is there;
+// an absent series reads as 0.
+func sample(body, series string) (float64, bool) {
+	for line := range strings.Lines(body) {
+		if rest, ok := strings.CutPrefix(line, series+" "); ok {
+			v, err := strconv.ParseFloat(strings.TrimSpace(rest), 64)
+			return v, err == nil
+		}
+	}
+	return 0, false
 }
 
 // checkSources fails unless every source with metrics is one of the
@@ -148,15 +167,26 @@ func TestValuationAsksOnlyItsSources(t *testing.T) {
 		}
 	}
 	u := newUpstreams(t)
+	const errorsSeries = `ohara_source_errors_total{source="skupszop"}`
+	const unavailableSeries = `ohara_source_requests_total{source="skupszop",status="http_503"}`
+	errorsBefore, _ := sample(scrape(t), errorsSeries)
 	r, _, err := newValuation(pool, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatalf("newValuation: %v", err)
 	}
+	built := scrape(t)
+	if got, ok := sample(built, errorsSeries); !ok || got != errorsBefore {
+		t.Fatalf("after newValuation %s = %v (exported %v), want %v before the first quote", errorsSeries, got, ok, errorsBefore)
+	}
+	unavailableBefore, _ := sample(built, unavailableSeries)
 	if _, err := r.Run(ctx); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if got, paths := u.asked(); !slices.Equal(got, []string{"olx", "skupszop"}) {
 		t.Fatalf("asked %v (paths %v), want olx and skupszop only", got, paths)
+	}
+	if got, _ := sample(scrape(t), unavailableSeries); got != unavailableBefore+1 {
+		t.Fatalf("%s = %v after the run, want %v: the quote must count once as http_503", unavailableSeries, got, unavailableBefore+1)
 	}
 	checkSources(t)
 }

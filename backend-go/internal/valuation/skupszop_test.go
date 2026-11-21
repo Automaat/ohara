@@ -2,6 +2,7 @@ package valuation
 
 import (
 	"context"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -21,6 +22,8 @@ type fakeShop struct {
 	empty   []byte
 	status  int
 	noToken bool
+	huge    int
+	badGzip int
 
 	mu       sync.Mutex
 	added    map[string]bool
@@ -50,6 +53,17 @@ func (f *fakeShop) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if f.status != 0 {
 		w.WriteHeader(f.status)
+		return
+	}
+	if f.badGzip != 0 {
+		w.Header().Set("Content-Encoding", "gzip")
+		w.WriteHeader(f.badGzip)
+		_, _ = w.Write([]byte("this page is plain text, not gzip"))
+		return
+	}
+	if f.huge != 0 {
+		w.WriteHeader(f.huge)
+		_, _ = w.Write(make([]byte, maxShopReply+1))
 		return
 	}
 	f.mu.Lock()
@@ -105,53 +119,98 @@ func TestSkupSzopQuote(t *testing.T) {
 		name    string
 		isbn    string
 		setup   func(*fakeShop)
+		down    bool
 		want    Quote
 		wantErr string
+		status  string
 	}{
 		{
-			name: "offer from the cart",
-			isbn: "9788308074770",
-			want: Quote{Offered: true, Cents: 732, Title: "Droga do siebie. O poczuciu wartości"},
+			name:   "offer from the cart",
+			isbn:   "9788308074770",
+			want:   Quote{Offered: true, Cents: 732, Title: "Droga do siebie. O poczuciu wartości"},
+			status: "ok",
 		},
 		{
-			name: "second cart row",
-			isbn: "9788308073209",
-			want: Quote{Offered: true, Cents: 537, Title: "Katedra"},
+			name:   "second cart row",
+			isbn:   "9788308073209",
+			want:   Quote{Offered: true, Cents: 537, Title: "Katedra"},
+			status: "ok",
 		},
 		{
-			name:  "shop does not buy the book",
-			isbn:  "9788375780635",
-			setup: func(f *fakeShop) { f.reply = string(notInterested) },
-			want:  Quote{},
+			name:   "shop does not buy the book",
+			isbn:   "9788375780635",
+			setup:  func(f *fakeShop) { f.reply = string(notInterested) },
+			want:   Quote{},
+			status: "ok",
 		},
 		{
 			name:    "other shop message is an error",
 			isbn:    "9788375780635",
 			setup:   func(f *fakeShop) { f.reply = `{"response":"<div>Niepoprawny numer ISBN</div>"}` },
 			wantErr: "skupszop: add 9788375780635: Niepoprawny numer ISBN",
+			status:  "parse_error",
 		},
 		{
 			name:    "added ISBN missing from the cart",
 			isbn:    "9780000000002",
 			wantErr: "skupszop: cart has no offer for 9780000000002",
+			status:  "parse_error",
 		},
 		{
 			name:    "sell page without a token",
 			isbn:    "9788308074770",
 			setup:   func(f *fakeShop) { f.noToken = true },
 			wantErr: "skupszop: sell page has no CSRF token",
+			status:  "parse_error",
 		},
 		{
 			name:    "shop down",
 			isbn:    "9788308074770",
 			setup:   func(f *fakeShop) { f.status = http.StatusServiceUnavailable },
 			wantErr: "skupszop: sell page: status 503",
+			status:  "http_503",
+		},
+		{
+			name:    "shop down with a page over the cap",
+			isbn:    "9788308074770",
+			setup:   func(f *fakeShop) { f.huge = http.StatusServiceUnavailable },
+			wantErr: "skupszop: sell page: response too large",
+			status:  "http_503",
+		},
+		{
+			name:    "sell page over the cap",
+			isbn:    "9788308074770",
+			setup:   func(f *fakeShop) { f.huge = http.StatusOK },
+			wantErr: "skupszop: sell page: response too large",
+			status:  "parse_error",
+		},
+		{
+			name:    "shop down with an unreadable page",
+			isbn:    "9788308074770",
+			setup:   func(f *fakeShop) { f.badGzip = http.StatusServiceUnavailable },
+			wantErr: "skupszop: sell page: gzip: invalid header",
+			status:  "http_503",
+		},
+		{
+			name:    "sell page unreadable",
+			isbn:    "9788308074770",
+			setup:   func(f *fakeShop) { f.badGzip = http.StatusOK },
+			wantErr: "skupszop: sell page: gzip: invalid header",
+			status:  "error",
+		},
+		{
+			name:    "shop unreachable",
+			isbn:    "9788308074770",
+			down:    true,
+			wantErr: "skupszop: sell page: ",
+			status:  "error",
 		},
 		{
 			name:    "undecodable reply",
 			isbn:    "9788308074770",
 			setup:   func(f *fakeShop) { f.reply = `<html>` },
 			wantErr: "skupszop: add 9788308074770: decode:",
+			status:  "parse_error",
 		},
 	}
 	for _, tt := range tests {
@@ -162,8 +221,13 @@ func TestSkupSzopQuote(t *testing.T) {
 			}
 			srv := httptest.NewServer(shop)
 			t.Cleanup(srv.Close)
+			if tt.down {
+				srv.Close()
+			}
 			s := SkupSzop{Client: srv.Client(), BaseURL: srv.URL + "/"}
+			before := scrape(t)
 			got, err := s.Quote(context.Background(), tt.isbn)
+			checkQuoteCounted(t, before, scrape(t), tt.status, got.Offered)
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("Quote err = %v, want %q", err, tt.wantErr)
@@ -179,6 +243,67 @@ func TestSkupSzopQuote(t *testing.T) {
 			}
 		})
 	}
+}
+
+// checkQuoteCounted fails unless the scrape after one quote counts it once
+// under status, with every other skupszop series as the scrape before it
+// had them but for the errors a failure adds, the last success an ok moves
+// and the results an ok sets.
+func checkQuoteCounted(t *testing.T, before, after, status string, offered bool) {
+	t.Helper()
+	delta := func(series string) float64 {
+		return metricValue(after, series) - metricValue(before, series)
+	}
+	for _, s := range []string{"ok", "http_503", "error", "parse_error"} {
+		want := 0.0
+		if s == status {
+			want = 1
+		}
+		series := `ohara_source_requests_total{source="skupszop",status="` + s + `"}`
+		if got := delta(series); got != want {
+			t.Errorf("%s moved by %v, want %v", series, got, want)
+		}
+	}
+	wantErrors, wantParse := 1.0, 0.0
+	if status == "ok" {
+		wantErrors = 0
+	}
+	if status == "parse_error" {
+		wantParse = 1
+	}
+	if got := delta(`ohara_source_errors_total{source="skupszop"}`); got != wantErrors {
+		t.Errorf("errors moved by %v, want %v", got, wantErrors)
+	}
+	if got := delta(`ohara_source_parse_errors_total{source="skupszop"}`); got != wantParse {
+		t.Errorf("parse errors moved by %v, want %v", got, wantParse)
+	}
+	success := `ohara_source_last_success_timestamp_seconds{source="skupszop"}`
+	if moved := metricValue(after, success) != metricValue(before, success); moved != (status == "ok") {
+		t.Errorf("last success moved = %v for status %s", moved, status)
+	}
+	if status == "ok" {
+		want := 0.0
+		if offered {
+			want = 1
+		}
+		if got := metricValue(after, `ohara_source_results{source="skupszop"}`); got != want {
+			t.Errorf("results = %v, want %v", got, want)
+		}
+	}
+}
+
+// metricValue returns the value of series in a scrape, 0 when it is absent.
+func metricValue(body, series string) float64 {
+	for line := range strings.Lines(body) {
+		if rest, ok := strings.CutPrefix(line, series+" "); ok {
+			v, err := strconv.ParseFloat(strings.TrimSpace(rest), 64)
+			if err != nil {
+				return math.NaN()
+			}
+			return v
+		}
+	}
+	return 0
 }
 
 func TestSkupSzopSessionsAreFresh(t *testing.T) {

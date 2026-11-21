@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"os"
 	"slices"
 	"strconv"
@@ -1011,10 +1012,12 @@ func TestRunKeepsTheRefusalBeyondTheErrorCap(t *testing.T) {
 	}
 }
 
-// requestLog keeps when each site was asked.
+// requestLog keeps when each site was asked and how many requests a fake
+// site received.
 type requestLog struct {
-	mu    sync.Mutex
-	times map[string][]time.Time
+	mu       sync.Mutex
+	times    map[string][]time.Time
+	received map[string]int
 }
 
 func (l *requestLog) add(site string) {
@@ -1026,10 +1029,19 @@ func (l *requestLog) add(site string) {
 	l.times[site] = append(l.times[site], time.Now())
 }
 
+func (l *requestLog) receive(site string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.received == nil {
+		l.received = map[string]int{}
+	}
+	l.received[site]++
+}
+
 func (l *requestLog) count(site string) int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return len(l.times[site])
+	return l.received[site]
 }
 
 // timedBuyBack declines every book and logs when it was asked.
@@ -1044,9 +1056,9 @@ func (b *timedBuyBack) Quote(context.Context, string) (Quote, error) {
 
 const runDelay = 200 * time.Millisecond
 
-// olxSite is a fake OLX that answers with the deals fixture and logs when
-// each request arrived. Requests whose query is held get no answer until
-// the test ends; the first of them signals held.
+// olxSite is a fake OLX that answers with the deals fixture and counts
+// the requests it received. Requests whose query is held get no answer
+// until the test ends; the first of them signals held.
 func olxSite(t *testing.T, log *requestLog, heldQuery string) (string, <-chan struct{}) {
 	t.Helper()
 	body, err := os.ReadFile("../deals/testdata/olx.json")
@@ -1055,7 +1067,7 @@ func olxSite(t *testing.T, log *requestLog, heldQuery string) (string, <-chan st
 	}
 	held := make(chan struct{}, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log.add(SourceOLX)
+		log.receive(SourceOLX)
 		if heldQuery != "" && strings.Contains(strings.ToLower(r.URL.Query().Get("query")), heldQuery) {
 			select {
 			case held <- struct{}{}:
@@ -1072,13 +1084,13 @@ func olxSite(t *testing.T, log *requestLog, heldQuery string) (string, <-chan st
 
 // pacedRuns builds a hunt and a valuation that ask OLX at olxURL through
 // one pacer in lanes of their own, as cmd/api does, with runDelay between
-// their own requests.
+// their own requests. log gets the time each OLX request was sent.
 func pacedRuns(pool *pgxpool.Pool, olxURL string, log *requestLog) (*deals.Hunter, *Runner) {
 	logger := slog.New(slog.DiscardHandler)
 	pacer := deals.NewPacer(runDelay / 2)
 	client := func() *http.Client {
 		c := deals.NewHTTPClient()
-		c.Transport = pacer.Lane().Transport(nil)
+		c.Transport = pacer.Lane().Transport(sentLog{log: log})
 		return c
 	}
 	hunter := deals.NewHunter(deals.NewStore(pool), []deals.Source{
@@ -1087,6 +1099,18 @@ func pacedRuns(pool *pgxpool.Pool, olxURL string, log *requestLog) (*deals.Hunte
 	runner := NewRunner(NewStore(pool), []deals.Source{deals.OLX{Client: client(), BaseURL: olxURL}},
 		[]BuyBack{&timedBuyBack{log: log}}, nil, Config{Delay: runDelay, Window: 90 * 24 * time.Hour}, logger)
 	return hunter, runner
+}
+
+// sentLog logs an OLX request once it is written, the moment the pacer
+// spaces; the fake site's handler starts a varying time later.
+type sentLog struct{ log *requestLog }
+
+func (s sentLog) RoundTrip(r *http.Request) (*http.Response, error) {
+	var once sync.Once
+	trace := &httptrace.ClientTrace{WroteRequest: func(httptrace.WroteRequestInfo) {
+		once.Do(func() { s.log.add(SourceOLX) })
+	}}
+	return http.DefaultTransport.RoundTrip(r.WithContext(httptrace.WithClientTrace(r.Context(), trace)))
 }
 
 // timedPepper is an empty feed that logs when it was asked.

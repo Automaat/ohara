@@ -844,41 +844,72 @@ func TestRunTriesAFailedAlertOncePerRun(t *testing.T) {
 	}
 }
 
-// slowNotifier takes delay to deliver each message, as a slow Telegram
-// answer does.
+// fakeClock moves only when a test advances it, so the database work
+// between two messages takes no time on it.
+type fakeClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *fakeClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *fakeClock) advance(d time.Duration) {
+	c.mu.Lock()
+	c.t = c.t.Add(d)
+	c.mu.Unlock()
+}
+
+func newFakeClock() *fakeClock {
+	return &fakeClock{t: time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)}
+}
+
+// useClock makes h read clock and its sleeps advance clock instead of
+// waiting.
+func useClock(h *Hunter, clock *fakeClock) {
+	h.now = clock.now
+	h.sleep = func(ctx context.Context, d time.Duration) error {
+		clock.advance(d)
+		return ctx.Err()
+	}
+}
+
+// slowNotifier takes delay on clock to deliver each message, as a slow
+// Telegram answer does, and keeps when each message started.
 type slowNotifier struct {
 	fakeNotifier
+	clock *fakeClock
 	delay time.Duration
+
+	startMu sync.Mutex
+	starts  []time.Time
 }
 
 func (n *slowNotifier) Send(ctx context.Context, text string) error {
-	time.Sleep(n.delay)
+	n.startMu.Lock()
+	n.starts = append(n.starts, n.clock.now())
+	n.startMu.Unlock()
+	n.clock.advance(n.delay)
 	return n.fakeNotifier.Send(ctx, text)
 }
 
-// recordWaits makes h's sleeps return at once and keeps their lengths.
-func recordWaits(h *Hunter) func() []time.Duration {
-	var mu sync.Mutex
-	var waits []time.Duration
-	h.sleep = func(ctx context.Context, d time.Duration) error {
-		mu.Lock()
-		waits = append(waits, d)
-		mu.Unlock()
-		return ctx.Err()
+// checkPacedFromReturn fails t unless the second message started a full
+// telegramPause, and at least Telegram's one second, after the first
+// message returned, not after it started.
+func checkPacedFromReturn(t *testing.T, n *slowNotifier) {
+	t.Helper()
+	n.startMu.Lock()
+	starts := append([]time.Time(nil), n.starts...)
+	n.startMu.Unlock()
+	if len(starts) != 2 {
+		t.Fatalf("sent %d messages, want 2", len(starts))
 	}
-	return func() []time.Duration {
-		mu.Lock()
-		defer mu.Unlock()
-		return append([]time.Duration(nil), waits...)
+	if gap := starts[1].Sub(starts[0]) - n.delay; gap < time.Second || gap > telegramPause {
+		t.Fatalf("second message started %v after the first returned, want telegramPause, at least 1s", gap)
 	}
-}
-
-// pacedFromReturn reports whether a wait began a full telegramPause after a
-// send that took delay returned, not after it started.
-func pacedFromReturn(waits []time.Duration, delay time.Duration) bool {
-	return slices.ContainsFunc(waits, func(d time.Duration) bool {
-		return d > telegramPause-delay/2 && d <= telegramPause
-	})
 }
 
 func TestRunAlertsOnceForAListingInTwoAnswersAndPacesMessages(t *testing.T) {
@@ -889,10 +920,10 @@ func TestRunAlertsOnceForAListingInTwoAnswersAndPacesMessages(t *testing.T) {
 	other := &fakeSource{name: "other", perQuery: true, listings: []Listing{{
 		Source: "other", ExternalID: "2", Title: "Blade Runner Blu-ray PL", URL: "https://example.com/2", PriceCents: 4500,
 	}}}
-	const delay = 200 * time.Millisecond
-	notifier := &slowNotifier{delay: delay}
+	clock := newFakeClock()
+	notifier := &slowNotifier{clock: clock, delay: 200 * time.Millisecond}
 	h := newTestHunter(pool, notifier, olx, other)
-	waits := recordWaits(h)
+	useClock(h, clock)
 	res := mustRun(t, h)
 	if len(olx.queries) != 2 || res.Alerts != 2 || res.Sent != 2 {
 		t.Fatalf("run = %+v, olx asked %q", res, olx.queries)
@@ -900,9 +931,7 @@ func TestRunAlertsOnceForAListingInTwoAnswersAndPacesMessages(t *testing.T) {
 	if got := len(notifier.messages()); got != 2 {
 		t.Fatalf("sent %d messages, want one per listing", got)
 	}
-	if !pacedFromReturn(waits(), delay) {
-		t.Fatalf("waits = %v, want about telegramPause after the first send returned", waits())
-	}
+	checkPacedFromReturn(t, notifier)
 }
 
 func TestRunPacesMessagesAcrossRuns(t *testing.T) {
@@ -911,10 +940,10 @@ func TestRunPacesMessagesAcrossRuns(t *testing.T) {
 	olx := &fakeSource{name: "olx", perQuery: true, listings: []Listing{
 		{Source: "olx", ExternalID: "1", Title: "Blade Runner Blu-ray", URL: "https://www.olx.pl/d/oferta/z-ID1.html", PriceCents: 4000},
 	}}
-	const delay = 200 * time.Millisecond
-	notifier := &slowNotifier{delay: delay}
+	clock := newFakeClock()
+	notifier := &slowNotifier{clock: clock, delay: 200 * time.Millisecond}
 	h := newTestHunter(pool, notifier, olx)
-	waits := recordWaits(h)
+	useClock(h, clock)
 	if res := mustRun(t, h); res.Sent != 1 {
 		t.Fatalf("first run = %+v", res)
 	}
@@ -922,9 +951,7 @@ func TestRunPacesMessagesAcrossRuns(t *testing.T) {
 	if res := mustRun(t, h); res.Sent != 1 {
 		t.Fatalf("second run = %+v", res)
 	}
-	if !pacedFromReturn(waits(), delay) {
-		t.Fatalf("waits = %v, want about telegramPause before the second run's message", waits())
-	}
+	checkPacedFromReturn(t, notifier)
 }
 
 func TestRunRetriesAnAlertOnlyAtItsRefreshedPrice(t *testing.T) {

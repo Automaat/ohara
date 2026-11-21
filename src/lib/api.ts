@@ -53,17 +53,49 @@ function messageFor(status: number, body: ErrorBody): string {
 	return `Serwer zwrócił błąd ${status}.`;
 }
 
+/** How long a request may go unanswered before it fails as no answer: above the server's own
+ * bounds for a normal answer (10 seconds per lookup provider, 8 seconds per search source) and
+ * below its 30-second request timeout. Weak signal can keep a connection up while answers stop. */
+export const requestDeadlineMs = 20_000;
+
+type Method = 'GET' | 'POST' | 'PUT' | 'DELETE';
+
 /**
  * Sends JSON or a binary upload to the API and decodes the response; 204 yields undefined. The
  * API never redirects, so a redirect is the sign-in turning the request away: followed, one to
  * another origin would fail as if the server never answered. A response whose body breaks off
- * counts as no answer: the connection was lost, whatever the status said.
+ * counts as no answer: the connection was lost, whatever the status said. A request without a
+ * whole answer after deadlineMs is aborted and fails as no answer (status 0), like a lost
+ * connection: the server may still have done what it asked.
  */
 export async function request<T>(
 	fetchFn: typeof fetch,
-	method: 'GET' | 'POST' | 'PUT' | 'DELETE',
+	method: Method,
 	path: string,
-	body?: unknown
+	body?: unknown,
+	deadlineMs = requestDeadlineMs
+): Promise<T> {
+	const abort = new AbortController();
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const expired = new Promise<never>((_resolve, reject) => {
+		timer = setTimeout(() => {
+			abort.abort();
+			reject(new ApiError(noAnswerMessage, 0));
+		}, deadlineMs);
+	});
+	try {
+		return await Promise.race([exchange<T>(fetchFn, method, path, body, abort.signal), expired]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+async function exchange<T>(
+	fetchFn: typeof fetch,
+	method: Method,
+	path: string,
+	body: unknown,
+	signal: AbortSignal
 ): Promise<T> {
 	let res: Response;
 	const binary = body instanceof Blob;
@@ -78,7 +110,8 @@ export async function request<T>(
 							'content-type': binary ? 'application/octet-stream' : 'application/json'
 						},
 			body: binary ? body : JSON.stringify(body),
-			redirect: 'manual'
+			redirect: 'manual',
+			signal
 		});
 	} catch {
 		throw new ApiError(noAnswerMessage, 0);

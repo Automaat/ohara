@@ -1,12 +1,7 @@
 <script lang="ts">
 	import { Button, Modal } from '@smykla-skalski/sui';
 	import { errorMessage, request } from '#lib/api.js';
-	import {
-		coverDeadlineMs,
-		photoProblem,
-		withDeadline,
-		type CoverUndo
-	} from '#lib/edition-cover.js';
+	import { coverDeadlineMs, photoProblem, type CoverUndo } from '#lib/edition-cover.js';
 
 	let {
 		open = $bindable(false),
@@ -37,10 +32,11 @@
 		failure = undefined;
 		try {
 			await request(
-				withDeadline(fetch, coverDeadlineMs),
+				fetch,
 				photo ? 'PUT' : 'DELETE',
 				`/api/editions/${editionID}/cover`,
-				photo
+				photo,
+				coverDeadlineMs
 			);
 		} catch (err) {
 			failure = errorMessage(err);

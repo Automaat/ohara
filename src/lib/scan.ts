@@ -4,7 +4,10 @@ import {
 	copyPayload,
 	displayName,
 	formatFits,
+	bindingLabels,
 	formatLabels,
+	packagingLabels,
+	triStateLabels,
 	type AcquiredAs,
 	type Binding,
 	type Condition,
@@ -472,6 +475,15 @@ function fitAuthors(authors: readonly string[] | null | undefined): string[] {
 	return fit.length <= maxAuthors && fit.every((a) => fitText(a) !== null) ? fit : [];
 }
 
+/** A value from labels' keys, as the API's enum check takes it; none for another. */
+function fitEnum<K extends string>(
+	labels: Record<K, string>,
+	value: string | null | undefined
+): K | null {
+	const v = value == null ? '' : trimSpace(value);
+	return Object.hasOwn(labels, v) ? (v as K) : null;
+}
+
 /**
  * An HTTP or HTTPS URL with a host and no credentials, in a stricter form than the API's check
  * takes: a plain host name, an optional port and RFC 3986 characters with well-formed escapes.
@@ -536,10 +548,13 @@ export function scanEditionPayload(
 			publisher: fitText(e?.publisher) ?? '',
 			year: fitYear(e?.year),
 			format: (movie || music) && f.format ? f.format : null,
-			pl_subtitles: movie ? (e?.pl_subtitles ?? 'unknown') : 'unknown',
-			pl_voiceover: movie ? (e?.pl_voiceover ?? 'unknown') : 'unknown',
-			packaging: movie ? [...f.packaging] : [],
-			binding: f.kind === 'book' && f.binding ? f.binding : null,
+			pl_subtitles: (movie && fitEnum(triStateLabels, e?.pl_subtitles)) || 'unknown',
+			pl_voiceover: (movie && fitEnum(triStateLabels, e?.pl_voiceover)) || 'unknown',
+			// The form takes these from the pick without a choice the user made.
+			packaging: movie
+				? f.packaging.flatMap((p) => fitEnum<Packaging>(packagingLabels, p) ?? [])
+				: [],
+			binding: f.kind === 'book' ? fitEnum<Binding>(bindingLabels, f.binding) : null,
 			// The release is one pressing on its own medium; another or an unknown medium is not it.
 			discogs_release_id: music && e?.format === f.format ? fitID(e?.discogs_release_id) : null,
 			cover_url: fitCoverURL(selected?.cover_url),

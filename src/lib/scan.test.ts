@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ApiError } from './api';
 import { deleteQueueEntry } from './queue-deletes';
-import type { EditionDetail, Format } from './collection';
+import type { Binding, EditionDetail, Format, Packaging } from './collection';
 import {
 	FormRejected,
 	LatestLoad,
@@ -609,6 +609,21 @@ describe('scan payloads', () => {
 				discogs_release_id: null,
 				cover_url: undefined
 			}
+		});
+		const odd = {
+			...movie,
+			edition: { ...movie.edition, pl_subtitles: 'maybe', pl_voiceover: ' yes ' }
+		} as unknown as Candidate;
+		const oddForm = form({ packaging: ['steelbook', 'box'] as unknown as Packaging[] });
+		expect(scanEditionPayload(oddForm, odd, '', 1)).toMatchObject({
+			value: { pl_subtitles: 'unknown', pl_voiceover: 'yes', packaging: ['steelbook'] }
+		});
+		const oddBook = form({ kind: 'book', name: 'Lalka', format: '', binding: 'spiral' as Binding });
+		expect(scanEditionPayload(oddBook, book, '', 1)).toMatchObject({ value: { binding: null } });
+		expect(
+			scanEditionPayload({ ...oddBook, binding: 'constructor' as Binding }, book, '', 1)
+		).toMatchObject({
+			value: { binding: null }
 		});
 		// Go trims U+0085 as space, so a name of it alone is empty there.
 		expect(scanTitlePayload(form({ name: '\u0085 ' }), movie)).toMatchObject({ ok: false });

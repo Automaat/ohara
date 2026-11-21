@@ -658,6 +658,13 @@ async function titleFor(
 	}
 }
 
+/** Throws FormRejected for a new item's form the server would refuse, before any request. */
+export function checkScan(target: Extract<SaveTarget, { kind: 'new' }>, f: QuickForm): void {
+	must(scanTitlePayload(f, target.candidate));
+	must(scanEditionPayload(f, target.candidate, target.barcode, 0));
+	must(scanCopyPayload(f, 0, ''));
+}
+
 /**
  * Saves a quick confirm as an owned or wishlist copy. A new barcode first gets its title, reusing
  * the one with the candidate's TMDB ID, then its edition; when another save created that edition
@@ -702,9 +709,8 @@ export async function saveScan(
 		return saved(e.title, e, copy);
 	}
 
+	checkScan(target, f);
 	const titleBody = must(scanTitlePayload(f, target.candidate));
-	must(scanEditionPayload(f, target.candidate, target.barcode, 0));
-	must(scanCopyPayload(f, 0, requestKey));
 
 	const title = await titleFor(fetchFn, titleBody, requestKey, made);
 	let edition: Edition;

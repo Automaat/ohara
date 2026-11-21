@@ -12,6 +12,7 @@ import {
 	FormRejected,
 	LatestLoad,
 	checkDigitMatches,
+	checkScan,
 	cleanBarcode,
 	discardRequest,
 	emptySticky,
@@ -371,17 +372,21 @@ export class ScanFlow {
 		const next = wedgeBarcodeIn(this.form.price);
 		if (next) this.form.price = '';
 		const f = $state.snapshot(this.form);
+		// Taken with the form: a pick made while an earlier attempt is removed belongs to the next save.
+		const target = $state.snapshot(item.target);
 		this.saving = true;
 		this.issue = null;
 		try {
-			if (!item.barcode) {
-				const sending = sentFor(item.target, f);
+			if (!item.barcode && target.kind === 'new') {
+				// A form the server would refuse must not cost the earlier attempt its rows.
+				checkScan(target, f);
+				const sending = sentFor(target, f);
 				if (item.sent !== null && item.sent !== sending && !(await this.#discard(item))) {
 					throw new FormRejected('', unsettled);
 				}
 				item.sent = sending;
 			}
-			const saved = await saveScan(this.#fetch, item.target, f, item.key, item.made);
+			const saved = await saveScan(this.#fetch, target, f, item.key, item.made);
 			const kept = { ...f, status: saved.copy.status ?? f.status };
 			if (kept.status === 'owned') {
 				visit.date = kept.purchased_on;

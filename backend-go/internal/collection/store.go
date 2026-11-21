@@ -59,6 +59,8 @@ func mapErr(err, notFound error, op string) error {
 		return ErrDuplicateBarcode
 	case code == pgUniqueViolation && constraint == "title_tmdb_id_key":
 		return ErrDuplicateTMDB
+	case code == pgUniqueViolation && constraint == "discarded_request_key":
+		return ErrRequestDiscarded
 	}
 	return fmt.Errorf("%s: %w", op, err)
 }
@@ -523,14 +525,24 @@ func (s *Store) DeleteCopy(ctx context.Context, id int64) error {
 }
 
 // DiscardRequest removes what the creates sent with key made, for an add
-// that failed: its copy, then its edition while it has no barcode (the
+// that failed: its copy unless someone edited it, then its edition while it has no barcode (the
 // scanner's undo puts those back in the queue), no other copy and no change
 // by a person, then its title while it has no edition and no change by a
-// person. Rows someone else uses or changed stay. An unknown key changes
-// nothing.
+// person. Rows someone else uses or changed stay. The key is recorded, so a
+// create that arrives with it later is refused (ErrRequestDiscarded).
 func (s *Store) DiscardRequest(ctx context.Context, key string) error {
 	return s.inTx(ctx, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `DELETE FROM copy WHERE request_key = $1`, key); err != nil {
+		// The same lock the creates take: a create with this key either committed
+		// before, and its rows are seen below, or waits and finds the key discarded.
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('request:' || $1, 0))`, key); err != nil {
+			return fmt.Errorf("lock request key: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO discarded_request (request_key) VALUES ($1)
+			ON CONFLICT DO NOTHING`, key); err != nil {
+			return fmt.Errorf("record discarded key: %w", err)
+		}
+		// A copy someone edited since the add made it is theirs now.
+		if _, err := tx.Exec(ctx, `DELETE FROM copy WHERE request_key = $1 AND updated_at = created_at`, key); err != nil {
 			return fmt.Errorf("discard copy: %w", err)
 		}
 		err := discardUnused(ctx, tx, key,

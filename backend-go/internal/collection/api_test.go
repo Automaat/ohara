@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -840,6 +841,25 @@ func TestDiscardRequestRemovesWhatAFailedAddMade(t *testing.T) {
 	if !exists(path("titles", renamed.ID)) {
 		t.Fatal("a title a person edited must stay")
 	}
+
+	title, ed, cp = add("copy-edited", obj{})
+	a.mustDo(http.MethodPut, path("copies", cp), obj{"edition_id": ed, "status": "owned", "shop": "z innej sesji"}, nil, http.StatusOK)
+	a.mustDo(http.MethodDelete, "/api/requests/copy-edited", nil, nil, http.StatusNoContent)
+	if !exists(path("copies", cp)) || !exists(path("editions", ed)) || !exists(path("titles", title)) {
+		t.Fatal("a copy a person edited must stay, with its edition and title")
+	}
+
+	title, ed, cp = add("a/b c", obj{})
+	a.mustDo(http.MethodDelete, "/api/requests/"+url.PathEscape("a/b c"), nil, nil, http.StatusNoContent)
+	if exists(path("copies", cp)) || exists(path("editions", ed)) || exists(path("titles", title)) {
+		t.Fatal("an escaped key must reach the rows it made")
+	}
+
+	a.mustDo(http.MethodDelete, "/api/requests/late", nil, nil, http.StatusNoContent)
+	a.fails(http.MethodPost, "/api/titles", obj{"kind": "movie", "name": "Spóźniony", "request_key": "late"}, http.StatusConflict, "request_key")
+	a.fails(http.MethodPost, "/api/editions", obj{"title_id": reused, "format": "dvd", "request_key": "late"}, http.StatusConflict, "request_key")
+	kept := a.edition(obj{"title_id": reused, "format": "bluray"})
+	a.fails(http.MethodPost, "/api/copies", obj{"edition_id": kept, "status": "owned", "request_key": "late"}, http.StatusConflict, "request_key")
 
 	a.fails(http.MethodDelete, "/api/requests/"+strings.Repeat("k", 101), nil, http.StatusNotFound, "")
 }

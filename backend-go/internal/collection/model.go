@@ -52,6 +52,8 @@ var (
 	ErrKindLocked       = errors.New("title kind cannot change while it has editions")
 	ErrHasEditions      = errors.New("title still has editions")
 	ErrHasCopies        = errors.New("edition still has copies")
+	// ErrRequestDiscarded refuses a create whose request key a discard gave up.
+	ErrRequestDiscarded = errors.New("this add was already undone")
 )
 
 // Date is a calendar day carried as YYYY-MM-DD in JSON.

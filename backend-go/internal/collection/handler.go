@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 
@@ -70,6 +71,8 @@ func (h *Handler) writeErr(w http.ResponseWriter, op string, err error) {
 		httpx.WriteJSON(w, h.logger, http.StatusConflict, httpx.Error{Error: err.Error(), Field: "barcode"})
 	case errors.Is(err, ErrDuplicateTMDB):
 		httpx.WriteJSON(w, h.logger, http.StatusConflict, httpx.Error{Error: err.Error(), Field: "tmdb_id"})
+	case errors.Is(err, ErrRequestDiscarded):
+		httpx.WriteJSON(w, h.logger, http.StatusConflict, httpx.Error{Error: err.Error(), Field: "request_key"})
 	case errors.Is(err, ErrKindLocked):
 		httpx.WriteJSON(w, h.logger, http.StatusConflict, httpx.Error{Error: err.Error(), Field: "kind"})
 	case errors.Is(err, ErrHasEditions), errors.Is(err, ErrHasCopies):
@@ -504,9 +507,9 @@ func (h *Handler) deleteCopy(w http.ResponseWriter, r *http.Request) {
 // discardRequest serves DELETE /api/requests/{key}: what a failed add with
 // that request key made goes, unless someone else uses or changed it.
 func (h *Handler) discardRequest(w http.ResponseWriter, r *http.Request) {
-	raw := chi.URLParam(r, "key")
+	raw, err := url.PathUnescape(chi.URLParam(r, "key"))
 	key, fe := normalizeRequestKey(&raw)
-	if fe != nil || key == nil {
+	if err != nil || fe != nil || key == nil {
 		httpx.WriteError(w, h.logger, http.StatusNotFound, "Nie ma takiego klucza.")
 		return
 	}

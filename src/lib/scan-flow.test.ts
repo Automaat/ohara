@@ -877,6 +877,33 @@ describe('ScanFlow without a barcode', () => {
 			expect(await flow.save()).toMatchObject({ saved: { titleID: 20, editionID: 43 } });
 		});
 
+		it('saves the pick shown when the save began, even if the user picks again meanwhile', async () => {
+			let release: (r: [number, unknown]) => void = () => {};
+			const held = new Promise<[number, unknown]>((resolve) => (release = resolve));
+			const s = server(routes(() => held));
+			const flow = await lostDiuna(s);
+			const saving = flow.save();
+			flow.choose();
+			flow.pick(0);
+			release([204, null]);
+			await saving;
+			const titles = s.calls.filter((c) => c.url === '/api/titles?tmdb_id=2');
+			expect(titles).toHaveLength(1);
+			const editions = s.calls.filter((c) => c.url === '/api/editions').map((c) => c.body);
+			expect(editions.at(-1)).toMatchObject({ title_id: 20, format: 'dvd' });
+		});
+
+		it('keeps what the first pick wrote when the new pick is not valid', async () => {
+			const s = server(routes([204, null]));
+			const flow = await lostDiuna(s);
+			flow.form.name = '  ';
+			const before = s.calls.length;
+			expect(await flow.save()).toBeNull();
+			expect(s.calls.length).toBe(before);
+			expect(flow.issue?.field).toBe('name');
+			expect(flow.item?.key).toBe('first');
+		});
+
 		it('retries the same pick under the same key without removing anything', async () => {
 			const s = server({
 				...routes([204, null]),

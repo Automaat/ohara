@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
-	"net/url"
 	"os"
 	"slices"
 	"strings"
@@ -31,16 +30,14 @@ func TestOpenDBWarnsOnNewerSchema(t *testing.T) {
 		t.Fatalf("newer build: %v", err)
 	}
 
-	dsn, err := url.Parse(os.Getenv("OHARA_TEST_DATABASE_URL"))
-	if err != nil {
-		t.Fatalf("OHARA_TEST_DATABASE_URL must be a URL: %v", err)
-	}
-	q := dsn.Query()
-	q.Set("search_path", pool.Config().ConnConfig.RuntimeParams["search_path"])
-	dsn.RawQuery = q.Encode()
+	// openDB gets the test database's own connection string, a URL or
+	// keyword/value pairs, and reaches the test schema through PGOPTIONS.
+	dsn := os.Getenv("OHARA_TEST_DATABASE_URL")
+	searchPath := strings.ReplaceAll(pool.Config().ConnConfig.RuntimeParams["search_path"], " ", "")
+	t.Setenv("PGOPTIONS", "-c search_path="+searchPath)
 
 	var logs bytes.Buffer
-	started, err := openDB(ctx, dsn.String(), slog.New(slog.NewTextHandler(&logs, nil)))
+	started, err := openDB(ctx, dsn, slog.New(slog.NewTextHandler(&logs, nil)))
 	if err != nil {
 		t.Fatalf("openDB on a newer schema: %v", err)
 	}
@@ -58,7 +55,7 @@ func TestOpenDBWarnsOnNewerSchema(t *testing.T) {
 		t.Fatalf("drop newer version: %v", err)
 	}
 	logs.Reset()
-	again, err := openDB(ctx, dsn.String(), slog.New(slog.NewTextHandler(&logs, nil)))
+	again, err := openDB(ctx, dsn, slog.New(slog.NewTextHandler(&logs, nil)))
 	if err != nil {
 		t.Fatalf("openDB on an up-to-date schema: %v", err)
 	}

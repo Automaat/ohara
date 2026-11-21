@@ -1003,14 +1003,16 @@ func (b *timedBuyBack) Quote(context.Context, string) (Quote, error) {
 
 const runDelay = 200 * time.Millisecond
 
-// pacedRuns builds a hunt and a valuation that share one pacer, as
-// cmd/api does, with runDelay between their own requests.
-func pacedRuns(pool *pgxpool.Pool, pacer *deals.Pacer, huntOLX, valueOLX deals.Source, log *requestLog) (*deals.Hunter, *Runner) {
+// pacedRuns builds a hunt and a valuation that share one pacer in lanes of
+// their own, as cmd/api does, with runDelay between their own requests.
+func pacedRuns(pool *pgxpool.Pool, huntOLX, valueOLX deals.Source, log *requestLog) (*deals.Hunter, *Runner) {
 	logger := slog.New(slog.DiscardHandler)
+	pacer := deals.NewPacer(runDelay / 2)
+	hunt, value := pacer.Lane(), pacer.Lane()
 	hunter := deals.NewHunter(deals.NewStore(pool), []deals.Source{
-		pacer.Source(huntOLX), pacer.Source(&timedSource{name: "pepper", log: log}),
+		hunt.Source(huntOLX), hunt.Source(&timedSource{name: "pepper", log: log}),
 	}, nil, deals.Config{Delay: runDelay, CanaryQuery: "dvd"}, logger)
-	runner := NewRunner(NewStore(pool), []deals.Source{pacer.Source(valueOLX)},
+	runner := NewRunner(NewStore(pool), []deals.Source{value.Source(valueOLX)},
 		[]BuyBack{&timedBuyBack{log: log}}, nil, Config{Delay: runDelay, Window: 90 * 24 * time.Hour}, logger)
 	return hunter, runner
 }
@@ -1020,7 +1022,7 @@ func TestOverlappingRunsSpaceRequestsToOneSite(t *testing.T) {
 	seed(t, pool)
 	log := &requestLog{}
 	found := []deals.Listing{listing("1", "Diuna DVD", 1000, used())}
-	hunter, runner := pacedRuns(pool, deals.NewPacer(runDelay/2),
+	hunter, runner := pacedRuns(pool,
 		&timedSource{name: SourceOLX, perQuery: true, listings: found, log: log},
 		&timedSource{name: SourceOLX, perQuery: true, listings: found, log: log}, log)
 
@@ -1048,18 +1050,34 @@ func TestOverlappingRunsSpaceRequestsToOneSite(t *testing.T) {
 	}
 }
 
+// heldOLX is an OLX whose first request gets no answer until the test
+// ends, and which signals started when that request arrives.
+func heldOLX(t *testing.T) (deals.Source, <-chan struct{}) {
+	t.Helper()
+	started := make(chan struct{}, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-r.Context().Done()
+	}))
+	t.Cleanup(srv.Close)
+	return deals.OLX{Client: deals.NewHTTPClient(), BaseURL: srv.URL + "/"}, started
+}
+
 func TestRunsDoNotWaitForEachOther(t *testing.T) {
 	for _, held := range []string{"valuation", "hunt"} {
 		t.Run(held+" held in an OLX request", func(t *testing.T) {
 			pool := dbtest.Migrated(t)
 			seed(t, pool)
 			log := &requestLog{}
-			blocking := blockingSource{started: make(chan struct{}, 1), release: make(chan struct{})}
-			var huntOLX, valueOLX deals.Source = blocking, &timedSource{name: SourceOLX, perQuery: true, log: log}
+			heldSource, started := heldOLX(t)
+			var huntOLX, valueOLX deals.Source = heldSource, &timedSource{name: SourceOLX, perQuery: true, log: log}
 			if held == "valuation" {
 				huntOLX, valueOLX = valueOLX, huntOLX
 			}
-			hunter, runner := pacedRuns(pool, deals.NewPacer(runDelay/2), huntOLX, valueOLX, log)
+			hunter, runner := pacedRuns(pool, huntOLX, valueOLX, log)
 			heldRun := func(ctx context.Context) error { _, err := runner.Run(ctx); return err }
 			otherRun := func(ctx context.Context) error { _, err := hunter.Run(ctx); return err }
 			if held == "hunt" {
@@ -1071,7 +1089,7 @@ func TestRunsDoNotWaitForEachOther(t *testing.T) {
 			heldCtx, stopHeld := context.WithCancel(context.Background())
 			defer stopHeld()
 			wg.Go(func() { _ = heldRun(heldCtx) })
-			<-blocking.started
+			<-started
 
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
@@ -1082,5 +1100,25 @@ func TestRunsDoNotWaitForEachOther(t *testing.T) {
 				t.Fatalf("the run beside the held %s never asked OLX", held)
 			}
 		})
+	}
+}
+
+func TestBackToBackRunsKeepTheirPacing(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	seed(t, pool)
+	log := &requestLog{}
+	src := &timedSource{name: SourceOLX, perQuery: true, log: log}
+	_, runner := pacedRuns(pool, &timedSource{name: SourceOLX, perQuery: true, log: log}, src, log)
+	runner.sleep = func(ctx context.Context, _ time.Duration) error { return ctx.Err() }
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	start := time.Now()
+	for i := range 2 {
+		if _, err := runner.Run(ctx); err != nil {
+			t.Fatalf("run %d: %v", i, err)
+		}
+	}
+	if d := time.Since(start); d >= runDelay/2 {
+		t.Fatalf("two valuations without their own pauses took %v, want them not to wait for each other's requests", d)
 	}
 }

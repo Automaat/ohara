@@ -275,8 +275,36 @@ type RecentFilter struct {
 	Sent       bool
 }
 
-// Recent returns the newest deal observations that pass f.
+// Listing rows Recent pages through: each listing with its alert's sent time and the wishlist copy
+// that matches it, the one the hunter recorded it for, else its alert's copy, while that copy is
+// still on the wishlist. allListings is every stored listing; wishedListings only those with a
+// matching copy, the only ones a filter keeps, found from the wishlist through
+// price_observation_wish_idx and deal_alert without reading the rest.
+const (
+	allListings = `SELECT o.id, o.observed_at, o.price_cents, o.source, a.sent_at, w.id AS wish_id, w.max_price_cents
+		FROM price_observation o
+		LEFT JOIN deal_alert a ON a.observation_id = o.id
+		LEFT JOIN copy w ON w.status = 'wishlist' AND w.id = coalesce(o.wishlist_copy_id, a.copy_id)`
+	wishedListings = `SELECT o.id, o.observed_at, o.price_cents, o.source, a.sent_at, w.id AS wish_id, w.max_price_cents
+		FROM copy w
+		JOIN price_observation o ON o.wishlist_copy_id = w.id
+		LEFT JOIN deal_alert a ON a.observation_id = o.id
+		WHERE w.status = 'wishlist'
+		UNION ALL
+		SELECT o.id, o.observed_at, o.price_cents, o.source, a.sent_at, w.id, w.max_price_cents
+		FROM copy w
+		JOIN deal_alert a ON a.copy_id = w.id
+		JOIN price_observation o ON o.id = a.observation_id AND o.wishlist_copy_id IS NULL
+		WHERE w.status = 'wishlist'`
+)
+
+// Recent returns the newest deal observations that pass f. It picks the page from the listing
+// rows first and reads raw and the joined edition and title only for that page.
 func (s *Store) Recent(ctx context.Context, f RecentFilter) ([]Observation, error) {
+	listings := allListings
+	if f.Matched || f.UnderLimit || f.Sent {
+		listings = wishedListings
+	}
 	rows, err := s.pool.Query(ctx, `SELECT o.id, o.source, coalesce(o.external_id, ''), o.observed_at,
 			o.price_cents, o.acquired_as, o.url, coalesce(o.raw->>'title', ''), coalesce(e.title_id, o.title_id), t.name,
 			e.id, e.format, nullif(o.raw->>'photo_url', ''),
@@ -288,17 +316,20 @@ func (s *Store) Recent(ctx context.Context, f RecentFilter) ([]Observation, erro
 			     WHEN a.attempts >= $2 THEN 'failed'
 			     ELSE 'pending' END,
 			coalesce(a.last_error, ''), coalesce(a.attempts, 0)
-		FROM price_observation o
+		FROM (
+			SELECT l.id, l.wish_id FROM (`+listings+`) l
+			WHERE l.source = ANY ($3)
+				AND (NOT $4 OR l.price_cents <= l.max_price_cents)
+				AND (NOT $5 OR l.wish_id IS NOT NULL)
+				AND (NOT $6 OR l.sent_at IS NOT NULL AND l.max_price_cents IS NOT NULL)
+			ORDER BY l.observed_at DESC, l.id DESC LIMIT $1
+		) page
+		JOIN price_observation o ON o.id = page.id
 		LEFT JOIN deal_alert a ON a.observation_id = o.id
-		LEFT JOIN copy w ON w.status = 'wishlist'
-			AND w.id = coalesce((o.raw->>'wishlist_copy_id')::bigint, a.copy_id)
+		LEFT JOIN copy w ON w.id = page.wish_id
 		LEFT JOIN edition e ON e.id = coalesce(w.edition_id, o.edition_id)
 		LEFT JOIN title t ON t.id = coalesce(e.title_id, o.title_id)
-		WHERE o.source = ANY ($3)
-			AND (NOT $4 OR o.price_cents <= w.max_price_cents)
-			AND (NOT $5 OR w.id IS NOT NULL)
-			AND (NOT $6 OR a.sent_at IS NOT NULL AND w.max_price_cents IS NOT NULL)
-		ORDER BY o.observed_at DESC, o.id DESC LIMIT $1`,
+		ORDER BY o.observed_at DESC, o.id DESC`,
 		f.Limit, MaxAttempts, sources, f.UnderLimit, f.Matched, f.Sent)
 	if err != nil {
 		return nil, fmt.Errorf("recent observations: %w", err)

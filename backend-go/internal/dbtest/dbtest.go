@@ -23,62 +23,62 @@ const extensionLockID int64 = 0x6f68617274
 // It skips the test unless OHARA_TEST_DATABASE_URL points at a disposable
 // database. pg_trgm is created in public first: extensions outlive schemas,
 // and one created inside a test schema would vanish with it.
-func Pool(t *testing.T) *pgxpool.Pool {
-	t.Helper()
+func Pool(tb testing.TB) *pgxpool.Pool {
+	tb.Helper()
 	dsn := os.Getenv("OHARA_TEST_DATABASE_URL")
 	if dsn == "" {
-		t.Skip("OHARA_TEST_DATABASE_URL not set")
+		tb.Skip("OHARA_TEST_DATABASE_URL not set")
 	}
 	ctx := context.Background()
 
 	admin, err := pgx.Connect(ctx, dsn)
 	if err != nil {
-		t.Fatalf("connect: %v", err)
+		tb.Fatalf("connect: %v", err)
 	}
-	t.Cleanup(func() { _ = admin.Close(context.Background()) })
+	tb.Cleanup(func() { _ = admin.Close(context.Background()) })
 
 	if _, err := admin.Exec(ctx, `SELECT pg_advisory_lock($1)`, extensionLockID); err != nil {
-		t.Fatalf("lock: %v", err)
+		tb.Fatalf("lock: %v", err)
 	}
 	_, err = admin.Exec(ctx, `CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA public`)
 	_, _ = admin.Exec(ctx, `SELECT pg_advisory_unlock($1)`, extensionLockID)
 	if err != nil {
-		t.Fatalf("create extension: %v", err)
+		tb.Fatalf("create extension: %v", err)
 	}
 
 	buf := make([]byte, 6)
 	_, _ = rand.Read(buf)
 	schema := "test_" + hex.EncodeToString(buf)
 	if _, err := admin.Exec(ctx, `CREATE SCHEMA `+schema); err != nil {
-		t.Fatalf("create schema: %v", err)
+		tb.Fatalf("create schema: %v", err)
 	}
-	t.Cleanup(func() {
+	tb.Cleanup(func() {
 		_, _ = admin.Exec(context.Background(), `DROP SCHEMA `+schema+` CASCADE`)
 	})
 
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
-		t.Fatalf("parse dsn: %v", err)
+		tb.Fatalf("parse dsn: %v", err)
 	}
 	cfg.ConnConfig.RuntimeParams["search_path"] = schema + ", public"
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
-		t.Fatalf("open pool: %v", err)
+		tb.Fatalf("open pool: %v", err)
 	}
-	t.Cleanup(pool.Close)
+	tb.Cleanup(pool.Close)
 	return pool
 }
 
 // Migrated is Pool with the embedded migrations applied.
-func Migrated(t *testing.T) *pgxpool.Pool {
-	t.Helper()
-	pool := Pool(t)
+func Migrated(tb testing.TB) *pgxpool.Pool {
+	tb.Helper()
+	pool := Pool(tb)
 	migrations, err := db.EmbeddedMigrations()
 	if err != nil {
-		t.Fatalf("embedded migrations: %v", err)
+		tb.Fatalf("embedded migrations: %v", err)
 	}
 	if _, err := db.Migrate(context.Background(), pool, migrations); err != nil {
-		t.Fatalf("migrate: %v", err)
+		tb.Fatalf("migrate: %v", err)
 	}
 	return pool
 }

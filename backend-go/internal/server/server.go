@@ -3,11 +3,13 @@ package server
 
 import (
 	"context"
+	"errors"
 	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/url"
+	"runtime/debug"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -49,6 +51,12 @@ type Deps struct {
 
 // New returns the router: probes, metrics, the JSON API and the frontend.
 func New(cfg Config, logger *slog.Logger, deps Deps) http.Handler {
+	return newRouter(cfg, logger, deps, requestTimeout)
+}
+
+// newRouter is New with the request timeout as a parameter, so tests can
+// shorten it.
+func newRouter(cfg Config, logger *slog.Logger, deps Deps, timeout time.Duration) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -57,9 +65,10 @@ func New(cfg Config, logger *slog.Logger, deps Deps) http.Handler {
 	r.Use(generalOptions)
 	r.Use(middleware.RequestID)
 	r.Use(requestObserver(logger, cfg.AccessLog))
-	r.Use(middleware.Recoverer)
-	r.Use(middleware.Timeout(requestTimeout))
+	r.Use(recoverer(logger))
+	r.Use(timeoutAfter(timeout, logger))
 	r.Use(crossOriginGuard(logger))
+	r.Use(jsonMethodNotAllowed(r, logger))
 
 	r.Get("/health", healthHandler(logger, deps.DB))
 	r.Handle("/metrics", metrics.Handler())
@@ -78,6 +87,131 @@ func New(cfg Config, logger *slog.Logger, deps Deps) http.Handler {
 		r.Handle("/*", web.Handler(deps.Web))
 	}
 	return r
+}
+
+// jsonMethodNotAllowed gives chi's own 405 the API's JSON error body. Only
+// chi's default handler knows which methods a path allows, including any
+// added with chi.RegisterMethod, and it writes them as Allow headers with an
+// empty body, so its answer is completed on the way out instead of replaced.
+// Only a request no route matches gets the wrapped writer; a handler keeps the
+// writer it had.
+func jsonMethodNotAllowed(routes chi.Routes, logger *slog.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			path := r.URL.RawPath
+			if path == "" {
+				path = r.URL.Path
+			}
+			if routes.Match(chi.NewRouteContext(), r.Method, path) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			next.ServeHTTP(&methodNotAllowedWriter{ResponseWriter: w, logger: logger}, r)
+		})
+	}
+}
+
+// methodNotAllowedWriter turns a 405 without a body of its own into the JSON
+// error and drops the empty body that follows.
+type methodNotAllowedWriter struct {
+	http.ResponseWriter
+	logger   *slog.Logger
+	wrote    bool
+	replaced bool
+}
+
+func (m *methodNotAllowedWriter) WriteHeader(code int) {
+	if !m.wrote && code == http.StatusMethodNotAllowed && m.Header().Get("Content-Type") == "" {
+		m.wrote, m.replaced = true, true
+		httpx.WriteError(m.ResponseWriter, m.logger, code, "method not allowed")
+		return
+	}
+	m.wrote = true
+	m.ResponseWriter.WriteHeader(code)
+}
+
+func (m *methodNotAllowedWriter) Write(b []byte) (int, error) {
+	if m.replaced {
+		return len(b), nil
+	}
+	m.wrote = true
+	return m.ResponseWriter.Write(b)
+}
+
+// Unwrap lets http.ResponseController reach the underlying writer.
+func (m *methodNotAllowedWriter) Unwrap() http.ResponseWriter { return m.ResponseWriter }
+
+// recoverer turns a handler panic into a logged error, with its stack, and a
+// JSON 500 when nothing was written yet. Like chi's Recoverer it lets
+// http.ErrAbortHandler itself through and sends no 500 on a protocol upgrade.
+func recoverer(logger *slog.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+			defer func() {
+				rvr := recover()
+				if rvr == nil {
+					return
+				}
+				if isAbortHandler(rvr) {
+					panic(rvr)
+				}
+				logger.Error("handler panic",
+					"request_id", middleware.GetReqID(r.Context()),
+					"method", r.Method,
+					"path", r.URL.Path,
+					"panic", rvr,
+					"stack", string(debug.Stack()),
+				)
+				if ww.Status() == 0 && r.Header.Get("Connection") != "Upgrade" {
+					writeFallback(ww, logger, http.StatusInternalServerError, "internal server error")
+				}
+			}()
+			next.ServeHTTP(ww, r)
+		})
+	}
+}
+
+// timeoutAfter cancels the request context after d. A handler that returns
+// past the deadline without writing gets a JSON 504; one that already wrote
+// keeps its answer.
+func timeoutAfter(d time.Duration, logger *slog.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx, cancel := context.WithTimeout(r.Context(), d)
+			ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+			defer func() {
+				cancel()
+				if errors.Is(ctx.Err(), context.DeadlineExceeded) && ww.Status() == 0 {
+					writeFallback(ww, logger, http.StatusGatewayTimeout, "gateway timeout")
+				}
+			}()
+			next.ServeHTTP(ww, r.WithContext(ctx))
+		})
+	}
+}
+
+// isAbortHandler reports a panic with http.ErrAbortHandler itself, the value
+// net/http and chi's Recoverer compare against; a wrapped one is an ordinary
+// panic. Both sides are compared as panic values, so a value of another
+// dynamic type, comparable or not, is simply unequal.
+func isAbortHandler(rvr any) bool {
+	return rvr == any(http.ErrAbortHandler)
+}
+
+// bodyHeaders describe a handler's own body; the fallback answer drops them
+// so a length, encoding or validator set for a body never sent does not
+// describe the JSON error instead.
+var bodyHeaders = []string{
+	"Content-Length", "Content-Encoding", "Content-Range", "Content-Disposition", "ETag", "Last-Modified",
+}
+
+// writeFallback sends the error answer for a handler that wrote nothing.
+func writeFallback(w http.ResponseWriter, logger *slog.Logger, code int, msg string) {
+	for _, h := range bodyHeaders {
+		w.Header().Del(h)
+	}
+	httpx.WriteError(w, logger, code, msg)
 }
 
 // permissionsPolicy lets only Ohara's own pages open the camera, for the

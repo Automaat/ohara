@@ -66,6 +66,9 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   suppression directives; fix the root cause.
 - Errors are `{"error": "...", "field": "..."}`: 422 for validation (field
   names the input), 409 for conflicts, 404 for a missing path resource.
+  The router's own answers share the shape: 405 for a wrong method (with
+  `Allow`), 500 for a handler panic (logged with its stack) and 504 for a
+  request past the 30 s timeout whose handler wrote nothing.
 - Money is integer grosze (`price_cents`). Barcodes are stored normalized
   (`barcode.Normalize`: EAN-8, EAN-13 or GTIN-14; a UPC-A becomes its
   EAN-13 with a leading 0, ISBN-10 becomes ISBN-13), one edition per barcode.
@@ -106,7 +109,10 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   `metrics.InitSource` so its counters exist before the first failure.
   When some of its sources fail but others answered, it returns a
   `*lookup.PartialError`: the lookup reports the failure next to the
-  candidates and does not cache the answer.
+  candidates and does not cache the answer. The movie chain waits at most
+  4 s for each name source and 6 s for all of them, fallbacks included,
+  so a hanging catalog fails as that source and leaves TMDB the rest of
+  the 10 s lookup. An Allegro token refresh runs on past that wait.
 - Music is the kind `music`: an album title whose `authors` are its credited
   artists, editions with a `cd`, `vinyl` or `cassette` format (required, like
   a movie's `dvd`/`bluray`/`uhd`) and an optional `discogs_release_id`. The
@@ -138,8 +144,8 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   user types (TMDB films, Google Books or, without a key, Open Library
   books, Discogs albums), answered as candidates for the barcode being
   added; a kind without its key answers 503.
-- Goroutines started outside a request handler, where chi's Recoverer does
-  not reach, call third-party code through `recovery.Call`: a lookup
+- Goroutines started outside a request handler, where the router's recoverer
+  does not reach, call third-party code through `recovery.Call`: a lookup
   provider's `Fetch` and `Parse`, a movie name source, a deal or valuation
   run. A panic there is logged at error level with its stack and counts as
   that provider's, source's or run's failure.
@@ -154,6 +160,9 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   queues one `deal_alert` per listing at or below the copy's
   `max_price_cents`; a listing seen again keeps its row, takes the new
   price and `last_seen_at`, and alerts if it has no alert yet. Alerts are retried up to 5 times within a week.
+  The wish a listing was recorded for (`raw.wishlist_copy_id`) is also the
+  generated, indexed column `wishlist_copy_id`, so the deals list's filters
+  start from wished listings instead of reading every observation.
   A source that answers 403 or 429 is asked nothing more until the next
   run, in a hunt and in a valuation (SkupSzop quotes too); the run's
   errors name the refusal once with the requests it skipped, and skipped

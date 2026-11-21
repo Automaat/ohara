@@ -6,6 +6,7 @@ import {
 	copyMeta,
 	copyNote,
 	copyRange,
+	missingCeiling,
 	daysAgo,
 	estimateSource,
 	estimateValue,
@@ -60,15 +61,15 @@ describe('estimates', () => {
 		);
 	});
 
-	it('names the source and count of a used or new price', () => {
+	it('names the source and count of a used price', () => {
 		expect(estimateSource('mid', { cents: 2550, source: 'olx', count: 5, trimmed: 2 })).toBe(
 			'OLX · 5 ofert (2 odrzucone)'
 		);
-		expect(estimateSource('ceiling', { cents: 4999, source: 'ceneo', count: 1, trimmed: 0 })).toBe(
-			'Ceneo · 1 oferta'
+		expect(estimateSource('mid', { cents: 4999, source: 'olx', count: 1, trimmed: 0 })).toBe(
+			'OLX · 1 oferta'
 		);
-		expect(estimateSource('mid', { cents: 2600, source: 'olx+vinted', count: 3, trimmed: 0 })).toBe(
-			'OLX i Vinted · 3 oferty'
+		expect(estimateSource('mid', { cents: 2600, source: 'olx', count: 3, trimmed: 0 })).toBe(
+			'OLX · 3 oferty'
 		);
 	});
 
@@ -494,6 +495,13 @@ describe('copy rows', () => {
 		);
 		expect(copyNote(copy({ mid: est(7900, 2) }))).toBe('OLX · 2 oferty');
 		expect(copyNote(copy({}))).toBe('brak danych');
+	});
+
+	it('marks a missing ceiling under every valued copy without one', () => {
+		expect(missingCeiling(copy({ floor: est(500), mid: est(2500) }))).toBe('Nowe: brak danych');
+		expect(missingCeiling(copy({ mid: est(2500) }))).toBe('Nowe: brak danych');
+		expect(missingCeiling(copy({ floor: est(500), ceiling: est(900) }))).toBeNull();
+		expect(missingCeiling(copy({}))).toBeNull();
 	});
 
 	it('names the format, or the kind, and what was paid', () => {

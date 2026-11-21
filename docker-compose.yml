@@ -1,12 +1,13 @@
 services:
   postgres:
-    image: postgres:19-alpine
+    image: postgres:18-alpine
     environment:
       POSTGRES_USER: ohara
       POSTGRES_PASSWORD: ohara
       POSTGRES_DB: ohara
     volumes:
-      - postgres-data:/var/lib/postgresql
+      # One volume per major: a cluster from another major does not start.
+      - postgres-18-data:/var/lib/postgresql
     ports:
       - '5432:5432'
     healthcheck:
@@ -32,4 +33,4 @@ services:
         condition: service_healthy
 
 volumes:
-  postgres-data:
+  postgres-18-data:

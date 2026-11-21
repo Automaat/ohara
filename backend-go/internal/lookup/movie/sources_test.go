@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -32,76 +33,6 @@ func fixture(t *testing.T, name string) []byte {
 		t.Fatal(err)
 	}
 	return b
-}
-
-func TestCeneo(t *testing.T) {
-	tests := []struct {
-		name   string
-		status int
-		body   []byte
-		want   []string
-		err    bool
-	}{
-		{
-			name: "recorded search page keeps film results", status: 200, body: fixture(t, "ceneo-search-incepcja.html"),
-			want: []string{"Incepcja [Blu-Ray]", "Incepcja [Blu-Ray 4K]+[Blu-Ray]", "Incepcja (2xBlu-ray)"},
-		},
-		{name: "recorded no-match page", status: 200, body: fixture(t, "ceneo-no-match.html"), want: []string{}},
-		{name: "unknown page is a parse error", status: 200, body: []byte("<html>captcha</html>"), err: true},
-		{name: "blocked", status: 403, body: []byte("denied"), err: true},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			var path string
-			s := serve(t, func(w http.ResponseWriter, r *http.Request) {
-				path = r.URL.EscapedPath()
-				if r.Header.Get("User-Agent") != browserUA {
-					t.Errorf("user agent %q", r.Header.Get("User-Agent"))
-				}
-				w.WriteHeader(tc.status)
-				_, _ = w.Write(tc.body)
-			})
-			got, err := Ceneo{Client: s.Client(), BaseURL: s.URL}.Products(context.Background(), "5906190326195")
-			if path != "/;szukaj-5906190326195" {
-				t.Errorf("path = %q", path)
-			}
-			if tc.err {
-				if err == nil {
-					t.Fatalf("want error, got %v", got)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			names := []string{}
-			for _, p := range got {
-				names = append(names, p.Name)
-				if p.Source != "ceneo" || !strings.HasPrefix(p.Category, "/Filmy") {
-					t.Errorf("product = %+v", p)
-				}
-			}
-			if strings.Join(names, "|") != strings.Join(tc.want, "|") {
-				t.Fatalf("names = %q, want %q", names, tc.want)
-			}
-		})
-	}
-}
-
-func TestCeneoSkipsOtherCategoriesAndCaps(t *testing.T) {
-	var page strings.Builder
-	page.WriteString(`<div class="js_search-results">`)
-	page.WriteString(`<div class="cat-prod-row" data-productName="Odtwarzacz DVD" data-GACategoryName="/Sprzęt RTV/DVD">`)
-	for _, n := range []string{"A &amp; B [DVD]", "A &amp; B [DVD]", "C", "D", "E"} {
-		page.WriteString(`<div class="cat-prod-row x" data-productName="` + n + `" data-GACategoryName="/Filmy/Filmy DVD">`)
-	}
-	got, err := parseCeneo(page.String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != ceneoMaxResults || got[0].Name != "A & B [DVD]" || got[1].Name != "C" {
-		t.Fatalf("products = %+v", got)
-	}
 }
 
 func TestUPCitemdb(t *testing.T) {
@@ -759,5 +690,73 @@ func TestEditionHintsMerge(t *testing.T) {
 	e = editionHints("1", []Product{{Name: "Psy DVD lektor: brak"}, {Name: "Psy Lektor PL"}})
 	if e.PLVoiceover != "yes" {
 		t.Fatalf("edition = %+v", e)
+	}
+}
+
+// panickingSource trips an index past the end of a slice, like a catalog
+// parser meeting a malformed answer.
+type panickingSource struct{}
+
+func (panickingSource) Name() string { return "broken" }
+
+func (panickingSource) Products(context.Context, string) ([]Product, error) {
+	return []Product{{Name: third(strings.Fields(""))}}, nil
+}
+
+// third is a parser that expects at least three fields.
+func third(fields []string) string { return fields[2] }
+
+func TestPanickingSourceIsAFailedSource(t *testing.T) {
+	var logs bytes.Buffer
+	kursk := []Product{{Source: "b", Name: "Kursk [Blu-ray]"}}
+	p := &Provider{
+		Sources: []NameSource{panickingSource{}, fakeSource{name: "b", products: kursk}},
+		TMDB:    &fakeSearcher{},
+		Logger:  slog.New(slog.NewJSONHandler(&logs, nil)),
+	}
+	_, err := p.Fetch(context.Background(), "5906190326195")
+	partial, ok := errors.AsType[*lookup.PartialError](err)
+	if !ok || !strings.Contains(err.Error(), "broken: panic: runtime error: index out of range [2] with length 0") {
+		t.Fatalf("err = %v, want a partial answer naming the panicking source", err)
+	}
+	var r Raw
+	if err := json.Unmarshal(partial.Raw, &r); err != nil || len(r.Products) != 1 {
+		t.Fatalf("raw = %s, %v", partial.Raw, err)
+	}
+	for _, want := range []string{`"level":"ERROR"`, `"source":"broken"`, `"stack":"goroutine `} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("log lacks %s:\n%s", want, logs.String())
+		}
+	}
+}
+
+func TestPanickingSourceAloneFailsTheFetch(t *testing.T) {
+	p := &Provider{
+		Sources: []NameSource{panickingSource{}, fakeSource{name: "b"}},
+		TMDB:    &fakeSearcher{},
+		Logger:  slog.New(slog.DiscardHandler),
+	}
+	if raw, err := p.Fetch(context.Background(), "5906190326195"); err == nil || !strings.Contains(err.Error(), "broken: panic") {
+		t.Fatalf("Fetch = %s, %v; want the panic as an error", raw, err)
+	}
+}
+
+// namelessSource panics when asked its name.
+type namelessSource struct{}
+
+func (namelessSource) Name() string { return third(strings.Fields("")) }
+
+func (namelessSource) Products(context.Context, string) ([]Product, error) { return nil, nil }
+
+func TestSourceWhoseNamePanicsIsAFailedSource(t *testing.T) {
+	kursk := []Product{{Source: "b", Name: "Kursk [Blu-ray]"}}
+	p := &Provider{
+		Sources: []NameSource{namelessSource{}, fakeSource{name: "b", products: kursk}},
+		TMDB:    &fakeSearcher{},
+		Logger:  slog.New(slog.DiscardHandler),
+	}
+	_, err := p.Fetch(context.Background(), "5906190326195")
+	if _, ok := errors.AsType[*lookup.PartialError](err); !ok || !strings.Contains(err.Error(), "name source 0: panic:") {
+		t.Fatalf("err = %v, want a partial answer naming source 0", err)
 	}
 }

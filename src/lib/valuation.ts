@@ -1,6 +1,6 @@
 import { formatLabels, formatPLN, kindLabels, type Format, type Kind } from '#lib/collection.js';
 
-export type ValueSource = 'olx' | 'vinted' | 'olx+vinted' | 'ceneo' | 'skupszop' | 'discogs';
+export type ValueSource = 'olx' | 'skupszop' | 'discogs';
 export type BoundKey = 'floor' | 'mid' | 'ceiling';
 
 export type Estimate = { cents: number; source: ValueSource; count: number; trimmed: number };
@@ -74,15 +74,13 @@ export const boundLabels: Record<BoundKey, string> = {
 
 export const boundHints: Record<BoundKey, string> = {
 	floor: 'Ile od ręki zapłaci skup (SkupSzop, tylko książki).',
-	mid: 'Mediana cen ofertowych używanych egzemplarzy na OLX i Vinted, bez wartości odstających.',
-	ceiling: 'Najniższa cena nowego egzemplarza w sklepach z Ceneo (mediana produktów).'
+	mid: 'Mediana cen ofertowych używanych egzemplarzy na OLX, bez wartości odstających.',
+	ceiling:
+		'Sugerowana cena egzemplarza w stanie Mint z Discogs, tylko dla płyt powiązanych z Discogs.'
 };
 
 export const sourceLabels: Record<ValueSource, string> = {
 	olx: 'OLX',
-	vinted: 'Vinted',
-	'olx+vinted': 'OLX i Vinted',
-	ceneo: 'Ceneo',
 	skupszop: 'SkupSzop',
 	discogs: 'Discogs'
 };
@@ -421,6 +419,13 @@ export function copyRange(c: CopyValue): string | null {
 	if (c.ceiling) return `do ${wholeZl(c.ceiling.cents)}`;
 	if (c.floor) return `od ${wholeZl(c.floor.cents)}`;
 	return null;
+}
+
+/** "Nowe: brak danych" under a copy that has a value but no ceiling. */
+export function missingCeiling(c: CopyValue): string | null {
+	return (c.floor || c.mid) && !c.ceiling
+		? `${boundLabels.ceiling}: ${estimateSource('ceiling', null)}`
+		: null;
 }
 
 /** The line under a copy's value: its range, else where its used value comes from. */

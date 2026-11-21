@@ -142,14 +142,7 @@ func run() int {
 
 	metrics.SetBuildInfo(version)
 	addr := envOr("OHARA_ADDR", ":8000")
-	srv := &http.Server{
-		Addr:              addr,
-		Handler:           server.New(server.Config{Version: version, AccessLog: envOr("OHARA_ACCESS_LOG", "false") == "true"}, logger, deps),
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      60 * time.Second,
-		IdleTimeout:       120 * time.Second,
-	}
+	srv := newHTTPServer(addr, server.New(server.Config{Version: version, AccessLog: envOr("OHARA_ACCESS_LOG", "false") == "true"}, logger, deps))
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()
@@ -176,6 +169,20 @@ func run() int {
 // openDB opens the pool and applies pending migrations. pgx's URL parser
 // needs a percent-encoded password, so deployments with arbitrary secrets
 // leave DATABASE_URL empty and pass the libpq PG* variables instead.
+// newHTTPServer serves h on addr. It leaves "OPTIONS *" to h, so its answer
+// carries the router's security headers like every other response.
+func newHTTPServer(addr string, h http.Handler) *http.Server {
+	return &http.Server{
+		Addr:                         addr,
+		Handler:                      h,
+		DisableGeneralOptionsHandler: true,
+		ReadHeaderTimeout:            10 * time.Second,
+		ReadTimeout:                  30 * time.Second,
+		WriteTimeout:                 60 * time.Second,
+		IdleTimeout:                  120 * time.Second,
+	}
+}
+
 func openDB(ctx context.Context, dsn string, logger *slog.Logger) (*pgxpool.Pool, error) {
 	pool, err := db.New(ctx, dsn)
 	if err != nil {
@@ -254,19 +261,16 @@ var sourceClient = &http.Client{Timeout: 8 * time.Second}
 
 // newMovieProvider builds the movie chain, or nil without a TMDB key: the
 // chain ends in a TMDB search. Allegro joins when its app credentials are
-// set; Ceneo and UPCitemdb can be switched off.
+// set; UPCitemdb can be switched off.
 func newMovieProvider(allegro *movie.Allegro, logger *slog.Logger) *movie.Provider {
 	key := os.Getenv("OHARA_TMDB_API_KEY")
 	if key == "" {
 		logger.Info("movie lookup disabled: OHARA_TMDB_API_KEY not set")
 		return nil
 	}
-	p := &movie.Provider{TMDB: movie.TMDB{Client: sourceClient, Key: key}}
+	p := &movie.Provider{TMDB: movie.TMDB{Client: sourceClient, Key: key}, Logger: logger}
 	if allegro != nil {
 		p.Sources = append(p.Sources, allegro)
-	}
-	if envOr("OHARA_CENEO", "true") == "true" {
-		p.Sources = append(p.Sources, movie.Ceneo{Client: sourceClient})
 	}
 	if envOr("OHARA_UPCITEMDB", "true") == "true" {
 		p.Sources = append(p.Sources, movie.UPCitemdb{Client: sourceClient})
@@ -393,10 +397,7 @@ func newHunter(pool *pgxpool.Pool, logger *slog.Logger) (*deals.Hunter, *deals.S
 	}
 	client := deals.NewHTTPClient()
 	sources := usedSources(client)
-	sources = append(sources,
-		deals.Pepper{Client: client, BaseURL: envOr("OHARA_DEALS_PEPPER_URL", deals.PepperURL)},
-		ceneoSource(client),
-	)
+	sources = append(sources, deals.Pepper{Client: client, BaseURL: envOr("OHARA_DEALS_PEPPER_URL", deals.PepperURL)})
 	var notifier deals.Notifier
 	token, chat := os.Getenv("OHARA_TELEGRAM_BOT_TOKEN"), os.Getenv("OHARA_TELEGRAM_CHAT_ID")
 	switch {
@@ -423,24 +424,15 @@ func sourceDelay() (time.Duration, error) {
 	return delay, nil
 }
 
-// usedSources are the marketplaces of used copies: OLX, and Vinted unless
-// OHARA_VINTED is false.
+// usedSources are the marketplaces of used copies: OLX.
 func usedSources(client *http.Client) []deals.Source {
-	out := []deals.Source{deals.OLX{Client: client, BaseURL: envOr("OHARA_DEALS_OLX_URL", deals.OLXURL)}}
-	if envOr("OHARA_VINTED", "true") == "true" {
-		out = append(out, deals.Vinted{Client: client, BaseURL: envOr("OHARA_DEALS_VINTED_URL", deals.VintedURL)})
-	}
-	return out
-}
-
-func ceneoSource(client *http.Client) deals.Ceneo {
-	return deals.Ceneo{Client: client, BaseURL: envOr("OHARA_DEALS_CENEO_URL", deals.CeneoURL)}
+	return []deals.Source{deals.OLX{Client: client, BaseURL: envOr("OHARA_DEALS_OLX_URL", deals.OLXURL)}}
 }
 
 // newValuation configures the valuation runner from the environment. The
 // daily schedule stays off until OHARA_VALUATION_INTERVAL is set; it asks
-// the deal hunter's OLX, Vinted and Ceneo, with the same pause, SkupSzop
-// and, with a Discogs token, the Discogs marketplace.
+// the deal hunter's OLX, with the same pause, SkupSzop and, with
+// a Discogs token, the Discogs marketplace.
 func newValuation(pool *pgxpool.Pool, logger *slog.Logger) (*valuation.Runner, *valuation.Store, error) {
 	interval, err := time.ParseDuration(envOr("OHARA_VALUATION_INTERVAL", "0s"))
 	if err != nil || interval < 0 {
@@ -458,7 +450,7 @@ func newValuation(pool *pgxpool.Pool, logger *slog.Logger) (*valuation.Runner, *
 		return nil, nil, err
 	}
 	client := deals.NewHTTPClient()
-	sources := append(usedSources(client), ceneoSource(client))
+	sources := usedSources(client)
 	buybacks := []valuation.BuyBack{
 		valuation.SkupSzop{Client: client, BaseURL: envOr("OHARA_VALUATION_SKUPSZOP_URL", valuation.SkupSzopURL)},
 	}

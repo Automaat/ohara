@@ -14,6 +14,7 @@ import (
 
 	"github.com/Automaat/ohara/backend-go/internal/deals"
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
+	"github.com/Automaat/ohara/backend-go/internal/recovery"
 )
 
 // maxRunErrors bounds the source errors a run keeps for the status view.
@@ -178,7 +179,7 @@ func (r *Runner) execute(ctx context.Context) {
 	r.status.LastStartedAt = &started
 	r.mu.Unlock()
 
-	res, err := r.Run(ctx)
+	res, err := recovery.Call(r.logger, "valuation panicked", func() (RunResult, error) { return r.Run(ctx) })
 	if err != nil {
 		res.Failure = err.Error()
 		r.logger.Error("valuation failed", "err", err)

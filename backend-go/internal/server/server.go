@@ -3,9 +3,11 @@ package server
 
 import (
 	"context"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -51,10 +53,13 @@ func New(cfg Config, logger *slog.Logger, deps Deps) http.Handler {
 		logger = slog.Default()
 	}
 	r := chi.NewRouter()
+	r.Use(securityHeaders)
+	r.Use(generalOptions)
 	r.Use(middleware.RequestID)
 	r.Use(requestObserver(logger, cfg.AccessLog))
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(requestTimeout))
+	r.Use(crossOriginGuard(logger))
 
 	r.Get("/health", healthHandler(logger, deps.DB))
 	r.Handle("/metrics", metrics.Handler())
@@ -73,6 +78,82 @@ func New(cfg Config, logger *slog.Logger, deps Deps) http.Handler {
 		r.Handle("/*", web.Handler(deps.Web))
 	}
 	return r
+}
+
+// permissionsPolicy lets only Ohara's own pages open the camera, for the
+// scanner, and denies the other features the SPA never uses.
+const permissionsPolicy = "camera=(self), microphone=(), geolocation=()"
+
+// securityHeaders adds the browser security headers to every response. It
+// runs first, so the recoverer's 500, the timeout's 504 and the router's own
+// 404 and 405 answers carry them too.
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "same-origin")
+		h.Set("Permissions-Policy", permissionsPolicy)
+		next.ServeHTTP(w, r)
+	})
+}
+
+// generalOptions answers "OPTIONS *" with an empty 200, as net/http does when
+// the server's DisableGeneralOptionsHandler is false. cmd/api sets it, so the
+// request reaches the router and its answer carries the security headers.
+func generalOptions(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodOptions || r.RequestURI != "*" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		w.Header().Set("Content-Length", "0")
+		if r.ContentLength != 0 {
+			_, _ = io.Copy(io.Discard, http.MaxBytesReader(w, r.Body, 4<<10))
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+}
+
+// crossOriginGuard answers 403 to a cross-origin write. Authelia's session
+// cookie covers every sibling site of the parent domain, so their pages could
+// otherwise write here.
+func crossOriginGuard(logger *slog.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if crossOriginWrite(r) {
+				httpx.WriteError(w, logger, http.StatusForbidden, "cross-origin request rejected")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// crossOriginWrite reports a request other than GET, HEAD and OPTIONS that the
+// browser marks as cross-origin: a Sec-Fetch-Site other than same-origin or
+// none, or an Origin whose host is not Host. Each header decides on its own,
+// unlike http.CrossOriginProtection, which ignores Origin once Sec-Fetch-Site
+// is set. Clients that send neither header, like curl, pass.
+func crossOriginWrite(r *http.Request) bool {
+	switch r.Method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return false
+	}
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "", "same-origin", "none":
+	default:
+		return true
+	}
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return false
+	}
+	u, err := url.Parse(origin)
+	if err != nil {
+		return true
+	}
+	return u.Host != r.Host
 }
 
 func requestObserver(logger *slog.Logger, accessLog bool) func(http.Handler) http.Handler {

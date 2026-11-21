@@ -1,5 +1,5 @@
-// Package deals hunts for listings of wishlist copies on OLX, Vinted,
-// Pepper.pl and Ceneo. A run asks every source, keeps the listings that
+// Package deals hunts for listings of wishlist copies on OLX and
+// Pepper.pl. A run asks every source, keeps the listings that
 // match a wishlist copy, stores each once as a price_observation and sends
 // one Telegram message per new listing at or below the copy's maximum price.
 package deals
@@ -45,10 +45,6 @@ func imageURL(value string) string {
 	return value
 }
 
-type listingPhoto struct {
-	URL string `json:"url"`
-}
-
 // Source finds listings. A query source is asked once per search query; a
 // feed source (PerQuery false) once per run with an empty query.
 type Source interface {
@@ -60,10 +56,10 @@ type Source interface {
 // maxPriceCents mirrors the price_observation cap (1 000 000 zł).
 const maxPriceCents = 100_000_000
 
-// maxBody caps a source response; a Ceneo results page is about 300 KB.
+// maxBody caps a source response; an HTML results page is a few hundred KB.
 const maxBody = 16 << 20
 
-// userAgent is a browser's: OLX and Ceneo answer 403 to library defaults.
+// userAgent is a browser's: OLX answers 403 to library defaults.
 const userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 " +
 	"(KHTML, like Gecko) Chrome/130.0 Safari/537.36"
 

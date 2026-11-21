@@ -38,6 +38,7 @@
 	import EditionCoverSheet from '#lib/components/EditionCoverSheet.svelte';
 	import { coverUndo } from '#lib/edition-cover.js';
 	import { purchaseDate } from '#lib/polish.js';
+	import { newRequestKey } from '#lib/scan.js';
 	import { copyRequest } from '#lib/title-detail.js';
 
 	const id = $derived(Number(page.params.id));
@@ -55,6 +56,11 @@
 	let copyForm = $state(copyToForm(null));
 	let copyIssue = $state<FormIssue | null>(null);
 	let savingCopy = $state(false);
+	/**
+	 * The open copy form's key, sent with every attempt to save it, so a retry after a lost answer
+	 * returns the copy instead of adding a second one.
+	 */
+	let copyKey = '';
 
 	let coverSheet = $state(false);
 
@@ -90,6 +96,7 @@
 	function startCopy() {
 		copyForm = copyToForm(null);
 		copyIssue = null;
+		copyKey = newRequestKey();
 		adding = true;
 	}
 
@@ -131,7 +138,7 @@
 		}
 		savingCopy = true;
 		try {
-			await request<Copy>(fetch, 'POST', '/api/copies', parsed.value);
+			await request<Copy>(fetch, 'POST', '/api/copies', { ...parsed.value, request_key: copyKey });
 			adding = false;
 			await load(id);
 		} catch (err) {

@@ -527,3 +527,92 @@ func TestSourceStatusCountsBlocking(t *testing.T) {
 		t.Fatalf("blocked canary = %v", v)
 	}
 }
+
+func TestAlertTextNamesTheMedium(t *testing.T) {
+	tests := []struct {
+		name   string
+		format *string
+		head   string
+	}{
+		{"cd", new("cd"), "🎯 Okazja: The Wall · CD"},
+		{"vinyl", new("vinyl"), "🎯 Okazja: The Wall · Winyl"},
+		{"cassette", new("cassette"), "🎯 Okazja: The Wall · Kaseta"},
+		{"movie", new("bluray"), "🎯 Okazja: The Wall · Blu-ray"},
+		{"no format", nil, "🎯 Okazja: The Wall"},
+		{"unknown format", new("laserdisc"), "🎯 Okazja: The Wall"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := alertText(&Alert{
+				Source: "olx", URL: "https://www.olx.pl/d/oferta/the-wall", ListingTitle: "Pink Floyd The Wall",
+				PriceCents: 4500, AcquiredAs: new("used"), TitleName: "The Wall", Format: tt.format,
+				MaxPriceCents: new(int64(5000)),
+			})
+			want := strings.Join([]string{
+				tt.head, "45,00 zł (limit 50,00 zł) · OLX · używany",
+				"Pink Floyd The Wall", "https://www.olx.pl/d/oferta/the-wall",
+			}, "\n")
+			if got != want {
+				t.Errorf("alertText = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// panickingSource trips an index past the end of a slice on every search,
+// like a parser meeting a malformed answer.
+type panickingSource struct{ calls atomic.Int32 }
+
+func (*panickingSource) Name() string   { return "olx" }
+func (*panickingSource) PerQuery() bool { return true }
+
+func (p *panickingSource) Search(context.Context, string) ([]Listing, error) {
+	p.calls.Add(1)
+	return []Listing{{Title: third(strings.Fields(""))}}, nil
+}
+
+// third is a parser that expects at least three fields.
+func third(fields []string) string { return fields[2] }
+
+func TestPanickingRunFailsAndTheScheduleGoesOn(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	wishlist(t, pool, wantBluray(nil))
+	src := &panickingSource{}
+	var logs strings.Builder
+	h := NewHunter(NewStore(pool), []Source{src}, nil, Config{Interval: time.Hour},
+		slog.New(slog.NewJSONHandler(&logs, nil)))
+	var sleeps atomic.Int32
+	h.sleep = func(ctx context.Context, _ time.Duration) error {
+		if sleeps.Add(1) > 2 {
+			return context.Canceled
+		}
+		return ctx.Err()
+	}
+
+	h.Start(t.Context())
+	h.Wait()
+	if got := src.calls.Load(); got != 2 {
+		t.Fatalf("scheduled runs searched %d times, want 2", got)
+	}
+	st := h.Status()
+	if st.Running || st.LastResult == nil || st.LastFinishedAt == nil ||
+		!strings.Contains(st.LastResult.Failure, "panic: runtime error: index out of range [2] with length 0") {
+		t.Fatalf("status = %+v, result %+v", st, st.LastResult)
+	}
+
+	if !h.Trigger() {
+		t.Fatal("Trigger after a panicking run = false")
+	}
+	h.Wait()
+	if got := src.calls.Load(); got != 3 {
+		t.Fatalf("manual run searched %d times in all, want 3", got)
+	}
+	if st := h.Status(); st.Running || st.LastResult == nil || st.LastResult.Failure == "" {
+		t.Fatalf("status after manual run = %+v", st)
+	}
+	for _, want := range []string{`"level":"ERROR"`, `"msg":"deal search panicked"`, `"stack":"goroutine `} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("log lacks %s:\n%s", want, logs.String())
+		}
+	}
+}

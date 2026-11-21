@@ -116,6 +116,11 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   reaches `lookup.ConfirmThreshold` (0.8); clients never auto-pick otherwise.
   `PUT /api/lookup/{barcode}/selection` stores the picked candidate, which
   answers later scans of that barcode without provider requests.
+- `GET /api/lookup/{barcode}?recheck=1`, sent only by the queue's "Szukaj
+  ponownie" (`/scan/{barcode}?recheck=1`), asks a provider again when its
+  cached answer is older than `lookup.RecheckAfter` (1 hour); the server
+  keeps that floor, so repeated taps cost one request per provider and
+  code per hour.
 - A music barcode no source knows falls back to a Discogs text search for
   Allegro's product name.
 - `GET /api/search?kind=&q=&barcode=&format=` searches by the title the

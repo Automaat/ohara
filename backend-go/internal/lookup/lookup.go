@@ -196,10 +196,28 @@ type outcome struct {
 	err        error
 }
 
+// RecheckAfter is how old a provider's cached answer must be before Recheck
+// asks the provider again. The server keeps this floor whatever the client
+// sends, so repeated rechecks cost at most one request per provider and
+// barcode per period.
+const RecheckAfter = time.Hour
+
 // Lookup queries every provider concurrently for a normalized barcode. A
 // failing provider is reported in Result.Errors and does not fail the lookup.
 // A stored selection short-circuits the providers.
 func (s *Service) Lookup(ctx context.Context, code string) Result {
+	return s.lookup(ctx, code, false)
+}
+
+// Recheck is Lookup that asks a provider again when its cached answer is
+// older than RecheckAfter, so a source that learned the barcode since the
+// last lookup can answer before the cache expires. A fresh answer replaces
+// the cached one; a stored selection still answers first.
+func (s *Service) Recheck(ctx context.Context, code string) Result {
+	return s.lookup(ctx, code, true)
+}
+
+func (s *Service) lookup(ctx context.Context, code string, recheck bool) Result {
 	if sel, ok := s.selection(ctx, code); ok {
 		return Result{Barcode: code, Candidates: []Candidate{sel}, Errors: []ProviderError{}}
 	}
@@ -210,7 +228,7 @@ func (s *Service) Lookup(ctx context.Context, code string) Result {
 			continue
 		}
 		wg.Go(func() {
-			cands, err := s.query(ctx, e, code)
+			cands, err := s.query(ctx, e, code, recheck)
 			outcomes[i] = outcome{candidates: cands, err: err}
 		})
 	}
@@ -286,10 +304,14 @@ func (s *Service) selection(ctx context.Context, code string) (Candidate, bool) 
 	return c, true
 }
 
-func (s *Service) query(ctx context.Context, e entry, code string) ([]Candidate, error) {
+func (s *Service) query(ctx context.Context, e entry, code string, recheck bool) ([]Candidate, error) {
 	p := e.provider
 	if s.cache != nil && e.ttl > 0 {
-		raw, ok, err := s.cache.Get(ctx, p.Name(), code, e.ttl)
+		maxAge := e.ttl
+		if recheck {
+			maxAge = min(maxAge, RecheckAfter)
+		}
+		raw, ok, err := s.cache.Get(ctx, p.Name(), code, maxAge)
 		if err != nil {
 			s.logger.Warn("lookup cache read failed", "provider", p.Name(), "err", err)
 		}

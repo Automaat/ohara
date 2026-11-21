@@ -312,9 +312,14 @@ function providerDetail(errors: LookupResult['errors']): string {
 /**
  * Resolves a scanned barcode: an edition that already carries it, else the lookup's candidates,
  * else a scan queue entry so the barcode is not lost. Throws an ApiError for a malformed
- * barcode or when not even the queue answers.
+ * barcode or when not even the queue answers. A recheck asks each source again when its cached
+ * answer is over an hour old.
  */
-export async function resolveScan(fetchFn: typeof fetch, raw: string): Promise<Resolution> {
+export async function resolveScan(
+	fetchFn: typeof fetch,
+	raw: string,
+	recheck = false
+): Promise<Resolution> {
 	const code = cleanBarcode(raw);
 	const editions = await request<Edition[]>(
 		fetchFn,
@@ -330,7 +335,12 @@ export async function resolveScan(fetchFn: typeof fetch, raw: string): Promise<R
 	let lookup: LookupResult | null = null;
 	let failure = '';
 	try {
-		lookup = await request<LookupResult>(fetchFn, 'GET', `/api/lookup/${encodeURIComponent(code)}`);
+		const query = recheck ? '?recheck=1' : '';
+		lookup = await request<LookupResult>(
+			fetchFn,
+			'GET',
+			`/api/lookup/${encodeURIComponent(code)}${query}`
+		);
 	} catch (err) {
 		failure = errorMessage(err);
 	}

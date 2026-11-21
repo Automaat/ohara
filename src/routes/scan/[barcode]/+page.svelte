@@ -12,6 +12,7 @@
 
 	const barcode = $derived(cleanBarcode(page.params.barcode ?? ''));
 	const manual = $derived(page.url.searchParams.get('manual') === '1');
+	const recheck = $derived(page.url.searchParams.get('recheck') === '1');
 	const title = $derived(pageTitle());
 
 	function pageTitle(): string {
@@ -33,7 +34,8 @@
 	$effect(() => {
 		const code = barcode;
 		const byHand = manual;
-		untrack(() => void flow.load(code, byHand));
+		const again = recheck;
+		untrack(() => void flow.load(code, byHand, again));
 	});
 
 	onDestroy(() => {

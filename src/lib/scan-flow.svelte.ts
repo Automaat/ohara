@@ -223,8 +223,11 @@ export class ScanFlow {
 		this.phase = { kind: 'ready', status: 'missing' };
 	}
 
-	/** Resolves a barcode, or opens a blank form for one typed by hand. */
-	async load(raw: string, byHand = false): Promise<void> {
+	/**
+	 * Resolves a barcode, or opens a blank form for one typed by hand. A recheck asks each source
+	 * again when its cached answer is over an hour old.
+	 */
+	async load(raw: string, byHand = false, recheck = false): Promise<void> {
 		const code = cleanBarcode(raw);
 		const current = this.#restart(code);
 		if (!looksLikeBarcode(code)) {
@@ -241,7 +244,7 @@ export class ScanFlow {
 			return;
 		}
 		try {
-			const r = await resolveScan(this.#fetch, code);
+			const r = await resolveScan(this.#fetch, code, recheck);
 			if (!current()) return;
 			if (r.kind === 'owned') {
 				this.item = {

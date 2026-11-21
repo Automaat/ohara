@@ -424,19 +424,14 @@ func sourceDelay() (time.Duration, error) {
 	return delay, nil
 }
 
-// usedSources are the marketplaces of used copies: OLX, and Vinted unless
-// OHARA_VINTED is false.
+// usedSources are the marketplaces of used copies: OLX.
 func usedSources(client *http.Client) []deals.Source {
-	out := []deals.Source{deals.OLX{Client: client, BaseURL: envOr("OHARA_DEALS_OLX_URL", deals.OLXURL)}}
-	if envOr("OHARA_VINTED", "true") == "true" {
-		out = append(out, deals.Vinted{Client: client, BaseURL: envOr("OHARA_DEALS_VINTED_URL", deals.VintedURL)})
-	}
-	return out
+	return []deals.Source{deals.OLX{Client: client, BaseURL: envOr("OHARA_DEALS_OLX_URL", deals.OLXURL)}}
 }
 
 // newValuation configures the valuation runner from the environment. The
 // daily schedule stays off until OHARA_VALUATION_INTERVAL is set; it asks
-// the deal hunter's OLX and Vinted, with the same pause, SkupSzop and, with
+// the deal hunter's OLX, with the same pause, SkupSzop and, with
 // a Discogs token, the Discogs marketplace.
 func newValuation(pool *pgxpool.Pool, logger *slog.Logger) (*valuation.Runner, *valuation.Store, error) {
 	interval, err := time.ParseDuration(envOr("OHARA_VALUATION_INTERVAL", "0s"))

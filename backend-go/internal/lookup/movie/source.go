@@ -46,7 +46,8 @@ type statusError struct {
 func (e statusError) Error() string { return "unexpected status " + strconv.Itoa(e.code) }
 
 // get runs req and returns the body of a response whose status is in ok,
-// counting failures under source. Transport errors name the URL without its
+// counting failures under source. Any other status fails before the body is
+// read, so its headers survive a broken body. Transport errors name the URL without its
 // query, which can carry an API key or a refresh token.
 func get(client *http.Client, source string, req *http.Request, ok ...int) (int, []byte, error) {
 	resp, err := client.Do(req)
@@ -58,16 +59,16 @@ func get(client *http.Client, source string, req *http.Request, ok ...int) (int,
 		return 0, nil, fmt.Errorf("%s: %s %s://%s%s: %w", source, req.Method, req.URL.Scheme, req.URL.Host, req.URL.Path, err)
 	}
 	defer resp.Body.Close()
+	if !slices.Contains(ok, resp.StatusCode) {
+		metrics.ObserveSource(source, "http_"+strconv.Itoa(resp.StatusCode))
+		return resp.StatusCode, nil, fmt.Errorf("%s: %w", source, statusError{code: resp.StatusCode, header: resp.Header})
+	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
 	if err != nil {
 		metrics.ObserveSource(source, metrics.SourceError)
 		return 0, nil, fmt.Errorf("%s: read body: %w", source, err)
 	}
-	if slices.Contains(ok, resp.StatusCode) {
-		return resp.StatusCode, body, nil
-	}
-	metrics.ObserveSource(source, "http_"+strconv.Itoa(resp.StatusCode))
-	return resp.StatusCode, nil, fmt.Errorf("%s: %w", source, statusError{code: resp.StatusCode, header: resp.Header})
+	return resp.StatusCode, body, nil
 }
 
 // succeeded counts a usable answer, a valid "no match" included.

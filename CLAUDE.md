@@ -117,10 +117,12 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   `PUT /api/lookup/{barcode}/selection` stores the picked candidate, which
   answers later scans of that barcode without provider requests.
 - The movie chain asks UPCitemdb (free: 100 requests a day, 6 a minute)
-  only when Allegro's catalog names no product. After a 429 it skips
-  UPCitemdb until the `X-RateLimit-Reset` time (at most a day ahead), or
-  for an hour without that header; a skipped UPCitemdb counts as a failed
-  source, so a lookup that finds nothing is not cached.
+  only when Allegro's catalog names no product with a searchable title, or
+  has not answered within 3 s. After a 429 it skips UPCitemdb until the
+  `X-RateLimit-Reset` time, or for an hour when that header is missing or
+  more than two days ahead; a reset already past needs no pause. A skipped
+  UPCitemdb counts as a failed source, so a lookup that finds nothing is
+  not cached.
 - A music barcode no source knows falls back to a Discogs text search for
   Allegro's product name.
 - `GET /api/search?kind=&q=&barcode=&format=` searches by the title the

@@ -43,14 +43,15 @@ func (tmdbStub) Search(context.Context, string, *int) ([]movie.TMDBMovie, error)
 }
 
 // upcServer is a UPCitemdb test double. While limited it answers 429 with
-// reset as its X-RateLimit-Reset header (none when empty); otherwise it
-// knows no barcode.
+// reset as its X-RateLimit-Reset header (none when empty), and cuts that
+// body short when truncate is set; otherwise it knows no barcode.
 type upcServer struct {
-	mu      sync.Mutex
-	hits    int
-	limited bool
-	reset   string
-	server  *httptest.Server
+	mu       sync.Mutex
+	hits     int
+	limited  bool
+	truncate bool
+	reset    string
+	server   *httptest.Server
 }
 
 func newUPCServer(t *testing.T) *upcServer {
@@ -64,6 +65,9 @@ func newUPCServer(t *testing.T) *upcServer {
 			if u.reset != "" {
 				w.Header().Set("X-RateLimit-Reset", u.reset)
 			}
+			if u.truncate {
+				w.Header().Set("Content-Length", "100")
+			}
 			w.WriteHeader(http.StatusTooManyRequests)
 			_, _ = w.Write([]byte(`{"code":"TOO_FAST"}`))
 			return
@@ -74,10 +78,10 @@ func newUPCServer(t *testing.T) *upcServer {
 	return u
 }
 
-func (u *upcServer) limit(reset string) {
+func (u *upcServer) limit(reset string, truncate bool) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	u.limited, u.reset = true, reset
+	u.limited, u.reset, u.truncate = true, reset, truncate
 }
 
 func (u *upcServer) lift() {
@@ -141,16 +145,20 @@ func (c *limitChain) cached(code string) bool {
 	return ok && raw != nil
 }
 
-// Barcodes for the rate-limit tests: the catalog names named, knows
-// nothing of unknown and fails on broken.
+// Barcodes for the rate-limit tests: the catalog names named, gives only a
+// format for formatOnly, knows nothing of unknown and fails on broken.
 const (
-	namedEAN   = "5906190326195"
-	unknownEAN = "5903570157561"
-	brokenEAN  = "5900058301379"
+	namedEAN      = "5906190326195"
+	formatOnlyEAN = "5900058301362"
+	unknownEAN    = "5903570157561"
+	brokenEAN     = "5900058301379"
 )
 
 func limitCatalog() catalog {
-	return catalog{names: map[string]string{namedEAN: "Kursk [Blu-ray]"}, down: map[string]bool{brokenEAN: true}}
+	return catalog{
+		names: map[string]string{namedEAN: "Kursk [Blu-ray]", formatOnlyEAN: "Blu-ray [2018]"},
+		down:  map[string]bool{brokenEAN: true},
+	}
 }
 
 func TestUPCitemdbAskedOnlyWhenTheCatalogNamesNothing(t *testing.T) {
@@ -160,6 +168,7 @@ func TestUPCitemdbAskedOnlyWhenTheCatalogNamesNothing(t *testing.T) {
 	}{
 		{name: "catalog names the product", code: namedEAN, upcHits: 0},
 		{name: "catalog names nothing", code: unknownEAN, upcHits: 1},
+		{name: "catalog names no searchable title", code: formatOnlyEAN, upcHits: 1},
 		{name: "catalog down", code: brokenEAN, upcHits: 1},
 	}
 	for _, tc := range tests {
@@ -176,7 +185,7 @@ func TestUPCitemdbAskedOnlyWhenTheCatalogNamesNothing(t *testing.T) {
 func TestUPCitemdbPausedUntilItsLimitResets(t *testing.T) {
 	c := newLimitChain(t, limitCatalog())
 	start := c.clock.Now()
-	c.upc.limit(strconv.FormatInt(start.Add(60*time.Second).Unix(), 10))
+	c.upc.limit(strconv.FormatInt(start.Add(60*time.Second).Unix(), 10), false)
 
 	res := c.svc.Lookup(context.Background(), unknownEAN)
 	if c.upc.count() != 1 || !mentionsLimit(res) || c.cached(unknownEAN) {
@@ -219,27 +228,33 @@ func TestUPCitemdbPauseLength(t *testing.T) {
 	base := time.Unix(1_800_000_000, 0)
 	unix := func(d time.Duration) string { return strconv.FormatInt(base.Add(d).Unix(), 10) }
 	tests := []struct {
-		name  string
-		reset string
-		pause time.Duration
+		name     string
+		reset    string
+		truncate bool
+		pause    time.Duration
 	}{
 		{name: "reset a minute ahead", reset: unix(time.Minute), pause: time.Minute},
 		{name: "daily reset", reset: unix(9 * time.Hour), pause: 9 * time.Hour},
+		{name: "reset a day and an hour ahead", reset: unix(25 * time.Hour), pause: 25 * time.Hour},
 		{name: "no header", reset: "", pause: time.Hour},
 		{name: "unreadable header", reset: "soon", pause: time.Hour},
-		{name: "reset already past", reset: unix(-time.Minute), pause: time.Hour},
-		{name: "reset beyond a day", reset: unix(72 * time.Hour), pause: 24 * time.Hour},
+		{name: "implausible reset", reset: unix(30 * 24 * time.Hour), pause: time.Hour},
+		{name: "reset already past", reset: unix(-time.Minute), pause: 0},
+		{name: "reset now", reset: unix(0), pause: 0},
+		{name: "truncated 429 body", reset: unix(time.Minute), truncate: true, pause: time.Minute},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			c := newLimitChain(t, limitCatalog())
-			c.upc.limit(tc.reset)
+			c.upc.limit(tc.reset, tc.truncate)
 			c.svc.Lookup(context.Background(), unknownEAN)
 			c.upc.lift()
-			c.clock.set(base.Add(tc.pause - time.Second))
-			c.svc.Lookup(context.Background(), unknownEAN)
-			if c.upc.count() != 1 {
-				t.Fatalf("asked upcitemdb a second before the pause ends")
+			if tc.pause > 0 {
+				c.clock.set(base.Add(tc.pause - time.Second))
+				c.svc.Lookup(context.Background(), unknownEAN)
+				if c.upc.count() != 1 {
+					t.Fatalf("asked upcitemdb a second before the pause ends")
+				}
 			}
 			c.clock.set(base.Add(tc.pause))
 			c.svc.Lookup(context.Background(), unknownEAN)

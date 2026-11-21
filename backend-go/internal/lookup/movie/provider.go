@@ -26,8 +26,10 @@ type Searcher interface {
 // without any request.
 type Provider struct {
 	Sources []NameSource
-	// Fallbacks are asked only when Sources name no product, so a source
-	// with a small request quota (UPCitemdb) spends it only where it helps.
+	// Fallbacks are asked only when Sources name no product with a
+	// searchable title, or have not answered within fallbackAfter, so a
+	// source with a small request quota (UPCitemdb) spends it only where it
+	// helps.
 	Fallbacks []NameSource
 	TMDB      Searcher
 	// Logger records a name source's recovered panic; nil logs to
@@ -36,6 +38,9 @@ type Provider struct {
 	// Now is the clock for rate-limit pauses; nil means time.Now.
 	Now func() time.Time
 
+	// fallbackAfter overrides defaultFallbackAfter in tests.
+	fallbackAfter time.Duration
+
 	mu sync.Mutex
 	// paused holds, per source name, when a source that answered with a
 	// *RateLimitError takes requests again.
@@ -43,12 +48,17 @@ type Provider struct {
 }
 
 // limitPause is how long a source rests after a rate-limit answer that does
-// not say when the limit resets; maxLimitPause bounds the reset it does
-// give, since the longest limit is a daily one.
+// not say when the limit resets. A reset more than maxLimitReset ahead is
+// not a plausible Unix time for a daily limit and counts as unreadable.
 const (
 	limitPause    = time.Hour
-	maxLimitPause = 24 * time.Hour
+	maxLimitReset = 48 * time.Hour
 )
+
+// defaultFallbackAfter is how long the fallbacks wait for a slow source
+// before they are asked anyway, so a slow catalog miss does not leave them
+// too little of the lookup's deadline (10 s, with 8 s per request).
+const defaultFallbackAfter = 3 * time.Second
 
 // maxQueries bounds TMDB searches per barcode when sources disagree.
 const maxQueries = 3
@@ -75,7 +85,8 @@ func (*Provider) Name() string { return "movie" }
 func (*Provider) Accepts(code string) bool { return !barcode.IsBook(code) }
 
 // Fetch asks every name source concurrently, and the fallbacks only when
-// those name no product, then searches TMDB for the distinct titles. A
+// those name nothing searchable or are slow, then searches TMDB for the
+// distinct titles. A
 // source paused for its rate limit is skipped and counts as failed. With no
 // product found, a failed source fails the fetch so a "no match" built on an
 // outage is not cached. When another source found the product, the answer
@@ -84,13 +95,8 @@ func (*Provider) Accepts(code string) bool { return !barcode.IsBook(code) }
 // answer.
 func (p *Provider) Fetch(ctx context.Context, code string) (json.RawMessage, error) {
 	raw := Raw{Products: []Product{}, Searches: []Search{}}
-	var errs error
-	raw.Products, errs = p.ask(ctx, raw.Products, p.Sources, 0, code)
-	if len(raw.Products) == 0 && len(p.Fallbacks) > 0 {
-		var fallbackErr error
-		raw.Products, fallbackErr = p.ask(ctx, raw.Products, p.Fallbacks, len(p.Sources), code)
-		errs = errors.Join(errs, fallbackErr)
-	}
+	products, errs := p.names(ctx, code)
+	raw.Products = append(raw.Products, products...)
 	if len(raw.Products) == 0 {
 		if errs != nil {
 			return nil, errs
@@ -118,6 +124,52 @@ func (p *Provider) Fetch(ctx context.Context, code string) (json.RawMessage, err
 		return nil, &lookup.PartialError{Raw: data, Err: failed}
 	}
 	return data, nil
+}
+
+// answer is what a group of name sources found.
+type answer struct {
+	products []Product
+	err      error
+}
+
+// names asks the sources, then the fallbacks when the sources name no
+// searchable title. When the sources take longer than fallbackAfter, the
+// fallbacks are asked in parallel; their failure then counts only if the
+// sources name nothing searchable either.
+func (p *Provider) names(ctx context.Context, code string) ([]Product, error) {
+	if len(p.Fallbacks) == 0 {
+		return p.ask(ctx, nil, p.Sources, 0, code)
+	}
+	group := func(sources []NameSource, first int) <-chan answer {
+		ch := make(chan answer, 1)
+		go func() {
+			found, err := p.ask(ctx, nil, sources, first, code)
+			ch <- answer{found, err}
+		}()
+		return ch
+	}
+	primary := group(p.Sources, 0)
+	wait := p.fallbackAfter
+	if wait <= 0 {
+		wait = defaultFallbackAfter
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	var fromSources, fromFallbacks answer
+	select {
+	case fromSources = <-primary:
+		if len(queries(fromSources.products)) > 0 {
+			return fromSources.products, fromSources.err
+		}
+		fromFallbacks = <-group(p.Fallbacks, len(p.Sources))
+	case <-timer.C:
+		fallback := group(p.Fallbacks, len(p.Sources))
+		fromSources, fromFallbacks = <-primary, <-fallback
+		if len(queries(fromSources.products)) > 0 {
+			fromFallbacks.err = nil
+		}
+	}
+	return append(fromSources.products, fromFallbacks.products...), errors.Join(fromSources.err, fromFallbacks.err)
 }
 
 // ask asks sources concurrently and appends what they name to out. first
@@ -169,15 +221,16 @@ func (p *Provider) now() time.Time {
 }
 
 // pause stops requests to a source until reset, or for limitPause when
-// reset is unknown or already past.
+// reset is unknown or implausibly far ahead. A reset already past needs no
+// pause.
 func (p *Provider) pause(name string, reset time.Time) {
 	now := p.now()
-	until := now.Add(limitPause)
-	if reset.After(now) {
-		until = reset
+	until := reset
+	if reset.IsZero() || reset.After(now.Add(maxLimitReset)) {
+		until = now.Add(limitPause)
 	}
-	if longest := now.Add(maxLimitPause); until.After(longest) {
-		until = longest
+	if !until.After(now) {
+		return
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()

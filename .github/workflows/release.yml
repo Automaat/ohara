@@ -85,3 +85,5 @@ jobs:
             ghcr.io/automaat/ohara:v${{ env.VERSION }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          sbom: true
+          provenance: mode=max

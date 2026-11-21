@@ -129,3 +129,5 @@ jobs:
             ghcr.io/automaat/ohara:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          sbom: true
+          provenance: mode=max

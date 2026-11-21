@@ -89,16 +89,22 @@ var sourceSeries = regexp.MustCompile(`(?m)^(ohara_source_[a-z_]+)\{[^}]*\bsourc
 // reached the test server.
 func metricSources(t *testing.T, prefix string) []string {
 	t.Helper()
-	rec := httptest.NewRecorder()
-	metrics.Handler().ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/metrics", http.NoBody))
 	var out []string
-	for _, m := range sourceSeries.FindAllStringSubmatch(rec.Body.String(), -1) {
+	for _, m := range sourceSeries.FindAllStringSubmatch(scrape(t), -1) {
 		if strings.HasPrefix(m[1], prefix) && !slices.Contains(out, m[2]) {
 			out = append(out, m[2])
 		}
 	}
 	slices.Sort(out)
 	return out
+}
+
+// scrape returns the metrics page.
+func scrape(t *testing.T) string {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	metrics.Handler().ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/metrics", http.NoBody))
+	return rec.Body.String()
 }
 
 // checkSources fails unless every source with metrics is one of the
@@ -152,11 +158,19 @@ func TestValuationAsksOnlyItsSources(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newValuation: %v", err)
 	}
+	// No other test here asks SkupSzop, so before the run its series are
+	// the zeroes newValuation exports.
+	if body := scrape(t); !strings.Contains(body, "\n"+`ohara_source_errors_total{source="skupszop"} 0`+"\n") {
+		t.Fatal("newValuation must export the skupszop series before the first quote")
+	}
 	if _, err := r.Run(ctx); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if got, paths := u.asked(); !slices.Equal(got, []string{"olx", "skupszop"}) {
 		t.Fatalf("asked %v (paths %v), want olx and skupszop only", got, paths)
+	}
+	if body := scrape(t); !strings.Contains(body, `ohara_source_requests_total{source="skupszop",status="http_503"} 1`) {
+		t.Fatal("the run's quote must count as http_503 under skupszop")
 	}
 	checkSources(t)
 }

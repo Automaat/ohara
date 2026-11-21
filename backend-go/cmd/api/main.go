@@ -454,6 +454,9 @@ func newValuation(pool *pgxpool.Pool, logger *slog.Logger) (*valuation.Runner, *
 	buybacks := []valuation.BuyBack{
 		valuation.SkupSzop{Client: client, BaseURL: envOr("OHARA_VALUATION_SKUPSZOP_URL", valuation.SkupSzopURL)},
 	}
+	for _, b := range buybacks {
+		metrics.InitSource(b.Name())
+	}
 	window := time.Duration(days) * 24 * time.Hour
 	var pricer valuation.ReleasePricer
 	if d := newDiscogs(); d != nil {

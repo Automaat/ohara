@@ -345,5 +345,7 @@ home-nas stack file.
   `:latest` and `:<sha>`.
 - One Go patch release everywhere: `toolchain` in `backend-go/go.mod`
   (CI's `setup-go` reads it), the Dockerfile's `golang` tag and `go` in
-  `.mise.toml`. Renovate's `go` group bumps them in one PR; the `go`
+  `.mise.toml`. Renovate's `go` group bumps them in one PR, opened only
+  once all three have the release (`minimumGroupSize: 3`), and CI's
+  `scripts/check-go-versions.sh` fails when they differ; the `go`
   language line stays where it is.

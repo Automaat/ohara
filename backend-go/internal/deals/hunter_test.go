@@ -616,3 +616,112 @@ func TestPanickingRunFailsAndTheScheduleGoesOn(t *testing.T) {
 		}
 	}
 }
+
+// callLog records source requests and notifier sends in the order they
+// happen.
+type callLog struct {
+	mu    sync.Mutex
+	calls []string
+}
+
+func (c *callLog) add(call string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls = append(c.calls, call)
+}
+
+func (c *callLog) list() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.calls...)
+}
+
+type loggedSource struct {
+	*fakeSource
+	log *callLog
+}
+
+func (s loggedSource) Search(ctx context.Context, query string) ([]Listing, error) {
+	s.log.add("search " + s.name)
+	return s.fakeSource.Search(ctx, query)
+}
+
+type loggedNotifier struct {
+	fakeNotifier
+	log *callLog
+}
+
+func (n *loggedNotifier) Send(ctx context.Context, text string) error {
+	n.log.add("send")
+	return n.fakeNotifier.Send(ctx, text)
+}
+
+func TestRunSendsAlertBeforeTheNextRequest(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	wishlist(t, pool, wantBluray(new(int64(5000))))
+	log := &callLog{}
+	olx := loggedSource{olxFixture(t), log}
+	other := loggedSource{&fakeSource{name: "other", perQuery: true}, log}
+	notifier := &loggedNotifier{log: log}
+	if res := mustRun(t, newTestHunter(pool, notifier, olx, other)); res.Sent != 1 {
+		t.Fatalf("run = %+v", res)
+	}
+	want := []string{"search olx", "send", "search olx", "search other", "search other"}
+	if got := log.list(); !slices.Equal(got, want) {
+		t.Fatalf("calls = %q, want %q", got, want)
+	}
+}
+
+func TestRunTriesAFailedAlertOncePerRun(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	wishlist(t, pool, wantBluray(new(int64(5000))))
+	notifier := &fakeNotifier{fail: 100}
+	other := &fakeSource{name: "other", perQuery: true}
+	h := newTestHunter(pool, notifier, olxFixture(t), other)
+	if res := mustRun(t, h); res.Alerts != 1 || res.Sent != 0 || len(other.queries) != 2 {
+		t.Fatalf("run = %+v, other asked %q", res, other.queries)
+	}
+	if notifier.fail != 99 {
+		t.Fatalf("notifier tried %d times in one run, want 1", 100-notifier.fail)
+	}
+	if n := count(t, pool, `SELECT attempts FROM deal_alert`); n != 1 {
+		t.Fatalf("attempts = %d after one run, want 1", n)
+	}
+	mustRun(t, h)
+	if n := count(t, pool, `SELECT attempts FROM deal_alert`); n != 2 {
+		t.Fatalf("attempts = %d after two runs, want 2", n)
+	}
+}
+
+func TestRunAlertsOnceForAListingInTwoAnswersAndPacesMessages(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	wishlist(t, pool, wantBluray(new(int64(5000))))
+	cheap := Listing{Source: "olx", ExternalID: "1", Title: "Blade Runner Blu-ray", URL: "https://www.olx.pl/d/oferta/z-ID1.html", PriceCents: 4000}
+	olx := &fakeSource{name: "olx", perQuery: true, listings: []Listing{cheap}}
+	other := &fakeSource{name: "other", perQuery: true, listings: []Listing{{
+		Source: "other", ExternalID: "2", Title: "Blade Runner Blu-ray PL", URL: "https://example.com/2", PriceCents: 4500,
+	}}}
+	notifier := &fakeNotifier{}
+	h := newTestHunter(pool, notifier, olx, other)
+	var mu sync.Mutex
+	var waits []time.Duration
+	h.sleep = func(ctx context.Context, d time.Duration) error {
+		mu.Lock()
+		waits = append(waits, d)
+		mu.Unlock()
+		return ctx.Err()
+	}
+	res := mustRun(t, h)
+	if len(olx.queries) != 2 || res.Alerts != 2 || res.Sent != 2 {
+		t.Fatalf("run = %+v, olx asked %q", res, olx.queries)
+	}
+	if got := len(notifier.messages()); got != 2 {
+		t.Fatalf("sent %d messages, want one per listing", got)
+	}
+	paced := slices.ContainsFunc(waits, func(d time.Duration) bool {
+		return d > telegramPause-100*time.Millisecond && d <= telegramPause
+	})
+	if !paced {
+		t.Fatalf("waits = %v, want one of about telegramPause before the second message", waits)
+	}
+}

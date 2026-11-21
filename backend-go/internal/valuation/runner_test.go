@@ -301,6 +301,112 @@ func TestRecordKeepsAnEarlierEdition(t *testing.T) {
 	}
 }
 
+// wishBluray adds a wished Blu-ray edition 22 of "Diuna" next to seed's
+// owned Blu-ray 20 and records found against it, as the deal hunter does.
+func wishBluray(t *testing.T, pool *pgxpool.Pool, found []deals.Listing) {
+	t.Helper()
+	exec(t, pool, `INSERT INTO edition (id, title_id, barcode, format) OVERRIDING SYSTEM VALUE
+		VALUES (22, 2, '5902600069720', 'bluray')`)
+	exec(t, pool, `INSERT INTO copy (edition_id, status) VALUES (22, 'wishlist')`)
+	bluray := "bluray"
+	wish := deals.Want{EditionID: 22, TitleID: 2, Kind: "movie", Name: "Diuna", Format: &bluray}
+	for i := range found {
+		if _, _, err := deals.NewStore(pool).Record(context.Background(), &found[i], &wish, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestWishedEditionListingsPriceTheOwnedEdition(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	seed(t, pool)
+	ctx := context.Background()
+	found := []deals.Listing{
+		listing("olx", "b1", "Diuna Blu-ray", 4000, used()),
+		listing("olx", "b2", "Diuna Blu-ray PL", 4500, used()),
+		listing("olx", "b3", "Diuna Blu-ray stan idealny", 5000, used()),
+	}
+	wishBluray(t, pool, found)
+	r := newTestRunner(pool, &fakeSource{name: "olx", listings: found}, &fakeSource{name: "ceneo"},
+		&fakeBuyBack{quotes: map[string]Quote{}})
+	if _, err := r.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	copies, _, err := r.store.Valued(ctx, r.Window())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range copies {
+		if c.EditionID == 20 && (c.Mid == nil || c.Mid.Count != 3) {
+			t.Fatalf("owned Blu-ray mid = %+v, want the 3 OLX Blu-ray prices", c.Mid)
+		}
+	}
+}
+
+func TestWishedEditionListingsSetTheOwnedCeiling(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	seed(t, pool)
+	ctx := context.Background()
+	found := []deals.Listing{
+		listing("ceneo", "c1", "Diuna Blu-ray", 6000, fresh()),
+		listing("ceneo", "c2", "Diuna Blu-ray PL", 6500, fresh()),
+	}
+	wishBluray(t, pool, found)
+	r := newTestRunner(pool, &fakeSource{name: "olx"}, &fakeSource{name: "ceneo", listings: found},
+		&fakeBuyBack{quotes: map[string]Quote{}})
+	if _, err := r.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	copies, _, err := r.store.Valued(ctx, r.Window())
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := 0
+	for _, c := range copies {
+		if c.EditionID != 20 {
+			continue
+		}
+		seen++
+		if c.Ceiling == nil || c.Ceiling.Count != 2 || c.Ceiling.Cents != 6250 {
+			t.Fatalf("owned Blu-ray ceiling = %+v, want the 2 Ceneo Blu-ray prices", c.Ceiling)
+		}
+	}
+	if seen == 0 {
+		t.Fatal("owned Blu-ray copies missing")
+	}
+}
+
+func TestPricesPoolOnlyMiddlesAndCeilings(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	seed(t, pool)
+	ctx := context.Background()
+	exec(t, pool, `INSERT INTO edition (id, title_id, barcode, binding) OVERRIDING SYSTEM VALUE
+		VALUES (12, 1, '9788308049396', 'hardcover')`)
+	exec(t, pool, `INSERT INTO edition (id, title_id, barcode, format, discogs_release_id)
+		OVERRIDING SYSTEM VALUE VALUES (22, 2, '5902600069720', 'bluray', 77)`)
+	exec(t, pool, `INSERT INTO copy (edition_id, status) VALUES (22, 'wishlist')`)
+	exec(t, pool, `INSERT INTO price_observation (source, external_id, price_cents, edition_id, last_seen_at)
+		VALUES ('olx', 'printing', 100, 12, now()),
+		       ('ceneo', 'printing-new', 110, 12, now()),
+		       ('skupszop', '9788308049396', 120, 12, now()),
+		       ('vinted', 'wish', 200, 22, now()),
+		       ('discogs_vg_plus', '77/22', 210, 22, now()),
+		       ('olx', 'dvd', 300, 21, now()),
+		       ('ceneo', 'dvd-new', 310, 21, now())`)
+	prices, err := NewStore(pool).Prices(ctx, 90*24*time.Hour)
+	if err != nil {
+		t.Fatalf("Prices: %v", err)
+	}
+	got := make([]int64, 0, len(prices))
+	for _, p := range prices {
+		got = append(got, p.Cents)
+	}
+	slices.Sort(got)
+	if !slices.Equal(got, []int64{100, 110, 200}) {
+		t.Fatalf("Prices = %+v, want only the used and Ceneo prices of unowned editions in an owned group", prices)
+	}
+}
+
 func TestStartSchedulesAfterTheLastValue(t *testing.T) {
 	pool := dbtest.Migrated(t)
 	ctx := t.Context()

@@ -405,7 +405,7 @@ func (s *Service) cached(ctx context.Context, p Provider, code string, maxAge ti
 	return nil, false, nil
 }
 
-// fetch calls the provider's Fetch; a panic in it, which chi's Recoverer
+// fetch calls the provider's Fetch; a panic in it, which the router's recoverer
 // cannot catch in this goroutine, fails the provider like an error.
 func (s *Service) fetch(ctx context.Context, p Provider, code string) (json.RawMessage, error) {
 	return recovery.Call(s.logger, "lookup provider panicked", func() (json.RawMessage, error) {

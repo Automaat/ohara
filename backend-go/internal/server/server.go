@@ -3,11 +3,13 @@ package server
 
 import (
 	"context"
+	"errors"
 	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/url"
+	"runtime/debug"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -49,6 +51,12 @@ type Deps struct {
 
 // New returns the router: probes, metrics, the JSON API and the frontend.
 func New(cfg Config, logger *slog.Logger, deps Deps) http.Handler {
+	return newRouter(cfg, logger, deps, requestTimeout)
+}
+
+// newRouter is New with the request timeout as a parameter, so tests can
+// shorten it.
+func newRouter(cfg Config, logger *slog.Logger, deps Deps, timeout time.Duration) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -57,9 +65,10 @@ func New(cfg Config, logger *slog.Logger, deps Deps) http.Handler {
 	r.Use(generalOptions)
 	r.Use(middleware.RequestID)
 	r.Use(requestObserver(logger, cfg.AccessLog))
-	r.Use(middleware.Recoverer)
-	r.Use(middleware.Timeout(requestTimeout))
+	r.Use(recoverer(logger))
+	r.Use(timeoutAfter(timeout, logger))
 	r.Use(crossOriginGuard(logger))
+	r.MethodNotAllowed(methodNotAllowed(r, logger))
 
 	r.Get("/health", healthHandler(logger, deps.DB))
 	r.Handle("/metrics", metrics.Handler())
@@ -78,6 +87,81 @@ func New(cfg Config, logger *slog.Logger, deps Deps) http.Handler {
 		r.Handle("/*", web.Handler(deps.Web))
 	}
 	return r
+}
+
+// allowCandidates are the methods a 405 can list in its Allow header.
+var allowCandidates = []string{
+	http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch,
+	http.MethodDelete, http.MethodConnect, http.MethodOptions, http.MethodTrace,
+}
+
+// methodNotAllowed answers a known path asked with a method it has no route
+// for, with the API's JSON error. chi does not pass the allowed methods to a
+// custom handler, so the Allow header its own answer carries is rebuilt from
+// the routes.
+func methodNotAllowed(routes chi.Routes, logger *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.RawPath
+		if path == "" {
+			path = r.URL.Path
+		}
+		for _, m := range allowCandidates {
+			if routes.Match(chi.NewRouteContext(), m, path) {
+				w.Header().Add("Allow", m)
+			}
+		}
+		httpx.WriteError(w, logger, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+// recoverer turns a handler panic into a logged error, with its stack, and a
+// JSON 500 when nothing was written yet. Like chi's Recoverer it lets
+// http.ErrAbortHandler through and sends no 500 on a protocol upgrade.
+func recoverer(logger *slog.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+			defer func() {
+				rvr := recover()
+				if rvr == nil {
+					return
+				}
+				if err, ok := rvr.(error); ok && errors.Is(err, http.ErrAbortHandler) {
+					panic(rvr)
+				}
+				logger.Error("handler panic",
+					"request_id", middleware.GetReqID(r.Context()),
+					"method", r.Method,
+					"path", r.URL.Path,
+					"panic", rvr,
+					"stack", string(debug.Stack()),
+				)
+				if ww.Status() == 0 && r.Header.Get("Connection") != "Upgrade" {
+					httpx.WriteError(ww, logger, http.StatusInternalServerError, "internal server error")
+				}
+			}()
+			next.ServeHTTP(ww, r)
+		})
+	}
+}
+
+// timeoutAfter cancels the request context after d. A handler that returns
+// past the deadline without writing gets a JSON 504; one that already wrote
+// keeps its answer.
+func timeoutAfter(d time.Duration, logger *slog.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx, cancel := context.WithTimeout(r.Context(), d)
+			ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+			defer func() {
+				cancel()
+				if errors.Is(ctx.Err(), context.DeadlineExceeded) && ww.Status() == 0 {
+					httpx.WriteError(ww, logger, http.StatusGatewayTimeout, "gateway timeout")
+				}
+			}()
+			next.ServeHTTP(ww, r.WithContext(ctx))
+		})
+	}
 }
 
 // permissionsPolicy lets only Ohara's own pages open the camera, for the

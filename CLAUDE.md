@@ -339,9 +339,11 @@ Runs on `custom-workloads` from `home-nas`
 `https://ohara.mskalski.dev` behind Traefik + Authelia. Nightly `pg_dump`
 goes offsite through restic.
 
-Release: run `release.yml` (empty input bumps the minor) → tag `vX.Y.Z`,
-GitHub release, `ghcr.io/automaat/ohara:vX.Y.Z`. Then bump the tag in the
-home-nas stack file.
+Release: run `release.yml` on `main` (empty input bumps the minor). It
+refuses another ref, a commit whose `CI` run has not passed and a version
+whose tag exists, then pushes `ghcr.io/automaat/ohara:vX.Y.Z`, tags `vX.Y.Z`
+and cuts the GitHub release, in that order. `:latest` comes only from CI on
+`main`. Then bump the tag in the home-nas stack file.
 
 ## Git and CI
 

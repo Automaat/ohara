@@ -11,9 +11,8 @@ describe('Content-Security-Policy', () => {
 		expect(csp.directives['script-src']).toEqual(['self', 'wasm-unsafe-eval']);
 	});
 
-	it('shows covers from any https host', () => {
-		expect(csp.directives['img-src']).toContain('https:');
-		expect(csp.directives['img-src']).not.toContain('http:');
+	it('shows covers and listing photos from any web host', () => {
+		expect(csp.directives['img-src']).toEqual(expect.arrayContaining(['https:', 'http:']));
 	});
 
 	it('loads no plugins and keeps base and form targets on this origin', () => {

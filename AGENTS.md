@@ -152,8 +152,10 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   `'self'` plus `'wasm-unsafe-eval'` for zxing, never `'unsafe-inline'` or
   `'unsafe-eval'`. Styles allow `'unsafe-inline'` (Svelte and SUI style
   attributes), fonts `data:` (SUI inlines its Latin fonts), images any
-  `https:` host. Anything the page loads from another origin needs its
-  directive there.
+  `https:` or `http:` host. Anything the page loads from another origin
+  needs its directive there. `npm run build` ends with
+  `scripts/check-csp.mjs`, which fails when a built page lacks the policy
+  or an inline script's hash.
 
 ### Auth
 

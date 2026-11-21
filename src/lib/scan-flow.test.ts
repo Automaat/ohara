@@ -895,6 +895,36 @@ describe('ScanFlow without a barcode', () => {
 		expect(flow.form).toMatchObject({ kind: 'book', name: 'Lalka' });
 	});
 
+	it('goes back from the search results to the form filled in by hand', async () => {
+		const s = server({
+			'GET /api/search?kind=music&q=Kind': [200, { candidates: [album, album] }],
+			'GET /api/search?kind=music&q=Nic': [200, { candidates: [] }]
+		});
+		const flow = new ScanFlow(s.fetchFn, memory());
+		flow.start('music');
+		flow.form.name = 'Kind of Blue (mój)';
+		flow.query = 'Kind';
+		await flow.search();
+		flow.query = 'Nic';
+		await flow.search();
+		expect(flow.choosing).toBe(true);
+		flow.typeIn();
+		expect(flow.choosing).toBe(false);
+		expect(flow.notice).toBeNull();
+		expect(flow.candidate).toBeNull();
+		expect(flow.item?.target).toEqual({ kind: 'new', barcode: '', candidate: null });
+		expect(flow.form).toMatchObject({ kind: 'music', name: 'Kind of Blue (mój)' });
+	});
+
+	it('keeps the candidates a barcode resolved to', async () => {
+		const s = server(lookup([movie, book], true));
+		const flow = new ScanFlow(s.fetchFn, memory());
+		await flow.load(code);
+		flow.typeIn();
+		expect(flow.choosing).toBe(true);
+		expect(flow.item?.candidates).toHaveLength(2);
+	});
+
 	it('drops what a barcode was still answering', async () => {
 		let release: (r: [number, unknown]) => void = () => {};
 		const slow = new Promise<[number, unknown]>((resolve) => (release = resolve));

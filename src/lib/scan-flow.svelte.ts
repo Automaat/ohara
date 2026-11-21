@@ -276,6 +276,22 @@ export class ScanFlow {
 		this.issue = null;
 	}
 
+	/**
+	 * Leaves the search results for the form filled in by hand, keeping what the user typed; only
+	 * an item without a known candidate list, one being added by hand, has them to leave.
+	 */
+	typeIn() {
+		const item = this.item;
+		if (!item || item.target.kind !== 'new' || this.phase.kind !== 'ready') return;
+		if (this.phase.status !== 'missing') return;
+		this.#settleSearch();
+		item.candidates = [];
+		item.picked = null;
+		item.target = { kind: 'new', barcode: item.barcode, candidate: null };
+		this.notice = null;
+		this.issue = null;
+	}
+
 	/** Drops the answer of a title search still on its way. */
 	#settleSearch() {
 		this.#search++;

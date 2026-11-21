@@ -314,3 +314,62 @@ func (s *Store) WishCount(ctx context.Context) (int, error) {
 	}
 	return n, nil
 }
+
+// LastRun is the hunter's last run as stored: when it started and, once it
+// ended, when and with what result. FinishedAt and Result belong to an
+// earlier run while a newer one has started but not finished.
+type LastRun struct {
+	StartedAt  time.Time
+	FinishedAt *time.Time
+	Result     *RunResult
+}
+
+// LastRun returns the stored last run; false before the first.
+func (s *Store) LastRun(ctx context.Context) (LastRun, bool, error) {
+	var (
+		run    LastRun
+		result []byte
+	)
+	err := s.pool.QueryRow(ctx, `SELECT started_at, finished_at, result FROM deal_run`).
+		Scan(&run.StartedAt, &run.FinishedAt, &result)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return LastRun{}, false, nil
+	}
+	if err != nil {
+		return LastRun{}, false, fmt.Errorf("last run: %w", err)
+	}
+	if result != nil {
+		var res RunResult
+		if err := json.Unmarshal(result, &res); err != nil {
+			return LastRun{}, false, fmt.Errorf("last run result: %w", err)
+		}
+		run.Result = &res
+	}
+	return run, true, nil
+}
+
+// RunStarted stores the start of a run and keeps the previous run's end.
+func (s *Store) RunStarted(ctx context.Context, at time.Time) error {
+	_, err := s.pool.Exec(ctx, `INSERT INTO deal_run (started_at) VALUES ($1)
+		ON CONFLICT (id) DO UPDATE SET started_at = excluded.started_at`, at)
+	if err != nil {
+		return fmt.Errorf("run started: %w", err)
+	}
+	return nil
+}
+
+// RunFinished stores a whole run: its start too, in case storing that
+// failed.
+func (s *Store) RunFinished(ctx context.Context, started, finished time.Time, res *RunResult) error {
+	result, err := json.Marshal(res)
+	if err != nil {
+		return fmt.Errorf("run finished: %w", err)
+	}
+	_, err = s.pool.Exec(ctx, `INSERT INTO deal_run (started_at, finished_at, result) VALUES ($1, $2, $3)
+		ON CONFLICT (id) DO UPDATE SET started_at = excluded.started_at,
+			finished_at = excluded.finished_at, result = excluded.result`, started, finished, result)
+	if err != nil {
+		return fmt.Errorf("run finished: %w", err)
+	}
+	return nil
+}

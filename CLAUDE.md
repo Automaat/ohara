@@ -157,6 +157,9 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   Every run also asks each query source the canary query, wishlist or not,
   and sets `ohara_source_canary_ok` (a feed's one request is its canary)
   and `ohara_source_results`. A canary without listings is a broken source.
+  The last run, scheduled, manual or cut short by shutdown, is kept in
+  `deal_run`: after a restart the status shows it and the first scheduled
+  run comes one interval after it started, at least 5 minutes on.
 - Valuation reuses the deal matcher, store and the OLX source for owned
   editions, and quotes owned books (ISBN barcodes) at SkupSzop.
   A copy's range comes from prices last seen within the window: floor =

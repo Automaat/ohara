@@ -17,6 +17,7 @@ import (
 )
 
 // maxRunErrors bounds the source errors a run keeps for the status view.
+// A refusal, at most one per source, is kept beyond it.
 const maxRunErrors = 20
 
 // telegramPause keeps alerts under Telegram's one message per second per
@@ -259,7 +260,7 @@ func (r *run) search(ctx context.Context, src Source, queries []string) error {
 	var f Refused
 	err := r.searchAll(ctx, src, &f, queries)
 	if msg := f.Message(src.Name(), "queries"); msg != "" {
-		r.fail(msg)
+		r.res.Errors = append(r.res.Errors, msg)
 	}
 	return err
 }

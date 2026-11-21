@@ -18,6 +18,7 @@ import (
 )
 
 // maxRunErrors bounds the source errors a run keeps for the status view.
+// A refusal, at most one per site, is kept beyond it.
 const maxRunErrors = 20
 
 // firstRunDelay keeps a restart loop from hammering the sources.
@@ -277,20 +278,15 @@ func (x *run) pause(ctx context.Context) error {
 
 func (x *run) fail(source string, err error) {
 	x.r.logger.Warn("valuation source failed", "source", source, "err", err)
-	x.keep(err.Error())
-}
-
-// keep adds msg to the run's errors for the status view.
-func (x *run) keep(msg string) {
 	if len(x.res.Errors) < maxRunErrors {
-		x.res.Errors = append(x.res.Errors, msg)
+		x.res.Errors = append(x.res.Errors, err.Error())
 	}
 }
 
 // report keeps a site's refusal, if any, in the run's errors.
 func (x *run) report(site string, f *deals.Refused, unit string) {
 	if msg := f.Message(site, unit); msg != "" {
-		x.keep(msg)
+		x.res.Errors = append(x.res.Errors, msg)
 	}
 }
 

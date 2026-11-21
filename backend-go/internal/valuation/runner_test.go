@@ -889,3 +889,19 @@ func counter(t *testing.T, series string) float64 {
 	}
 	return 0
 }
+
+func TestRunKeepsTheRefusalBeyondTheErrorCap(t *testing.T) {
+	x := &run{}
+	for range maxRunErrors {
+		x.res.Errors = append(x.res.Errors, "olx: status 503")
+	}
+	var f deals.Refused
+	if !f.Note(statusError{http.StatusTooManyRequests}) {
+		t.Fatal("429 is not a refusal")
+	}
+	f.Skip()
+	x.report("olx", &f, "queries")
+	if len(x.res.Errors) != maxRunErrors+1 || x.res.Errors[maxRunErrors] != "olx: refused with status 429, skipped 1 queries" {
+		t.Fatalf("errors = %q", x.res.Errors)
+	}
+}

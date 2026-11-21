@@ -730,3 +730,39 @@ func TestRunTreatsOnly403And429AsRefusals(t *testing.T) {
 		})
 	}
 }
+
+// failThenRefuse answers its first fails queries with a 503 and every
+// later one with a 429.
+type failThenRefuse struct {
+	fails   int
+	queries []string
+}
+
+func (*failThenRefuse) Name() string   { return "fail-then-refuse" }
+func (*failThenRefuse) PerQuery() bool { return true }
+
+func (f *failThenRefuse) Search(_ context.Context, query string) ([]Listing, error) {
+	f.queries = append(f.queries, query)
+	if len(f.queries) <= f.fails {
+		return nil, statusError{http.StatusServiceUnavailable}
+	}
+	return nil, statusError{http.StatusTooManyRequests}
+}
+
+func TestRunKeepsTheRefusalBeyondTheErrorCap(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	for i := range maxRunErrors + 2 {
+		wishlist(t, pool, &Want{Kind: "movie", Name: "Film " + strconv.Itoa(i+1), Format: new("dvd")})
+	}
+	src := &failThenRefuse{fails: maxRunErrors}
+	res := mustRun(t, newTestHunter(pool, nil, src))
+	if res.Queries != maxRunErrors+2 || len(src.queries) != maxRunErrors+1 {
+		t.Fatalf("asked %d of %d queries, want all but the last", len(src.queries), res.Queries)
+	}
+	if len(res.Errors) != maxRunErrors+1 {
+		t.Fatalf("errors = %d, want %d failures and the refusal", len(res.Errors), maxRunErrors)
+	}
+	if last := res.Errors[maxRunErrors]; last != "fail-then-refuse: refused with status 429, skipped 1 queries" {
+		t.Fatalf("last error = %q", last)
+	}
+}

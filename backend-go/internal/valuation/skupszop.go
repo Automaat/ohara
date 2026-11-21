@@ -165,15 +165,18 @@ func shopDo(ctx context.Context, client *http.Client, method, target string, bod
 		return nil, err
 	}
 	defer resp.Body.Close()
+	// The status comes first: a refusal whose body breaks off is still a
+	// refusal.
+	if resp.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxShopReply))
+		return nil, statusError{resp.StatusCode}
+	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxShopReply+1))
 	if err != nil {
 		return nil, err
 	}
 	if len(data) > maxShopReply {
 		return nil, errors.New("response too large")
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, statusError{resp.StatusCode}
 	}
 	return data, nil
 }

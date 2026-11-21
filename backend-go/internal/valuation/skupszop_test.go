@@ -237,3 +237,17 @@ func TestSkupSzopRefusalStopsTheRun(t *testing.T) {
 		})
 	}
 }
+
+func TestSkupSzopRefusalWithABrokenBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "1000")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte("Too Many"))
+	}))
+	t.Cleanup(srv.Close)
+	_, err := SkupSzop{Client: srv.Client(), BaseURL: srv.URL + "/"}.Quote(context.Background(), "9788308074770")
+	var f deals.Refused
+	if err == nil || !f.Note(err) {
+		t.Fatalf("Quote err = %v, want a 429 refusal", err)
+	}
+}

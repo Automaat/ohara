@@ -48,23 +48,18 @@ func (c *clockCache) Put(_ context.Context, provider, code string, raw json.RawM
 	return nil
 }
 
-// seed stores raw as if it was fetched age ago.
-func (c *clockCache) seed(provider, code, raw string, age time.Duration) {
+// seedMiss stores the provider's "no match" answer for recheckCode as if it
+// was fetched age ago.
+func (c *clockCache) seedMiss(provider string, age time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.entries[provider+"/"+code] = clockEntry{raw: json.RawMessage(raw), fetchedAt: c.now.Add(-age)}
+	c.entries[provider+"/"+recheckCode] = clockEntry{raw: json.RawMessage(missAnswer), fetchedAt: c.now.Add(-age)}
 }
 
 func (c *clockCache) advance(d time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.now = c.now.Add(d)
-}
-
-func (c *clockCache) raw(provider, code string) string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return string(c.entries[provider+"/"+code].raw)
 }
 
 // learnedProvider is a fakeProvider whose answer without a name is a "no
@@ -120,7 +115,7 @@ func TestRecheckAsksAgainOnlyPastTheFloor(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			svc, p, cache := recheckService(t)
-			cache.seed("discogs", recheckCode, missAnswer, tt.cachedAge)
+			cache.seedMiss("discogs", tt.cachedAge)
 			lookupFn := svc.Lookup
 			if tt.recheck {
 				lookupFn = svc.Recheck
@@ -140,7 +135,7 @@ func TestRecheckAsksAgainOnlyPastTheFloor(t *testing.T) {
 func TestRecheckReplacesTheCachedAnswer(t *testing.T) {
 	svc, p, cache := recheckService(t)
 	ctx := context.Background()
-	cache.seed("discogs", recheckCode, missAnswer, 2*time.Hour)
+	cache.seedMiss("discogs", 2*time.Hour)
 
 	for range 3 {
 		res := svc.Recheck(ctx, recheckCode)
@@ -152,9 +147,7 @@ func TestRecheckReplacesTheCachedAnswer(t *testing.T) {
 	if got := p.fetchCount(); got != 1 {
 		t.Fatalf("three rechecks within an hour made %d fetches, want 1", got)
 	}
-	if got := cache.raw("discogs", recheckCode); got == missAnswer {
-		t.Fatalf("cached answer still the old miss: %s", got)
-	}
+	// The fresh answer replaced the cached miss: a plain lookup serves it.
 	if res := svc.Lookup(ctx, recheckCode); len(res.Candidates) != 1 || p.fetchCount() != 1 {
 		t.Fatalf("lookup after recheck: %+v, fetches %d", res, p.fetchCount())
 	}
@@ -174,7 +167,7 @@ func TestRecheckKeepsAShorterTTL(t *testing.T) {
 	}
 	cache := newClockCache()
 	svc := lookup.NewService(r, cache, discard())
-	cache.seed("upc", recheckCode, missAnswer, 20*time.Minute)
+	cache.seedMiss("upc", 20*time.Minute)
 	svc.Recheck(context.Background(), recheckCode)
 	if got := p.fetchCount(); got != 1 {
 		t.Fatalf("recheck past a 10-minute TTL made %d fetches, want 1", got)
@@ -184,7 +177,7 @@ func TestRecheckKeepsAShorterTTL(t *testing.T) {
 func TestRecheckAnswersWithTheSelectionFirst(t *testing.T) {
 	svc, p, cache := recheckService(t)
 	ctx := context.Background()
-	cache.seed("discogs", recheckCode, missAnswer, 2*time.Hour)
+	cache.seedMiss("discogs", 2*time.Hour)
 	picked := lookup.Candidate{Type: "music", Title: lookup.TitleFields{Name: "Picked"}}
 	if _, err := svc.Select(ctx, recheckCode, picked); err != nil {
 		t.Fatal(err)
@@ -211,7 +204,7 @@ func TestLookupHandlerRecheck(t *testing.T) {
 	for _, tt := range tests {
 		t.Run("query "+tt.query, func(t *testing.T) {
 			svc, p, cache := recheckService(t)
-			cache.seed("discogs", recheckCode, missAnswer, 2*time.Hour)
+			cache.seedMiss("discogs", 2*time.Hour)
 			h := lookup.NewHandler(svc, discard())
 			srv := httptest.NewServer(server.New(server.Config{}, discard(), server.Deps{API: []server.Mounter{h}}))
 			t.Cleanup(srv.Close)

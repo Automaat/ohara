@@ -303,7 +303,10 @@ export class ScanFlow {
 		if (!item || item.target.kind !== 'new' || this.searching || !query) return;
 		const current = this.#current;
 		const search = ++this.#search;
-		const fresh = () => current() && search === this.#search;
+		const kind = this.form.kind;
+		const latest = () => current() && search === this.#search;
+		// A search for another kind than the form now shows answers nothing.
+		const fresh = () => latest() && this.form.kind === kind;
 		this.searching = true;
 		try {
 			const found = await searchTitles(
@@ -327,7 +330,7 @@ export class ScanFlow {
 		} catch (err) {
 			if (fresh()) this.notice = errorMessage(err);
 		} finally {
-			if (fresh()) this.searching = false;
+			if (latest()) this.searching = false;
 		}
 	}
 

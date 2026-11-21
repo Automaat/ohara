@@ -94,8 +94,8 @@
 		}
 		if (p.status === 'missing') {
 			return {
-				overline: 'Dodaj ręcznie',
-				tone: 'quiet',
+				overline: candidate ? `Znaleziono · ${providerLabel(candidate)}` : 'Dodaj ręcznie',
+				tone: candidate ? 'ok' : 'quiet',
 				name: flow.form.name.trim() || undefined,
 				meta: kindLabels[flow.form.kind],
 				cover: { kind: flow.form.kind, url: candidate?.cover_url }
@@ -306,7 +306,11 @@
 		{#if flow.choosing}
 			<div class="candidates" role="group" aria-labelledby="scan-candidates">
 				<p class="caption" id="scan-candidates">
-					{albums ? 'Ten kod ma kilka wydań: wybierz swoje.' : 'Wybierz, co skanujesz.'}
+					{#if code}
+						{albums ? 'Ten kod ma kilka wydań: wybierz swoje.' : 'Wybierz, co skanujesz.'}
+					{:else}
+						{albums ? 'Wybierz wydanie.' : 'Wybierz pozycję.'}
+					{/if}
 				</p>
 				{#each item.candidates as c, i (i)}
 					<button

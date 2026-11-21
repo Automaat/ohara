@@ -877,6 +877,24 @@ describe('ScanFlow without a barcode', () => {
 		expect(keys).toMatchObject([{ request_key: key }, { request_key: key }]);
 	});
 
+	it('drops a search answer for the kind the user switched away from', async () => {
+		let release: (r: [number, unknown]) => void = () => {};
+		const held = new Promise<[number, unknown]>((resolve) => (release = resolve));
+		const s = server({ 'GET /api/search?kind=music&q=Kind+of+Blue': () => held });
+		const flow = new ScanFlow(s.fetchFn, memory());
+		flow.start('music');
+		flow.query = 'Kind of Blue';
+		const searching = flow.search();
+		flow.form.kind = 'book';
+		flow.form.name = 'Lalka';
+		release([200, { candidates: [album, album] }]);
+		await searching;
+		expect(flow.searching).toBe(false);
+		expect(flow.choosing).toBe(false);
+		expect(flow.item?.candidates).toEqual([]);
+		expect(flow.form).toMatchObject({ kind: 'book', name: 'Lalka' });
+	});
+
 	it('drops what a barcode was still answering', async () => {
 		let release: (r: [number, unknown]) => void = () => {};
 		const slow = new Promise<[number, unknown]>((resolve) => (release = resolve));

@@ -4,7 +4,7 @@ Self-hosted tracker for a physical media collection (movies, books, music):
 barcode scanning from an iPhone, purchase prices, used-deal hunting and
 valuation. Roadmap: umbrella issue #11.
 
-**Stack:** Go (chi + pgx) and PostgreSQL 18 behind a SvelteKit 2 + Svelte 5
+**Stack:** Go (chi + pgx) and PostgreSQL 18 behind a SvelteKit + Svelte 5
 SPA built with [`@smykla-skalski/sui`](https://github.com/smykla-skalski/sui).
 Same layout and tooling as `../baratie`. `package.json` and
 `backend-go/go.mod` are the source of truth for versions.

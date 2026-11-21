@@ -31,5 +31,5 @@ database with `pg_dump` and the corresponding restore tool to preserve them.
 ## Image
 
 `ghcr.io/automaat/ohara` serves the API, the web UI, `/health` and
-`/metrics` on port 8000. See [AGENTS.md](AGENTS.md) for configuration,
+`/metrics` on port 8000. See [CLAUDE.md](CLAUDE.md) for configuration,
 conventions and deployment.

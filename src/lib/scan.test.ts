@@ -340,6 +340,34 @@ describe('resolveScan', () => {
 		expect(s.calls.at(-1)?.body).toEqual(queued);
 	});
 
+	it('fails without queuing when the lookup gets no answer in 20 seconds', async () => {
+		vi.useFakeTimers();
+		try {
+			const s = server({ 'GET /api/editions?barcode=5901234123457': [200, []] });
+			const stalled: typeof fetch = (input, init) =>
+				String(input).startsWith('/api/lookup/')
+					? new Promise<Response>(() => undefined)
+					: s.fetchFn(input, init);
+			const outcome: { error?: unknown } = {};
+			const settled = resolveScan(stalled, '5901234123457').then(
+				() => undefined,
+				(err: unknown) => {
+					outcome.error = err;
+				}
+			);
+
+			await vi.advanceTimersByTimeAsync(19_999);
+			expect(outcome.error).toBeUndefined();
+			await vi.advanceTimersByTimeAsync(1);
+			await settled;
+			expect(outcome.error).toBeInstanceOf(ApiError);
+			expect(outcome.error).toMatchObject({ status: 0, message: 'Serwer nie odpowiada.' });
+			expect(s.paths()).toEqual(['GET /api/editions?barcode=5901234123457']);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it('queues a rescanned barcode only after a queue removal on its way has settled', async () => {
 		let answer: () => void = () => {};
 		vi.stubGlobal(

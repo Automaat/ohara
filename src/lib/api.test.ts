@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, errorMessage, request, requestDeadlineMs } from './api';
+import { ApiError, errorMessage, request } from './api';
 
 type Call = { url: string; init: RequestInit | undefined };
 
@@ -120,7 +120,7 @@ describe('request deadline', () => {
 		const signals: (AbortSignal | undefined)[] = [];
 		const state = track(request(stalled(signals), 'GET', '/api/lookup/5901234123457'));
 
-		await vi.advanceTimersByTimeAsync(requestDeadlineMs - 1);
+		await vi.advanceTimersByTimeAsync(19_999);
 		expect(state.settled).toBe(false);
 		expect(signals[0]?.aborted).toBe(false);
 
@@ -136,7 +136,7 @@ describe('request deadline', () => {
 			new Response(new ReadableStream({ start() {} }), { status: 200 });
 		const state = track(request(headersOnly, 'GET', '/api/collection'));
 
-		await vi.advanceTimersByTimeAsync(requestDeadlineMs);
+		await vi.advanceTimersByTimeAsync(20_000);
 		expect(state.error).toMatchObject({ status: 0, message: 'Serwer nie odpowiada.' });
 	});
 

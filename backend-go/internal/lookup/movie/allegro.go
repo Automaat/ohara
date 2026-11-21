@@ -17,6 +17,7 @@ import (
 
 	"github.com/Automaat/ohara/backend-go/internal/fetch"
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
+	"github.com/Automaat/ohara/backend-go/internal/reqlog"
 )
 
 // AllegroUserAgent identifies Ohara to Allegro. The Allegro REST API terms
@@ -193,11 +194,12 @@ func (a *Allegro) currentToken(ctx context.Context, force bool) (string, *tokenO
 }
 
 // startOp runs a refresh of t, or a save of t, in its own goroutine. The
-// caller holds a.mu.
+// caller holds a.mu. The op may outlive the lookup that started it, so its
+// context drops the request's log info.
 func (a *Allegro) startOp(ctx context.Context, t Token, refresh bool) {
 	op := &tokenOp{done: make(chan struct{}), refresh: refresh, chain: append(slices.Clone(a.chain), t.Refresh)}
 	a.op = op
-	go a.runOp(context.WithoutCancel(ctx), op, t)
+	go a.runOp(reqlog.Detach(context.WithoutCancel(ctx)), op, t)
 }
 
 // runOp drops a refresh token Allegro rejects, so the next lookup loads

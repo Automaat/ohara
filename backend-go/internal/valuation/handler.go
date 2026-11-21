@@ -53,17 +53,17 @@ func (h *Handler) view(w http.ResponseWriter, r *http.Request) {
 	window := h.runner.Window()
 	copies, sum, err := h.store.Valued(r.Context(), window)
 	if err != nil {
-		httpx.WriteInternal(w, h.logger, "valuation", err)
+		httpx.WriteInternal(w, r, h.logger, "valuation", err)
 		return
 	}
 	history, err := h.store.History(r.Context(), historyDays)
 	if err != nil {
-		httpx.WriteInternal(w, h.logger, "valuation history", err)
+		httpx.WriteInternal(w, r, h.logger, "valuation history", err)
 		return
 	}
 	latest, ok, err := h.store.Latest(r.Context())
 	if err != nil {
-		httpx.WriteInternal(w, h.logger, "valuation latest", err)
+		httpx.WriteInternal(w, r, h.logger, "valuation latest", err)
 		return
 	}
 	var last *string

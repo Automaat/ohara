@@ -34,6 +34,7 @@ Same layout and tooling as `../baratie`. `package.json` and
     /metrics/          # Prometheus collectors on a private registry (ohara_*)
     /recovery/         # recovery.Call: a panic outside a request handler becomes a logged error
     /seed/             # `api seed`: demo data for an empty local database
+    /reqlog/           # slog handler adding a request's request_id, method and path to *Context log lines
 /src/                  # SvelteKit SPA (adapter-static, ssr off)
   /routes/             # pages; /scan is the scanner, /scan/queue the unresolved barcodes
   /lib/                # nav table, API client, collection types, form helpers, scan flow (pure TS, unit tested)
@@ -73,6 +74,12 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   The router's own answers share the shape: 405 for a wrong method (with
   `Allow`), 500 for a handler panic (logged with its stack) and 504 for a
   request past the 30 s timeout whose handler wrote nothing.
+- Every router answer carries `X-Request-Id`, the ID the access log and
+  the panic log record; one a client sends is ignored. `cmd/api`'s logger
+  wraps its text handler in `reqlog.NewHandler`, so a `*Context` log call
+  with the request's context adds `request_id`, `method` and `path`;
+  `httpx.WriteInternal` takes the request for that. Lines logged outside a
+  request keep their form.
 - Money is integer grosze (`price_cents`). Barcodes are stored normalized
   (`barcode.Normalize`: EAN-8, EAN-13 or GTIN-14; a UPC-A becomes its
   EAN-13 with a leading 0, ISBN-10 becomes ISBN-13), one edition per barcode.
@@ -355,17 +362,22 @@ browser's `Host` (`changeOrigin: false`) so dev writes pass this check.
 
 ```bash
 mise run dev                         # Postgres + app from source (docker compose)
-mise run backend                     # API only, needs DATABASE_URL or PG*
+mise run db                          # Postgres only, in the background
+mise run backend                     # API only; the `mise run db` Postgres unless DATABASE_URL or PGHOST is set
 mise run frontend                    # Vite dev server, proxies /api to :8000
 mise run seed                        # demo data into the empty `mise run dev` database
+mise run test-backend                # go test ./... with DB tests in ohara_test; args go to go test
 
 npm run lint && npm run check        # oxlint + prettier, svelte-check
 npm run test:coverage                # vitest
 npm run build                        # SPA into build/
-cd backend-go && go test ./...       # set OHARA_TEST_DATABASE_URL for DB tests
+cd backend-go && go test ./...       # DB tests skip unless OHARA_TEST_DATABASE_URL is set
 cd backend-go && golangci-lint run ./...
 ./scripts/run-nilaway.sh backend-go github.com/Automaat/ohara/backend-go
 ```
+
+`OHARA_DB_PORT` (default `5432`) moves the dev Postgres's host port when
+another one holds 5432; `db`, `backend` and `test-backend` follow it.
 
 Allegro authorization is one-time: with the client credentials set, run
 `docker exec -it ohara api allegro-login`, open the printed link and

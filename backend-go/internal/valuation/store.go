@@ -17,6 +17,14 @@ import (
 type Store struct {
 	pool  *pgxpool.Pool
 	deals *deals.Store
+	// betweenReads runs in Valued after the copies are read and before
+	// their prices are, so a test can change the database in between.
+	betweenReads func()
+}
+
+// querier runs a query on the pool or inside a transaction.
+type querier interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }
 
 // NewStore wraps pool.
@@ -76,7 +84,11 @@ func (s *Store) Record(ctx context.Context, l *deals.Listing, h *Holding) (bool,
 // names now: its external ID is "<release>/<edition>", so a changed or
 // cleared release stops valuing the edition at once.
 func (s *Store) Prices(ctx context.Context, window time.Duration) ([]Price, error) {
-	rows, err := s.pool.Query(ctx, `SELECT o.edition_id, e.title_id, e.format, o.source,
+	return prices(ctx, s.pool, window)
+}
+
+func prices(ctx context.Context, q querier, window time.Duration) ([]Price, error) {
+	rows, err := q.Query(ctx, `SELECT o.edition_id, e.title_id, e.format, o.source,
 			o.price_cents, o.acquired_as, o.last_seen_at
 		FROM price_observation o JOIN edition e ON e.id = o.edition_id
 		WHERE o.source = ANY ($1)
@@ -98,8 +110,12 @@ func (s *Store) Prices(ctx context.Context, window time.Duration) ([]Price, erro
 
 // Copies returns every owned copy with its edition and title, by title.
 func (s *Store) Copies(ctx context.Context) ([]CopyValue, error) {
-	rows, err := s.pool.Query(ctx, `SELECT c.id, e.id, t.id, t.name, t.kind, e.format, e.barcode,
-			c.price_cents, `+collection.CoverURL+`
+	return copies(ctx, s.pool)
+}
+
+func copies(ctx context.Context, q querier) ([]CopyValue, error) {
+	rows, err := q.Query(ctx, `SELECT c.id, e.id, t.id, t.name, t.kind, e.format, e.barcode,
+			c.price_cents, `+collection.CoverURL+`, e.discogs_release_id
 		FROM copy c JOIN edition e ON e.id = c.edition_id JOIN title t ON t.id = e.title_id
 		WHERE c.status = 'owned'
 		ORDER BY lower(t.name), c.id`)
@@ -109,24 +125,34 @@ func (s *Store) Copies(ctx context.Context) ([]CopyValue, error) {
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (CopyValue, error) {
 		var c CopyValue
 		err := row.Scan(&c.CopyID, &c.EditionID, &c.TitleID, &c.TitleName, &c.Kind, &c.Format,
-			&c.Barcode, &c.PriceCents, &c.CoverURL)
+			&c.Barcode, &c.PriceCents, &c.CoverURL, &c.DiscogsReleaseID)
 		return c, err
 	})
 }
 
 // Valued returns every owned copy with its range and the collection
-// summary, from the prices last seen within window.
+// summary, from the prices last seen within window. Copies and prices
+// come from one snapshot, so a copy's Discogs release is the one its
+// Discogs prices were read for.
 func (s *Store) Valued(ctx context.Context, window time.Duration) ([]CopyValue, Summary, error) {
-	copies, err := s.Copies(ctx)
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return nil, Summary{}, fmt.Errorf("valued: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	owned, err := copies(ctx, tx)
 	if err != nil {
 		return nil, Summary{}, err
 	}
-	prices, err := s.Prices(ctx, window)
+	if s.betweenReads != nil {
+		s.betweenReads()
+	}
+	seen, err := prices(ctx, tx, window)
 	if err != nil {
 		return nil, Summary{}, err
 	}
-	Value(copies, NewRanges(prices))
-	return copies, Summarize(copies), nil
+	Value(owned, NewRanges(seen))
+	return owned, Summarize(owned), nil
 }
 
 // HistoryPoint is one day of the collection's value.

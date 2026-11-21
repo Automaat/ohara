@@ -33,8 +33,8 @@ func (a failingAPI) Mount(r chi.Router) {
 		}
 		httpx.WriteJSON(w, a.logger, http.StatusCreated, in)
 	})
-	r.Get("/broken", func(w http.ResponseWriter, _ *http.Request) {
-		httpx.WriteInternal(w, a.logger, "load", errors.New("boom"))
+	r.Get("/broken", func(w http.ResponseWriter, req *http.Request) {
+		httpx.WriteInternal(w, req, a.logger, "load", errors.New("boom"))
 	})
 	r.Get("/panic", func(http.ResponseWriter, *http.Request) {
 		panic("boom")

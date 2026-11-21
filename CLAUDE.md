@@ -33,6 +33,7 @@ Same layout and tooling as `../baratie`. `package.json` and
     /fetch/            # fetch.Do: one request to an outside source, capped body, query-free errors
     /metrics/          # Prometheus collectors on a private registry (ohara_*)
     /recovery/         # recovery.Call: a panic outside a request handler becomes a logged error
+    /reqlog/           # slog handler adding a request's request_id, method and path to *Context log lines
 /src/                  # SvelteKit SPA (adapter-static, ssr off)
   /routes/             # pages; /scan is the scanner, /scan/queue the unresolved barcodes
   /lib/                # nav table, API client, collection types, form helpers, scan flow (pure TS, unit tested)
@@ -72,6 +73,12 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   The router's own answers share the shape: 405 for a wrong method (with
   `Allow`), 500 for a handler panic (logged with its stack) and 504 for a
   request past the 30 s timeout whose handler wrote nothing.
+- Every router answer carries `X-Request-Id`, the ID the access log and
+  the panic log record; one a client sends is ignored. `cmd/api`'s logger
+  wraps its text handler in `reqlog.NewHandler`, so a `*Context` log call
+  with the request's context adds `request_id`, `method` and `path`;
+  `httpx.WriteInternal` takes the request for that. Lines logged outside a
+  request keep their form.
 - Money is integer grosze (`price_cents`). Barcodes are stored normalized
   (`barcode.Normalize`: EAN-8, EAN-13 or GTIN-14; a UPC-A becomes its
   EAN-13 with a leading 0, ISBN-10 becomes ISBN-13), one edition per barcode.

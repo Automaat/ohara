@@ -35,7 +35,7 @@ func (h *Handler) getEditionCover(w http.ResponseWriter, r *http.Request) {
 	}
 	photo, err := h.store.editionCover(r.Context(), id)
 	if err != nil {
-		h.writeErr(w, "get edition cover", notFound(err))
+		h.writeErr(w, r, "get edition cover", notFound(err))
 		return
 	}
 	w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -66,7 +66,7 @@ func (h *Handler) putEditionCover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.store.setEditionCover(r.Context(), id, photo); err != nil {
-		h.writeErr(w, "save edition cover", notFound(err))
+		h.writeErr(w, r, "save edition cover", notFound(err))
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -78,7 +78,7 @@ func (h *Handler) deleteEditionCover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.store.setEditionCover(r.Context(), id, nil); err != nil {
-		h.writeErr(w, "remove edition cover", notFound(err))
+		h.writeErr(w, r, "remove edition cover", notFound(err))
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

@@ -37,7 +37,7 @@ func (h *Handler) Mount(r chi.Router) {
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	entries, err := h.store.List(r.Context())
 	if err != nil {
-		httpx.WriteInternal(w, h.logger, "list scan queue", err)
+		httpx.WriteInternal(w, r, h.logger, "list scan queue", err)
 		return
 	}
 	httpx.WriteJSON(w, h.logger, http.StatusOK, entries)
@@ -70,7 +70,7 @@ func (h *Handler) add(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrInCollection):
 		httpx.WriteJSON(w, h.logger, http.StatusConflict, httpx.Error{Error: err.Error(), Field: "barcode"})
 	case err != nil:
-		httpx.WriteInternal(w, h.logger, "add to scan queue", err)
+		httpx.WriteInternal(w, r, h.logger, "add to scan queue", err)
 	case created:
 		httpx.WriteJSON(w, h.logger, http.StatusCreated, entry)
 	default:
@@ -88,7 +88,7 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrNotFound):
 		httpx.WriteError(w, h.logger, http.StatusNotFound, "not found")
 	case err != nil:
-		httpx.WriteInternal(w, h.logger, "delete scan queue entry", err)
+		httpx.WriteInternal(w, r, h.logger, "delete scan queue entry", err)
 	default:
 		w.WriteHeader(http.StatusNoContent)
 	}

@@ -1,5 +1,5 @@
 // Package recovery turns a panic into an error in goroutines Ohara starts
-// outside a request handler, where chi's Recoverer does not reach. A
+// outside a request handler, where the router's recoverer does not reach. A
 // third-party answer that trips a parser then fails its provider, source
 // or run instead of ending the process.
 package recovery

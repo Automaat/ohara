@@ -299,6 +299,15 @@ func titleSearchers() map[string]lookup.TextSearcher {
 	return s
 }
 
+// discogsBudget is the rate budget of OHARA_DISCOGS_TOKEN, which every
+// Discogs client of the process sends: the music lookup, the title search
+// and the valuation draw on it together.
+var discogsBudget = discogs.NewLimiter()
+
+// discogsHTTP sends the Discogs requests, one connection each, so that no
+// resend by net/http escapes discogsBudget.
+var discogsHTTP = discogs.NewHTTPClient()
+
 // newDiscogs is the Discogs client, or nil without OHARA_DISCOGS_TOKEN:
 // every Discogs endpoint needs a token.
 func newDiscogs() *discogs.Client {
@@ -306,7 +315,9 @@ func newDiscogs() *discogs.Client {
 	if token == "" {
 		return nil
 	}
-	return &discogs.Client{HTTP: sourceClient, BaseURL: envOr("OHARA_DISCOGS_URL", discogs.BaseURL), Token: token}
+	return &discogs.Client{
+		HTTP: discogsHTTP, BaseURL: envOr("OHARA_DISCOGS_URL", discogs.BaseURL), Token: token, Limiter: discogsBudget,
+	}
 }
 
 // newMusicProvider builds the music chain: Discogs when a token is set,
@@ -485,19 +496,28 @@ func newValuation(pool *pgxpool.Pool, lane *deals.Lane, logger *slog.Logger) (*v
 		metrics.InitSource(b.Name())
 	}
 	window := time.Duration(days) * 24 * time.Hour
-	var pricer valuation.ReleasePricer
-	if d := newDiscogs(); d != nil {
-		pricer = valuation.Discogs{
-			Market:      d,
-			Rates:       &valuation.NBP{Client: client, BaseURL: envOr("OHARA_VALUATION_NBP_URL", valuation.NBPURL)},
-			Suggestions: envOr("OHARA_DISCOGS_PRICE_SUGGESTIONS", "true") == "true",
-		}
-		metrics.InitSource(valuation.SourceNBP)
-	}
+	pricer := newReleasePricer(client)
 	logger.Info("valuation", "interval", interval, "window_days", days, "discogs", pricer != nil)
 	store := valuation.NewStore(pool)
 	cfg := valuation.Config{Interval: interval, Delay: delay, Window: window}
 	return valuation.NewRunner(store, sources, buybacks, pricer, cfg, logger), store, nil
+}
+
+// newReleasePricer prices album releases on the Discogs marketplace, or is
+// nil without OHARA_DISCOGS_TOKEN. Its requests yield the shared budget to
+// scans and title searches.
+func newReleasePricer(client *http.Client) valuation.ReleasePricer {
+	d := newDiscogs()
+	if d == nil {
+		return nil
+	}
+	d.Priority = discogs.Background
+	metrics.InitSource(valuation.SourceNBP)
+	return valuation.Discogs{
+		Market:      d,
+		Rates:       &valuation.NBP{Client: client, BaseURL: envOr("OHARA_VALUATION_NBP_URL", valuation.NBPURL)},
+		Suggestions: envOr("OHARA_DISCOGS_PRICE_SUGGESTIONS", "true") == "true",
+	}
 }
 
 func registerPoolMetrics(pool *pgxpool.Pool) {

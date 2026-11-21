@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"time"
 
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
 )
@@ -34,11 +35,40 @@ const maxBody = 4 << 20
 const maxResults = 10
 
 // Client calls the Discogs API with a personal access token. The API
-// allows 60 authenticated requests a minute; callers pace their requests.
+// allows 60 authenticated requests a minute: every request, and every
+// redirect it follows, waits for Limiter at Priority, then has
+// RequestTimeout to finish. Every Client of the same token shares one
+// Limiter, with HTTP from NewHTTPClient; a nil Limiter leaves the pacing
+// to the caller.
 type Client struct {
-	HTTP    *http.Client
-	BaseURL string
-	Token   string
+	HTTP     *http.Client
+	BaseURL  string
+	Token    string
+	Limiter  *Limiter
+	Priority Priority
+}
+
+// maxRedirects is how many redirects a request follows, as net/http does.
+const maxRedirects = 10
+
+// RequestTimeout bounds every request sent, the first and each redirect,
+// from its own turn in the budget: one that has not reached Discogs by
+// then is given up, so it cannot arrive late and crowd a later minute.
+const RequestTimeout = 8 * time.Second
+
+// NewHTTPClient returns the HTTP client a Client of a Limiter needs: it
+// speaks HTTP/1.1 on a fresh connection for every request. net/http
+// resends a GET by itself when a reused connection drops, and that resend
+// would skip the budget.
+func NewHTTPClient() *http.Client {
+	var protocols http.Protocols
+	protocols.SetHTTP1(true)
+	return &http.Client{Transport: &http.Transport{
+		Proxy:               http.ProxyFromEnvironment,
+		DisableKeepAlives:   true,
+		Protocols:           &protocols,
+		TLSHandshakeTimeout: 5 * time.Second,
+	}}
 }
 
 // Release is one release a barcode search found. Title is Discogs'
@@ -136,9 +166,66 @@ func (c *Client) PriceSuggestions(ctx context.Context, id int64) (Suggestions, e
 	return s, err
 }
 
-// get fetches path, decodes the JSON body into out and runs check on it.
-// The outcome counts in the source health metrics: ok only once the body
-// decodes and passes check. Errors name the path without the query.
+// httpClient is c.HTTP, or the default client, with every redirect hop
+// waiting for the budget too, since net/http resends the token to the same
+// host, and every request sent bounded by RequestTimeout from its turn.
+func (c *Client) httpClient() *http.Client {
+	client := http.DefaultClient
+	if c.HTTP != nil {
+		client = c.HTTP
+	}
+	paced := *client
+	paced.Transport = hopTimeout{next: client.Transport}
+	check := client.CheckRedirect
+	paced.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if check != nil {
+			if err := check(req, via); err != nil {
+				return err
+			}
+		} else if len(via) >= maxRedirects {
+			return errors.New("stopped after 10 redirects")
+		}
+		return c.Limiter.Wait(req.Context(), c.Priority)
+	}
+	return &paced
+}
+
+// hopTimeout gives each request it sends RequestTimeout, counted when it
+// starts: right after the request's turn in the budget. The response body
+// keeps the deadline until it is closed.
+type hopTimeout struct{ next http.RoundTripper }
+
+func (h hopTimeout) RoundTrip(r *http.Request) (*http.Response, error) {
+	next := h.next
+	if next == nil {
+		next = http.DefaultTransport
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), RequestTimeout)
+	resp, err := next.RoundTrip(r.WithContext(ctx))
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	resp.Body = cancelOnClose{ReadCloser: resp.Body, cancel: cancel}
+	return resp, nil
+}
+
+// cancelOnClose ends a request's deadline once its body is closed.
+type cancelOnClose struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (b cancelOnClose) Close() error {
+	defer b.cancel()
+	return b.ReadCloser.Close()
+}
+
+// get waits for the token's budget, fetches path, decodes the JSON body
+// into out and runs check on it. The outcome counts in the source health
+// metrics: ok only once the body decodes and passes check; a request the
+// budget kept back was never sent and does not count. Errors name the
+// path without the query.
 func (c *Client) get(ctx context.Context, path string, out any, check func() error) error {
 	base := c.BaseURL
 	if base == "" {
@@ -152,11 +239,10 @@ func (c *Client) get(ctx context.Context, path string, out any, check func() err
 	req.Header.Set("Accept", "application/vnd.discogs.v2.discogs+json")
 	req.Header.Set("User-Agent", UserAgent)
 	req.Header.Set("Authorization", "Discogs token="+c.Token)
-	client := c.HTTP
-	if client == nil {
-		client = http.DefaultClient
+	if err := c.Limiter.Wait(ctx, c.Priority); err != nil {
+		return fmt.Errorf("discogs: GET %s: wait for rate budget: %w", req.URL.Path, err)
 	}
-	resp, err := client.Do(req)
+	resp, err := c.httpClient().Do(req)
 	if err != nil {
 		metrics.ObserveSource(Source, metrics.SourceError)
 		if uerr, ok := errors.AsType[*url.Error](err); ok {

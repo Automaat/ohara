@@ -343,3 +343,7 @@ home-nas stack file.
 - CI: frontend (lint, check, coverage, build), Go (vet, test against
   Postgres, golangci-lint, nilaway), image build; `main` pushes
   `:latest` and `:<sha>`.
+- One Go patch release everywhere: `toolchain` in `backend-go/go.mod`
+  (CI's `setup-go` reads it), the Dockerfile's `golang` tag and `go` in
+  `.mise.toml`. Renovate's `go` group bumps them in one PR; the `go`
+  language line stays where it is.

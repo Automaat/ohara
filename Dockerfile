@@ -8,7 +8,7 @@ COPY src ./src
 COPY static ./static
 RUN npm run build
 
-FROM golang:1.27-alpine AS api
+FROM golang:1.27.4-alpine AS api
 ARG VERSION=dev
 WORKDIR /src
 COPY backend-go/go.mod backend-go/go.sum ./

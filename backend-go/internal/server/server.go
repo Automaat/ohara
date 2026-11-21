@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -76,17 +77,45 @@ func New(cfg Config, logger *slog.Logger, deps Deps) http.Handler {
 	return r
 }
 
-// crossOriginGuard answers 403 to any method but GET, HEAD and OPTIONS when the
-// browser marks the request as cross-origin: by Sec-Fetch-Site, or, when that
-// header is missing, by an Origin whose host is not Host. Authelia's session
+// crossOriginGuard answers 403 to a cross-origin write. Authelia's session
 // cookie covers every sibling site of the parent domain, so their pages could
-// otherwise write here. Clients that send neither header, like curl, pass.
+// otherwise write here.
 func crossOriginGuard(logger *slog.Logger) func(http.Handler) http.Handler {
-	cop := http.NewCrossOriginProtection()
-	cop.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		httpx.WriteError(w, logger, http.StatusForbidden, "cross-origin request rejected")
-	}))
-	return cop.Handler
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if crossOriginWrite(r) {
+				httpx.WriteError(w, logger, http.StatusForbidden, "cross-origin request rejected")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// crossOriginWrite reports a request other than GET, HEAD and OPTIONS that the
+// browser marks as cross-origin: a Sec-Fetch-Site other than same-origin or
+// none, or an Origin whose host is not Host. Each header decides on its own,
+// unlike http.CrossOriginProtection, which ignores Origin once Sec-Fetch-Site
+// is set. Clients that send neither header, like curl, pass.
+func crossOriginWrite(r *http.Request) bool {
+	switch r.Method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return false
+	}
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "", "same-origin", "none":
+	default:
+		return true
+	}
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return false
+	}
+	u, err := url.Parse(origin)
+	if err != nil {
+		return true
+	}
+	return u.Host != r.Host
 }
 
 func requestObserver(logger *slog.Logger, accessLog bool) func(http.Handler) http.Handler {

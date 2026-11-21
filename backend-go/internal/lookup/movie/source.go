@@ -8,14 +8,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
-	"net/url"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/Automaat/ohara/backend-go/internal/fetch"
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
 )
 
@@ -36,39 +34,19 @@ type NameSource interface {
 // maxBody caps a provider response; a search page is a few hundred KiB.
 const maxBody = 4 << 20
 
-// statusError reports an unexpected HTTP status and keeps the response
-// headers, which can say when to retry.
-type statusError struct {
-	code   int
-	header http.Header
-}
-
-func (e statusError) Error() string { return "unexpected status " + strconv.Itoa(e.code) }
-
-// get runs req and returns the body of a response whose status is in ok,
-// counting failures under source. Any other status fails before the body is
-// read, so its headers survive a broken body. Transport errors name the URL without its
-// query, which can carry an API key or a refresh token.
-func get(client *http.Client, source string, req *http.Request, ok ...int) (int, []byte, error) {
-	resp, err := client.Do(req)
+// get sends r and returns the response, whose body is read when r accepts
+// its status, counting failures under source. Any other status is a
+// fetch.StatusError returned with the response headers, which survive a
+// broken body. Transport errors name the URL without its query, which can
+// carry an API key or a refresh token.
+func get(ctx context.Context, client *http.Client, source string, r fetch.Request) (fetch.Response, error) {
+	r.MaxBody = maxBody
+	resp, err := fetch.Do(ctx, client, r)
 	if err != nil {
-		metrics.ObserveSource(source, metrics.SourceError)
-		if ue, ok := errors.AsType[*url.Error](err); ok {
-			err = ue.Err
-		}
-		return 0, nil, fmt.Errorf("%s: %s %s://%s%s: %w", source, req.Method, req.URL.Scheme, req.URL.Host, req.URL.Path, err)
+		metrics.ObserveSource(source, fetch.Outcome(err))
+		return resp, fmt.Errorf("%s: %w", source, err)
 	}
-	defer resp.Body.Close()
-	if !slices.Contains(ok, resp.StatusCode) {
-		metrics.ObserveSource(source, "http_"+strconv.Itoa(resp.StatusCode))
-		return resp.StatusCode, nil, fmt.Errorf("%s: %w", source, statusError{code: resp.StatusCode, header: resp.Header})
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
-	if err != nil {
-		metrics.ObserveSource(source, metrics.SourceError)
-		return 0, nil, fmt.Errorf("%s: read body: %w", source, err)
-	}
-	return resp.StatusCode, body, nil
+	return resp, nil
 }
 
 // succeeded counts a usable answer, a valid "no match" included.
@@ -99,15 +77,12 @@ func (e *RateLimitError) Error() string {
 
 func (e *RateLimitError) Unwrap() error { return ErrQuotaExceeded }
 
-// limitReset reads the reset time, Unix seconds in X-RateLimit-Reset, from
-// the response err carries; zero when the header is missing or unreadable.
-func limitReset(err error) time.Time {
-	e, ok := errors.AsType[statusError](err)
-	if !ok {
-		return time.Time{}
-	}
-	sec, perr := strconv.ParseInt(strings.TrimSpace(e.header.Get("X-RateLimit-Reset")), 10, 64)
-	if perr != nil || sec <= 0 {
+// limitReset reads the reset time, Unix seconds in X-RateLimit-Reset,
+// from a response's headers; zero when the header is missing or
+// unreadable.
+func limitReset(header http.Header) time.Time {
+	sec, err := strconv.ParseInt(strings.TrimSpace(header.Get("X-RateLimit-Reset")), 10, 64)
+	if err != nil || sec <= 0 {
 		return time.Time{}
 	}
 	return time.Unix(sec, 0)
@@ -115,6 +90,6 @@ func limitReset(err error) time.Time {
 
 // isStatus reports whether err carries HTTP status code.
 func isStatus(err error, code int) bool {
-	var e statusError
-	return errors.As(err, &e) && e.code == code
+	e, ok := errors.AsType[fetch.StatusError](err)
+	return ok && e.Code == code
 }

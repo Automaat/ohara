@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	"net/http"
 	"net/url"
@@ -18,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Automaat/ohara/backend-go/internal/fetch"
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
 )
 
@@ -60,24 +60,13 @@ const maxPriceCents = 100_000_000
 // maxBody caps a source response; an HTML results page is a few hundred KB.
 const maxBody = 16 << 20
 
-// userAgent is a browser's: OLX answers 403 to library defaults.
-const userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 " +
-	"(KHTML, like Gecko) Chrome/130.0 Safari/537.36"
-
 // NewHTTPClient is the client the sources share.
 func NewHTTPClient() *http.Client {
 	return &http.Client{Timeout: 30 * time.Second}
 }
 
-// statusError is a response with a status other than 200.
-type statusError struct{ code int }
-
-func (e statusError) Error() string { return "status " + strconv.Itoa(e.code) }
-
-// StatusCode is the status the source answered.
-func (e statusError) StatusCode() int { return e.code }
-
-// statusCoder is an error that carries the HTTP status a site answered.
+// statusCoder is an error that carries the HTTP status a site answered,
+// such as fetch.StatusError.
 type statusCoder interface {
 	error
 	StatusCode() int
@@ -145,7 +134,7 @@ func sourceStatus(err error) string {
 	if _, ok := errors.AsType[parseError](err); ok {
 		return metrics.SourceParseError
 	}
-	return metrics.SourceError
+	return fetch.Outcome(err)
 }
 
 // ObserveSearch counts the outcome of one Search on src in the source
@@ -156,30 +145,19 @@ func ObserveSearch(src Source, err error) {
 
 // get fetches the endpoint and returns the body of a 200 response.
 func get(ctx context.Context, client *http.Client, endpoint, accept string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, http.NoBody)
+	resp, err := fetch.Do(ctx, client, fetch.Request{
+		URL: endpoint,
+		Header: http.Header{
+			"User-Agent":      {fetch.BrowserUserAgent},
+			"Accept":          {accept},
+			"Accept-Language": {"pl-PL,pl;q=0.9,en;q=0.8"},
+		},
+		MaxBody: maxBody,
+	})
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", userAgent)
-	req.Header.Set("Accept", accept)
-	req.Header.Set("Accept-Language", "pl-PL,pl;q=0.9,en;q=0.8")
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxBody))
-		return nil, statusError{resp.StatusCode}
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(body) > maxBody {
-		return nil, errors.New("response too large")
-	}
-	return body, nil
+	return resp.Body, nil
 }
 
 var priceChars = regexp.MustCompile(`[^\d,.]`)

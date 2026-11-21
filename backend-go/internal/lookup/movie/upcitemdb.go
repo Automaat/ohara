@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/Automaat/ohara/backend-go/internal/fetch"
 )
 
 // UPCitemdb queries the free UPCitemdb trial endpoint (100 requests a day and
@@ -39,29 +41,24 @@ func (u UPCitemdb) Products(ctx context.Context, code string) ([]Product, error)
 	if base == "" {
 		base = "https://api.upcitemdb.com"
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/prod/trial/lookup?upc="+url.QueryEscape(code), http.NoBody)
-	if err != nil {
-		return nil, fmt.Errorf("upcitemdb: %w", err)
-	}
-	req.Header.Set("Accept", "application/json")
-	client := u.Client
-	if client == nil {
-		client = http.DefaultClient
-	}
-	status, body, err := get(client, u.Name(), req, http.StatusOK, http.StatusBadRequest, http.StatusNotFound)
+	resp, err := get(ctx, u.Client, u.Name(), fetch.Request{
+		URL:    base + "/prod/trial/lookup?upc=" + url.QueryEscape(code),
+		Header: http.Header{"Accept": {"application/json"}},
+		OK:     []int{http.StatusOK, http.StatusBadRequest, http.StatusNotFound},
+	})
 	if isStatus(err, http.StatusTooManyRequests) {
-		return nil, fmt.Errorf("upcitemdb: %w", &RateLimitError{Reset: limitReset(err)})
+		return nil, fmt.Errorf("upcitemdb: %w", &RateLimitError{Reset: limitReset(resp.Header)})
 	}
 	if err != nil {
 		return nil, err
 	}
 	var r upcResponse
-	if err := json.Unmarshal(body, &r); err != nil {
+	if err := json.Unmarshal(resp.Body, &r); err != nil {
 		return nil, parseFailed(u.Name(), err)
 	}
-	if status != http.StatusOK {
+	if resp.Status != http.StatusOK {
 		if r.Code != "INVALID_UPC" && r.Code != "NOT_FOUND" {
-			return nil, parseFailed(u.Name(), fmt.Errorf("status %d code %q", status, r.Code))
+			return nil, parseFailed(u.Name(), fmt.Errorf("status %d code %q", resp.Status, r.Code))
 		}
 		found(u.Name(), 0)
 		return []Product{}, nil

@@ -5,13 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
-	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/Automaat/ohara/backend-go/internal/fetch"
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
 )
 
@@ -194,38 +193,20 @@ func upcA(code string) (string, bool) {
 // source; the caller counts the ok once the body parses. Transport errors
 // name the URL without its query.
 func get(ctx context.Context, client *http.Client, source, rawURL string, ok ...int) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, http.NoBody)
+	resp, err := fetch.Do(ctx, client, fetch.Request{
+		URL:     rawURL,
+		Header:  http.Header{"Accept": {"application/json"}, "User-Agent": {userAgent}},
+		MaxBody: maxBody,
+		OK:      ok,
+	})
 	if err != nil {
-		metrics.ObserveSource(source, metrics.SourceError)
-		return nil, fmt.Errorf("%s: build request: invalid URL", source)
+		metrics.ObserveSource(source, fetch.Outcome(err))
+		return nil, fmt.Errorf("%s: %w", source, err)
 	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", userAgent)
-	if client == nil {
-		client = http.DefaultClient
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		metrics.ObserveSource(source, metrics.SourceError)
-		if uerr, ok := errors.AsType[*url.Error](err); ok {
-			err = uerr.Err
-		}
-		return nil, fmt.Errorf("%s: GET %s://%s%s: %w", source, req.URL.Scheme, req.URL.Host, req.URL.Path, err)
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
-	if err != nil {
-		metrics.ObserveSource(source, metrics.SourceError)
-		return nil, fmt.Errorf("%s: read body: %w", source, err)
-	}
-	if !slices.Contains(ok, resp.StatusCode) {
-		metrics.ObserveSource(source, "http_"+strconv.Itoa(resp.StatusCode))
-		return nil, fmt.Errorf("%s: unexpected status %d", source, resp.StatusCode)
-	}
-	if resp.StatusCode == http.StatusNotFound {
+	if resp.Status == http.StatusNotFound {
 		return nil, nil
 	}
-	return body, nil
+	return resp.Body, nil
 }
 
 func succeeded(source string) { metrics.ObserveSource(source, metrics.SourceOK) }

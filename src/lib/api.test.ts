@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { ApiError, errorMessage, request } from './api';
+import {
+	ApiError,
+	errorMessage,
+	isNoAnswer,
+	isSessionExpired,
+	request,
+	sessionExpiredMessage
+} from './api';
 
 type Call = { url: string; init: RequestInit | undefined };
 
@@ -86,6 +93,33 @@ describe('request', () => {
 		}) as typeof fetch;
 		const err = await failure(request(offline, 'GET', '/api/x'));
 		expect(err.message).toBe('Serwer nie odpowiada.');
+		expect(isNoAnswer(err)).toBe(true);
+		expect(isSessionExpired(err)).toBe(false);
+	});
+
+	it('leaves a redirect unfollowed, so one to the sign-in is not taken for no answer', async () => {
+		const calls: Call[] = [];
+		await request(fake(200, '[]', calls), 'GET', '/api/titles');
+		expect(calls[0].init?.redirect).toBe('manual');
+	});
+
+	it.each([
+		['a 401', fake(401, 'Unauthorized')],
+		['a 401 with JSON', fake(401, '{"error":"unauthorized"}')],
+		[
+			'a redirect',
+			(async () => {
+				const res = new Response(null, { status: 200 });
+				Object.defineProperty(res, 'type', { value: 'opaqueredirect' });
+				Object.defineProperty(res, 'status', { value: 0 });
+				return res;
+			}) as typeof fetch
+		]
+	])('takes %s for an expired session', async (_, fetchFn) => {
+		const err = await failure(request(fetchFn, 'POST', '/api/scan-queue', {}));
+		expect(err).toMatchObject({ status: 401, message: sessionExpiredMessage });
+		expect(isSessionExpired(err)).toBe(true);
+		expect(isNoAnswer(err)).toBe(false);
 	});
 });
 

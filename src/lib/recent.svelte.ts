@@ -1,5 +1,8 @@
-/** How a scan ended, for the scanner's list of recent scans. */
-export type ScanOutcome = 'added' | 'queued' | 'skipped' | 'undone';
+/**
+ * How a scan ended, for the scanner's list of recent scans; waiting is kept on the device until
+ * the scan queue takes it.
+ */
+export type ScanOutcome = 'added' | 'queued' | 'waiting' | 'skipped' | 'undone';
 
 export type RecentScan = {
 	id: number;
@@ -12,6 +15,7 @@ export type RecentScan = {
 export const outcomeLabels: Record<ScanOutcome, string> = {
 	added: 'Dodano',
 	queued: 'W kolejce',
+	waiting: 'Czeka',
 	skipped: 'Pominięto',
 	undone: 'Cofnięto'
 };
@@ -19,6 +23,7 @@ export const outcomeLabels: Record<ScanOutcome, string> = {
 export const outcomeTones = {
 	added: 'success',
 	queued: 'warning',
+	waiting: 'warning',
 	skipped: 'neutral',
 	undone: 'neutral'
 } as const;

@@ -160,6 +160,9 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   queues one `deal_alert` per listing at or below the copy's
   `max_price_cents`; a listing seen again keeps its row, takes the new
   price and `last_seen_at`, and alerts if it has no alert yet. Alerts are retried up to 5 times within a week.
+  The wish a listing was recorded for (`raw.wishlist_copy_id`) is also the
+  generated, indexed column `wishlist_copy_id`, so the deals list's filters
+  start from wished listings instead of reading every observation.
   A source that answers 403 or 429 is asked nothing more until the next
   run, in a hunt and in a valuation (SkupSzop quotes too); the run's
   errors name the refusal once with the requests it skipped, and skipped

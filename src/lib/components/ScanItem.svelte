@@ -158,6 +158,14 @@
 		if (flow.issue?.field === 'name') editing = true;
 	});
 
+	// Any edit to the title, kind, medium or query while a search runs, even one undone at once,
+	// leaves the form to the user: the search's answer is dropped.
+	$effect(() => {
+		const f = flow.form;
+		void [f.kind, f.name, f.format, f.binding, ...f.packaging, flow.query];
+		untrack(() => flow.edited());
+	});
+
 	$effect(() => {
 		const p = flow.phase;
 		const choosing = flow.choosing;
@@ -331,6 +339,9 @@
 				{@render titleSearch()}
 			{/if}
 			<div class="ways">
+				{#if item.searched}
+					<Button onclick={() => flow.typeIn()}>Wpisz ręcznie</Button>
+				{/if}
 				<Button onclick={close}>Pomiń</Button>
 			</div>
 		{:else}

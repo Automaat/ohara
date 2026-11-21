@@ -2,6 +2,7 @@
 	import { Button, Callout, FactList, PageHeader, Pill, Section } from '@smykla-skalski/sui';
 	import { onMount } from 'svelte';
 	import { errorMessage } from '#lib/api.js';
+	import { discogsNotice } from '#lib/discogs.js';
 	import { databaseBadge, fetchStatus, StatusError, type Status } from '#lib/status.js';
 
 	let info = $state<Status | null>(null);
@@ -53,6 +54,10 @@
 			<dt>Harmonogram wyceny kolekcji</dt>
 			<dd><code>OHARA_VALUATION_INTERVAL</code></dd>
 		</dl>
+	</Section>
+
+	<Section title="Źródła danych">
+		<p lang="en">{discogsNotice}</p>
 	</Section>
 </div>
 

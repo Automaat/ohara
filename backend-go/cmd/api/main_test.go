@@ -13,7 +13,6 @@ import (
 	"testing"
 
 	"github.com/Automaat/ohara/backend-go/internal/dbtest"
-	"github.com/Automaat/ohara/backend-go/internal/deals"
 	"github.com/Automaat/ohara/backend-go/internal/discogs"
 	"github.com/Automaat/ohara/backend-go/internal/lookup/music"
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
@@ -178,22 +177,33 @@ func TestDiscogsCallersShareOneBudget(t *testing.T) {
 	if provider == nil {
 		t.Fatal("no music provider with a Discogs token")
 	}
-	pricer, ok := newReleasePricer(deals.NewHTTPClient()).(valuation.Discogs)
+	runner, _, err := newValuation(nil, logger)
+	if err != nil {
+		t.Fatalf("newValuation: %v", err)
+	}
+	pricer, ok := runner.Pricer().(valuation.Discogs)
 	if !ok {
-		t.Fatal("valuation pricer is not valuation.Discogs")
+		t.Fatalf("valuation pricer is %T, want valuation.Discogs", runner.Pricer())
 	}
-	callers := map[string]any{
-		"title search":   search.Discogs,
-		"music provider": provider.Discogs,
-		"valuation":      pricer.Market,
+	callers := []struct {
+		name     string
+		caller   any
+		priority discogs.Priority
+	}{
+		{"title search", search.Discogs, discogs.Interactive},
+		{"music provider", provider.Discogs, discogs.Interactive},
+		{"valuation", pricer.Market, discogs.Background},
 	}
-	for name, caller := range callers {
-		c, ok := caller.(*discogs.Client)
+	for _, tc := range callers {
+		c, ok := tc.caller.(*discogs.Client)
 		if !ok {
-			t.Fatalf("%s: Discogs caller is %T, want *discogs.Client", name, caller)
+			t.Fatalf("%s: Discogs caller is %T, want *discogs.Client", tc.name, tc.caller)
 		}
 		if c.Limiter == nil || c.Limiter != discogsBudget {
-			t.Errorf("%s: limiter %p, want the shared budget %p", name, c.Limiter, discogsBudget)
+			t.Errorf("%s: limiter %p, want the shared budget %p", tc.name, c.Limiter, discogsBudget)
+		}
+		if c.Priority != tc.priority {
+			t.Errorf("%s: priority %d, want %d", tc.name, c.Priority, tc.priority)
 		}
 	}
 }

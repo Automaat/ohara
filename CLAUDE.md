@@ -113,10 +113,12 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   Archive. Every release becomes a candidate: one barcode often names
   several pressings, so the user picks the edition.
 - Every Discogs request in the process (music lookup, title search,
-  valuation) waits for one shared `discogs.Limiter`: a burst of 5, then
-  one every 1.2 s, so no minute holds more than 55 of the token's 60.
-  Callers wait in arrival order; a wait that would outlast the caller's
-  context returns its error at once without a request.
+  valuation), and every redirect it follows, waits for one shared
+  `discogs.Limiter`: a burst of 5, then one every 1.2 s, so no minute
+  holds more than 55 of the token's 60. Waiting scans and title searches
+  go before the valuation's `Background` requests, each in arrival order;
+  a caller that gives up leaves the queue, and a wait that would outlast
+  the caller's context returns its error at once without a request.
 - A lookup result sets `needs_confirmation` unless exactly one candidate
   reaches `lookup.ConfirmThreshold` (0.8); clients never auto-pick otherwise.
   `PUT /api/lookup/{barcode}/selection` stores the picked candidate, which

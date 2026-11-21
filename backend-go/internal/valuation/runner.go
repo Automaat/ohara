@@ -95,6 +95,9 @@ func NewRunner(store *Store, sources []deals.Source, buybacks []BuyBack, pricer 
 // Window is how far back a price still counts.
 func (r *Runner) Window() time.Duration { return r.cfg.Window }
 
+// Pricer prices the owned album releases; nil without one.
+func (r *Runner) Pricer() ReleasePricer { return r.pricer }
+
 func sleepCtx(ctx context.Context, d time.Duration) error {
 	t := time.NewTimer(d)
 	defer t.Stop()

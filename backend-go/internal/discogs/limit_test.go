@@ -18,16 +18,33 @@ import (
 // answers every endpoint and keeps each request's arrival on the bubble's
 // clock. Requests reach it in process, since a bubble's clock stands still
 // while a goroutine waits on a real socket.
+// With redirect set, it first redirects every request to itself, the way
+// a moved endpoint would.
 type arrivals struct {
-	mu    sync.Mutex
-	times []time.Time
+	redirect bool
+
+	mu       sync.Mutex
+	times    []time.Time
+	searches []time.Time
 }
 
 func (a *arrivals) RoundTrip(r *http.Request) (*http.Response, error) {
 	a.mu.Lock()
 	a.times = append(a.times, time.Now())
+	if r.URL.Path == "/database/search" {
+		a.searches = append(a.searches, time.Now())
+	}
 	a.mu.Unlock()
 	rec := httptest.NewRecorder()
+	if a.redirect && r.URL.Query().Get("hop") == "" {
+		moved := *r.URL
+		q := moved.Query()
+		q.Set("hop", "1")
+		moved.RawQuery = q.Encode()
+		rec.Header().Set("Location", moved.String())
+		rec.WriteHeader(http.StatusFound)
+		return rec.Result(), nil
+	}
 	if r.URL.Path == "/database/search" {
 		_, _ = rec.WriteString(`{"results":[{"id":1,"title":"Artist - Album"}]}`)
 	} else {
@@ -42,8 +59,25 @@ func (a *arrivals) seen() []time.Time {
 	return slices.Clone(a.times)
 }
 
+func (a *arrivals) searched() []time.Time {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return slices.Clone(a.searches)
+}
+
 func (a *arrivals) client(limiter *discogs.Limiter) *discogs.Client {
 	return &discogs.Client{HTTP: &http.Client{Transport: a}, BaseURL: "http://discogs.test", Token: "secret", Limiter: limiter}
+}
+
+// checkMinutes fails when any 60 seconds hold more than 60 of times.
+func checkMinutes(t *testing.T, times []time.Time) {
+	t.Helper()
+	slices.SortFunc(times, func(a, b time.Time) int { return a.Compare(b) })
+	for i := 0; i+60 < len(times); i++ {
+		if span := times[i+60].Sub(times[i]); span <= time.Minute {
+			t.Fatalf("requests %d to %d arrived within %v: 61 requests in one minute", i, i+60, span)
+		}
+	}
 }
 
 func TestLimiterKeepsEveryMinuteWithinBudget(t *testing.T) {
@@ -74,12 +108,72 @@ func TestLimiterKeepsEveryMinuteWithinBudget(t *testing.T) {
 		if len(times) != goroutines*perGoroutine {
 			t.Fatalf("server saw %d requests, want %d", len(times), goroutines*perGoroutine)
 		}
-		slices.SortFunc(times, func(a, b time.Time) int { return a.Compare(b) })
-		for i := 0; i+60 < len(times); i++ {
-			if span := times[i+60].Sub(times[i]); span <= time.Minute {
-				t.Fatalf("requests %d to %d arrived within %v: 61 requests in one minute", i, i+60, span)
+		checkMinutes(t, times)
+	})
+}
+
+func TestRedirectsSpendBudget(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		api := &arrivals{redirect: true}
+		c := api.client(discogs.NewLimiter())
+		const calls = 40
+		for range calls {
+			if _, err := c.SearchBarcode(t.Context(), "5099902894225"); err != nil {
+				t.Fatalf("search: %v", err)
 			}
 		}
+		times := api.seen()
+		if len(times) != 2*calls {
+			t.Fatalf("server saw %d requests, want %d: one redirect per call", len(times), 2*calls)
+		}
+		checkMinutes(t, times)
+	})
+}
+
+func TestCanceledWaitersGiveBackTheirPlace(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		api := &arrivals{}
+		limiter := discogs.NewLimiter()
+		search, valuation := api.client(limiter), api.client(limiter)
+		valuation.Priority = discogs.Background
+		for range 5 {
+			if _, err := search.Stats(t.Context(), 1, "EUR"); err != nil {
+				t.Fatalf("burst: %v", err)
+			}
+		}
+		spent := time.Now()
+
+		gone, leave := context.WithCancel(t.Context())
+		var wg sync.WaitGroup
+		for range 8 {
+			wg.Go(func() {
+				if _, err := search.SearchText(gone, "Kult", ""); !errors.Is(err, context.Canceled) {
+					t.Errorf("left search: err = %v, want context.Canceled", err)
+				}
+			})
+		}
+		synctest.Wait()
+		ctx, stop := context.WithCancel(t.Context())
+		wg.Go(func() {
+			if _, err := valuation.Stats(ctx, 2, "EUR"); err != nil && ctx.Err() == nil {
+				t.Errorf("valuation: %v", err)
+			}
+		})
+		synctest.Wait()
+		leave()
+		synctest.Wait()
+
+		scan, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		defer cancel()
+		if _, err := search.SearchBarcode(scan, "5099902894225"); err != nil {
+			t.Fatalf("scan after the searches left: %v", err)
+		}
+		searches := api.searched()
+		if len(searches) != 1 || searches[0].Sub(spent) != 1200*time.Millisecond {
+			t.Fatalf("searches arrived at %v, want one scan 1.2s after the burst", searches)
+		}
+		stop()
+		wg.Wait()
 	})
 }
 
@@ -88,6 +182,7 @@ func TestLookupGetsTurnWhileValuationUsesWholeBudget(t *testing.T) {
 		api := &arrivals{}
 		limiter := discogs.NewLimiter()
 		pricing, lookup := api.client(limiter), api.client(limiter)
+		pricing.Priority = discogs.Background
 		ctx, stop := context.WithCancel(t.Context())
 		done := make(chan struct{})
 		go func() {
@@ -118,6 +213,9 @@ func TestLookupGetsTurnWhileValuationUsesWholeBudget(t *testing.T) {
 		}
 		if took := time.Since(start); took >= 10*time.Second {
 			t.Fatalf("lookup took %v, want under the 10 s lookup budget", took)
+		}
+		if sent := api.searched()[0].Sub(start); sent > 1200*time.Millisecond {
+			t.Fatalf("lookup sent %v after it asked, want the next turn: ahead of the valuation", sent)
 		}
 		stop()
 		<-done

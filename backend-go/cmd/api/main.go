@@ -472,12 +472,14 @@ func newValuation(pool *pgxpool.Pool, logger *slog.Logger) (*valuation.Runner, *
 }
 
 // newReleasePricer prices album releases on the Discogs marketplace, or is
-// nil without OHARA_DISCOGS_TOKEN.
+// nil without OHARA_DISCOGS_TOKEN. Its requests yield the shared budget to
+// scans and title searches.
 func newReleasePricer(client *http.Client) valuation.ReleasePricer {
 	d := newDiscogs()
 	if d == nil {
 		return nil
 	}
+	d.Priority = discogs.Background
 	metrics.InitSource(valuation.SourceNBP)
 	return valuation.Discogs{
 		Market:      d,

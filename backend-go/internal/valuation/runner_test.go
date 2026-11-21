@@ -761,6 +761,50 @@ func TestChangedReleaseDropsItsDiscogsPrices(t *testing.T) {
 	}
 }
 
+func TestValuedReadsOneSnapshot(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	exec(t, pool, `INSERT INTO title (id, kind, name, authors) OVERRIDING SYSTEM VALUE
+		VALUES (8, 'music', 'Nevermind', '{"Nirvana"}')`)
+	exec(t, pool, `INSERT INTO edition (id, title_id, format, discogs_release_id) OVERRIDING SYSTEM VALUE
+		VALUES (80, 8, 'cd', 200)`)
+	exec(t, pool, `INSERT INTO copy (edition_id, status) VALUES (80, 'owned')`)
+	vgPlus := int64(50000)
+	pricer := &fakePricer{prices: map[int64]ReleasePrice{200: {VGPlusCents: &vgPlus}}}
+	store := NewStore(pool)
+	r := NewRunner(store, nil, nil, pricer, Config{Window: 90 * 24 * time.Hour}, slog.New(slog.DiscardHandler))
+	r.sleep = func(ctx context.Context, _ time.Duration) error { return ctx.Err() }
+	ctx := context.Background()
+	if _, err := r.Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	exec(t, pool, `UPDATE edition SET discogs_release_id = 100 WHERE id = 80`)
+
+	// An edit naming release 200 again lands after the copies are read:
+	// the prices must still be read as of before it.
+	store.betweenReads = func() {
+		exec(t, pool, `UPDATE edition SET discogs_release_id = 200 WHERE id = 80`)
+	}
+	copies, _, err := store.Valued(ctx, r.Window())
+	if err != nil || len(copies) != 1 {
+		t.Fatalf("Valued = %+v, %v", copies, err)
+	}
+	c := copies[0]
+	if c.DiscogsReleaseID == nil || *c.DiscogsReleaseID != 100 || c.Mid != nil {
+		t.Fatalf("copy = release %v, mid %+v: want release 100 without release 200's price",
+			c.DiscogsReleaseID, c.Mid)
+	}
+
+	store.betweenReads = nil
+	copies, _, err = store.Valued(ctx, r.Window())
+	if err != nil || len(copies) != 1 {
+		t.Fatalf("Valued = %+v, %v", copies, err)
+	}
+	c = copies[0]
+	if c.DiscogsReleaseID == nil || *c.DiscogsReleaseID != 200 || c.Mid == nil || c.Mid.Cents != vgPlus {
+		t.Fatalf("after the edit: release %v, mid %+v", c.DiscogsReleaseID, c.Mid)
+	}
+}
+
 // panickingSource trips an index past the end of a slice on every search,
 // like a parser meeting a malformed answer.
 type panickingSource struct{ calls atomic.Int32 }

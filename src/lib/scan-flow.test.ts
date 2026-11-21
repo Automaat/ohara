@@ -701,6 +701,215 @@ describe('ScanFlow.save', () => {
 	});
 });
 
+describe('ScanFlow without a barcode', () => {
+	const album: Candidate = {
+		type: 'music',
+		title: { name: 'Kind of Blue', authors: ['Miles Davis'], year: 1959 },
+		edition: { barcode: '', format: 'vinyl', label: 'Columbia', discogs_release_id: 7 },
+		provider: 'discogs',
+		confidence: 0.6
+	};
+
+	it('opens a blank item of the asked kind to search or fill in by hand', () => {
+		const s = server({});
+		const flow = new ScanFlow(s.fetchFn, memory());
+		flow.start('music');
+		expect(flow.phase).toEqual({ kind: 'ready', status: 'missing' });
+		expect(flow.code).toBe('');
+		expect(flow.item).toMatchObject({
+			barcode: '',
+			byHand: true,
+			target: { kind: 'new', barcode: '', candidate: null }
+		});
+		expect(flow.form).toMatchObject({ kind: 'music', name: '', price: '' });
+		flow.dismiss();
+		expect(s.calls).toHaveLength(0);
+		expect(recentScans.list).toHaveLength(0);
+	});
+
+	it('saves a result found by title as a title, edition and copy, outside the recent scans', async () => {
+		const cd = { ...album, edition: { ...album.edition, format: 'cd' as const } };
+		const s = server({
+			'GET /api/search?kind=music&q=Kind+of+Blue': [200, { candidates: [album, cd] }],
+			'POST /api/titles': [201, { id: 4, name: 'Kind of Blue', kind: 'music' }],
+			'POST /api/editions': [
+				201,
+				{ id: 30, title_id: 4, barcode: null, format: 'vinyl', binding: null }
+			],
+			'POST /api/copies?cover=auto': copyReply({ id: 50, edition_id: 30, price_cents: 8000 })
+		});
+		const flow = new ScanFlow(s.fetchFn, memory());
+		flow.start('music');
+		flow.query = 'Kind of Blue';
+		await flow.search();
+		expect(flow.choosing).toBe(true);
+		flow.pick(0);
+		flow.form.price = '80';
+		const added = await flow.save();
+		expect(added).toMatchObject({ barcode: '', next: null, saved: { titleID: 4, editionID: 30 } });
+		expect(s.calls.find((c) => c.url === '/api/titles')?.body).toMatchObject({
+			kind: 'music',
+			name: 'Kind of Blue',
+			authors: ['Miles Davis'],
+			year: 1959
+		});
+		expect(s.calls.find((c) => c.url === '/api/editions')?.body).toMatchObject({
+			title_id: 4,
+			barcode: null,
+			format: 'vinyl',
+			label: 'Columbia',
+			discogs_release_id: 7
+		});
+		expect(recentScans.list).toHaveLength(0);
+		expect(session.adds[0]).toMatchObject({
+			copyID: 50,
+			createdTitle: true,
+			createdEdition: true,
+			medium: 'Winyl',
+			priceCents: 8000,
+			recentID: null
+		});
+	});
+
+	it('removes what a failed add made and starts over, so adding it again makes no duplicate', async () => {
+		const s = server({
+			'GET /api/search?kind=music&q=Kind+of+Blue': [200, { candidates: [album] }],
+			'POST /api/titles': [
+				[201, { id: 4, name: 'Kind of Blue', kind: 'music' }],
+				[201, { id: 5, name: 'Kind of Blue', kind: 'music' }]
+			],
+			'POST /api/editions': [
+				[201, { id: 30, title_id: 4, barcode: null, format: 'vinyl', binding: null }],
+				[201, { id: 31, title_id: 5, barcode: null, format: 'vinyl', binding: null }]
+			],
+			'POST /api/copies?cover=auto': [
+				[500, { error: 'boom' }],
+				copyReply({ id: 50, edition_id: 31 })
+			],
+			'DELETE /api/editions/30': [204, null],
+			'DELETE /api/titles/4': [204, null]
+		});
+		const flow = new ScanFlow(s.fetchFn, memory());
+		flow.start('music');
+		flow.query = 'Kind of Blue';
+		await flow.search();
+		const firstKey = flow.item?.key;
+		expect(await flow.save()).toBeNull();
+		expect(flow.issue?.message).toBeTruthy();
+		expect(s.paths().slice(-2)).toEqual(['DELETE /api/editions/30', 'DELETE /api/titles/4']);
+		expect(flow.item?.key).not.toBe(firstKey);
+		expect(flow.item?.made).toEqual({ titles: [], editions: [], titleUnanswered: false });
+
+		const added = await flow.save();
+		expect(added?.saved).toMatchObject({ titleID: 5, editionID: 31 });
+		const keys = s.calls.filter((c) => c.url === '/api/titles').map((c) => c.body);
+		expect(keys).toMatchObject([{ request_key: firstKey }, { request_key: flow.item?.key }]);
+	});
+
+	it('keeps an edition whose copy went in unanswered and opens the title it belongs to', async () => {
+		const rejs: Candidate = {
+			type: 'movie',
+			title: { name: 'Rejs', year: 1970, tmdb_id: 2 },
+			edition: { barcode: '', format: 'dvd' },
+			provider: 'tmdb',
+			confidence: 0.6
+		};
+		const diuna = { ...movie, edition: { barcode: '', format: 'uhd' as const } };
+		const s = server({
+			'GET /api/search?kind=movie&q=Diuna': [200, { candidates: [diuna, rejs] }],
+			'GET /api/titles?tmdb_id=1': [200, []],
+			'GET /api/titles?tmdb_id=2': [200, [{ id: 20, name: 'Rejs', kind: 'movie' }]],
+			'POST /api/titles': [201, { id: 10, name: 'Diuna: Część druga', kind: 'movie' }],
+			'POST /api/editions': [
+				[201, { id: 42, title_id: 10, barcode: null, format: 'uhd', binding: null }],
+				[200, { id: 42, title_id: 10, barcode: null, format: 'uhd', binding: null }]
+			],
+			'POST /api/copies?cover=auto': [
+				() => Promise.reject(new TypeError('lost')),
+				copyReply({ id: 60, edition_id: 42 })
+			],
+			'GET /api/titles/10': [200, { id: 10, name: 'Diuna: Część druga', kind: 'movie' }]
+		});
+		const flow = new ScanFlow(s.fetchFn, memory());
+		flow.start('movie');
+		flow.query = 'Diuna';
+		await flow.search();
+		flow.pick(0);
+		const key = flow.item?.key;
+		expect(await flow.save()).toBeNull();
+		expect(flow.item?.key).toBe(key);
+		expect(flow.item?.made.editions).toEqual([42]);
+
+		flow.choose();
+		flow.pick(1);
+		const added = await flow.save();
+		expect(added?.saved).toMatchObject({
+			titleID: 10,
+			titleName: 'Diuna: Część druga',
+			editionID: 42
+		});
+	});
+
+	it('keeps the key after a lost answer, so a retry reuses the edition it made', async () => {
+		const s = server({
+			'GET /api/search?kind=movie&q=Diuna': [
+				200,
+				{ candidates: [{ ...movie, edition: { barcode: '', format: 'uhd' } }] }
+			],
+			'GET /api/titles?tmdb_id=1': [200, [{ id: 10, name: 'Diuna: Część druga', kind: 'movie' }]],
+			'POST /api/editions': [
+				() => Promise.reject(new TypeError('lost')),
+				[200, { id: 41, title_id: 10, barcode: null, format: 'uhd', binding: null }]
+			],
+			'POST /api/copies?cover=auto': copyReply({ id: 70, edition_id: 41 })
+		});
+		const flow = new ScanFlow(s.fetchFn, memory());
+		flow.start('movie');
+		flow.query = 'Diuna';
+		await flow.search();
+		const key = flow.item?.key;
+		expect(await flow.save()).toBeNull();
+		expect(flow.item?.key).toBe(key);
+		expect(s.paths().some((p) => p.startsWith('DELETE'))).toBe(false);
+		const added = await flow.save();
+		expect(added?.saved).toMatchObject({ titleID: 10, editionID: 41 });
+		const keys = s.calls.filter((c) => c.url === '/api/editions').map((c) => c.body);
+		expect(keys).toMatchObject([{ request_key: key }, { request_key: key }]);
+	});
+
+	it('drops a search answer for the kind the user switched away from', async () => {
+		let release: (r: [number, unknown]) => void = () => {};
+		const held = new Promise<[number, unknown]>((resolve) => (release = resolve));
+		const s = server({ 'GET /api/search?kind=music&q=Kind+of+Blue': () => held });
+		const flow = new ScanFlow(s.fetchFn, memory());
+		flow.start('music');
+		flow.query = 'Kind of Blue';
+		const searching = flow.search();
+		flow.form.kind = 'book';
+		flow.form.name = 'Lalka';
+		release([200, { candidates: [album, album] }]);
+		await searching;
+		expect(flow.searching).toBe(false);
+		expect(flow.choosing).toBe(false);
+		expect(flow.item?.candidates).toEqual([]);
+		expect(flow.form).toMatchObject({ kind: 'book', name: 'Lalka' });
+	});
+
+	it('drops what a barcode was still answering', async () => {
+		let release: (r: [number, unknown]) => void = () => {};
+		const slow = new Promise<[number, unknown]>((resolve) => (release = resolve));
+		const s = server({ [`GET /api/editions?barcode=${code}`]: () => slow });
+		const flow = new ScanFlow(s.fetchFn, memory());
+		const loading = flow.load(code);
+		flow.start('book');
+		release([200, []]);
+		await loading.catch(() => undefined);
+		expect(flow.phase).toEqual({ kind: 'ready', status: 'missing' });
+		expect(flow.item?.barcode).toBe('');
+		expect(flow.form.kind).toBe('book');
+	});
+});
+
 describe('ScanFlow.manual and dismiss', () => {
 	it('fills a queued code in by hand and logs it as queued when left', async () => {
 		const entry = { id: 1, barcode: code, reason: 'lookup_failed', detail: 'x', scans: 1 };

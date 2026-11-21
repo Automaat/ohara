@@ -162,4 +162,13 @@ describe('undoAdd', () => {
 		await undoAdd(s.fetchFn, add({ createdEdition: true }));
 		expect(s.calls).toEqual(['DELETE /api/copies/40', 'DELETE /api/editions/21?requeue=1']);
 	});
+
+	it('undoes an add without a barcode and leaves the recent scans alone', async () => {
+		const s = server({ 'DELETE /api/copies/40': gone });
+		const scanned = add();
+		const typed = recordAdd({ ...scanned, recentID: null });
+		await undoAdd(s.fetchFn, typed);
+		expect(session.adds).toEqual([scanned]);
+		expect(recentScans.list[0]).toMatchObject({ outcome: 'added', href: '/copies/40' });
+	});
 });

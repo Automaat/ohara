@@ -153,6 +153,10 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   Vite, never loaded from a CDN. A keyboard-wedge scanner types into the
   focused barcode field. The flow lives in `src/lib/scan.ts`: existing
   edition → add a copy, lookup candidates → quick confirm, nothing → queue.
+- Kolekcja's "Dodaj tytuł" (`/titles/new`) is the scanner's quick confirm
+  without a barcode (`ScanFlow.start`): search by title or fill in by hand;
+  the save creates the title, a barcode-less edition and the copy. Such
+  adds stay out of the scanner's recent scans.
 - Kolekcja (`/`) lists copies. Its filter sheet's "Bez egzemplarzy"
   (`?status=none`) lists titles without one instead, filtered in the client
   from `GET /api/titles`; `/titles` redirects to `/`. `?add=copy` on a title

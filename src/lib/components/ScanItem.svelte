@@ -47,6 +47,8 @@
 	let editing = $state(false);
 
 	const item = $derived(flow.item);
+	/** Empty for an item added without a barcode. */
+	const code = $derived(item?.barcode ?? flow.code);
 	const candidate = $derived(flow.candidate);
 	const albums = $derived(item?.candidates.every((c) => c.type === 'music') ?? false);
 	const sources = $derived(item?.errors.map((e) => e.provider).join(', ') ?? '');
@@ -92,8 +94,8 @@
 		}
 		if (p.status === 'missing') {
 			return {
-				overline: 'Dodaj ręcznie',
-				tone: 'quiet',
+				overline: candidate ? `Znaleziono · ${providerLabel(candidate)}` : 'Dodaj ręcznie',
+				tone: candidate ? 'ok' : 'quiet',
 				name: flow.form.name.trim() || undefined,
 				meta: kindLabels[flow.form.kind],
 				cover: { kind: flow.form.kind, url: candidate?.cover_url }
@@ -239,7 +241,9 @@
 			{#if header.more}
 				<p class="meta">{header.more}</p>
 			{/if}
-			<p class="code">{barcodeGroups(item?.barcode ?? flow.code).join(' ')}</p>
+			{#if code}
+				<p class="code">{barcodeGroups(code).join(' ')}</p>
+			{/if}
 			{#if flow.phase.kind === 'ready' && item?.target.kind === 'new' && !flow.choosing}
 				<div class="tools">
 					{#if flow.phase.status !== 'missing'}
@@ -302,7 +306,11 @@
 		{#if flow.choosing}
 			<div class="candidates" role="group" aria-labelledby="scan-candidates">
 				<p class="caption" id="scan-candidates">
-					{albums ? 'Ten kod ma kilka wydań: wybierz swoje.' : 'Wybierz, co skanujesz.'}
+					{#if code}
+						{albums ? 'Ten kod ma kilka wydań: wybierz swoje.' : 'Wybierz, co skanujesz.'}
+					{:else}
+						{albums ? 'Wybierz wydanie.' : 'Wybierz pozycję.'}
+					{/if}
 				</p>
 				{#each item.candidates as c, i (i)}
 					<button

@@ -1,12 +1,5 @@
 <script lang="ts">
-	import {
-		Button,
-		Disclosure,
-		Field,
-		FormError,
-		SegmentedControl,
-		Textarea
-	} from '@smykla-skalski/sui';
+	import { Button, Field, FormError, SegmentedControl, Textarea } from '@smykla-skalski/sui';
 	import { tick } from 'svelte';
 	import {
 		authorsLabel,
@@ -22,7 +15,6 @@
 		saving,
 		submitLabel,
 		kindLocked = false,
-		collapseDetails = false,
 		onsubmit,
 		oncancel
 	}: {
@@ -31,13 +23,15 @@
 		saving: boolean;
 		submitLabel: string;
 		kindLocked?: boolean;
-		collapseDetails?: boolean;
 		onsubmit: () => void;
 		oncancel?: () => void;
 	} = $props();
 
 	const errorFor = (field: string) => (issue?.field === field ? issue.message : undefined);
-	const detailFields = [
+	const fieldKeys = [
+		'name',
+		'year',
+		'authors',
 		'tmdb_id',
 		'polish_title',
 		'original_title',
@@ -46,14 +40,11 @@
 		'cover_url',
 		'notes'
 	];
-	const fieldKeys = ['name', 'year', 'authors', ...detailFields];
 	const general = $derived(issue && !fieldKeys.includes(issue.field) ? issue.message : null);
 	let titleForm: HTMLFormElement;
-	let detailsOpen = $state(false);
 
 	$effect(() => {
 		if (!issue?.field) return;
-		if (collapseDetails && detailFields.includes(issue.field)) detailsOpen = true;
 		void tick().then(() => titleForm.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus());
 	});
 </script>
@@ -93,15 +84,7 @@
 			{/snippet}
 		</Field>
 	{/if}
-	{#if collapseDetails}
-		<Disclosure summary="Więcej szczegółów" bind:open={detailsOpen}>
-			<div class="details">
-				{@render optionalFields()}
-			</div>
-		</Disclosure>
-	{:else}
-		{@render optionalFields()}
-	{/if}
+	{@render optionalFields()}
 	<div class="actions">
 		<Button tone="signal" type="submit" loading={saving}>{submitLabel}</Button>
 		{#if oncancel}
@@ -155,10 +138,6 @@
 		display: grid;
 		gap: 1rem;
 		max-width: 40rem;
-	}
-	.details {
-		display: grid;
-		gap: 1rem;
 	}
 	.actions {
 		display: flex;

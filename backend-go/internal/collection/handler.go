@@ -53,6 +53,8 @@ func (h *Handler) Mount(r chi.Router) {
 	r.Get("/copies/{id}", h.getCopy)
 	r.Put("/copies/{id}", h.updateCopy)
 	r.Delete("/copies/{id}", h.deleteCopy)
+
+	r.Delete("/requests/{key}", h.discardRequest)
 }
 
 // writeErr maps store errors to responses. A missing parent named in the
@@ -494,6 +496,22 @@ func (h *Handler) deleteCopy(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.store.DeleteCopy(r.Context(), id); err != nil {
 		h.writeErr(w, "delete copy", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// discardRequest serves DELETE /api/requests/{key}: what a failed add with
+// that request key made goes, unless someone else uses or changed it.
+func (h *Handler) discardRequest(w http.ResponseWriter, r *http.Request) {
+	raw := chi.URLParam(r, "key")
+	key, fe := normalizeRequestKey(&raw)
+	if fe != nil || key == nil {
+		httpx.WriteError(w, h.logger, http.StatusNotFound, "Nie ma takiego klucza.")
+		return
+	}
+	if err := h.store.DiscardRequest(r.Context(), *key); err != nil {
+		h.writeErr(w, "discard request", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

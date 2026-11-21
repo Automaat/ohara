@@ -607,20 +607,12 @@ async function discard(fetchFn: typeof fetch, path: string): Promise<boolean> {
 }
 
 /**
- * Removes what a failed add without a barcode made, edition first, so neither a retry for
- * another title nor a later add of the same one finds it. An edition that holds a copy, as after
- * a lost answer, stays with its title. True when nothing the add made is left.
+ * Asks the server to remove what the creates sent with requestKey made, for an add without a
+ * barcode that failed: its copy, then its edition and title unless someone else uses or changed
+ * them. Throws when the server did not confirm, so nothing may be saved over it yet.
  */
-export async function discardMade(fetchFn: typeof fetch, made: Made): Promise<boolean> {
-	const drop = (ids: number[], path: string) =>
-		Promise.all(
-			[...ids].map(async (id) => {
-				if (await discard(fetchFn, `${path}/${id}`)) forget(ids, id);
-			})
-		);
-	await drop(made.editions, '/api/editions');
-	if (made.editions.length === 0) await drop(made.titles, '/api/titles');
-	return made.editions.length === 0 && made.titles.length === 0 && !made.titleUnanswered;
+export async function discardRequest(fetchFn: typeof fetch, requestKey: string): Promise<void> {
+	await request<void>(fetchFn, 'DELETE', `/api/requests/${encodeURIComponent(requestKey)}`);
 }
 
 function remember(ids: number[], id: number) {

@@ -766,3 +766,80 @@ func TestEditionRequestKeyMakesCreateRetrySafe(t *testing.T) {
 	a.fails(http.MethodPost, "/api/editions", obj{"title_id": movie, "format": "dvd", "request_key": strings.Repeat("k", 101)},
 		http.StatusUnprocessableEntity, "request_key")
 }
+
+func TestDiscardRequestRemovesWhatAFailedAddMade(t *testing.T) {
+	a := newAPI(t)
+	exists := func(path string) bool {
+		t.Helper()
+		switch code := a.do(http.MethodGet, path, nil, nil); code {
+		case http.StatusOK:
+			return true
+		case http.StatusNotFound:
+			return false
+		default:
+			t.Fatalf("GET %s = %d", path, code)
+			return false
+		}
+	}
+	add := func(key string, edition obj) (int64, int64, int64) {
+		t.Helper()
+		var tt collection.Title
+		a.mustDo(http.MethodPost, "/api/titles", obj{"kind": "movie", "name": "Diuna", "request_key": key}, &tt, http.StatusCreated)
+		edition["title_id"], edition["format"], edition["request_key"] = tt.ID, "uhd", key
+		ed := a.edition(edition)
+		return tt.ID, ed, a.copyOf(obj{"edition_id": ed, "status": "owned", "request_key": key})
+	}
+	path := func(kind string, id int64) string { return fmt.Sprintf("/api/%s/%d", kind, id) }
+
+	title, ed, cp := add("all", obj{})
+	a.mustDo(http.MethodDelete, "/api/requests/all", nil, nil, http.StatusNoContent)
+	if exists(path("copies", cp)) || exists(path("editions", ed)) || exists(path("titles", title)) {
+		t.Fatal("a failed add left rows behind")
+	}
+	a.mustDo(http.MethodDelete, "/api/requests/all", nil, nil, http.StatusNoContent)
+	a.mustDo(http.MethodDelete, "/api/requests/unknown", nil, nil, http.StatusNoContent)
+
+	title, ed, cp = add("shared", obj{})
+	other := a.copyOf(obj{"edition_id": ed, "status": "owned"})
+	a.mustDo(http.MethodDelete, "/api/requests/shared", nil, nil, http.StatusNoContent)
+	if exists(path("copies", cp)) || !exists(path("copies", other)) || !exists(path("editions", ed)) || !exists(path("titles", title)) {
+		t.Fatal("an edition another copy uses must stay, with its title, and only the add's copy go")
+	}
+
+	title, ed, _ = add("edited", obj{})
+	a.mustDo(http.MethodPut, path("editions", ed), obj{"title_id": title, "format": "uhd", "notes": "z innej sesji"}, nil, http.StatusOK)
+	a.mustDo(http.MethodDelete, "/api/requests/edited", nil, nil, http.StatusNoContent)
+	if !exists(path("editions", ed)) || !exists(path("titles", title)) {
+		t.Fatal("an edition a person edited must stay")
+	}
+
+	title, ed, _ = add("photo", obj{})
+	a.mustDo(http.MethodPut, path("editions", ed)+"/cover", coverPNG(t, 1), nil, http.StatusNoContent)
+	a.mustDo(http.MethodDelete, "/api/requests/photo", nil, nil, http.StatusNoContent)
+	if !exists(path("editions", ed)) || !exists(path("titles", title)) {
+		t.Fatal("an edition with a cover photo must stay")
+	}
+
+	title, ed, _ = add("barcode", obj{"barcode": "5901234123457"})
+	a.mustDo(http.MethodDelete, "/api/requests/barcode", nil, nil, http.StatusNoContent)
+	if !exists(path("editions", ed)) || !exists(path("titles", title)) {
+		t.Fatal("an edition with a barcode must stay for the scanner's undo")
+	}
+
+	reused := a.title("movie", "Rejs")
+	ed = a.edition(obj{"title_id": reused, "format": "dvd", "request_key": "reused"})
+	a.mustDo(http.MethodDelete, "/api/requests/reused", nil, nil, http.StatusNoContent)
+	if exists(path("editions", ed)) || !exists(path("titles", reused)) {
+		t.Fatal("a title the add did not make must stay")
+	}
+
+	var renamed collection.Title
+	a.mustDo(http.MethodPost, "/api/titles", obj{"kind": "book", "name": "Lalka", "request_key": "renamed"}, &renamed, http.StatusCreated)
+	a.mustDo(http.MethodPut, path("titles", renamed.ID), obj{"kind": "book", "name": "Lalka (wyd. 2)"}, nil, http.StatusOK)
+	a.mustDo(http.MethodDelete, "/api/requests/renamed", nil, nil, http.StatusNoContent)
+	if !exists(path("titles", renamed.ID)) {
+		t.Fatal("a title a person edited must stay")
+	}
+
+	a.fails(http.MethodDelete, "/api/requests/"+strings.Repeat("k", 101), nil, http.StatusNotFound, "")
+}

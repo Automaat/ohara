@@ -3,8 +3,8 @@ name: CI
 on:
   push:
     branches: [main]
+  # Every PR, stacked ones too; only a push to main pushes the image.
   pull_request:
-    branches: [main]
   # New advisories against unchanged code fail the vulnerability gates too.
   schedule:
     - cron: '23 4 * * *'

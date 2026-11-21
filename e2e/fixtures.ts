@@ -2,10 +2,15 @@ import { expect, test as base, type APIRequestContext } from '@playwright/test';
 
 /**
  * The smoke tests, each failing when the browser asked anything of another origin than the app.
- * The server side is covered by e2e/compose.yaml, which leaves the app no way out, and by
- * `expectNoSourceRequests`.
+ * Their API client follows no redirect, so it never reaches another origin either. The server side
+ * is covered by e2e/compose.yaml, which leaves the app no way out, and by `expectNoSourceRequests`.
  */
 export const test = base.extend<{ sameOrigin: void }>({
+	request: async ({ playwright, baseURL }, use) => {
+		const request = await playwright.request.newContext({ baseURL, maxRedirects: 0 });
+		await use(request);
+		await request.dispose();
+	},
 	sameOrigin: [
 		async ({ context, baseURL }, use) => {
 			const app = new URL(baseURL ?? '').origin;

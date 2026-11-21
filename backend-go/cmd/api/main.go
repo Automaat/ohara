@@ -100,7 +100,11 @@ func run() int {
 	registerPoolMetrics(pool)
 
 	deps := server.Deps{DB: pool}
-	lookupService, err := newLookup(pool, logger)
+	// One Allegro client serves both chains: it holds the token lock. Its
+	// token refreshes finish before the pool closes.
+	allegro := newAllegro(pool)
+	defer allegro.Wait()
+	lookupService, err := newLookup(pool, allegro, logger)
 	if err != nil {
 		logger.Error("lookup providers", "err", err)
 		return 2
@@ -219,7 +223,7 @@ const musicCacheTTL = 7 * 24 * time.Hour
 // newLookup registers the barcode metadata providers. Registration order is
 // the field priority when book answers are merged: the national library
 // first, then Open Library, then Google Books when a key is set.
-func newLookup(pool *pgxpool.Pool, logger *slog.Logger) (*lookup.Service, error) {
+func newLookup(pool *pgxpool.Pool, allegro *movie.Allegro, logger *slog.Logger) (*lookup.Service, error) {
 	registry := &lookup.Registry{}
 	client := &http.Client{}
 	providers := []lookup.Provider{
@@ -235,8 +239,6 @@ func newLookup(pool *pgxpool.Pool, logger *slog.Logger) (*lookup.Service, error)
 		}
 		metrics.InitSource(p.Name())
 	}
-	// One Allegro client serves both chains: it holds the token lock.
-	allegro := newAllegro(pool)
 	if p := newMovieProvider(allegro, logger); p != nil {
 		if err := registry.Register(p, movieCacheTTL); err != nil {
 			return nil, err

@@ -132,7 +132,10 @@ func (m *memStore) Load(context.Context, string) (Token, bool, error) {
 	return *m.token, true, nil
 }
 
-func (m *memStore) Save(_ context.Context, _ string, t Token) error {
+func (m *memStore) Save(ctx context.Context, _ string, t Token) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.token = &t

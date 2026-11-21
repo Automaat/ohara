@@ -176,14 +176,12 @@ func (p *Provider) products(ctx context.Context, i int, s NameSource, code strin
 	if pe, ok := errors.AsType[*recovery.PanicError](err); ok {
 		return nil, fmt.Errorf("%s: %w", name, pe)
 	}
-	if rl, ok := errors.AsType[*RateLimitError](err); ok {
-		p.pause(name, rl.Reset)
-	}
 	return found, err
 }
 
 // within asks s for at most sourceTimeout and returns its answer, or an
-// error naming it when the time runs out first.
+// error naming it when the time runs out first. A rate limit the source
+// reports pauses it even when its answer comes after the wait ended.
 func (p *Provider) within(ctx context.Context, s NameSource, name, code string) ([]Product, error) {
 	ctx, cancel := context.WithTimeout(ctx, sourceTimeout)
 	defer cancel()
@@ -196,6 +194,9 @@ func (p *Provider) within(ctx context.Context, s NameSource, name, code string) 
 		found, err := recovery.Call(p.Logger, "movie name source panicked", func() ([]Product, error) {
 			return s.Products(ctx, code)
 		}, "source", name, "barcode", code)
+		if rl, ok := errors.AsType[*RateLimitError](err); ok {
+			p.pause(name, rl.Reset)
+		}
 		done <- answer{found, err}
 	}()
 	select {

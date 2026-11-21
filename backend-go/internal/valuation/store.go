@@ -65,25 +65,28 @@ func (s *Store) Record(ctx context.Context, l *deals.Listing, h *Holding) (bool,
 }
 
 // Prices returns the valuation sources' observations last seen within
-// window that value an owned edition. OLX, Vinted and Ceneo prices of any
-// edition count when an edition of the same title and format is owned, as
-// middles and ceilings pool that group and a listing keeps the edition it
-// was first stored against, often a wished one. Floors and Discogs bounds
-// are per edition, so those count only for an owned edition. A Discogs
-// price counts only for the release the edition names now: its external
-// ID is "<release>/<edition>", so a changed or cleared release stops
-// valuing the edition at once.
+// window that value an owned edition. OLX, Vinted and Ceneo prices of an
+// edition without an owned copy count when an edition of the same title
+// and format is owned, as middles and ceilings pool that group and a
+// listing keeps the edition it was first stored against, often a wished
+// one. Such a price counts only once seen after the edition last changed:
+// a listing matched before an edit, such as a new format, may not fit it.
+// Floors and Discogs bounds are per edition, so those count only for an
+// owned edition. A Discogs price counts only for the release the edition
+// names now: its external ID is "<release>/<edition>", so a changed or
+// cleared release stops valuing the edition at once.
 func (s *Store) Prices(ctx context.Context, window time.Duration) ([]Price, error) {
 	rows, err := s.pool.Query(ctx, `SELECT o.edition_id, e.title_id, e.format, o.source,
 			o.price_cents, o.acquired_as, o.last_seen_at
 		FROM price_observation o JOIN edition e ON e.id = o.edition_id
 		WHERE o.source = ANY ($1)
 			AND o.last_seen_at > now() - make_interval(secs => $2)
-			AND EXISTS (SELECT 1 FROM copy c JOIN edition owned ON owned.id = c.edition_id
-				WHERE c.status = 'owned'
-					AND (owned.id = e.id
-						OR o.source = ANY ($4) AND owned.title_id = e.title_id
-							AND owned.format IS NOT DISTINCT FROM e.format))
+			AND (o.edition_id IN (SELECT edition_id FROM copy WHERE status = 'owned')
+				OR o.source = ANY ($4) AND o.last_seen_at > e.updated_at
+					AND (e.title_id, coalesce(e.format, '')) IN (
+						SELECT owned.title_id, coalesce(owned.format, '')
+						FROM copy c JOIN edition owned ON owned.id = c.edition_id
+						WHERE c.status = 'owned'))
 			AND (o.source <> ALL ($3)
 				OR o.external_id = e.discogs_release_id::text || '/' || e.id::text)`,
 		valuationSources, window.Seconds(), discogsSources, pooledSources)

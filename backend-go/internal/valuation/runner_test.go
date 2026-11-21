@@ -384,15 +384,23 @@ func TestPricesPoolOnlyMiddlesAndCeilings(t *testing.T) {
 		VALUES (12, 1, '9788308049396', 'hardcover')`)
 	exec(t, pool, `INSERT INTO edition (id, title_id, barcode, format, discogs_release_id)
 		OVERRIDING SYSTEM VALUE VALUES (22, 2, '5902600069720', 'bluray', 77)`)
-	exec(t, pool, `INSERT INTO copy (edition_id, status) VALUES (22, 'wishlist')`)
+	exec(t, pool, `INSERT INTO edition (id, title_id, barcode, format, updated_at) OVERRIDING SYSTEM VALUE
+		VALUES (23, 2, '5902600069737', 'bluray', now() - interval '1 hour')`)
+	exec(t, pool, `INSERT INTO title (id, kind, name) OVERRIDING SYSTEM VALUE VALUES (3, 'movie', 'Solaris')`)
+	exec(t, pool, `INSERT INTO edition (id, title_id, barcode, format) OVERRIDING SYSTEM VALUE
+		VALUES (30, 3, '5902600069744', 'bluray')`)
+	exec(t, pool, `INSERT INTO copy (edition_id, status) VALUES (22, 'wishlist'), (30, 'wishlist')`)
 	exec(t, pool, `INSERT INTO price_observation (source, external_id, price_cents, edition_id, last_seen_at)
 		VALUES ('olx', 'printing', 100, 12, now()),
 		       ('ceneo', 'printing-new', 110, 12, now()),
 		       ('skupszop', '9788308049396', 120, 12, now()),
 		       ('vinted', 'wish', 200, 22, now()),
 		       ('discogs_vg_plus', '77/22', 210, 22, now()),
+		       ('olx', 'seen-since-edit', 220, 23, now()),
+		       ('olx', 'seen-before-edit', 230, 23, now() - interval '2 hours'),
 		       ('olx', 'dvd', 300, 21, now()),
-		       ('ceneo', 'dvd-new', 310, 21, now())`)
+		       ('ceneo', 'dvd-new', 310, 21, now()),
+		       ('olx', 'other-title', 400, 30, now())`)
 	prices, err := NewStore(pool).Prices(ctx, 90*24*time.Hour)
 	if err != nil {
 		t.Fatalf("Prices: %v", err)
@@ -402,8 +410,34 @@ func TestPricesPoolOnlyMiddlesAndCeilings(t *testing.T) {
 		got = append(got, p.Cents)
 	}
 	slices.Sort(got)
-	if !slices.Equal(got, []int64{100, 110, 200}) {
-		t.Fatalf("Prices = %+v, want only the used and Ceneo prices of unowned editions in an owned group", prices)
+	if !slices.Equal(got, []int64{100, 110, 200, 220}) {
+		t.Fatalf("Prices = %+v, want only the used and Ceneo prices of unowned editions in an owned group seen since their last edit", prices)
+	}
+}
+
+func TestEditedFormatDropsEarlierListings(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	seed(t, pool)
+	ctx := context.Background()
+	record := func(format string, found ...deals.Listing) {
+		t.Helper()
+		wish := deals.Want{EditionID: 21, TitleID: 2, Kind: "movie", Name: "Diuna", Format: &format}
+		for i := range found {
+			if _, _, err := deals.NewStore(pool).Record(ctx, &found[i], &wish, false); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	record("dvd", listing("olx", "d1", "Diuna DVD", 1000, used()),
+		listing("ceneo", "d2", "Diuna DVD", 2000, fresh()))
+	exec(t, pool, `UPDATE edition SET format = 'bluray', updated_at = now(), edited_at = now() WHERE id = 21`)
+	record("bluray", listing("olx", "b1", "Diuna Blu-ray", 4000, used()))
+	prices, err := NewStore(pool).Prices(ctx, 90*24*time.Hour)
+	if err != nil {
+		t.Fatalf("Prices: %v", err)
+	}
+	if len(prices) != 1 || prices[0].Cents != 4000 {
+		t.Fatalf("Prices = %+v, want only the Blu-ray listing seen after the format edit", prices)
 	}
 }
 

@@ -208,19 +208,22 @@ func quantile(sorted []int64, q float64) float64 {
 
 // CopyValue is one owned copy with its edition's range.
 type CopyValue struct {
-	CopyID        int64     `json:"copy_id"`
-	EditionID     int64     `json:"edition_id"`
-	TitleID       int64     `json:"title_id"`
-	TitleName     string    `json:"title_name"`
-	Kind          string    `json:"kind"`
-	Format        *string   `json:"format"`
-	Barcode       *string   `json:"barcode"`
-	PriceCents    *int64    `json:"price_cents"`
-	CoverURL      *string   `json:"cover_url,omitempty"`
-	Floor         *Estimate `json:"floor"`
-	Mid           *Estimate `json:"mid"`
-	Ceiling       *Estimate `json:"ceiling"`
-	LowConfidence bool      `json:"low_confidence"`
+	CopyID     int64   `json:"copy_id"`
+	EditionID  int64   `json:"edition_id"`
+	TitleID    int64   `json:"title_id"`
+	TitleName  string  `json:"title_name"`
+	Kind       string  `json:"kind"`
+	Format     *string `json:"format"`
+	Barcode    *string `json:"barcode"`
+	PriceCents *int64  `json:"price_cents"`
+	CoverURL   *string `json:"cover_url,omitempty"`
+	// DiscogsReleaseID is the album edition's Discogs release, so a price
+	// from Discogs can credit it.
+	DiscogsReleaseID *int64    `json:"discogs_release_id,omitempty"`
+	Floor            *Estimate `json:"floor"`
+	Mid              *Estimate `json:"mid"`
+	Ceiling          *Estimate `json:"ceiling"`
+	LowConfidence    bool      `json:"low_confidence"`
 }
 
 // Bound is one bound summed over the collection: the total of the copies

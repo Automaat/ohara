@@ -1,6 +1,14 @@
 <script lang="ts">
-	import { copyMeta, copyNote, missingCeiling, wholeZl, type CopyValue } from '#lib/valuation.js';
+	import {
+		copyMeta,
+		copyNote,
+		discogsRelease,
+		missingCeiling,
+		wholeZl,
+		type CopyValue
+	} from '#lib/valuation.js';
 	import CollectionCover from './CollectionCover.svelte';
+	import DiscogsCredit from './DiscogsCredit.svelte';
 
 	let { copies }: { copies: readonly CopyValue[] } = $props();
 </script>
@@ -27,6 +35,7 @@
 					{/if}
 				</span>
 			</a>
+			<DiscogsCredit class="row-credit" release={discogsRelease(c)} />
 		</li>
 	{/each}
 </ul>
@@ -93,6 +102,11 @@
 		font-size: 0.6875rem;
 		font-weight: 700;
 		white-space: nowrap;
+	}
+
+	/* Under the copy's details: past the row's padding, the cover and the gap. */
+	li > :global(.row-credit) {
+		padding: 0 0.875rem 0.625rem calc(0.875rem + 2.375rem + 0.75rem);
 	}
 
 	.meta {

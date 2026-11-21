@@ -22,6 +22,7 @@ type fakeShop struct {
 	empty   []byte
 	status  int
 	noToken bool
+	huge    int
 
 	mu       sync.Mutex
 	added    map[string]bool
@@ -51,6 +52,11 @@ func (f *fakeShop) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if f.status != 0 {
 		w.WriteHeader(f.status)
+		return
+	}
+	if f.huge != 0 {
+		w.WriteHeader(f.huge)
+		_, _ = w.Write(make([]byte, maxShopReply+1))
 		return
 	}
 	f.mu.Lock()
@@ -156,6 +162,20 @@ func TestSkupSzopQuote(t *testing.T) {
 			setup:   func(f *fakeShop) { f.status = http.StatusServiceUnavailable },
 			wantErr: "skupszop: sell page: status 503",
 			status:  "http_503",
+		},
+		{
+			name:    "shop down with a page over the cap",
+			isbn:    "9788308074770",
+			setup:   func(f *fakeShop) { f.huge = http.StatusServiceUnavailable },
+			wantErr: "skupszop: sell page: response too large",
+			status:  "http_503",
+		},
+		{
+			name:    "sell page over the cap",
+			isbn:    "9788308074770",
+			setup:   func(f *fakeShop) { f.huge = http.StatusOK },
+			wantErr: "skupszop: sell page: response too large",
+			status:  "parse_error",
 		},
 		{
 			name:    "shop unreachable",

@@ -8,6 +8,7 @@ import (
 	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -107,6 +108,18 @@ func scrape(t *testing.T) string {
 	return rec.Body.String()
 }
 
+// sample returns the value of series in a scrape and whether it is there;
+// an absent series reads as 0.
+func sample(body, series string) (float64, bool) {
+	for line := range strings.Lines(body) {
+		if rest, ok := strings.CutPrefix(line, series+" "); ok {
+			v, err := strconv.ParseFloat(strings.TrimSpace(rest), 64)
+			return v, err == nil
+		}
+	}
+	return 0, false
+}
+
 // checkSources fails unless every source with metrics is one of the
 // marketplaces and the buy-back the hunter and the valuation may ask.
 func checkSources(t *testing.T) {
@@ -154,23 +167,26 @@ func TestValuationAsksOnlyItsSources(t *testing.T) {
 		}
 	}
 	u := newUpstreams(t)
+	const errorsSeries = `ohara_source_errors_total{source="skupszop"}`
+	const unavailableSeries = `ohara_source_requests_total{source="skupszop",status="http_503"}`
+	errorsBefore, _ := sample(scrape(t), errorsSeries)
 	r, _, err := newValuation(pool, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatalf("newValuation: %v", err)
 	}
-	// No other test here asks SkupSzop, so before the run its series are
-	// the zeroes newValuation exports.
-	if body := scrape(t); !strings.Contains(body, "\n"+`ohara_source_errors_total{source="skupszop"} 0`+"\n") {
-		t.Fatal("newValuation must export the skupszop series before the first quote")
+	built := scrape(t)
+	if got, ok := sample(built, errorsSeries); !ok || got != errorsBefore {
+		t.Fatalf("after newValuation %s = %v (exported %v), want %v before the first quote", errorsSeries, got, ok, errorsBefore)
 	}
+	unavailableBefore, _ := sample(built, unavailableSeries)
 	if _, err := r.Run(ctx); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if got, paths := u.asked(); !slices.Equal(got, []string{"olx", "skupszop"}) {
 		t.Fatalf("asked %v (paths %v), want olx and skupszop only", got, paths)
 	}
-	if body := scrape(t); !strings.Contains(body, `ohara_source_requests_total{source="skupszop",status="http_503"} 1`) {
-		t.Fatal("the run's quote must count as http_503 under skupszop")
+	if got, _ := sample(scrape(t), unavailableSeries); got != unavailableBefore+1 {
+		t.Fatalf("%s = %v after the run, want %v: the quote must count once as http_503", unavailableSeries, got, unavailableBefore+1)
 	}
 	checkSources(t)
 }

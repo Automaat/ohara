@@ -62,6 +62,16 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   `request_key`: a repeat with the same key answers 200 with the row the
   first request created. The scanner sends one key per add, so a retry
   after a lost answer knows what the add made and undo removes only that.
+  `DELETE /api/requests/{key}` removes what a failed barcode-less add made
+  with its key: the copy, then the edition and title unless another copy
+  or edition uses them or a person changed them (`edited_at`: an edit or a
+  cover photo; rows keyed before that column count as changed once
+  they were updated or got a photo). The key
+  goes into `discarded_request`, so a create that arrives with it later
+  (a stalled request) answers 409 on `request_key`; a per-key advisory
+  lock orders creates and discards. The collection's add calls it after a
+  refused save and before saving another valid pick over a key that may
+  have written.
 - Lookup providers implement `lookup.Provider` (`Fetch` returns raw JSON,
   `Parse` turns raw JSON into candidates) and register in `cmd/api` with a
   cache TTL. Candidate `title`/`edition` fields match the POST bodies of

@@ -59,6 +59,8 @@ func mapErr(err, notFound error, op string) error {
 		return ErrDuplicateBarcode
 	case code == pgUniqueViolation && constraint == "title_tmdb_id_key":
 		return ErrDuplicateTMDB
+	case code == pgUniqueViolation && constraint == "discarded_request_key":
+		return ErrRequestDiscarded
 	}
 	return fmt.Errorf("%s: %w", op, err)
 }
@@ -196,7 +198,7 @@ func (s *Store) UpdateTitle(ctx context.Context, id int64, in *TitleInput) (Titl
 		_, err = tx.Exec(ctx, `UPDATE title SET kind = $2, name = $3, original_title = $4,
 			polish_title = $5, year = $6, tmdb_id = $7, authors = $8, bn_id = $9,
 			openlibrary_id = $10, notes = $11, cover_url = NULLIF(COALESCE($12, cover_url), ''),
-			updated_at = now() WHERE id = $1`,
+			updated_at = now(), edited_at = now() WHERE id = $1`,
 			id, in.Kind, in.Name, in.OriginalTitle, in.PolishTitle, in.Year, in.TMDBID, in.Authors,
 			in.BNID, in.OpenLibraryID, in.Notes, in.CoverURL)
 		return mapErr(err, ErrTitleNotFound, "update title")
@@ -277,6 +279,11 @@ func (s *Store) CreateEdition(ctx context.Context, in *EditionInput) (Edition, b
 	var id int64
 	created := true
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
+		// The request key's lock comes first, as in DiscardRequest, which then locks the title:
+		// taking the title first would deadlock against it.
+		if err := lockRequestKey(ctx, tx, in.RequestKey); err != nil {
+			return err
+		}
 		if _, err := lockTitleKind(ctx, tx, in); err != nil {
 			return err
 		}
@@ -322,7 +329,8 @@ func (s *Store) UpdateEdition(ctx context.Context, id int64, in *EditionInput) (
 		tag, err := tx.Exec(ctx, `UPDATE edition SET title_id = $2, barcode = $3, label = $4,
 			publisher = $5, year = $6, format = $7, pl_subtitles = $8, pl_voiceover = $9,
 			packaging = $10, binding = $11, discogs_release_id = $12, notes = $13,
-			cover_url = NULLIF(COALESCE($14, cover_url), ''), updated_at = now() WHERE id = $1`,
+			cover_url = NULLIF(COALESCE($14, cover_url), ''), updated_at = now(), edited_at = now()
+			WHERE id = $1`,
 			id, in.TitleID, in.Barcode, in.Label, in.Publisher, in.Year, in.Format, in.PLSubtitles,
 			in.PLVoiceover, in.Packaging, in.Binding, in.DiscogsReleaseID, in.Notes, in.CoverURL)
 		if err != nil {
@@ -426,7 +434,8 @@ func (s *Store) editionCover(ctx context.Context, id int64) ([]byte, error) {
 }
 
 func (s *Store) setEditionCover(ctx context.Context, id int64, photo []byte) error {
-	tag, err := s.pool.Exec(ctx, `UPDATE edition SET cover_photo = $2, updated_at = clock_timestamp() WHERE id = $1`,
+	tag, err := s.pool.Exec(ctx, `UPDATE edition SET cover_photo = $2, updated_at = clock_timestamp(),
+		edited_at = clock_timestamp() WHERE id = $1`,
 		id, photo)
 	if err != nil {
 		return fmt.Errorf("set edition cover: %w", err)
@@ -516,6 +525,82 @@ func (s *Store) DeleteCopy(ctx context.Context, id int64) error {
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
+	}
+	return nil
+}
+
+// DiscardRequest removes what the creates sent with key made, for an add
+// that failed: its copy unless someone edited it, then its edition while it has no barcode (the
+// scanner's undo puts those back in the queue), no other copy and no change
+// by a person, then its title while it has no edition and no change by a
+// person. Rows someone else uses or changed stay. The key is recorded, so a
+// create that arrives with it later is refused (ErrRequestDiscarded).
+func (s *Store) DiscardRequest(ctx context.Context, key string) error {
+	return s.inTx(ctx, func(tx pgx.Tx) error {
+		// The same lock the creates take: a create with this key either committed
+		// before, and its rows are seen below, or waits and finds the key discarded.
+		if err := lockRequestKey(ctx, tx, &key); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO discarded_request (request_key) VALUES ($1)
+			ON CONFLICT DO NOTHING`, key); err != nil {
+			return fmt.Errorf("record discarded key: %w", err)
+		}
+		// A copy someone edited since the add made it is theirs now.
+		if _, err := tx.Exec(ctx, `DELETE FROM copy WHERE request_key = $1 AND updated_at = created_at`, key); err != nil {
+			return fmt.Errorf("discard copy: %w", err)
+		}
+		err := discardUnused(ctx, tx, key,
+			`SELECT id FROM edition WHERE request_key = $1 AND barcode IS NULL AND edited_at IS NULL FOR UPDATE`,
+			`SELECT EXISTS (SELECT 1 FROM copy WHERE edition_id = $1)`,
+			`DELETE FROM edition WHERE id = $1`)
+		if err != nil {
+			return fmt.Errorf("discard edition: %w", err)
+		}
+		err = discardUnused(ctx, tx, key,
+			`SELECT id FROM title WHERE request_key = $1 AND edited_at IS NULL FOR UPDATE`,
+			`SELECT EXISTS (SELECT 1 FROM edition WHERE title_id = $1)`,
+			`DELETE FROM title WHERE id = $1`)
+		if err != nil {
+			return fmt.Errorf("discard title: %w", err)
+		}
+		return nil
+	})
+}
+
+// lockRequestKey takes the transaction lock the request_key_guard trigger
+// takes for key; none for a create without one.
+func lockRequestKey(ctx context.Context, tx pgx.Tx, key *string) error {
+	if key == nil {
+		return nil
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('request:' || $1, 0))`, *key); err != nil {
+		return fmt.Errorf("lock request key: %w", err)
+	}
+	return nil
+}
+
+// discardUnused deletes the row lock finds unless used says it is in use.
+// The check runs after the lock as its own statement, as checkNoEditions
+// does, so it sees a child committed while the lock waited.
+func discardUnused(ctx context.Context, tx pgx.Tx, key, lock, used, remove string) error {
+	var id int64
+	err := tx.QueryRow(ctx, lock, key).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("lock: %w", err)
+	}
+	var inUse bool
+	if err := tx.QueryRow(ctx, used, id).Scan(&inUse); err != nil {
+		return fmt.Errorf("check use: %w", err)
+	}
+	if inUse {
+		return nil
+	}
+	if _, err := tx.Exec(ctx, remove, id); err != nil {
+		return fmt.Errorf("delete: %w", err)
 	}
 	return nil
 }

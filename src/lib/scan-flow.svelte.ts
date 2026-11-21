@@ -12,8 +12,9 @@ import {
 	FormRejected,
 	LatestLoad,
 	checkDigitMatches,
+	checkScan,
 	cleanBarcode,
-	discardMade,
+	discardRequest,
 	emptySticky,
 	isInvalidBarcode,
 	loadSticky,
@@ -62,6 +63,11 @@ export type FlowItem = {
 	logged: boolean;
 	/** What saves of this item created, kept across retries. */
 	made: Made;
+	/**
+	 * The title and edition an earlier save of an item without a barcode sent its key with, while
+	 * that key may still replay what it wrote; null once nothing stands behind the key.
+	 */
+	sent: string | null;
 	/** The candidates came from a title search, which the user may leave for the draft. */
 	searched: boolean;
 	/** What the user had in the form when the first search answered, to go back to. */
@@ -98,6 +104,17 @@ export type Added = { saved: Saved; add: SessionAdd; barcode: string; next: stri
 function refused(err: unknown): boolean {
 	return err instanceof ApiError && err.status >= 400 && err.status <= 500;
 }
+
+/** What a save without a barcode cannot change once its key may have written: title and edition. */
+function sentFor(target: SaveTarget, f: QuickForm): string {
+	const candidate = target.kind === 'new' ? target.candidate : null;
+	const { kind, name, format, binding, packaging } = f;
+	return JSON.stringify([candidate, kind, name.trim(), format, binding, packaging]);
+}
+
+/** Why a changed item without a barcode is not saved: the earlier attempt still stands. */
+const unsettled =
+	'Nie udało się cofnąć poprzedniej próby zapisu, więc nowa pozycja nie została dodana. Spróbuj ponownie.';
 
 /** The medium of the edition a save joined: its format or binding. */
 function mediumOf(e: Pick<Edition, 'format' | 'binding'>): string {
@@ -176,6 +193,7 @@ export class ScanFlow {
 			errors: [],
 			logged: false,
 			made: newMade(),
+			sent: null,
 			searched: false,
 			draft: null
 		};
@@ -389,9 +407,11 @@ export class ScanFlow {
 	 * The copy the server returns decides what is logged: a retry of a save whose answer was
 	 * lost returns the copy the first attempt made, even when the form changed in between. An
 	 * owned copy's shop joins the ones stored when it answers, so another page's save that
-	 * answered meanwhile keeps its shop. An add without a barcode the server refused removes the
-	 * title and edition it made and starts over with a new key, as no barcode would find them
-	 * again; after a lost answer it keeps the key, so a retry returns what the request made.
+	 * answered meanwhile keeps its shop. An add without a barcode the server refused removes what
+	 * it made and starts over with a new key, as no barcode would find it again; after a lost
+	 * answer it keeps the key, so a retry returns what the request made. A retry for another
+	 * title or edition removes what the earlier attempt made first, and saves nothing while that
+	 * is not confirmed.
 	 */
 	async save(): Promise<Added | null> {
 		const item = this.item;
@@ -400,10 +420,21 @@ export class ScanFlow {
 		const next = wedgeBarcodeIn(this.form.price);
 		if (next) this.form.price = '';
 		const f = $state.snapshot(this.form);
+		// Taken with the form: a pick made while an earlier attempt is removed belongs to the next save.
+		const target = $state.snapshot(item.target);
 		this.saving = true;
 		this.issue = null;
 		try {
-			const saved = await saveScan(this.#fetch, item.target, f, item.key, item.made);
+			if (!item.barcode && target.kind === 'new') {
+				// A form the server would refuse must not cost the earlier attempt its rows.
+				checkScan(target, f);
+				const sending = sentFor(target, f);
+				if (item.sent !== null && item.sent !== sending && !(await this.#discard(item))) {
+					throw new FormRejected('', unsettled);
+				}
+				item.sent = sending;
+			}
+			const saved = await saveScan(this.#fetch, target, f, item.key, item.made);
 			const kept = { ...f, status: saved.copy.status ?? f.status };
 			if (kept.status === 'owned') {
 				visit.date = kept.purchased_on;
@@ -437,10 +468,7 @@ export class ScanFlow {
 			});
 			return current() ? { saved, add, barcode: item.barcode, next } : null;
 		} catch (err) {
-			if (!item.barcode && refused(err) && (await discardMade(this.#fetch, item.made))) {
-				item.key = newRequestKey();
-				item.made = newMade();
-			}
+			if (!item.barcode && refused(err)) await this.#discard(item);
 			if (!current()) return null;
 			this.issue =
 				err instanceof FormRejected
@@ -454,6 +482,22 @@ export class ScanFlow {
 		} finally {
 			if (current()) this.saving = false;
 		}
+	}
+
+	/**
+	 * Removes what an item's earlier save made, then gives the item a new key, so nothing the key
+	 * replays lands under another title. False when the server did not confirm the removal.
+	 */
+	async #discard(item: FlowItem): Promise<boolean> {
+		try {
+			await discardRequest(this.#fetch, item.key);
+		} catch {
+			return false;
+		}
+		item.key = newRequestKey();
+		item.made = newMade();
+		item.sent = null;
+		return true;
 	}
 
 	/**

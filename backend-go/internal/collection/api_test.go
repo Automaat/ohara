@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -765,4 +766,110 @@ func TestEditionRequestKeyMakesCreateRetrySafe(t *testing.T) {
 
 	a.fails(http.MethodPost, "/api/editions", obj{"title_id": movie, "format": "dvd", "request_key": strings.Repeat("k", 101)},
 		http.StatusUnprocessableEntity, "request_key")
+}
+
+func TestDiscardRequestRemovesWhatAFailedAddMade(t *testing.T) {
+	a := newAPI(t)
+	exists := func(path string) bool {
+		t.Helper()
+		switch code := a.do(http.MethodGet, path, nil, nil); code {
+		case http.StatusOK:
+			return true
+		case http.StatusNotFound:
+			return false
+		default:
+			t.Fatalf("GET %s = %d", path, code)
+			return false
+		}
+	}
+	add := func(key string, edition obj) (int64, int64, int64) {
+		t.Helper()
+		var tt collection.Title
+		a.mustDo(http.MethodPost, "/api/titles", obj{"kind": "movie", "name": "Diuna", "request_key": key}, &tt, http.StatusCreated)
+		edition["title_id"], edition["format"], edition["request_key"] = tt.ID, "uhd", key
+		ed := a.edition(edition)
+		return tt.ID, ed, a.copyOf(obj{"edition_id": ed, "status": "owned", "request_key": key})
+	}
+	path := func(kind string, id int64) string { return fmt.Sprintf("/api/%s/%d", kind, id) }
+
+	title, ed, cp := add("all", obj{})
+	a.mustDo(http.MethodDelete, "/api/requests/all", nil, nil, http.StatusNoContent)
+	if exists(path("copies", cp)) || exists(path("editions", ed)) || exists(path("titles", title)) {
+		t.Fatal("a failed add left rows behind")
+	}
+	a.mustDo(http.MethodDelete, "/api/requests/all", nil, nil, http.StatusNoContent)
+	a.mustDo(http.MethodDelete, "/api/requests/unknown", nil, nil, http.StatusNoContent)
+
+	title, ed, cp = add("shared", obj{})
+	other := a.copyOf(obj{"edition_id": ed, "status": "owned"})
+	a.mustDo(http.MethodDelete, "/api/requests/shared", nil, nil, http.StatusNoContent)
+	if exists(path("copies", cp)) || !exists(path("copies", other)) || !exists(path("editions", ed)) || !exists(path("titles", title)) {
+		t.Fatal("an edition another copy uses must stay, with its title, and only the add's copy go")
+	}
+
+	title, ed, _ = add("edited", obj{})
+	a.mustDo(http.MethodPut, path("editions", ed), obj{"title_id": title, "format": "uhd", "notes": "z innej sesji"}, nil, http.StatusOK)
+	a.mustDo(http.MethodDelete, "/api/requests/edited", nil, nil, http.StatusNoContent)
+	if !exists(path("editions", ed)) || !exists(path("titles", title)) {
+		t.Fatal("an edition a person edited must stay")
+	}
+
+	title, ed, _ = add("photo", obj{})
+	a.mustDo(http.MethodPut, path("editions", ed)+"/cover", coverPNG(t, 1), nil, http.StatusNoContent)
+	a.mustDo(http.MethodDelete, "/api/requests/photo", nil, nil, http.StatusNoContent)
+	if !exists(path("editions", ed)) || !exists(path("titles", title)) {
+		t.Fatal("an edition with a cover photo must stay")
+	}
+
+	title, ed, _ = add("barcode", obj{"barcode": "5901234123457"})
+	a.mustDo(http.MethodDelete, "/api/requests/barcode", nil, nil, http.StatusNoContent)
+	if !exists(path("editions", ed)) || !exists(path("titles", title)) {
+		t.Fatal("an edition with a barcode must stay for the scanner's undo")
+	}
+
+	reused := a.title("movie", "Rejs")
+	ed = a.edition(obj{"title_id": reused, "format": "dvd", "request_key": "reused"})
+	a.mustDo(http.MethodDelete, "/api/requests/reused", nil, nil, http.StatusNoContent)
+	if exists(path("editions", ed)) || !exists(path("titles", reused)) {
+		t.Fatal("a title the add did not make must stay")
+	}
+
+	var renamed collection.Title
+	a.mustDo(http.MethodPost, "/api/titles", obj{"kind": "book", "name": "Lalka", "request_key": "renamed"}, &renamed, http.StatusCreated)
+	a.mustDo(http.MethodPut, path("titles", renamed.ID), obj{"kind": "book", "name": "Lalka (wyd. 2)"}, nil, http.StatusOK)
+	a.mustDo(http.MethodDelete, "/api/requests/renamed", nil, nil, http.StatusNoContent)
+	if !exists(path("titles", renamed.ID)) {
+		t.Fatal("a title a person edited must stay")
+	}
+
+	title, ed, cp = add("copy-edited", obj{})
+	a.mustDo(http.MethodPut, path("copies", cp), obj{"edition_id": ed, "status": "owned", "shop": "z innej sesji"}, nil, http.StatusOK)
+	a.mustDo(http.MethodDelete, "/api/requests/copy-edited", nil, nil, http.StatusNoContent)
+	if !exists(path("copies", cp)) || !exists(path("editions", ed)) || !exists(path("titles", title)) {
+		t.Fatal("a copy a person edited must stay, with its edition and title")
+	}
+
+	title, ed, cp = add("a%2Fb", obj{})
+	other, otherEd, otherCp := add("a/b", obj{})
+	a.mustDo(http.MethodDelete, "/api/requests/"+url.PathEscape("a%2Fb"), nil, nil, http.StatusNoContent)
+	if exists(path("copies", cp)) || exists(path("editions", ed)) || exists(path("titles", title)) {
+		t.Fatal("a key holding an escape sequence must reach its own rows")
+	}
+	if !exists(path("copies", otherCp)) || !exists(path("editions", otherEd)) || !exists(path("titles", other)) {
+		t.Fatal("decoding a key twice reached another key's rows")
+	}
+
+	title, ed, cp = add("a/b c", obj{})
+	a.mustDo(http.MethodDelete, "/api/requests/"+url.PathEscape("a/b c"), nil, nil, http.StatusNoContent)
+	if exists(path("copies", cp)) || exists(path("editions", ed)) || exists(path("titles", title)) {
+		t.Fatal("an escaped key must reach the rows it made")
+	}
+
+	a.mustDo(http.MethodDelete, "/api/requests/late", nil, nil, http.StatusNoContent)
+	a.fails(http.MethodPost, "/api/titles", obj{"kind": "movie", "name": "Spóźniony", "request_key": "late"}, http.StatusConflict, "request_key")
+	a.fails(http.MethodPost, "/api/editions", obj{"title_id": reused, "format": "dvd", "request_key": "late"}, http.StatusConflict, "request_key")
+	kept := a.edition(obj{"title_id": reused, "format": "bluray"})
+	a.fails(http.MethodPost, "/api/copies", obj{"edition_id": kept, "status": "owned", "request_key": "late"}, http.StatusConflict, "request_key")
+
+	a.fails(http.MethodDelete, "/api/requests/"+strings.Repeat("k", 101), nil, http.StatusNotFound, "")
 }

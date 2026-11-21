@@ -608,20 +608,12 @@ async function discard(fetchFn: typeof fetch, path: string): Promise<boolean> {
 }
 
 /**
- * Removes what a failed add without a barcode made, edition first, so neither a retry for
- * another title nor a later add of the same one finds it. An edition that holds a copy, as after
- * a lost answer, stays with its title. True when nothing the add made is left.
+ * Asks the server to remove what the creates sent with requestKey made, for an add without a
+ * barcode that failed: its copy, then its edition and title unless someone else uses or changed
+ * them. Throws when the server did not confirm, so nothing may be saved over it yet.
  */
-export async function discardMade(fetchFn: typeof fetch, made: Made): Promise<boolean> {
-	const drop = (ids: number[], path: string) =>
-		Promise.all(
-			[...ids].map(async (id) => {
-				if (await discard(fetchFn, `${path}/${id}`)) forget(ids, id);
-			})
-		);
-	await drop(made.editions, '/api/editions');
-	if (made.editions.length === 0) await drop(made.titles, '/api/titles');
-	return made.editions.length === 0 && made.titles.length === 0 && !made.titleUnanswered;
+export async function discardRequest(fetchFn: typeof fetch, requestKey: string): Promise<void> {
+	await request<void>(fetchFn, 'DELETE', `/api/requests/${encodeURIComponent(requestKey)}`);
 }
 
 function remember(ids: number[], id: number) {
@@ -664,6 +656,24 @@ async function titleFor(
 		if (!reused) throw err;
 		made.titleUnanswered = false;
 		return reused;
+	}
+}
+
+/** The longest text the API takes in a title's name or a copy's shop, in UTF-8 bytes. */
+const maxTextBytes = 500;
+
+function tooLong(text: string): boolean {
+	return new TextEncoder().encode(text.trim()).length > maxTextBytes;
+}
+
+/** Throws FormRejected for a new item's form the server would refuse, before any request. */
+export function checkScan(target: Extract<SaveTarget, { kind: 'new' }>, f: QuickForm): void {
+	must(scanTitlePayload(f, target.candidate));
+	must(scanEditionPayload(f, target.candidate, target.barcode, 0));
+	must(scanCopyPayload(f, 0, ''));
+	if (tooLong(f.name)) throw new FormRejected('name', 'Tytuł jest za długi.');
+	if (f.status === 'owned' && tooLong(f.shop)) {
+		throw new FormRejected('shop', 'Nazwa sklepu jest za długa.');
 	}
 }
 
@@ -711,9 +721,8 @@ export async function saveScan(
 		return saved(e.title, e, copy);
 	}
 
+	checkScan(target, f);
 	const titleBody = must(scanTitlePayload(f, target.candidate));
-	must(scanEditionPayload(f, target.candidate, target.barcode, 0));
-	must(scanCopyPayload(f, 0, requestKey));
 
 	const title = await titleFor(fetchFn, titleBody, requestKey, made);
 	let edition: Edition;

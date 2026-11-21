@@ -13,7 +13,11 @@ import (
 	"testing"
 
 	"github.com/Automaat/ohara/backend-go/internal/dbtest"
+	"github.com/Automaat/ohara/backend-go/internal/deals"
+	"github.com/Automaat/ohara/backend-go/internal/discogs"
+	"github.com/Automaat/ohara/backend-go/internal/lookup/music"
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
+	"github.com/Automaat/ohara/backend-go/internal/valuation"
 )
 
 // upstreams stands in for every outside source the deal hunter and the
@@ -159,4 +163,37 @@ func TestValuationAsksOnlyItsSources(t *testing.T) {
 		t.Fatalf("asked %v (paths %v), want olx and skupszop only", got, paths)
 	}
 	checkSources(t)
+}
+
+func TestDiscogsCallersShareOneBudget(t *testing.T) {
+	t.Setenv("OHARA_DISCOGS_TOKEN", "secret")
+	t.Setenv("OHARA_MUSICBRAINZ", "false")
+	logger := slog.New(slog.DiscardHandler)
+
+	search, ok := titleSearchers()["music"].(music.TextSearch)
+	if !ok {
+		t.Fatalf("title search for music is not music.TextSearch")
+	}
+	provider := newMusicProvider(nil, logger)
+	if provider == nil {
+		t.Fatal("no music provider with a Discogs token")
+	}
+	pricer, ok := newReleasePricer(deals.NewHTTPClient()).(valuation.Discogs)
+	if !ok {
+		t.Fatal("valuation pricer is not valuation.Discogs")
+	}
+	callers := map[string]any{
+		"title search":   search.Discogs,
+		"music provider": provider.Discogs,
+		"valuation":      pricer.Market,
+	}
+	for name, caller := range callers {
+		c, ok := caller.(*discogs.Client)
+		if !ok {
+			t.Fatalf("%s: Discogs caller is %T, want *discogs.Client", name, caller)
+		}
+		if c.Limiter == nil || c.Limiter != discogsBudget {
+			t.Errorf("%s: limiter %p, want the shared budget %p", name, c.Limiter, discogsBudget)
+		}
+	}
 }

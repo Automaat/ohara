@@ -34,11 +34,14 @@ const maxBody = 4 << 20
 const maxResults = 10
 
 // Client calls the Discogs API with a personal access token. The API
-// allows 60 authenticated requests a minute; callers pace their requests.
+// allows 60 authenticated requests a minute: every request waits for
+// Limiter, which every Client of the same token shares. A nil Limiter
+// leaves the pacing to the caller.
 type Client struct {
 	HTTP    *http.Client
 	BaseURL string
 	Token   string
+	Limiter *Limiter
 }
 
 // Release is one release a barcode search found. Title is Discogs'
@@ -136,9 +139,11 @@ func (c *Client) PriceSuggestions(ctx context.Context, id int64) (Suggestions, e
 	return s, err
 }
 
-// get fetches path, decodes the JSON body into out and runs check on it.
-// The outcome counts in the source health metrics: ok only once the body
-// decodes and passes check. Errors name the path without the query.
+// get waits for the token's budget, fetches path, decodes the JSON body
+// into out and runs check on it. The outcome counts in the source health
+// metrics: ok only once the body decodes and passes check; a request the
+// budget kept back was never sent and does not count. Errors name the
+// path without the query.
 func (c *Client) get(ctx context.Context, path string, out any, check func() error) error {
 	base := c.BaseURL
 	if base == "" {
@@ -155,6 +160,9 @@ func (c *Client) get(ctx context.Context, path string, out any, check func() err
 	client := c.HTTP
 	if client == nil {
 		client = http.DefaultClient
+	}
+	if err := c.Limiter.Wait(ctx); err != nil {
+		return fmt.Errorf("discogs: GET %s: wait for rate budget: %w", req.URL.Path, err)
 	}
 	resp, err := client.Do(req)
 	if err != nil {

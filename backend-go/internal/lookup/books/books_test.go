@@ -405,6 +405,35 @@ func TestProvidersCountSourceOutcomes(t *testing.T) {
 	}
 }
 
+// TestProvidersTimeSourceRequests checks that each request is timed under
+// its source whatever its outcome, a response shape that fails to parse
+// after a 200 included.
+func TestProvidersTimeSourceRequests(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/institutions/bibs.json":
+			http.Error(w, "slow down", http.StatusTooManyRequests)
+		case "/api/books":
+			_, _ = w.Write([]byte("<html>busy</html>"))
+		default:
+			_, _ = w.Write([]byte(`{"kind":"books#volumes","items":"changed"}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	ctx := context.Background()
+	before := scrape(t)
+	_, _ = (books.BN{BaseURL: srv.URL}).Fetch(ctx, "9788375780635")
+	_, _ = (books.OpenLibrary{BaseURL: srv.URL}).Fetch(ctx, "9788375780635")
+	_, _ = (books.GoogleBooks{APIKey: "k", BaseURL: srv.URL}).Fetch(ctx, "9788375780635")
+	after := scrape(t)
+	for _, source := range []string{"bn", "openlibrary", "google_books"} {
+		series := `ohara_source_request_duration_seconds_count{source="` + source + `"}`
+		if d := after[series] - before[series]; d != 1 {
+			t.Errorf("%s grew by %v, want 1", series, d)
+		}
+	}
+}
+
 func TestLookupRecordsSourceResults(t *testing.T) {
 	_, srv := newCatalog(t)
 	res := chain(t, srv, nil).Lookup(context.Background(), "9788375780635")

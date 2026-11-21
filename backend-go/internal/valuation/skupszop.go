@@ -177,6 +177,7 @@ func shopDo(ctx context.Context, client *http.Client, method, target string, bod
 		header.Set("X-Requested-With", "XMLHttpRequest")
 	}
 	resp, err := fetch.Do(ctx, client, fetch.Request{
+		Source:  SourceSkupSzop,
 		Method:  method,
 		URL:     target,
 		Body:    body,

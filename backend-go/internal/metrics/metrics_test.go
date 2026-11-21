@@ -3,6 +3,8 @@ package metrics
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -73,5 +75,37 @@ func TestScanQueueCollector(t *testing.T) {
 	failing := &scanQueueCollector{count: func(context.Context) (int64, error) { return 0, errors.New("db down") }}
 	if n := testutil.CollectAndCount(failing); n != 0 {
 		t.Fatalf("failed count exported %d series", n)
+	}
+}
+
+// scrape returns the /metrics exposition text.
+func scrape(t *testing.T) string {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	Handler().ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/metrics", nil))
+	return rec.Body.String()
+}
+
+// TestSourceDurationBucketsHoldADealTimeout checks that a request the deal
+// client's 30 s timeout cut off, which runs a little past 30 s, lands in a
+// finite bucket.
+func TestSourceDurationBucketsHoldADealTimeout(t *testing.T) {
+	const src = "test-duration"
+	InitSource(src)
+	series := `ohara_source_request_duration_seconds_count{source="` + src + `"} `
+	if text := scrape(t); !strings.Contains(text, series+"0\n") {
+		t.Fatalf("no empty duration histogram after InitSource, want line %q0", series)
+	}
+
+	ObserveSourceDuration(src, 30*time.Second+500*time.Millisecond)
+	text := scrape(t)
+	for _, want := range []string{
+		`ohara_source_request_duration_seconds_bucket{source="` + src + `",le="30"} 0` + "\n",
+		`ohara_source_request_duration_seconds_bucket{source="` + src + `",le="60"} 1` + "\n",
+		series + "1\n",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("scrape lacks %q", want)
+		}
 	}
 }

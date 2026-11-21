@@ -241,7 +241,8 @@ func (c *Client) get(ctx context.Context, path string, out any, check func() err
 		return fmt.Errorf("discogs: GET %s: wait for rate budget: %w", u.Path, err)
 	}
 	resp, err := fetch.Do(ctx, c.httpClient(), fetch.Request{
-		URL: base + path,
+		Source: Source,
+		URL:    base + path,
 		Header: http.Header{
 			"Accept":        {"application/vnd.discogs.v2.discogs+json"},
 			"User-Agent":    {UserAgent},

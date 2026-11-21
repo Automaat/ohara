@@ -89,12 +89,12 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	status := h.hunter.Status()
 	obs, err := h.store.Recent(r.Context(), filter)
 	if err != nil {
-		httpx.WriteInternal(w, h.logger, "recent deals", err)
+		httpx.WriteInternal(w, r, h.logger, "recent deals", err)
 		return
 	}
 	wishes, err := h.store.WishCount(r.Context())
 	if err != nil {
-		httpx.WriteInternal(w, h.logger, "wish count", err)
+		httpx.WriteInternal(w, r, h.logger, "wish count", err)
 		return
 	}
 	httpx.WriteJSON(w, h.logger, http.StatusOK, View{Status: status, Wishes: wishes, Observations: obs})
@@ -138,7 +138,7 @@ func (h *Handler) run(w http.ResponseWriter, _ *http.Request) {
 func (h *Handler) listKeywords(w http.ResponseWriter, r *http.Request) {
 	keywords, err := h.store.Keywords(r.Context())
 	if err != nil {
-		httpx.WriteInternal(w, h.logger, "list keywords", err)
+		httpx.WriteInternal(w, r, h.logger, "list keywords", err)
 		return
 	}
 	httpx.WriteJSON(w, h.logger, http.StatusOK, keywords)
@@ -158,7 +158,7 @@ func (h *Handler) addKeyword(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrDuplicateKeyword):
 		httpx.WriteJSON(w, h.logger, http.StatusConflict, httpx.Error{Error: err.Error(), Field: "phrase"})
 	case err != nil:
-		httpx.WriteInternal(w, h.logger, "add keyword", err)
+		httpx.WriteInternal(w, r, h.logger, "add keyword", err)
 	default:
 		httpx.WriteJSON(w, h.logger, http.StatusCreated, k)
 	}
@@ -174,7 +174,7 @@ func (h *Handler) deleteKeyword(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrNotFound):
 		httpx.WriteError(w, h.logger, http.StatusNotFound, "not found")
 	case err != nil:
-		httpx.WriteInternal(w, h.logger, "delete keyword", err)
+		httpx.WriteInternal(w, r, h.logger, "delete keyword", err)
 	default:
 		w.WriteHeader(http.StatusNoContent)
 	}

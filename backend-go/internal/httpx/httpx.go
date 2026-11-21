@@ -53,9 +53,10 @@ func WriteFieldError(w http.ResponseWriter, logger *slog.Logger, fe *FieldError)
 	WriteJSON(w, logger, http.StatusUnprocessableEntity, Error{Error: fe.Msg, Field: fe.Field})
 }
 
-// WriteInternal logs err and sends a generic 500.
-func WriteInternal(w http.ResponseWriter, logger *slog.Logger, op string, err error) {
-	logger.Error(op, "err", err)
+// WriteInternal logs err and sends a generic 500. It logs with r's context, so
+// a logger built on reqlog.NewHandler adds the request's ID, method and path.
+func WriteInternal(w http.ResponseWriter, r *http.Request, logger *slog.Logger, op string, err error) {
+	logger.ErrorContext(r.Context(), op, "err", err)
 	WriteError(w, logger, http.StatusInternalServerError, "internal server error")
 }
 

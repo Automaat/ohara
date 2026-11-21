@@ -17,6 +17,7 @@ import (
 
 	"github.com/Automaat/ohara/backend-go/internal/httpx"
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
+	"github.com/Automaat/ohara/backend-go/internal/reqlog"
 	"github.com/Automaat/ohara/backend-go/internal/web"
 )
 
@@ -65,8 +66,8 @@ func newRouter(cfg Config, logger *slog.Logger, deps Deps, timeout time.Duration
 	}
 	r := chi.NewRouter()
 	r.Use(securityHeaders)
+	r.Use(requestID)
 	r.Use(generalOptions(cfg.RequireRemoteUser))
-	r.Use(middleware.RequestID)
 	r.Use(requestObserver(logger, cfg.AccessLog))
 	r.Use(recoverer(logger))
 	r.Use(timeoutAfter(timeout, logger))
@@ -218,6 +219,28 @@ func writeFallback(w http.ResponseWriter, logger *slog.Logger, code int, msg str
 		w.Header().Del(h)
 	}
 	httpx.WriteError(w, logger, code, msg)
+}
+
+// requestID gives every request a new ID from chi's RequestID, which would
+// take the client's X-Request-Id as is; the client's header is dropped first,
+// so logs hold only IDs the server made. The ID goes on the context, where
+// middleware.GetReqID finds it for the access log, into the X-Request-Id
+// response header and, with the method and path, into the reqlog request info
+// that *Context log calls write. It runs right after securityHeaders, so every
+// answer the router writes carries the header.
+func requestID(next http.Handler) http.Handler {
+	assign := middleware.RequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := middleware.GetReqID(r.Context())
+		w.Header().Set(middleware.RequestIDHeader, id)
+		next.ServeHTTP(w, r.WithContext(reqlog.WithRequest(r.Context(), id, r.Method, r.URL.Path)))
+	}))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(middleware.RequestIDHeader) != "" {
+			r = r.Clone(r.Context())
+			r.Header.Del(middleware.RequestIDHeader)
+		}
+		assign.ServeHTTP(w, r)
+	})
 }
 
 // permissionsPolicy lets only Ohara's own pages open the camera, for the

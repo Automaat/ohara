@@ -6,11 +6,14 @@ ALTER TABLE title ADD COLUMN edited_at timestamptz;
 
 ALTER TABLE edition ADD COLUMN edited_at timestamptz;
 
--- Rows from before this column may have been changed by a person already,
--- so none of them is left for a discard to remove.
-UPDATE title SET edited_at = updated_at WHERE request_key IS NOT NULL;
+-- Rows from before this column that changed after they were made, or carry
+-- a cover photo, count as changed by a person; untouched ones stay
+-- removable.
+UPDATE title SET edited_at = updated_at
+    WHERE request_key IS NOT NULL AND updated_at > created_at;
 
-UPDATE edition SET edited_at = updated_at WHERE request_key IS NOT NULL;
+UPDATE edition SET edited_at = updated_at
+    WHERE request_key IS NOT NULL AND (updated_at > created_at OR cover_photo IS NOT NULL);
 
 -- Keys a discard has given up. A create that arrives with one later, such as
 -- a request that stalled on the way, is refused instead of adding rows the

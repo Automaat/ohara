@@ -507,7 +507,13 @@ func (h *Handler) deleteCopy(w http.ResponseWriter, r *http.Request) {
 // discardRequest serves DELETE /api/requests/{key}: what a failed add with
 // that request key made goes, unless someone else uses or changed it.
 func (h *Handler) discardRequest(w http.ResponseWriter, r *http.Request) {
-	raw, err := url.PathUnescape(chi.URLParam(r, "key"))
+	// chi matches on the escaped path when the request needed one, as for a key with a slash,
+	// and hands its segment over still escaped; otherwise the segment is already decoded.
+	raw := chi.URLParam(r, "key")
+	var err error
+	if r.URL.RawPath != "" {
+		raw, err = url.PathUnescape(raw)
+	}
 	key, fe := normalizeRequestKey(&raw)
 	if err != nil || fe != nil || key == nil {
 		httpx.WriteError(w, h.logger, http.StatusNotFound, "Nie ma takiego klucza.")

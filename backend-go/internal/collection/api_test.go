@@ -849,6 +849,16 @@ func TestDiscardRequestRemovesWhatAFailedAddMade(t *testing.T) {
 		t.Fatal("a copy a person edited must stay, with its edition and title")
 	}
 
+	title, ed, cp = add("a%2Fb", obj{})
+	other, otherEd, otherCp := add("a/b", obj{})
+	a.mustDo(http.MethodDelete, "/api/requests/"+url.PathEscape("a%2Fb"), nil, nil, http.StatusNoContent)
+	if exists(path("copies", cp)) || exists(path("editions", ed)) || exists(path("titles", title)) {
+		t.Fatal("a key holding an escape sequence must reach its own rows")
+	}
+	if !exists(path("copies", otherCp)) || !exists(path("editions", otherEd)) || !exists(path("titles", other)) {
+		t.Fatal("decoding a key twice reached another key's rows")
+	}
+
 	title, ed, cp = add("a/b c", obj{})
 	a.mustDo(http.MethodDelete, "/api/requests/"+url.PathEscape("a/b c"), nil, nil, http.StatusNoContent)
 	if exists(path("copies", cp)) || exists(path("editions", ed)) || exists(path("titles", title)) {

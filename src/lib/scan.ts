@@ -658,11 +658,22 @@ async function titleFor(
 	}
 }
 
+/** The longest text the API takes in a title's name or a copy's shop, in UTF-8 bytes. */
+const maxTextBytes = 500;
+
+function tooLong(text: string): boolean {
+	return new TextEncoder().encode(text.trim()).length > maxTextBytes;
+}
+
 /** Throws FormRejected for a new item's form the server would refuse, before any request. */
 export function checkScan(target: Extract<SaveTarget, { kind: 'new' }>, f: QuickForm): void {
 	must(scanTitlePayload(f, target.candidate));
 	must(scanEditionPayload(f, target.candidate, target.barcode, 0));
 	must(scanCopyPayload(f, 0, ''));
+	if (tooLong(f.name)) throw new FormRejected('name', 'Tytuł jest za długi.');
+	if (f.status === 'owned' && tooLong(f.shop)) {
+		throw new FormRejected('shop', 'Nazwa sklepu jest za długa.');
+	}
 }
 
 /**

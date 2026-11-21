@@ -279,6 +279,11 @@ func (s *Store) CreateEdition(ctx context.Context, in *EditionInput) (Edition, b
 	var id int64
 	created := true
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
+		// The request key's lock comes first, as in DiscardRequest, which then locks the title:
+		// taking the title first would deadlock against it.
+		if err := lockRequestKey(ctx, tx, in.RequestKey); err != nil {
+			return err
+		}
 		if _, err := lockTitleKind(ctx, tx, in); err != nil {
 			return err
 		}
@@ -534,8 +539,8 @@ func (s *Store) DiscardRequest(ctx context.Context, key string) error {
 	return s.inTx(ctx, func(tx pgx.Tx) error {
 		// The same lock the creates take: a create with this key either committed
 		// before, and its rows are seen below, or waits and finds the key discarded.
-		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('request:' || $1, 0))`, key); err != nil {
-			return fmt.Errorf("lock request key: %w", err)
+		if err := lockRequestKey(ctx, tx, &key); err != nil {
+			return err
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO discarded_request (request_key) VALUES ($1)
 			ON CONFLICT DO NOTHING`, key); err != nil {
@@ -561,6 +566,18 @@ func (s *Store) DiscardRequest(ctx context.Context, key string) error {
 		}
 		return nil
 	})
+}
+
+// lockRequestKey takes the transaction lock the request_key_guard trigger
+// takes for key; none for a create without one.
+func lockRequestKey(ctx context.Context, tx pgx.Tx, key *string) error {
+	if key == nil {
+		return nil
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('request:' || $1, 0))`, *key); err != nil {
+		return fmt.Errorf("lock request key: %w", err)
+	}
+	return nil
 }
 
 // discardUnused deletes the row lock finds unless used says it is in use.

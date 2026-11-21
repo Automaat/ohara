@@ -904,6 +904,16 @@ describe('ScanFlow without a barcode', () => {
 			expect(flow.item?.key).toBe('first');
 		});
 
+		it('keeps what the first pick wrote when the new title is longer than the server takes', async () => {
+			const s = server(routes([204, null]));
+			const flow = await lostDiuna(s);
+			flow.form.name = 'ą'.repeat(251);
+			const before = s.calls.length;
+			expect(await flow.save()).toBeNull();
+			expect(s.calls.length).toBe(before);
+			expect(flow.issue).toEqual({ field: 'name', message: 'Tytuł jest za długi.' });
+		});
+
 		it('retries the same pick under the same key without removing anything', async () => {
 			const s = server({
 				...routes([204, null]),

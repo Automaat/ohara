@@ -65,7 +65,8 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   `DELETE /api/requests/{key}` removes what a failed barcode-less add made
   with its key: the copy, then the edition and title unless another copy
   or edition uses them or a person changed them (`edited_at`: an edit or a
-  cover photo; rows keyed before that column count as changed). The key
+  cover photo; rows keyed before that column count as changed once
+  they were updated or got a photo). The key
   goes into `discarded_request`, so a create that arrives with it later
   (a stalled request) answers 409 on `request_key`; a per-key advisory
   lock orders creates and discards. The collection's add calls it after a

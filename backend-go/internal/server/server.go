@@ -3,6 +3,7 @@ package server
 
 import (
 	"context"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -53,6 +54,7 @@ func New(cfg Config, logger *slog.Logger, deps Deps) http.Handler {
 	}
 	r := chi.NewRouter()
 	r.Use(securityHeaders)
+	r.Use(generalOptions)
 	r.Use(middleware.RequestID)
 	r.Use(requestObserver(logger, cfg.AccessLog))
 	r.Use(middleware.Recoverer)
@@ -93,6 +95,23 @@ func securityHeaders(next http.Handler) http.Handler {
 		h.Set("Referrer-Policy", "same-origin")
 		h.Set("Permissions-Policy", permissionsPolicy)
 		next.ServeHTTP(w, r)
+	})
+}
+
+// generalOptions answers "OPTIONS *" with an empty 200, as net/http does when
+// the server's DisableGeneralOptionsHandler is false. cmd/api sets it, so the
+// request reaches the router and its answer carries the security headers.
+func generalOptions(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodOptions || r.RequestURI != "*" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		w.Header().Set("Content-Length", "0")
+		if r.ContentLength != 0 {
+			_, _ = io.Copy(io.Discard, http.MaxBytesReader(w, r.Body, 4<<10))
+		}
+		w.WriteHeader(http.StatusOK)
 	})
 }
 

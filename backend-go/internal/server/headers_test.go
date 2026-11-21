@@ -2,8 +2,11 @@ package server_test
 
 import (
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -72,11 +75,6 @@ func TestSecurityHeaders(t *testing.T) {
 		{"health", http.MethodGet, "/health", nil, "", http.StatusOK},
 		{"metrics", http.MethodGet, "/metrics", nil, "", http.StatusOK},
 	}
-	want := map[string]string{
-		"X-Content-Type-Options": "nosniff",
-		"X-Frame-Options":        "DENY",
-		"Referrer-Policy":        "same-origin",
-	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req, err := http.NewRequestWithContext(t.Context(), tt.method, srv.URL+tt.path, strings.NewReader(tt.body))
@@ -97,15 +95,64 @@ func TestSecurityHeaders(t *testing.T) {
 			if resp.StatusCode != tt.code {
 				t.Fatalf("%s %s = %d, want %d", tt.method, tt.path, resp.StatusCode, tt.code)
 			}
-			for name, value := range want {
-				if got := resp.Header.Get(name); got != value {
-					t.Errorf("%s = %q, want %q", name, got, value)
-				}
-			}
-			policy := resp.Header.Get("Permissions-Policy")
-			if !strings.Contains(policy, "camera=(self)") {
-				t.Errorf("Permissions-Policy = %q, want camera=(self)", policy)
-			}
+			checkSecurityHeaders(t, resp.Header)
 		})
+	}
+}
+
+// TestGeneralOptions covers "OPTIONS *" on a server that, like cmd/api's,
+// leaves it to the router instead of net/http's own empty answer.
+func TestGeneralOptions(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
+	srv := httptest.NewUnstartedServer(server.New(server.Config{}, logger, server.Deps{}))
+	srv.Config.DisableGeneralOptionsHandler = true
+	srv.Start()
+	t.Cleanup(srv.Close)
+
+	host := strings.TrimPrefix(srv.URL, "http://")
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodOptions, srv.URL, http.NoBody)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.URL = &url.URL{Scheme: "http", Host: host, Opaque: "*"}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("OPTIONS *: %v", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK || len(body) != 0 {
+		t.Fatalf("OPTIONS * = %d %q, want an empty 200", resp.StatusCode, body)
+	}
+	checkSecurityHeaders(t, resp.Header)
+}
+
+// checkSecurityHeaders asserts the four security headers, with the camera
+// allowed to Ohara's own pages and to nothing else.
+func checkSecurityHeaders(t *testing.T, h http.Header) {
+	t.Helper()
+	want := map[string]string{
+		"X-Content-Type-Options": "nosniff",
+		"X-Frame-Options":        "DENY",
+		"Referrer-Policy":        "same-origin",
+	}
+	for name, value := range want {
+		if got := h.Get(name); got != value {
+			t.Errorf("%s = %q, want %q", name, got, value)
+		}
+	}
+	policy := h.Get("Permissions-Policy")
+	var camera []string
+	for directive := range strings.SplitSeq(policy, ",") {
+		directive = strings.TrimSpace(directive)
+		if feature, _, _ := strings.Cut(directive, "="); feature == "camera" {
+			camera = append(camera, directive)
+		}
+	}
+	if len(camera) != 1 || camera[0] != "camera=(self)" {
+		t.Errorf("Permissions-Policy = %q, want exactly one camera=(self)", policy)
 	}
 }

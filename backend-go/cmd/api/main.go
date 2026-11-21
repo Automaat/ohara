@@ -142,14 +142,7 @@ func run() int {
 
 	metrics.SetBuildInfo(version)
 	addr := envOr("OHARA_ADDR", ":8000")
-	srv := &http.Server{
-		Addr:              addr,
-		Handler:           server.New(server.Config{Version: version, AccessLog: envOr("OHARA_ACCESS_LOG", "false") == "true"}, logger, deps),
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      60 * time.Second,
-		IdleTimeout:       120 * time.Second,
-	}
+	srv := newHTTPServer(addr, server.New(server.Config{Version: version, AccessLog: envOr("OHARA_ACCESS_LOG", "false") == "true"}, logger, deps))
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()
@@ -176,6 +169,20 @@ func run() int {
 // openDB opens the pool and applies pending migrations. pgx's URL parser
 // needs a percent-encoded password, so deployments with arbitrary secrets
 // leave DATABASE_URL empty and pass the libpq PG* variables instead.
+// newHTTPServer serves h on addr. It leaves "OPTIONS *" to h, so its answer
+// carries the router's security headers like every other response.
+func newHTTPServer(addr string, h http.Handler) *http.Server {
+	return &http.Server{
+		Addr:                         addr,
+		Handler:                      h,
+		DisableGeneralOptionsHandler: true,
+		ReadHeaderTimeout:            10 * time.Second,
+		ReadTimeout:                  30 * time.Second,
+		WriteTimeout:                 60 * time.Second,
+		IdleTimeout:                  120 * time.Second,
+	}
+}
+
 func openDB(ctx context.Context, dsn string, logger *slog.Logger) (*pgxpool.Pool, error) {
 	pool, err := db.New(ctx, dsn)
 	if err != nil {

@@ -1,0 +1,10 @@
+{
+  "Very Good (VG)": {"currency": "USD", "value": 6.7972},
+  "Good Plus (G+)": {"currency": "USD", "value": 3.7319},
+  "Near Mint (NM or M-)": {"currency": "USD", "value": 8.5996},
+  "Good (G)": {"currency": "USD", "value": 2.2681},
+  "Very Good Plus (VG+)": {"currency": "USD", "value": 7.9302},
+  "Mint (M)": {"currency": "USD", "value": 10.5313},
+  "Fair (F)": {"currency": "USD", "value": 1.8346},
+  "Poor (P)": {"currency": "USD", "value": 1.3001}
+}

@@ -14,7 +14,7 @@ export default defineConfig({
 	build: { cssTarget: ['chrome120', 'edge120', 'firefox115', 'safari16.4'] },
 	server: {
 		proxy: {
-			'/api': 'http://localhost:8000',
+			'/api': { target: 'http://localhost:8000', changeOrigin: false },
 			'/health': 'http://localhost:8000'
 		}
 	},

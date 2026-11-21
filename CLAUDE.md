@@ -192,7 +192,12 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
 
 None in the app. Production sits behind Traefik with the Authelia forward-auth
 middleware, so the app trusts every request that reaches it. Do not expose
-the container port beyond the LAN.
+the container port beyond the LAN. Authelia's session cookie covers every
+`*.mskalski.dev` site, so the router answers 403 to any method but GET, HEAD
+and OPTIONS that a browser marks as cross-origin: a `Sec-Fetch-Site` other
+than `same-origin` or `none`, or an `Origin` whose host is not `Host`.
+Requests with neither header, like curl, pass. The Vite dev proxy keeps the
+browser's `Host` (`changeOrigin: false`) so dev writes pass this check.
 
 ## Configuration
 

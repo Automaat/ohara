@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -55,6 +56,7 @@ func New(cfg Config, logger *slog.Logger, deps Deps) http.Handler {
 	r.Use(requestObserver(logger, cfg.AccessLog))
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(requestTimeout))
+	r.Use(crossOriginGuard(logger))
 
 	r.Get("/health", healthHandler(logger, deps.DB))
 	r.Handle("/metrics", metrics.Handler())
@@ -73,6 +75,47 @@ func New(cfg Config, logger *slog.Logger, deps Deps) http.Handler {
 		r.Handle("/*", web.Handler(deps.Web))
 	}
 	return r
+}
+
+// crossOriginGuard answers 403 to a cross-origin write. Authelia's session
+// cookie covers every sibling site of the parent domain, so their pages could
+// otherwise write here.
+func crossOriginGuard(logger *slog.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if crossOriginWrite(r) {
+				httpx.WriteError(w, logger, http.StatusForbidden, "cross-origin request rejected")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// crossOriginWrite reports a request other than GET, HEAD and OPTIONS that the
+// browser marks as cross-origin: a Sec-Fetch-Site other than same-origin or
+// none, or an Origin whose host is not Host. Each header decides on its own,
+// unlike http.CrossOriginProtection, which ignores Origin once Sec-Fetch-Site
+// is set. Clients that send neither header, like curl, pass.
+func crossOriginWrite(r *http.Request) bool {
+	switch r.Method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return false
+	}
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "", "same-origin", "none":
+	default:
+		return true
+	}
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return false
+	}
+	u, err := url.Parse(origin)
+	if err != nil {
+		return true
+	}
+	return u.Host != r.Host
 }
 
 func requestObserver(logger *slog.Logger, accessLog bool) func(http.Handler) http.Handler {

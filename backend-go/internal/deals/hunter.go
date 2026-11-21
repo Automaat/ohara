@@ -17,6 +17,7 @@ import (
 )
 
 // maxRunErrors bounds the source errors a run keeps for the status view.
+// A refusal, at most one per source, is kept beyond it.
 const maxRunErrors = 20
 
 // telegramPause keeps alerts under Telegram's one message per second per
@@ -317,9 +318,18 @@ func (r *run) pause(ctx context.Context) error {
 // publishes the listing count and canary outcome. A feed source is asked
 // once: that answer is both its canary and, with a wishlist, its listings.
 func (r *run) search(ctx context.Context, src Source, queries []string) error {
+	var f Refused
+	err := r.searchAll(ctx, src, &f, queries)
+	if msg := f.Message(src.Name(), "queries"); msg != "" {
+		r.res.Errors = append(r.res.Errors, msg)
+	}
+	return err
+}
+
+func (r *run) searchAll(ctx context.Context, src Source, f *Refused, queries []string) error {
 	canary := r.h.cfg.CanaryQuery
 	if !src.PerQuery() {
-		listings, ok, err := r.ask(ctx, src, "")
+		listings, ok, err := r.ask(ctx, src, f, "")
 		if err != nil {
 			return err
 		}
@@ -334,7 +344,7 @@ func (r *run) search(ctx context.Context, src Source, queries []string) error {
 	}
 	results := 0
 	if canary != "" {
-		listings, ok, err := r.ask(ctx, src, canary)
+		listings, ok, err := r.ask(ctx, src, f, canary)
 		if err != nil {
 			return err
 		}
@@ -342,7 +352,7 @@ func (r *run) search(ctx context.Context, src Source, queries []string) error {
 		results += len(listings)
 	}
 	for _, q := range queries {
-		listings, ok, err := r.ask(ctx, src, q)
+		listings, ok, err := r.ask(ctx, src, f, q)
 		if err != nil {
 			return err
 		}
@@ -358,10 +368,15 @@ func (r *run) search(ctx context.Context, src Source, queries []string) error {
 	return nil
 }
 
-// ask sends one request to src after the pause and counts its outcome. A
-// source failure is logged and kept in the result with ok false; err is
+// ask sends one request to the source after the pause and counts its
+// outcome. A source failure is logged and kept in the result with ok
+// false; a refusal is kept once, when the source is done. A source that
+// refused is not asked again: the query is skipped without a pause. err is
 // only the run's cancellation.
-func (r *run) ask(ctx context.Context, src Source, query string) ([]Listing, bool, error) {
+func (r *run) ask(ctx context.Context, src Source, f *Refused, query string) ([]Listing, bool, error) {
+	if f.Skip() {
+		return nil, false, ctx.Err()
+	}
 	if err := r.pause(ctx); err != nil {
 		return nil, false, err
 	}
@@ -372,7 +387,9 @@ func (r *run) ask(ctx context.Context, src Source, query string) ([]Listing, boo
 	ObserveSearch(src, err)
 	if err != nil {
 		r.h.logger.Warn("deal source failed", "source", src.Name(), "query", query, "err", err)
-		r.fail(err.Error())
+		if !f.Note(err) {
+			r.fail(err.Error())
+		}
 		return nil, false, nil
 	}
 	return listings, true, nil

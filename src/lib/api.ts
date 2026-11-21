@@ -56,7 +56,8 @@ function messageFor(status: number, body: ErrorBody): string {
 /**
  * Sends JSON or a binary upload to the API and decodes the response; 204 yields undefined. The
  * API never redirects, so a redirect is the sign-in turning the request away: followed, one to
- * another origin would fail as if the server never answered.
+ * another origin would fail as if the server never answered. A response whose body breaks off
+ * counts as no answer: the connection was lost, whatever the status said.
  */
 export async function request<T>(
 	fetchFn: typeof fetch,
@@ -86,9 +87,15 @@ export async function request<T>(
 		throw new ApiError(sessionExpiredMessage, 401);
 	}
 	if (res.status === 204) return undefined as T;
+	let text: string;
+	try {
+		text = await res.text();
+	} catch {
+		throw new ApiError(noAnswerMessage, 0);
+	}
 	let parsed: unknown;
 	try {
-		parsed = await res.json();
+		parsed = JSON.parse(text);
 	} catch {
 		throw new ApiError(
 			res.ok ? 'Serwer zwrócił nieczytelną odpowiedź.' : `Serwer zwrócił błąd ${res.status}.`,
@@ -101,6 +108,18 @@ export async function request<T>(
 		throw new ApiError(messageFor(res.status, errBody), res.status, field);
 	}
 	return parsed as T;
+}
+
+/**
+ * A fetch that aborts each request, its body included, once ms passed, so a request the network
+ * holds open fails as one that got no answer.
+ */
+export function deadlineFetch(fetchFn: typeof fetch, ms: number): typeof fetch {
+	return (input, init) => {
+		const controller = new AbortController();
+		setTimeout(() => controller.abort(), ms);
+		return fetchFn(input, { ...init, signal: controller.signal });
+	};
 }
 
 /** Whether a request got no answer at all, as without a connection. */

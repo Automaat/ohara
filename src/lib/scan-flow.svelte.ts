@@ -1,4 +1,11 @@
-import { ApiError, errorMessage, invalidBarcodeMessage, isNoAnswer, isSessionExpired } from './api';
+import {
+	ApiError,
+	deadlineFetch,
+	errorMessage,
+	invalidBarcodeMessage,
+	isNoAnswer,
+	isSessionExpired
+} from './api';
 import {
 	bindingLabels,
 	formatLabels,
@@ -54,6 +61,12 @@ export type FlowPhase =
 	| { kind: 'offline' }
 	/** The sign-in turned the check away; saved when the device keeps the code meanwhile. */
 	| { kind: 'expired'; saved: boolean };
+
+/**
+ * How long one request of a barcode's check may stay open. The server ends every request within
+ * 30 s, so one still open after this got no answer and the code is kept.
+ */
+export const checkTimeout = 35_000;
 
 /** Where a code whose check got no answer waits for the connection. */
 export type Keeper = Pick<PendingScans, 'keep' | 'sessionExpired'>;
@@ -258,7 +271,7 @@ export class ScanFlow {
 			return;
 		}
 		try {
-			const r = await resolveScan(this.#fetch, code);
+			const r = await resolveScan(deadlineFetch(this.#fetch, checkTimeout), code);
 			if (!current()) return;
 			if (r.kind === 'owned') {
 				this.item = {

@@ -243,14 +243,36 @@ describe('PendingScans.send', () => {
 	});
 
 	it.each([
-		['a 409 without the barcode field', 409, '{"error":"conflict"}'],
-		['a 409 that is not the API', 409, 'Conflict'],
-		['a 422 that is not the API', 422, 'Unprocessable']
-	])('keeps a code on %s', async (_, status, body) => {
+		['a 409 without the barcode field', '{"error":"conflict"}'],
+		['a 409 that is not the API', 'Conflict']
+	])('keeps a code on %s', async (_, body) => {
 		const device = memory([a]);
-		const pending = new PendingScans(async () => new Response(body, { status }), device.open);
+		const pending = new PendingScans(async () => new Response(body, { status: 409 }), device.open);
 		await pending.send();
 		expect([...device.kept]).toEqual([a]);
+	});
+
+	it.each([
+		['without a field', () => '{"error":"invalid"}'],
+		['as plain text', () => 'Unprocessable'],
+		[
+			'whose body breaks off',
+			() =>
+				new ReadableStream({
+					start: (controller) => controller.error(new TypeError('network'))
+				})
+		]
+	])('drops a code on a 422 %s, as it can never succeed', async (_, body) => {
+		const device = memory([a]);
+		let posts = 0;
+		const pending = new PendingScans(async () => {
+			posts++;
+			return new Response(body(), { status: 422 });
+		}, device.open);
+		await pending.send();
+		await pending.send();
+		expect(device.kept.size).toBe(0);
+		expect(posts).toBe(1);
 	});
 
 	it('gives up on a POST that hangs, so later runs still send', async () => {

@@ -1,4 +1,4 @@
-import { ApiError, errorMessage, invalidBarcodeMessage, request } from './api';
+import { ApiError, errorMessage, invalidBarcodeMessage, isSessionExpired, request } from './api';
 import { queueDeletesSettled } from './queue-deletes';
 import {
 	copyPayload,
@@ -338,7 +338,7 @@ function providerDetail(errors: LookupResult['errors']): string {
 /**
  * Resolves a scanned barcode: an edition that already carries it, else the lookup's candidates,
  * else a scan queue entry so the barcode is not lost. Throws an ApiError for a malformed
- * barcode or when not even the queue answers.
+ * barcode, when the sign-in turns a request away or when not even the queue answers.
  */
 export async function resolveScan(fetchFn: typeof fetch, raw: string): Promise<Resolution> {
 	const code = cleanBarcode(raw);
@@ -358,6 +358,7 @@ export async function resolveScan(fetchFn: typeof fetch, raw: string): Promise<R
 	try {
 		lookup = await request<LookupResult>(fetchFn, 'GET', `/api/lookup/${encodeURIComponent(code)}`);
 	} catch (err) {
+		if (isSessionExpired(err)) throw err;
 		failure = errorMessage(err);
 	}
 	if (lookup && lookup.candidates.length > 0) {

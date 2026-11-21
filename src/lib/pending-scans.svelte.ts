@@ -229,7 +229,7 @@ export class PendingScans {
 	 * Sends every waiting code to the scan queue, one run at a time across the app's tabs, after
 	 * the queue removals on their way, so a removal never races the same code queued again. A code
 	 * leaves the device once the queue took it (200 or 201, even if the body is lost), an edition
-	 * carries it (409 on barcode) or the API refuses it (422); any other answer keeps it for the
+	 * carries it (409 on barcode) or the queue refuses it (422); any other answer keeps it for the
 	 * next run. No answer within postTimeout, or the sign-in turning the request away, ends the
 	 * run. While another tab sends, this one only reads the count.
 	 */
@@ -294,7 +294,10 @@ export class PendingScans {
 		}).catch((): Outcome => 'stop');
 	}
 
-	/** What the scan queue's answer means for the code; only the API's own refusals settle it. */
+	/**
+	 * What the scan queue's answer means for the code. A 422 can never succeed, so it settles by its
+	 * status; a 409 settles only as the API's own conflict on the barcode.
+	 */
 	async #outcome(res: Response): Promise<Outcome> {
 		if (res.type === 'opaqueredirect' || res.status === 401) {
 			this.expired = true;
@@ -303,8 +306,8 @@ export class PendingScans {
 		const settled =
 			res.status === 200 ||
 			res.status === 201 ||
-			(res.status === 409 && (await errorField(res)) === 'barcode') ||
-			(res.status === 422 && (await errorField(res)) !== undefined);
+			res.status === 422 ||
+			(res.status === 409 && (await errorField(res)) === 'barcode');
 		if (settled) this.expired = false;
 		return settled ? 'settled' : 'kept';
 	}

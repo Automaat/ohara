@@ -1,8 +1,8 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { invalidBarcodeMessage } from './api';
 import { formatPLN, type EditionDetail } from './collection';
 import { recentScans } from './recent.svelte';
-import { ScanFlow, resetVisit, type Keeper } from './scan-flow.svelte';
+import { ScanFlow, checkTimeout, resetVisit, type Keeper } from './scan-flow.svelte';
 import { resetSession, session } from './session.svelte';
 import type { Candidate, KeyValueStore } from './scan';
 
@@ -288,6 +288,54 @@ describe('ScanFlow.load without a connection', () => {
 			expect(recentScans.list).toMatchObject(logged);
 		}
 	);
+
+	it('keeps a code whose check answer breaks off after its status', async () => {
+		const kept = device();
+		const fetchFn: typeof fetch = async () =>
+			new Response(
+				new ReadableStream({
+					start: (controller) => controller.error(new TypeError('network'))
+				}),
+				{ status: 200 }
+			);
+		const flow = new ScanFlow(fetchFn, memory(), kept);
+		await flow.load(code);
+		expect(flow.phase).toEqual({ kind: 'offline' });
+		expect(kept.kept).toEqual([code]);
+	});
+
+	it('keeps a code whose check the network holds open past its deadline', async () => {
+		vi.useFakeTimers();
+		const kept = device();
+		const fetchFn: typeof fetch = (_, init) =>
+			new Promise<Response>((_resolve, reject) => {
+				init?.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+			});
+		const flow = new ScanFlow(fetchFn, memory(), kept);
+		const loading = flow.load(code);
+		await vi.advanceTimersByTimeAsync(checkTimeout - 1);
+		expect(flow.phase).toEqual({ kind: 'loading' });
+		await vi.advanceTimersByTimeAsync(1);
+		await loading;
+		expect(flow.phase).toEqual({ kind: 'offline' });
+		expect(kept.kept).toEqual([code]);
+		vi.useRealTimers();
+	});
+
+	it('asks to sign in again when the lookup is turned away and the queue fails', async () => {
+		const kept = device();
+		const s = server({
+			...noEdition,
+			[`GET /api/lookup/${code}`]: [401, null],
+			'POST /api/scan-queue': [503, { error: 'down' }]
+		});
+		const flow = new ScanFlow(s.fetchFn, memory(), kept);
+		await flow.load(code);
+		expect(flow.phase).toEqual({ kind: 'expired', saved: true });
+		expect(kept.kept).toEqual([code]);
+		expect(kept.expired).toBe(1);
+		expect(s.paths()).not.toContain('POST /api/scan-queue');
+	});
 
 	it('keeps nothing for a check the server answered', async () => {
 		const kept = device();

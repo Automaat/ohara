@@ -202,10 +202,10 @@ func TestRemoveCeneoMigration(t *testing.T) {
 	}
 }
 
-// TestCheckUnknownMigrations runs the startup check on a database migrated
-// by a newer or the same build: versions the binary has no file for are
+// TestUnknownMigrations runs a migration and its warning on a database
+// migrated by a newer or the same build: versions the binary has no file for are
 // logged once and counted, known pending ones are still applied.
-func TestCheckUnknownMigrations(t *testing.T) {
+func TestUnknownMigrations(t *testing.T) {
 	probe := func(versions ...string) []db.Migration {
 		out := make([]db.Migration, 0, len(versions))
 		for _, v := range versions {
@@ -241,21 +241,18 @@ func TestCheckUnknownMigrations(t *testing.T) {
 			}
 
 			binary := probe(tt.binary...)
-			applied, err := db.Migrate(ctx, pool, binary)
+			res, err := db.ApplyMigrations(ctx, pool, binary)
 			if err != nil {
 				t.Fatalf("migrate: %v", err)
 			}
-			if !slices.Equal(applied, tt.wantApplied) {
-				t.Fatalf("applied %v, want %v", applied, tt.wantApplied)
+			if !slices.Equal(res.Applied, tt.wantApplied) {
+				t.Fatalf("applied %v, want %v", res.Applied, tt.wantApplied)
+			}
+			if !slices.Equal(res.Unknown, tt.wantUnknown) {
+				t.Fatalf("unknown %v, want %v", res.Unknown, tt.wantUnknown)
 			}
 			var logs bytes.Buffer
-			unknown, err := db.CheckUnknown(ctx, pool, binary, slog.New(slog.NewTextHandler(&logs, nil)))
-			if err != nil {
-				t.Fatalf("check: %v", err)
-			}
-			if !slices.Equal(unknown, tt.wantUnknown) {
-				t.Fatalf("unknown %v, want %v", unknown, tt.wantUnknown)
-			}
+			db.WarnUnknown(slog.New(slog.NewTextHandler(&logs, nil)), binary, res.Unknown)
 
 			lines := strings.Split(strings.TrimSpace(logs.String()), "\n")
 			if len(tt.wantUnknown) == 0 {

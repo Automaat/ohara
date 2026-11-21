@@ -66,6 +66,9 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   suppression directives; fix the root cause.
 - Errors are `{"error": "...", "field": "..."}`: 422 for validation (field
   names the input), 409 for conflicts, 404 for a missing path resource.
+  The router's own answers share the shape: 405 for a wrong method (with
+  `Allow`), 500 for a handler panic (logged with its stack) and 504 for a
+  request past the 30 s timeout whose handler wrote nothing.
 - Money is integer grosze (`price_cents`). Barcodes are stored normalized
   (`barcode.Normalize`: EAN-8, EAN-13 or GTIN-14; a UPC-A becomes its
   EAN-13 with a leading 0, ISBN-10 becomes ISBN-13), one edition per barcode.
@@ -138,8 +141,8 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   user types (TMDB films, Google Books or, without a key, Open Library
   books, Discogs albums), answered as candidates for the barcode being
   added; a kind without its key answers 503.
-- Goroutines started outside a request handler, where chi's Recoverer does
-  not reach, call third-party code through `recovery.Call`: a lookup
+- Goroutines started outside a request handler, where the router's recoverer
+  does not reach, call third-party code through `recovery.Call`: a lookup
   provider's `Fetch` and `Parse`, a movie name source, a deal or valuation
   run. A panic there is logged at error level with its stack and counts as
   that provider's, source's or run's failure.

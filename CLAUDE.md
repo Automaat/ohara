@@ -68,10 +68,12 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   cover photo; rows keyed before that column count as changed once
   they were updated or got a photo). The key
   goes into `discarded_request`, so a create that arrives with it later
-  (a stalled request) answers 409 on `request_key`; a per-key advisory
-  lock orders creates and discards. The collection's add calls it after a
+  (a stalled request) answers 409 on `request_key` before any other
+  check; a per-key advisory lock orders creates and discards, and a create
+  reads its row back under it. The collection's add calls it after a
   refused save and before saving another valid pick over a key that may
-  have written.
+  have written; a pick's provider values the API would refuse are left
+  out of the save. A key is at most 100 bytes of UTF-8 without NUL.
 - Lookup providers implement `lookup.Provider` (`Fetch` returns raw JSON,
   `Parse` turns raw JSON into candidates) and register in `cmd/api` with a
   cache TTL. Candidate `title`/`edition` fields match the POST bodies of

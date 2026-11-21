@@ -872,4 +872,103 @@ func TestDiscardRequestRemovesWhatAFailedAddMade(t *testing.T) {
 	a.fails(http.MethodPost, "/api/copies", obj{"edition_id": kept, "status": "owned", "request_key": "late"}, http.StatusConflict, "request_key")
 
 	a.fails(http.MethodDelete, "/api/requests/"+strings.Repeat("k", 101), nil, http.StatusNotFound, "")
+
+	// A replay after the discard removed the edition's title is refused for its key, not its title.
+	title, _, _ = add("gone", obj{})
+	a.mustDo(http.MethodDelete, "/api/requests/gone", nil, nil, http.StatusNoContent)
+	if exists(path("titles", title)) {
+		t.Fatal("the discard left the title")
+	}
+	a.fails(http.MethodPost, "/api/editions", obj{"title_id": title, "format": "uhd", "request_key": "gone"}, http.StatusConflict, "request_key")
+	a.fails(http.MethodPost, "/api/copies", obj{"edition_id": ed, "status": "owned", "request_key": "gone"}, http.StatusConflict, "request_key")
+
+	a.fails(http.MethodPost, "/api/titles", obj{"kind": "movie", "name": "Zero", "request_key": "a\x00b"}, http.StatusUnprocessableEntity, "request_key")
+	a.fails(http.MethodPost, "/api/editions", obj{"title_id": reused, "format": "dvd", "request_key": "a\x00b"}, http.StatusUnprocessableEntity, "request_key")
+	a.fails(http.MethodPost, "/api/copies", obj{"edition_id": kept, "status": "owned", "request_key": "a\x00b"}, http.StatusUnprocessableEntity, "request_key")
+	a.fails(http.MethodDelete, "/api/requests/a%00b", nil, http.StatusNotFound, "")
+	a.fails(http.MethodDelete, "/api/requests/a%FFb", nil, http.StatusNotFound, "")
+}
+
+// TestCreatesRacingADiscardAnswerTheirRowOrAConflict runs an add's creates
+// against a discard of its key: each create answers what it made or 409 on
+// request_key, never a missing row or a server error.
+func TestCreatesRacingADiscardAnswerTheirRowOrAConflict(t *testing.T) {
+	a := newAPI(t)
+	// send is do without t.Fatal, for goroutines.
+	send := func(method, path string, body any) (int, int64, error) {
+		var r io.Reader = http.NoBody
+		if body != nil {
+			b, err := json.Marshal(body)
+			if err != nil {
+				return 0, 0, err
+			}
+			r = bytes.NewReader(b)
+		}
+		req, err := http.NewRequestWithContext(context.Background(), method, a.url+path, r)
+		if err != nil {
+			return 0, 0, err
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return 0, 0, err
+		}
+		defer resp.Body.Close()
+		var out struct {
+			ID    int64  `json:"id"`
+			Field string `json:"field"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil && resp.StatusCode != http.StatusNoContent {
+			return resp.StatusCode, 0, fmt.Errorf("%s %s: decode: %w", method, path, err)
+		}
+		if resp.StatusCode == http.StatusConflict && out.Field != "request_key" {
+			return resp.StatusCode, 0, fmt.Errorf("%s %s: 409 on %q", method, path, out.Field)
+		}
+		return resp.StatusCode, out.ID, nil
+	}
+	add := func(key string) error {
+		code, title, err := send(http.MethodPost, "/api/titles", obj{"kind": "movie", "name": "Diuna", "request_key": key})
+		if err != nil || code == http.StatusConflict {
+			return err
+		}
+		if code != http.StatusCreated {
+			return fmt.Errorf("title: %d", code)
+		}
+		// The replay of a create the discard may have removed.
+		if code, _, err := send(http.MethodPost, "/api/titles", obj{"kind": "movie", "name": "Diuna", "request_key": key}); err != nil || (code != http.StatusOK && code != http.StatusConflict) {
+			return fmt.Errorf("title replay: %d %w", code, err)
+		}
+		code, edition, err := send(http.MethodPost, "/api/editions", obj{"title_id": title, "format": "uhd", "request_key": key})
+		if err != nil || code == http.StatusConflict {
+			return err
+		}
+		if code != http.StatusCreated {
+			return fmt.Errorf("edition: %d", code)
+		}
+		code, _, err = send(http.MethodPost, "/api/copies", obj{"edition_id": edition, "status": "owned", "request_key": key})
+		if err != nil || code == http.StatusConflict {
+			return err
+		}
+		if code != http.StatusCreated {
+			return fmt.Errorf("copy: %d", code)
+		}
+		return nil
+	}
+	for i := range 60 {
+		key := fmt.Sprintf("race-%d", i)
+		errs := make(chan error, 2)
+		go func() { errs <- add(key) }()
+		go func() {
+			time.Sleep(time.Duration(i%6) * time.Millisecond)
+			code, _, err := send(http.MethodDelete, "/api/requests/"+key, nil)
+			if err == nil && code != http.StatusNoContent {
+				err = fmt.Errorf("discard: %d", code)
+			}
+			errs <- err
+		}()
+		for range 2 {
+			if err := <-errs; err != nil {
+				t.Fatalf("%s: %v", key, err)
+			}
+		}
+	}
 }

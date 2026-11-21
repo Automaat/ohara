@@ -4,7 +4,10 @@ import {
 	copyPayload,
 	displayName,
 	formatFits,
+	bindingLabels,
 	formatLabels,
+	packagingLabels,
+	triStateLabels,
 	type AcquiredAs,
 	type Binding,
 	type Condition,
@@ -429,13 +432,75 @@ export function quickForm(
 	};
 }
 
-function opt<T>(v: T | null | undefined): T | null {
-	return v ?? null;
+/** The longest text the API takes in a short field (a name, label or shop), in UTF-8 bytes. */
+const maxTextBytes = 500;
+/** The longest cover URL the API takes, in UTF-8 bytes. */
+const maxURLBytes = 10000;
+/** The most authors the API takes for one title. */
+const maxAuthors = 20;
+
+function byteLength(text: string): number {
+	return new TextEncoder().encode(text).length;
+}
+
+/** Trims like Go's strings.TrimSpace, which also takes U+0085 (next line) for a space. */
+function trimSpace(text: string): string {
+	return text.replace(/^[\s\u0085]+|[\s\u0085]+$/gu, '');
+}
+
+function tooLong(text: string): boolean {
+	return byteLength(trimSpace(text)) > maxTextBytes;
+}
+
+/*
+ * A provider's values as the API takes them, none for one it would refuse: the form shows none of
+ * these, so a refused one would only make the save fail.
+ */
+
+function fitText(text: string | null | undefined): string | null {
+	const t = text == null ? '' : trimSpace(text);
+	return t && !t.includes('\0') && byteLength(t) <= maxTextBytes ? t : null;
+}
+
+function fitYear(year: number | null | undefined): number | null {
+	return year != null && Number.isInteger(year) && year >= 1800 && year <= 2200 ? year : null;
+}
+
+function fitID(id: number | null | undefined): number | null {
+	return id != null && Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
+function fitAuthors(authors: readonly string[] | null | undefined): string[] {
+	const fit = (authors ?? []).map(trimSpace).filter(Boolean);
+	return fit.length <= maxAuthors && fit.every((a) => fitText(a) !== null) ? fit : [];
+}
+
+/** A value from labels' keys, as the API's enum check takes it; none for another. */
+function fitEnum<K extends string>(
+	labels: Record<K, string>,
+	value: string | null | undefined
+): K | null {
+	const v = value == null ? '' : trimSpace(value);
+	return Object.hasOwn(labels, v) ? (v as K) : null;
+}
+
+/**
+ * An HTTP or HTTPS URL with a host and no credentials, in a stricter form than the API's check
+ * takes: a plain host name, an optional port and RFC 3986 characters with well-formed escapes.
+ * A browser's URL parser takes more than Go's (a bad escape, a missing slash), so it cannot tell.
+ */
+const coverURL =
+	/^https?:\/\/[a-z0-9._~-]+(?::\d+)?(?:[/?#](?:[\w\-.~:/?#[\]@!$&'()*+,;=]|%[0-9a-f]{2}|\P{ASCII})*)?$/iu;
+
+function fitCoverURL(value: string | null | undefined): string | undefined {
+	const raw = value == null ? '' : trimSpace(value);
+	return raw && byteLength(raw) <= maxURLBytes && coverURL.test(raw) ? raw : undefined;
 }
 
 /** The POST /api/titles body: the form's kind and name over the candidate's other fields. */
 export function scanTitlePayload(f: QuickForm, candidate: Candidate | null): Parsed<TitlePayload> {
-	const name = f.name.trim();
+	// Postgres text takes no NUL, which a provider's name can carry into the form.
+	const name = trimSpace(f.name.replaceAll('\0', ''));
 	if (!name) return { ok: false, issue: { field: 'name', message: 'Podaj tytuł.' } };
 	const t = candidate?.type === f.kind ? candidate.title : null;
 	const movie = f.kind === 'movie';
@@ -445,13 +510,13 @@ export function scanTitlePayload(f: QuickForm, candidate: Candidate | null): Par
 		value: {
 			kind: f.kind,
 			name,
-			original_title: opt(t?.original_title),
-			polish_title: opt(t?.polish_title),
-			year: opt(t?.year),
-			tmdb_id: movie ? opt(t?.tmdb_id) : null,
-			authors: movie ? [] : (t?.authors ?? []),
-			bn_id: book ? opt(t?.bn_id) : null,
-			openlibrary_id: book ? opt(t?.openlibrary_id) : null,
+			original_title: fitText(t?.original_title),
+			polish_title: fitText(t?.polish_title),
+			year: fitYear(t?.year),
+			tmdb_id: movie ? fitID(t?.tmdb_id) : null,
+			authors: movie ? [] : fitAuthors(t?.authors),
+			bn_id: book ? fitText(t?.bn_id) : null,
+			openlibrary_id: book ? fitText(t?.openlibrary_id) : null,
 			notes: ''
 		}
 	};
@@ -479,17 +544,20 @@ export function scanEditionPayload(
 		value: {
 			title_id: titleID,
 			barcode: barcode || null,
-			label: e?.label ?? '',
-			publisher: e?.publisher ?? '',
-			year: opt(e?.year),
+			label: fitText(e?.label) ?? '',
+			publisher: fitText(e?.publisher) ?? '',
+			year: fitYear(e?.year),
 			format: (movie || music) && f.format ? f.format : null,
-			pl_subtitles: movie ? (e?.pl_subtitles ?? 'unknown') : 'unknown',
-			pl_voiceover: movie ? (e?.pl_voiceover ?? 'unknown') : 'unknown',
-			packaging: movie ? [...f.packaging] : [],
-			binding: f.kind === 'book' && f.binding ? f.binding : null,
+			pl_subtitles: (movie && fitEnum(triStateLabels, e?.pl_subtitles)) || 'unknown',
+			pl_voiceover: (movie && fitEnum(triStateLabels, e?.pl_voiceover)) || 'unknown',
+			// The form takes these from the pick without a choice the user made.
+			packaging: movie
+				? f.packaging.flatMap((p) => fitEnum<Packaging>(packagingLabels, p) ?? [])
+				: [],
+			binding: f.kind === 'book' ? fitEnum<Binding>(bindingLabels, f.binding) : null,
 			// The release is one pressing on its own medium; another or an unknown medium is not it.
-			discogs_release_id: music && e?.format === f.format ? opt(e?.discogs_release_id) : null,
-			cover_url: selected?.cover_url,
+			discogs_release_id: music && e?.format === f.format ? fitID(e?.discogs_release_id) : null,
+			cover_url: fitCoverURL(selected?.cover_url),
 			notes: ''
 		}
 	};
@@ -657,13 +725,6 @@ async function titleFor(
 		made.titleUnanswered = false;
 		return reused;
 	}
-}
-
-/** The longest text the API takes in a title's name or a copy's shop, in UTF-8 bytes. */
-const maxTextBytes = 500;
-
-function tooLong(text: string): boolean {
-	return new TextEncoder().encode(text.trim()).length > maxTextBytes;
 }
 
 /** Throws FormRejected for a new item's form the server would refuse, before any request. */

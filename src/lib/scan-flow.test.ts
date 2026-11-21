@@ -914,6 +914,34 @@ describe('ScanFlow without a barcode', () => {
 			expect(flow.issue).toEqual({ field: 'name', message: 'Tytuł jest za długi.' });
 		});
 
+		it('saves a new pick with provider data the server would refuse without it', async () => {
+			const long = 'ą'.repeat(251);
+			const odd: Candidate = {
+				type: 'movie',
+				title: { name: 'Rejs', original_title: long, year: 1799, tmdb_id: 3 },
+				edition: { barcode: '', format: 'dvd', label: long, publisher: 'Zespół', year: 2201 },
+				cover_url: 'ftp://img.example/rejs.jpg',
+				provider: 'tmdb',
+				confidence: 0.6
+			};
+			const s = server({
+				...routes([204, null]),
+				'GET /api/search?kind=movie&q=Diuna': [200, { candidates: [diuna, odd] }],
+				'GET /api/titles?tmdb_id=3': [200, []],
+				'POST /api/titles': [
+					[201, { id: 10, name: 'Diuna: Część druga', kind: 'movie' }],
+					[201, { id: 20, name: 'Rejs', kind: 'movie' }]
+				]
+			});
+			const flow = await lostDiuna(s);
+			expect(await flow.save()).toMatchObject({ saved: { titleID: 20, editionID: 43 } });
+			const bodies = (url: string) => s.calls.filter((c) => c.url === url).map((c) => c.body);
+			expect(bodies('/api/titles').at(-1)).toMatchObject({ original_title: null, year: null });
+			const edition = bodies('/api/editions').at(-1);
+			expect(edition).toMatchObject({ label: '', publisher: 'Zespół', year: null });
+			expect(edition).not.toHaveProperty('cover_url');
+		});
+
 		it('retries the same pick under the same key without removing anything', async () => {
 			const s = server({
 				...routes([204, null]),

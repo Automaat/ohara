@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
@@ -73,6 +74,59 @@ type statusError struct{ code int }
 
 func (e statusError) Error() string { return "status " + strconv.Itoa(e.code) }
 
+// StatusCode is the status the source answered.
+func (e statusError) StatusCode() int { return e.code }
+
+// statusCoder is an error that carries the HTTP status a site answered.
+type statusCoder interface {
+	error
+	StatusCode() int
+}
+
+// Refused tracks one site within a run. A 403 or 429 answer means the site
+// is blocking us, so the run sends it nothing more until the next run and
+// reports the refusal once, with the requests it skipped. Other failures,
+// such as timeouts, 5xx answers and parse errors, are not refusals.
+type Refused struct {
+	code    int
+	skipped int
+}
+
+// Note records err as the site's refusal and reports true, or reports
+// false for any other failure.
+func (f *Refused) Note(err error) bool {
+	se, ok := errors.AsType[statusCoder](err)
+	if !ok {
+		return false
+	}
+	code := se.StatusCode()
+	if code != http.StatusForbidden && code != http.StatusTooManyRequests {
+		return false
+	}
+	f.code = code
+	return true
+}
+
+// Skip reports whether the site refused already, counting the request the
+// run then skips.
+func (f *Refused) Skip() bool {
+	if f.code == 0 {
+		return false
+	}
+	f.skipped++
+	return true
+}
+
+// Message is the run error naming the refusal and the skipped requests,
+// counted in unit ("queries", "quotes"), or "" when the site did not
+// refuse.
+func (f *Refused) Message(site, unit string) string {
+	if f.code == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s: refused with status %d, skipped %d %s", site, f.code, f.skipped, unit)
+}
+
 // parseError is a response a source could not read.
 type parseError struct{ err error }
 
@@ -85,8 +139,8 @@ func sourceStatus(err error) string {
 	if err == nil {
 		return metrics.SourceOK
 	}
-	if se, ok := errors.AsType[statusError](err); ok {
-		return "http_" + strconv.Itoa(se.code)
+	if se, ok := errors.AsType[statusCoder](err); ok {
+		return "http_" + strconv.Itoa(se.StatusCode())
 	}
 	if _, ok := errors.AsType[parseError](err); ok {
 		return metrics.SourceParseError

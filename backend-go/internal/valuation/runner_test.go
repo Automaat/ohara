@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -44,6 +46,7 @@ func (f *fakeSource) Search(_ context.Context, q string) ([]deals.Listing, error
 
 type fakeBuyBack struct {
 	quotes map[string]Quote
+	err    error
 	asked  []string
 }
 
@@ -51,6 +54,9 @@ func (*fakeBuyBack) Name() string { return SourceSkupSzop }
 
 func (f *fakeBuyBack) Quote(_ context.Context, isbn string) (Quote, error) {
 	f.asked = append(f.asked, isbn)
+	if f.err != nil {
+		return Quote{}, f.err
+	}
 	q, ok := f.quotes[isbn]
 	if !ok {
 		return Quote{}, errors.New("skupszop: status 503")
@@ -813,4 +819,73 @@ func TestPanickingRunFailsAndTheScheduleGoesOn(t *testing.T) {
 			t.Errorf("log lacks %s:\n%s", want, logs.String())
 		}
 	}
+}
+
+func TestRunStopsAskingSitesThatRefused(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	seed(t, pool)
+	exec(t, pool, `INSERT INTO title (id, kind, name, authors) OVERRIDING SYSTEM VALUE
+		VALUES (3, 'book', 'Lód', '{"Jacek Dukaj"}'), (4, 'book', 'Perfekcyjna niedoskonałość', '{"Jacek Dukaj"}')`)
+	exec(t, pool, `INSERT INTO edition (id, title_id, barcode, binding) OVERRIDING SYSTEM VALUE
+		VALUES (30, 3, '9788308041208', 'paperback'), (40, 4, '9788308035306', 'paperback')`)
+	exec(t, pool, `INSERT INTO copy (edition_id, status) VALUES (30, 'owned'), (40, 'owned')`)
+	refusing := &fakeSource{name: "valuation-refusing", err: statusError{http.StatusForbidden}}
+	next := &fakeSource{name: "valuation-after-refusal"}
+	bb := &fakeBuyBack{err: fmt.Errorf("skupszop: sell page: %w", statusError{http.StatusTooManyRequests})}
+	r := newTestRunner(pool, bb, refusing, next)
+	refusedBefore := counter(t, `ohara_source_requests_total{source="valuation-refusing",status="http_403"}`)
+
+	res, err := r.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Queries < 3 {
+		t.Fatalf("queries = %d, want several", res.Queries)
+	}
+	if len(refusing.queries) != 1 {
+		t.Fatalf("refusing source asked %q, want 1 query", refusing.queries)
+	}
+	if len(next.queries) != res.Queries {
+		t.Fatalf("next source asked %d of %d queries", len(next.queries), res.Queries)
+	}
+	if len(bb.asked) != 1 {
+		t.Fatalf("buy-back asked %q, want 1 quote", bb.asked)
+	}
+	want := []string{
+		fmt.Sprintf("valuation-refusing: refused with status 403, skipped %d queries", res.Queries-1),
+		"skupszop: refused with status 429, skipped 2 quotes",
+	}
+	if !slices.Equal(res.Errors, want) {
+		t.Fatalf("errors = %q, want %q", res.Errors, want)
+	}
+	if d := counter(t, `ohara_source_requests_total{source="valuation-refusing",status="http_403"}`) - refusedBefore; d != 1 {
+		t.Fatalf("http_403 requests grew by %v, want 1", d)
+	}
+
+	if _, err := r.Run(context.Background()); err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+	if len(refusing.queries) != 2 || refusing.queries[1] != refusing.queries[0] {
+		t.Fatalf("second run asked %q, want the first query again", refusing.queries[1:])
+	}
+	if len(bb.asked) != 2 || bb.asked[1] != bb.asked[0] {
+		t.Fatalf("second run quoted %q, want the first book again", bb.asked[1:])
+	}
+}
+
+// counter reads one series from /metrics, 0 when it is absent.
+func counter(t *testing.T, series string) float64 {
+	t.Helper()
+	for line := range strings.Lines(scrape(t)) {
+		key, val, ok := strings.Cut(strings.TrimSpace(line), " ")
+		if !ok || key != series {
+			continue
+		}
+		v, err := strconv.ParseFloat(val, 64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	return 0
 }

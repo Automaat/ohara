@@ -151,6 +151,10 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   queues one `deal_alert` per listing at or below the copy's
   `max_price_cents`; a listing seen again keeps its row, takes the new
   price and `last_seen_at`, and alerts if it has no alert yet. Alerts are retried up to 5 times within a week.
+  A source that answers 403 or 429 is asked nothing more until the next
+  run, in a hunt and in a valuation (SkupSzop quotes too); the run's
+  errors name the refusal once with the requests it skipped, and skipped
+  requests count in no source metric. Other failures do not stop asking.
   Every run also asks each query source the canary query, wishlist or not,
   and sets `ohara_source_canary_ok` (a feed's one request is its canary)
   and `ohara_source_results`. A canary without listings is a broken source.

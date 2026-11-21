@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/Automaat/ohara/backend-go/internal/deals"
 )
 
 // fakeShop mimics the SkupSzop sell flow: the sell page sets a session and
@@ -207,5 +209,31 @@ func TestParseCartIgnoresRowWithoutPrice(t *testing.T) {
 	page = []byte(`<div class="buy-cart-item" data-isbn="9788308074770"><div class="price"><span class="value">abc</span></div>`)
 	if _, ok := parseCart(page, "9788308074770"); ok {
 		t.Fatal("an unreadable price must not quote")
+	}
+}
+
+func TestSkupSzopRefusalStopsTheRun(t *testing.T) {
+	for _, tt := range []struct {
+		status  int
+		refused bool
+	}{
+		{http.StatusForbidden, true},
+		{http.StatusTooManyRequests, true},
+		{http.StatusServiceUnavailable, false},
+	} {
+		t.Run(strconv.Itoa(tt.status), func(t *testing.T) {
+			shop := newFakeShop(t)
+			shop.status = tt.status
+			srv := httptest.NewServer(shop)
+			t.Cleanup(srv.Close)
+			_, err := SkupSzop{Client: srv.Client(), BaseURL: srv.URL + "/"}.Quote(context.Background(), "9788308074770")
+			if err == nil {
+				t.Fatal("Quote succeeded")
+			}
+			var f deals.Refused
+			if got := f.Note(err); got != tt.refused {
+				t.Fatalf("Note(%v) = %v, want %v", err, got, tt.refused)
+			}
+		})
 	}
 }

@@ -80,6 +80,8 @@ type Hunter struct {
 	logger   *slog.Logger
 	cfg      Config
 	sleep    func(ctx context.Context, d time.Duration) error
+	// now reads the clock that paces alert messages.
+	now func() time.Time
 
 	running atomic.Bool
 	wg      sync.WaitGroup
@@ -100,7 +102,7 @@ func NewHunter(store *Store, sources []Source, notifier Notifier, cfg Config, lo
 	}
 	h := &Hunter{
 		store: store, sources: sources, notifier: notifier, logger: logger, cfg: cfg,
-		sleep: sleepCtx, base: context.Background(),
+		sleep: sleepCtx, now: time.Now, base: context.Background(),
 	}
 	h.status.Scheduled = cfg.Interval > 0
 	h.status.IntervalSeconds = int64(cfg.Interval.Seconds())
@@ -499,13 +501,13 @@ func (h *Hunter) sendWait() time.Duration {
 	if h.lastSend.IsZero() {
 		return 0
 	}
-	return max(telegramPause-time.Since(h.lastSend), 0)
+	return max(telegramPause-h.now().Sub(h.lastSend), 0)
 }
 
 // sent starts the pause before the next message.
 func (h *Hunter) sent() {
 	h.mu.Lock()
-	h.lastSend = time.Now()
+	h.lastSend = h.now()
 	h.mu.Unlock()
 }
 

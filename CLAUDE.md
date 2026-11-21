@@ -94,12 +94,15 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   priority. Every provider gets `ohara_lookup_provider_requests_total`,
   `ohara_lookup_provider_errors_total` and `ohara_lookup_cache_hits_total`.
   Every external request (book providers, the movie chain's sources, deal
-  sources) also counts in the source health metrics through
-  `metrics.ObserveSource`: `ohara_source_requests_total{source,status}`,
+  sources, valuation sources) also counts in the source health metrics
+  through `metrics.ObserveSource`:
+  `ohara_source_requests_total{source,status}`,
   `ohara_source_errors_total{source}`, `ohara_source_parse_errors_total`
   and `ohara_source_last_success_timestamp_seconds`. A request counts as
   ok only once its response parses; it then sets `ohara_source_results` to
-  the products or candidates found. Register each source with
+  the products or candidates found. A SkupSzop quote counts once, as ok
+  when the cart shows the offer or the shop does not buy the book, with
+  results 1 for an offer. Register each source with
   `metrics.InitSource` so its counters exist before the first failure.
   When some of its sources fail but others answered, it returns a
   `*lookup.PartialError`: the lookup reports the failure next to the
@@ -277,7 +280,11 @@ cd backend-go && golangci-lint run ./...
 Allegro authorization is one-time: with the client credentials set, run
 `docker exec -it ohara api allegro-login`, open the printed link and
 confirm the code. The refresh token is stored in `oauth_token` and rotated on
-each refresh.
+each refresh. A refresh runs on its own context, at most 20 s, so a lookup
+that gives up first does not lose the rotated pair; a pair whose save failed
+stays in use and is saved again by the next lookup, unless `allegro-login`
+stored a pair meanwhile, which then wins. A refresh token Allegro rejects is
+dropped, so the next lookup loads the pair a later `allegro-login` stored.
 
 ## Deployment
 

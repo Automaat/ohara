@@ -83,16 +83,21 @@ func seed(t *testing.T, pool *pgxpool.Pool) {
 	exec(t, pool, `INSERT INTO copy (edition_id, status) VALUES (21, 'wishlist')`)
 }
 
-func listing(source, id, title string, cents int64, state *string) deals.Listing {
+// listing is an OLX listing.
+func listing(id, title string, cents int64, state *string) deals.Listing {
 	return deals.Listing{
-		Source: source, ExternalID: id, Title: title, URL: "https://example.test/" + id,
+		Source: SourceOLX, ExternalID: id, Title: title, URL: "https://example.test/" + id,
 		PriceCents: cents, AcquiredAs: state, Raw: json.RawMessage(`{}`),
 	}
 }
 
-func newTestRunner(pool *pgxpool.Pool, olx, vinted *fakeSource, bb *fakeBuyBack) *Runner {
+func newTestRunner(pool *pgxpool.Pool, bb *fakeBuyBack, sources ...*fakeSource) *Runner {
 	logger := slog.New(slog.DiscardHandler)
-	r := NewRunner(NewStore(pool), []deals.Source{olx, vinted}, []BuyBack{bb}, nil,
+	src := make([]deals.Source, 0, len(sources))
+	for _, s := range sources {
+		src = append(src, s)
+	}
+	r := NewRunner(NewStore(pool), src, []BuyBack{bb}, nil,
 		Config{Window: 90 * 24 * time.Hour}, logger)
 	r.sleep = func(ctx context.Context, _ time.Duration) error { return ctx.Err() }
 	return r
@@ -103,27 +108,24 @@ func TestRunValuesOwnedCopies(t *testing.T) {
 	seed(t, pool)
 	ctx := context.Background()
 	olx := &fakeSource{name: "olx", listings: []deals.Listing{
-		listing("olx", "1", "Katedra Jacek Dukaj", 2000, used()),
-		listing("olx", "2", "Dukaj - Katedra, stan dobry", 2500, nil),
-		listing("olx", "3", "Katedra. Opowiadania. Dukaj", 3000, used()),
-		listing("olx", "4", "Diuna Blu-ray", 4000, used()),
-		listing("olx", "5", "Diuna DVD", 1000, used()),
-		listing("olx", "6", "Katedra Dukaj okładka", 100, used()),
-		listing("olx", "7", "Katedra Dukaj nowa w folii", 9000, fresh()),
-	}}
-	vinted := &fakeSource{name: "vinted", listings: []deals.Listing{
-		listing("vinted", "v1", "Katedra - Jacek Dukaj", 4999, fresh()),
+		listing("1", "Katedra Jacek Dukaj", 2000, used()),
+		listing("2", "Dukaj - Katedra, stan dobry", 2500, nil),
+		listing("3", "Katedra. Opowiadania. Dukaj", 3000, used()),
+		listing("4", "Diuna Blu-ray", 4000, used()),
+		listing("5", "Diuna DVD", 1000, used()),
+		listing("6", "Katedra Dukaj okładka", 100, used()),
+		listing("7", "Katedra Dukaj nowa w folii", 9000, fresh()),
 	}}
 	bb := &fakeBuyBack{quotes: map[string]Quote{
 		"9788308073209": {Offered: true, Cents: 537, Title: "Katedra", URL: "https://skupszop.test/sprzedaj"},
 	}}
-	r := newTestRunner(pool, olx, vinted, bb)
+	r := newTestRunner(pool, bb, olx)
 
 	res, err := r.Run(ctx)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	want := RunResult{Editions: 2, Queries: 3, Listings: 24, Matched: 18, New: 6, Quotes: 1, Errors: []string{}}
+	want := RunResult{Editions: 2, Queries: 3, Listings: 21, Matched: 15, New: 5, Quotes: 1, Errors: []string{}}
 	if res.Editions != want.Editions || res.Queries != want.Queries || res.Listings != want.Listings ||
 		res.Matched != want.Matched || res.New != want.New || res.Quotes != want.Quotes || len(res.Errors) != 0 {
 		t.Fatalf("Run = %+v, want %+v", res, want)
@@ -187,7 +189,7 @@ func TestRunValuesOwnedCopies(t *testing.T) {
 	}
 	olx.listings[0].PriceCents = 2100
 	res, err = r.Run(ctx)
-	if err != nil || res.New != 0 || res.Matched != 18 || res.Quotes != 1 {
+	if err != nil || res.New != 0 || res.Matched != 15 || res.Quotes != 1 {
 		t.Fatalf("second Run = %+v, %v", res, err)
 	}
 	var price int64
@@ -200,7 +202,7 @@ func TestRunValuesOwnedCopies(t *testing.T) {
 		t.Fatalf("seen again: price %d observed %v (was %v) seen %v (was %v)", price, observed, firstObserved, seen, firstSeen)
 	}
 	var rows int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM price_observation`).Scan(&rows); err != nil || rows != 7 {
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM price_observation`).Scan(&rows); err != nil || rows != 6 {
 		t.Fatalf("observations = %d, %v; a second run must not duplicate rows", rows, err)
 	}
 	history, err = r.store.History(ctx, 30)
@@ -220,9 +222,8 @@ func TestRunKeepsGoingOnSourceErrors(t *testing.T) {
 	pool := dbtest.Migrated(t)
 	seed(t, pool)
 	olx := &fakeSource{name: "olx", err: errors.New("olx: status 403")}
-	vinted := &fakeSource{name: "vinted"}
 	bb := &fakeBuyBack{quotes: map[string]Quote{}}
-	r := newTestRunner(pool, olx, vinted, bb)
+	r := newTestRunner(pool, bb, olx)
 	res, err := r.Run(context.Background())
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -240,7 +241,7 @@ func TestRunCountsSourceHealth(t *testing.T) {
 	seed(t, pool)
 	failing := &fakeSource{name: "valuation-failing", err: errors.New("boom")}
 	working := &fakeSource{name: "valuation-working"}
-	if _, err := newTestRunner(pool, failing, working, &fakeBuyBack{quotes: map[string]Quote{}}).Run(context.Background()); err != nil {
+	if _, err := newTestRunner(pool, &fakeBuyBack{quotes: map[string]Quote{}}, failing, working).Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	body := scrape(t)
@@ -264,15 +265,15 @@ func TestPricesWindowAndOwnership(t *testing.T) {
 		VALUES ('olx', 'old', 100, 10, now() - interval '100 days'),
 		       ('olx', 'recent', 200, 10, now() - interval '10 days'),
 		       ('olx', 'wish', 300, 21, now()),
-		       ('vinted', 'v', 250, 10, now()),
+		       ('skupszop', 's', 250, 10, now()),
 		       ('pepper', 'p', 400, 10, now())`)
 	prices, err := NewStore(pool).Prices(ctx, 90*24*time.Hour)
 	if err != nil {
 		t.Fatalf("Prices: %v", err)
 	}
 	slices.SortFunc(prices, func(a, b Price) int { return int(a.Cents - b.Cents) })
-	if len(prices) != 2 || prices[0].Cents != 200 || prices[1].Source != SourceVinted {
-		t.Fatalf("Prices = %+v, want the recent OLX and Vinted prices of an owned edition", prices)
+	if len(prices) != 2 || prices[0].Cents != 200 || prices[1].Source != SourceSkupSzop {
+		t.Fatalf("Prices = %+v, want the recent OLX and SkupSzop prices of an owned edition", prices)
 	}
 }
 
@@ -284,7 +285,7 @@ func TestRecordKeepsAnEarlierEdition(t *testing.T) {
 		VALUES ('olx', '9', 500, 21, 2)`)
 	store := NewStore(pool)
 	h := Holding{Want: deals.Want{EditionID: 20, TitleID: 2}}
-	l := listing("olx", "9", "Diuna", 450, used())
+	l := listing("9", "Diuna", 450, used())
 	isNew, err := store.Record(ctx, &l, &h)
 	if err != nil || isNew {
 		t.Fatalf("Record = %v, %v; want an existing listing", isNew, err)
@@ -478,16 +479,15 @@ func TestRunValuesEveryOwnedPrinting(t *testing.T) {
 		VALUES (11, 1, '9788308049396', 'hardcover')`)
 	exec(t, pool, `INSERT INTO copy (edition_id, status, price_cents) VALUES (11, 'owned', 6000)`)
 	olx := &fakeSource{name: "olx", listings: []deals.Listing{
-		listing("olx", "1", "Katedra Jacek Dukaj", 2000, used()),
-		listing("olx", "2", "Katedra Dukaj twarda oprawa", 3000, used()),
-		listing("olx", "3", "Katedra Dukaj", 4000, used()),
+		listing("1", "Katedra Jacek Dukaj", 2000, used()),
+		listing("2", "Katedra Dukaj twarda oprawa", 3000, used()),
+		listing("3", "Katedra Dukaj", 4000, used()),
 	}}
-	vinted := &fakeSource{name: "vinted"}
 	bb := &fakeBuyBack{quotes: map[string]Quote{
 		"9788308073209": {Offered: true, Cents: 537},
 		"9788308049396": {Offered: true, Cents: 900},
 	}}
-	r := newTestRunner(pool, olx, vinted, bb)
+	r := newTestRunner(pool, bb, olx)
 	if _, err := r.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -536,8 +536,8 @@ func TestRunPricesAlbumsOnDiscogs(t *testing.T) {
 	exec(t, pool, `INSERT INTO copy (edition_id, status, price_cents) VALUES
 		(70, 'owned', 3500), (71, 'owned', 9000), (72, 'wishlist', NULL)`)
 	olx := &fakeSource{name: "olx", listings: []deals.Listing{
-		listing("olx", "1", "Pink Floyd The Dark Side Of The Moon CD", 2000, used()),
-		listing("olx", "2", "Pink Floyd Dark Side of the Moon winyl LP", 8000, used()),
+		listing("1", "Pink Floyd The Dark Side Of The Moon CD", 2000, used()),
+		listing("2", "Pink Floyd Dark Side of the Moon winyl LP", 8000, used()),
 	}}
 	lowest, vgPlus, mint := int64(5313), int64(7098), int64(11700)
 	pricer := &fakePricer{prices: map[int64]ReleasePrice{

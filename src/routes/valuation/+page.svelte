@@ -173,7 +173,7 @@
 	{#if view && !valued}
 		<EmptyState
 			title="Kolekcja nie ma jeszcze wyceny"
-			description="Wycena sprawdza ceny posiadanych egzemplarzy w skupie, w ogłoszeniach z OLX i Vinted oraz na Discogs."
+			description="Wycena sprawdza ceny posiadanych egzemplarzy w skupie, w ogłoszeniach z OLX oraz na Discogs."
 			action={runButton}
 		/>
 		{#if status?.last_result}
@@ -230,9 +230,9 @@
 				VG+ i Mint.
 			</p>
 			<p class="methodology">
-				Ceny z OLX i Vinted pochodzą z ogłoszeń. Nie znamy cen, po których zawarto transakcje.
-				Uwzględniamy oferty z ostatnich {view.window_days} dni. Wycena używanych egzemplarzy na podstawie
-				mniej niż {offers(view.min_observations)} ma niską pewność i jest oznaczona jako „mało danych”.
+				Ceny z OLX pochodzą z ogłoszeń. Nie znamy cen, po których zawarto transakcje. Uwzględniamy
+				oferty z ostatnich {view.window_days} dni. Wycena używanych egzemplarzy na podstawie mniej niż
+				{offers(view.min_observations)} ma niską pewność i jest oznaczona jako „mało danych”.
 			</p>
 		</Disclosure>
 	{/if}

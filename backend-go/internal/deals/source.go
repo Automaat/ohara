@@ -1,4 +1,4 @@
-// Package deals hunts for listings of wishlist copies on OLX, Vinted and
+// Package deals hunts for listings of wishlist copies on OLX and
 // Pepper.pl. A run asks every source, keeps the listings that
 // match a wishlist copy, stores each once as a price_observation and sends
 // one Telegram message per new listing at or below the copy's maximum price.
@@ -43,10 +43,6 @@ func imageURL(value string) string {
 		return ""
 	}
 	return value
-}
-
-type listingPhoto struct {
-	URL string `json:"url"`
 }
 
 // Source finds listings. A query source is asked once per search query; a

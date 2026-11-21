@@ -395,7 +395,7 @@ func (r *run) deliver(ctx context.Context) error {
 
 var (
 	formatLabels = map[string]string{"dvd": "DVD", "bluray": "Blu-ray", "uhd": "4K UHD"}
-	sourceLabels = map[string]string{"olx": "OLX", "vinted": "Vinted", "pepper": "Pepper"}
+	sourceLabels = map[string]string{"olx": "OLX", "pepper": "Pepper"}
 	stateLabels  = map[string]string{"new": "nowy", "used": "używany"}
 )
 

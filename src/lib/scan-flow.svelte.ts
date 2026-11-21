@@ -1,4 +1,11 @@
-import { ApiError, errorMessage, invalidBarcodeMessage } from './api';
+import {
+	ApiError,
+	deadlineFetch,
+	errorMessage,
+	invalidBarcodeMessage,
+	isNoAnswer,
+	isSessionExpired
+} from './api';
 import {
 	bindingLabels,
 	formatLabels,
@@ -7,6 +14,7 @@ import {
 	type FormIssue,
 	type Kind
 } from './collection';
+import { pendingScans, type PendingScans } from './pending-scans.svelte';
 import { logScan } from './recent.svelte';
 import {
 	FormRejected,
@@ -48,7 +56,20 @@ export type FlowPhase =
 	| { kind: 'queued'; entry: QueueEntry }
 	| { kind: 'ready'; status: ItemStatus }
 	| { kind: 'invalid'; message: string }
-	| { kind: 'failed'; message: string };
+	| { kind: 'failed'; message: string }
+	/** The check got no answer, and the device keeps the code until the scan queue takes it. */
+	| { kind: 'offline' }
+	/** The sign-in turned the check away; saved when the device keeps the code meanwhile. */
+	| { kind: 'expired'; saved: boolean };
+
+/**
+ * How long one request of a barcode's check may stay open. The server ends every request within
+ * 30 s, so one still open after this got no answer and the code is kept.
+ */
+export const checkTimeout = 35_000;
+
+/** Where a code whose check got no answer waits for the connection. */
+export type Keeper = Pick<PendingScans, 'keep' | 'sessionExpired'>;
 
 /** The barcode being added and what it resolved to. picked is null while the user chooses. */
 export type FlowItem = {
@@ -157,10 +178,16 @@ export class ScanFlow {
 	#search = 0;
 	readonly #fetch: typeof fetch;
 	readonly #store: KeyValueStore | undefined;
+	readonly #pending: Keeper;
 
-	constructor(fetchFn: typeof fetch, store: KeyValueStore | undefined) {
+	constructor(
+		fetchFn: typeof fetch,
+		store: KeyValueStore | undefined,
+		pending: Keeper = pendingScans
+	) {
 		this.#fetch = fetchFn;
 		this.#store = store;
+		this.#pending = pending;
 		this.sticky = loadSticky(store);
 	}
 
@@ -223,7 +250,10 @@ export class ScanFlow {
 		this.phase = { kind: 'ready', status: 'missing' };
 	}
 
-	/** Resolves a barcode, or opens a blank form for one typed by hand. */
+	/**
+	 * Resolves a barcode, or opens a blank form for one typed by hand. A check that gets no answer,
+	 * or that the sign-in turns away, keeps the code on the device, even once the user moved on.
+	 */
 	async load(raw: string, byHand = false): Promise<void> {
 		const code = cleanBarcode(raw);
 		const current = this.#restart(code);
@@ -241,7 +271,7 @@ export class ScanFlow {
 			return;
 		}
 		try {
-			const r = await resolveScan(this.#fetch, code);
+			const r = await resolveScan(deadlineFetch(this.#fetch, checkTimeout), code);
 			if (!current()) return;
 			if (r.kind === 'owned') {
 				this.item = {
@@ -272,10 +302,18 @@ export class ScanFlow {
 				this.phase = { kind: 'queued', entry: r.entry };
 			}
 		} catch (err) {
+			const expired = isSessionExpired(err);
+			const kept = (expired || isNoAnswer(err)) && (await this.#pending.keep(code));
+			if (expired) this.#pending.sessionExpired();
 			if (!current()) return;
-			this.phase = isInvalidBarcode(err)
-				? { kind: 'invalid', message: errorMessage(err) }
-				: { kind: 'failed', message: errorMessage(err) };
+			if (isInvalidBarcode(err)) {
+				this.phase = { kind: 'invalid', message: errorMessage(err) };
+				return;
+			}
+			if (kept) this.item = this.#blank(code, false);
+			if (expired) this.phase = { kind: 'expired', saved: kept };
+			else if (kept) this.phase = { kind: 'offline' };
+			else this.phase = { kind: 'failed', message: errorMessage(err) };
 		}
 	}
 
@@ -509,15 +547,20 @@ export class ScanFlow {
 	}
 
 	/**
-	 * Logs a barcode the user left without adding: queued when no source knew it, else skipped.
-	 * A barcode opened to be typed by hand, one already logged and one still saving are left
-	 * alone.
+	 * Logs a barcode the user left without adding: waiting when the device keeps it, queued when
+	 * no source knew it, else skipped. A barcode opened to be typed by hand, one already logged and
+	 * one still saving are left alone.
 	 */
 	dismiss() {
 		const item = this.item;
 		if (!item || item.logged || item.byHand || this.saving) return;
 		item.logged = true;
 		const p = this.phase;
+		if (p.kind === 'offline' || p.kind === 'expired') {
+			const why = p.kind === 'offline' ? 'Zapisano bez połączenia' : 'Zapisano, sesja wygasła';
+			logScan(item.barcode, 'waiting', why);
+			return;
+		}
 		const missing = p.kind === 'queued' || (p.kind === 'ready' && p.status === 'missing');
 		logScan(
 			item.barcode,

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -261,7 +262,8 @@ var sourceClient = &http.Client{Timeout: 8 * time.Second}
 
 // newMovieProvider builds the movie chain, or nil without a TMDB key: the
 // chain ends in a TMDB search. Allegro joins when its app credentials are
-// set; UPCitemdb can be switched off.
+// set; UPCitemdb, which can be switched off, is a fallback asked only when
+// Allegro names nothing, since its free quota is small.
 func newMovieProvider(allegro *movie.Allegro, logger *slog.Logger) *movie.Provider {
 	key := os.Getenv("OHARA_TMDB_API_KEY")
 	if key == "" {
@@ -273,10 +275,10 @@ func newMovieProvider(allegro *movie.Allegro, logger *slog.Logger) *movie.Provid
 		p.Sources = append(p.Sources, allegro)
 	}
 	if envOr("OHARA_UPCITEMDB", "true") == "true" {
-		p.Sources = append(p.Sources, movie.UPCitemdb{Client: sourceClient})
+		p.Fallbacks = append(p.Fallbacks, movie.UPCitemdb{Client: sourceClient})
 	}
-	names := make([]string, 0, len(p.Sources))
-	for _, s := range p.Sources {
+	names := make([]string, 0, len(p.Sources)+len(p.Fallbacks))
+	for _, s := range slices.Concat(p.Sources, p.Fallbacks) {
 		names = append(names, s.Name())
 		metrics.InitSource(s.Name())
 	}

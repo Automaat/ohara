@@ -111,6 +111,11 @@ var (
 		Help: "When the stored collection value was last computed; 0 before the first valuation.",
 	})
 
+	dbUnknownMigrations = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "ohara_db_unknown_migrations",
+		Help: "Migrations applied to the database that this binary has no file for, counted at startup; above 0 after a rollback to an older release.",
+	})
+
 	backgroundRuns = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "ohara_background_runs_total",
 		Help: "Finished background runs, scheduled or manual, by task (deals, valuation) and outcome (ok, failed: the run returned an error).",
@@ -147,6 +152,7 @@ func init() {
 		collectionSpent,
 		collectionLowConfidence,
 		valuationLastRun,
+		dbUnknownMigrations,
 		backgroundRuns,
 		backgroundRunDuration,
 		backgroundLastSuccess,
@@ -308,6 +314,12 @@ func SetCollectionValue(v CollectionValue) {
 	collectionSpent.Set(float64(v.SpentCents) / 100)
 	collectionLowConfidence.Set(float64(v.LowConfidence))
 	valuationLastRun.Set(float64(v.ComputedAt.Unix()))
+}
+
+// SetUnknownMigrations records how many applied migrations the binary has
+// no file for.
+func SetUnknownMigrations(n int) {
+	dbUnknownMigrations.Set(float64(n))
 }
 
 // Background tasks for ObserveBackgroundRun.

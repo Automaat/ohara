@@ -62,7 +62,9 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   needed. Sentinel errors map to HTTP status codes.
 - Schema changes are new files in `internal/db/migrations/`, applied once at
   startup in version order, each in its own transaction, under an advisory
-  lock. Never edit an applied migration.
+  lock. Never edit an applied migration. Applied versions the binary has
+  no file for (a rollback to an older release) log one error at startup
+  and set `ohara_db_unknown_migrations`; the app still starts.
 - Linters: `golangci-lint` (`.golangci.yml`) and `nilaway`. Never add
   suppression directives; fix the root cause.
 - Errors are `{"error": "...", "field": "..."}`: 422 for validation (field

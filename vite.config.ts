@@ -2,7 +2,7 @@ import { sveltekit } from '@sveltejs/kit/vite';
 import adapter from '@sveltejs/adapter-static';
 import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
 import { defineConfig } from 'vitest/config';
-import { csp } from './src/lib/csp';
+import { csp } from './src/lib/csp.ts';
 
 export default defineConfig({
 	plugins: [

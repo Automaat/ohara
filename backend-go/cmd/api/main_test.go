@@ -29,7 +29,6 @@ func newUpstreams(t *testing.T) *upstreams {
 	t.Helper()
 	fixtures := map[string]string{
 		"/olx/":     "../../internal/deals/testdata/olx.json",
-		"/vinted":   "../../internal/deals/testdata/vinted.html",
 		"/pepper":   "../../internal/deals/testdata/pepper.xml",
 		"/skupszop": "",
 	}
@@ -57,10 +56,8 @@ func newUpstreams(t *testing.T) *upstreams {
 	}))
 	t.Cleanup(u.srv.Close)
 	t.Setenv("OHARA_DEALS_OLX_URL", u.srv.URL+"/olx/")
-	t.Setenv("OHARA_DEALS_VINTED_URL", u.srv.URL+"/vinted")
 	t.Setenv("OHARA_DEALS_PEPPER_URL", u.srv.URL+"/pepper")
 	t.Setenv("OHARA_VALUATION_SKUPSZOP_URL", u.srv.URL+"/skupszop")
-	t.Setenv("OHARA_VINTED", "true")
 	t.Setenv("OHARA_DEALS_DELAY", "1s")
 	t.Setenv("OHARA_DEALS_CANARY_QUERY", "dvd")
 	t.Setenv("OHARA_DISCOGS_TOKEN", "")
@@ -109,7 +106,7 @@ func metricSources(t *testing.T, prefix string) []string {
 func checkSources(t *testing.T) {
 	t.Helper()
 	for _, s := range metricSources(t, "ohara_source_") {
-		if !slices.Contains([]string{"olx", "pepper", "skupszop", "vinted"}, s) {
+		if !slices.Contains([]string{"olx", "pepper", "skupszop"}, s) {
 			t.Errorf("metrics name source %q", s)
 		}
 	}
@@ -126,14 +123,14 @@ func TestHunterAsksOnlyItsSources(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if got, paths := u.asked(); !slices.Equal(got, []string{"olx", "vinted", "pepper"}) {
-		t.Fatalf("asked %v (paths %v), want olx, vinted and pepper only", got, paths)
+	if got, paths := u.asked(); !slices.Equal(got, []string{"olx", "pepper"}) {
+		t.Fatalf("asked %v (paths %v), want olx and pepper only", got, paths)
 	}
 	if len(res.Errors) != 0 {
 		t.Fatalf("errors = %q", res.Errors)
 	}
-	if got := metricSources(t, "ohara_source_canary_ok"); !slices.Equal(got, []string{"olx", "pepper", "vinted"}) {
-		t.Fatalf("canary series for %v, want olx, pepper and vinted only", got)
+	if got := metricSources(t, "ohara_source_canary_ok"); !slices.Equal(got, []string{"olx", "pepper"}) {
+		t.Fatalf("canary series for %v, want olx and pepper only", got)
 	}
 	checkSources(t)
 }
@@ -158,8 +155,8 @@ func TestValuationAsksOnlyItsSources(t *testing.T) {
 	if _, err := r.Run(ctx); err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if got, paths := u.asked(); !slices.Equal(got, []string{"olx", "vinted", "skupszop"}) {
-		t.Fatalf("asked %v (paths %v), want olx, vinted and skupszop only", got, paths)
+	if got, paths := u.asked(); !slices.Equal(got, []string{"olx", "skupszop"}) {
+		t.Fatalf("asked %v (paths %v), want olx and skupszop only", got, paths)
 	}
 	checkSources(t)
 }

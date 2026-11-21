@@ -65,11 +65,11 @@ describe('estimates', () => {
 		expect(estimateSource('mid', { cents: 2550, source: 'olx', count: 5, trimmed: 2 })).toBe(
 			'OLX · 5 ofert (2 odrzucone)'
 		);
-		expect(estimateSource('mid', { cents: 4999, source: 'vinted', count: 1, trimmed: 0 })).toBe(
-			'Vinted · 1 oferta'
+		expect(estimateSource('mid', { cents: 4999, source: 'olx', count: 1, trimmed: 0 })).toBe(
+			'OLX · 1 oferta'
 		);
-		expect(estimateSource('mid', { cents: 2600, source: 'olx+vinted', count: 3, trimmed: 0 })).toBe(
-			'OLX i Vinted · 3 oferty'
+		expect(estimateSource('mid', { cents: 2600, source: 'olx', count: 3, trimmed: 0 })).toBe(
+			'OLX · 3 oferty'
 		);
 	});
 

@@ -3,8 +3,10 @@
 	import {
 		collectionStatusLabels,
 		formatLabels,
+		listsOwned,
 		loanedLabel,
 		options,
+		unfinishedLabel,
 		type CollectionFilter
 	} from '#lib/collection.js';
 	import { foldLocation } from '#lib/collection-filter.js';
@@ -17,6 +19,7 @@
 		format,
 		status,
 		loaned,
+		unfinished,
 		location,
 		locations,
 		tag,
@@ -25,6 +28,7 @@
 		onformat,
 		onstatus,
 		onloaned,
+		onunfinished,
 		onlocation,
 		ontag
 	}: {
@@ -33,6 +37,8 @@
 		format: CollectionFilter['format'];
 		status: CollectionFilter['status'];
 		loaned: boolean;
+		/** Whether only owned copies of titles not finished are listed. */
+		unfinished: boolean;
 		/** The location the copies are filtered by, empty for any. */
 		location: string;
 		/** The locations in use, the most used first. */
@@ -45,6 +51,7 @@
 		onformat: (format: CollectionFilter['format']) => void;
 		onstatus: (status: CollectionFilter['status']) => void;
 		onloaned: (loaned: boolean) => void;
+		onunfinished: (unfinished: boolean) => void;
 		onlocation: (location: string) => void;
 		ontag: (tag: string) => void;
 	} = $props();
@@ -52,9 +59,10 @@
 	const all = 'all';
 	const formatOptions = [{ value: all, label: 'Każdy' }, ...options(formatLabels)];
 	// "Bez egzemplarzy" lists titles instead of copies, and a title has no format of its own.
-	// "Sprzedane" is a switch of its own: the segments hold five options before they turn into
-	// a select, and sold copies are the ones no other choice lists.
-	const { sold, ...shelfStatuses } = collectionStatusLabels;
+	// "Zamówione" and "Sprzedane" are switches of their own: the segments hold five options before
+	// they turn into a select. Sold copies are the ones no other choice lists; ordered ones show
+	// on the default shelf too, the switch lists them alone.
+	const { ordered, sold, ...shelfStatuses } = collectionStatusLabels;
 	const statusOptions = [{ value: all, label: 'Każdy' }, ...options(shelfStatuses)];
 	// A location is trimmed text, so a lone space can never be one, unlike a word such as "all".
 	const anyPlace = ' ';
@@ -144,9 +152,13 @@
 			label="Status"
 			options={statusOptions}
 			bind:value={
-				() => (status === 'sold' ? null : status || all),
+				() => (status === 'sold' || status === 'ordered' ? null : status || all),
 				(v) => onstatus(v === all || v === null ? '' : (v as CollectionFilter['status']))
 			}
+		/>
+		<Switch
+			label={ordered}
+			bind:checked={() => status === 'ordered', (on) => onstatus(on ? 'ordered' : '')}
 		/>
 		<Switch
 			label={sold}
@@ -157,6 +169,13 @@
 			disabled={status === 'none'}
 			checked={loaned}
 			onchange={(e) => onloaned(e.currentTarget.checked)}
+		/>
+		<!-- Only owned copies wait to be watched, read or heard. -->
+		<Switch
+			label={unfinishedLabel}
+			disabled={!listsOwned(status)}
+			checked={unfinished && listsOwned(status)}
+			onchange={(e) => onunfinished(e.currentTarget.checked)}
 		/>
 	</div>
 	{#snippet footer()}

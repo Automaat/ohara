@@ -30,6 +30,7 @@ function item(over: Partial<CollectionItem>): CollectionItem {
 		original_title: null,
 		polish_title: null,
 		year: null,
+		finished: false,
 		...over
 	};
 }
@@ -220,6 +221,37 @@ describe('the loan filter', () => {
 	});
 });
 
+describe('the unfinished filter', () => {
+	/** Owned copies of finished and unfinished titles, a lent one, a wish and a sold copy. */
+	const shelf: CollectionItem[] = [
+		item({ copy_id: 1, kind: 'movie', format: 'dvd', name: 'Rejs' }),
+		item({ copy_id: 2, kind: 'book', name: 'Solaris', finished: true, finished_on: '2025-05-01' }),
+		item({ copy_id: 3, kind: 'book', name: 'Eden', price_cents: 2000 }),
+		item({ copy_id: 4, kind: 'music', format: 'cd', name: 'Kind of Blue', finished: true }),
+		item({ copy_id: 5, kind: 'movie', format: 'dvd', name: 'Miś', status: 'wishlist' }),
+		item({ copy_id: 6, kind: 'book', name: 'Lalka', status: 'sold' }),
+		item({ copy_id: 7, kind: 'book', name: 'Golem XIV', loan_borrower: 'Ania' })
+	];
+
+	it.each([
+		['lists owned copies of titles not finished', {}, [1, 3, 7]],
+		['with a kind', { kind: 'book' }, [3, 7]],
+		['with a search', { q: 'rejs' }, [1]],
+		['with the owned status', { status: 'owned' }, [1, 3, 7]],
+		['with the unpriced copies', { status: 'unpriced' }, [1, 7]],
+		['with the lent copies', { loaned: true }, [7]],
+		['with the wishlist, which is not owned', { status: 'wishlist' }, []],
+		['with the sold copies, which are not owned', { status: 'sold' }, []]
+	] as [string, Partial<CollectionFilter>, number[]][])('%s', (_name, filter, copies) => {
+		const listed = filterCollection(shelf, { ...none, unfinished: true, ...filter });
+		expect(listed.map((i) => i.copy_id)).toEqual(copies);
+	});
+
+	it('lists finished titles too when off', () => {
+		expect(filterCollection(shelf, none).map((i) => i.copy_id)).toEqual([1, 2, 3, 4, 5, 7]);
+	});
+});
+
 describe('the location filter', () => {
 	/** Copies on two shelves spelled in different cases, one in a box, one nowhere and a wish. */
 	const placed: CollectionItem[] = [
@@ -324,6 +356,35 @@ describe('sold copies', () => {
 		['"Sprzedane" lists them alone', { status: 'sold' }, [3, 4]],
 		['"Sprzedane" with a kind', { status: 'sold', kind: 'book' }, [4]],
 		['"Sprzedane" with a search', { status: 'sold', q: 'alien' }, [3]],
+		['owned copies leave them out', { status: 'owned' }, [1]],
+		['copies without a price leave them out', { status: 'unpriced' }, []]
+	] as [string, Partial<CollectionFilter>, number[]][])('%s', (_name, filter, copies) => {
+		const listed = filterCollection(shelf, { ...none, ...filter });
+		expect(listed.map((i) => i.copy_id)).toEqual(copies);
+	});
+});
+
+describe('ordered copies', () => {
+	const shelf: CollectionItem[] = [
+		item({ copy_id: 1, kind: 'movie', format: 'uhd', name: 'Diuna', price_cents: 4999 }),
+		item({
+			copy_id: 2,
+			kind: 'movie',
+			format: 'uhd',
+			name: 'Diuna: Część druga',
+			status: 'ordered',
+			price_cents: 12999,
+			expected_on: '2026-12-15'
+		}),
+		item({ copy_id: 3, kind: 'book', name: 'Lód', status: 'ordered' }),
+		item({ copy_id: 4, kind: 'book', name: 'Solaris', status: 'sold', sold_on: '2026-05-10' })
+	];
+
+	it.each([
+		['the default list keeps them', {}, [1, 2, 3]],
+		['"Zamówione" lists them alone', { status: 'ordered' }, [2, 3]],
+		['"Zamówione" with a kind', { status: 'ordered', kind: 'book' }, [3]],
+		['"Zamówione" with a search', { status: 'ordered', q: 'diuna' }, [2]],
 		['owned copies leave them out', { status: 'owned' }, [1]],
 		['copies without a price leave them out', { status: 'unpriced' }, []]
 	] as [string, Partial<CollectionFilter>, number[]][])('%s', (_name, filter, copies) => {

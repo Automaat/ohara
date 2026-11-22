@@ -23,6 +23,7 @@ import (
 	"github.com/Automaat/ohara/backend-go/internal/db"
 	"github.com/Automaat/ohara/backend-go/internal/deals"
 	"github.com/Automaat/ohara/backend-go/internal/discogs"
+	"github.com/Automaat/ohara/backend-go/internal/export"
 	"github.com/Automaat/ohara/backend-go/internal/lookup"
 	"github.com/Automaat/ohara/backend-go/internal/lookup/books"
 	"github.com/Automaat/ohara/backend-go/internal/lookup/movie"
@@ -133,6 +134,7 @@ func run() int {
 		scanqueue.NewHandler(queue, logger),
 		deals.NewHandler(dealStore, hunter, logger),
 		valuation.NewHandler(valueStore, valuer, logger),
+		export.NewHandler(pool, valuer.Window(), logger),
 	}
 	if dir := os.Getenv("OHARA_WEB_DIR"); dir != "" {
 		webFS := os.DirFS(dir)

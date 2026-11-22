@@ -40,6 +40,7 @@ func (h *Handler) Mount(r chi.Router) {
 	r.Post("/titles", h.createTitle)
 	r.Get("/titles/{id}", h.getTitle)
 	r.Put("/titles/{id}", h.updateTitle)
+	r.Put("/titles/{id}/finished", h.setFinished)
 	r.Put("/titles/{id}/rating", h.rateTitle)
 	r.Delete("/titles/{id}", h.deleteTitle)
 
@@ -60,6 +61,7 @@ func (h *Handler) Mount(r chi.Router) {
 	r.Put("/copies/{id}", h.updateCopy)
 	r.Delete("/copies/{id}", h.deleteCopy)
 	r.Post("/copies/{id}/loans", h.lendCopy)
+	r.Post("/copies/{id}/receipt", h.receiveCopy)
 	r.Put("/loans/{id}", h.returnLoan)
 
 	r.Delete("/requests/{key}", h.discardRequest)
@@ -82,6 +84,8 @@ func (h *Handler) writeErr(w http.ResponseWriter, r *http.Request, op string, er
 		httpx.WriteJSON(w, h.logger, http.StatusConflict, httpx.Error{Error: err.Error(), Field: "request_key"})
 	case errors.Is(err, ErrKindLocked):
 		httpx.WriteJSON(w, h.logger, http.StatusConflict, httpx.Error{Error: err.Error(), Field: "kind"})
+	case errors.Is(err, ErrNotOrdered):
+		httpx.WriteJSON(w, h.logger, http.StatusConflict, httpx.Error{Error: err.Error(), Field: "status"})
 	case errors.Is(err, ErrLentCopyStays):
 		httpx.WriteJSON(w, h.logger, http.StatusConflict, httpx.Error{Error: err.Error(), Field: "status"})
 	case errors.Is(err, ErrHasEditions), errors.Is(err, ErrHasCopies), errors.Is(err, ErrNotOwned),
@@ -112,10 +116,12 @@ func notFound(err error) error {
 }
 
 // Totals sums the copies in a collection view. Copies counts sold ones too;
-// owned, priced and spent count owned copies only.
+// owned and priced count owned copies only, ordered the copies on their way
+// (left out when none) and spent what owned and ordered copies cost.
 type Totals struct {
 	Copies     int   `json:"copies"`
 	Owned      int   `json:"owned"`
+	Ordered    int   `json:"ordered,omitempty"`
 	Wishlist   int   `json:"wishlist"`
 	Priced     int   `json:"priced"`
 	SpentCents int64 `json:"spent_cents"`
@@ -137,6 +143,12 @@ func totals(items []Item) Totals {
 			t.Wishlist++
 			continue
 		case StatusSold:
+			continue
+		case StatusOrdered:
+			t.Ordered++
+			if it.PriceCents != nil {
+				t.SpentCents += *it.PriceCents
+			}
 			continue
 		}
 		t.Owned++
@@ -177,6 +189,12 @@ func (h *Handler) collection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f.Loaned = loaned == "1"
+	unfinished, fe := queryEnum(r, "unfinished", []string{"1"})
+	if fe != nil {
+		httpx.WriteFieldError(w, h.logger, fe)
+		return
+	}
+	f.Unfinished = unfinished == "1"
 	f.Location = r.URL.Query().Get("location")
 	f.Query = r.URL.Query().Get("q")
 	f.Typed = f.Query
@@ -332,6 +350,30 @@ func (h *Handler) updateTitle(w http.ResponseWriter, r *http.Request) {
 	t, err := h.store.UpdateTitle(r.Context(), id, in)
 	if err != nil {
 		h.writeErr(w, r, "update title", notFound(err))
+		return
+	}
+	httpx.WriteJSON(w, h.logger, http.StatusOK, t)
+}
+
+// setFinished serves PUT /api/titles/{id}/finished: the title's finished
+// state and day alone, so a page holding an older copy of the title
+// never writes its other fields back.
+func (h *Handler) setFinished(w http.ResponseWriter, r *http.Request) {
+	id, ok := httpx.PathID(w, r, h.logger, "id")
+	if !ok {
+		return
+	}
+	var in FinishInput
+	if !httpx.DecodeJSON(w, r, h.logger, &in) {
+		return
+	}
+	if fe := in.Normalize(); fe != nil {
+		httpx.WriteFieldError(w, h.logger, fe)
+		return
+	}
+	t, err := h.store.SetFinished(r.Context(), id, &in)
+	if err != nil {
+		h.writeErr(w, r, "set finished", notFound(err))
 		return
 	}
 	httpx.WriteJSON(w, h.logger, http.StatusOK, t)
@@ -621,6 +663,21 @@ func (h *Handler) lendCopy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, h.logger, http.StatusCreated, l)
+}
+
+// receiveCopy serves POST /api/copies/{id}/receipt: an ordered copy arrived
+// and goes on the shelf as it is stored, without its expected delivery.
+func (h *Handler) receiveCopy(w http.ResponseWriter, r *http.Request) {
+	id, ok := httpx.PathID(w, r, h.logger, "id")
+	if !ok {
+		return
+	}
+	c, err := h.store.ReceiveCopy(r.Context(), id)
+	if err != nil {
+		h.writeErr(w, r, "receive copy", err)
+		return
+	}
+	httpx.WriteJSON(w, h.logger, http.StatusOK, c)
 }
 
 func (h *Handler) returnLoan(w http.ResponseWriter, r *http.Request) {

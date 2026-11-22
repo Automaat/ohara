@@ -27,6 +27,10 @@ const (
 	// StatusSold is a copy that left the shelf: it keeps its purchase and
 	// adds the day it was sold and, when known, what it sold for.
 	StatusSold = "sold"
+	// StatusOrdered is a copy bought but not yet delivered: it keeps its
+	// price, the day it was ordered and the shop, and may name the day it is
+	// expected. It turns owned, keeping all of that, once it arrives.
+	StatusOrdered = "ordered"
 
 	maxText    = 500
 	maxNotes   = 10000
@@ -48,7 +52,7 @@ var (
 	bindings     = []string{"hardcover", "paperback", "other"}
 	triStates    = []string{"yes", "no", "unknown"}
 	packagings   = []string{"steelbook", "slipcover", "digipak", "mediabook"}
-	statuses     = []string{StatusOwned, StatusWishlist, StatusSold}
+	statuses     = []string{StatusOwned, StatusWishlist, StatusSold, StatusOrdered}
 	acquiredAs   = []string{"new", "used"}
 	conditions   = []string{"mint", "very_good", "good", "fair", "poor"}
 )
@@ -87,6 +91,8 @@ var (
 	ErrAlreadyLent      = errors.New("this copy is already lent")
 	ErrLentCopyStays    = errors.New("a lent copy stays owned until it comes back")
 	ErrReturned         = errors.New("this loan is already returned")
+	// ErrNotOrdered refuses to receive a copy that is not on order.
+	ErrNotOrdered = errors.New("only ordered copies can be received")
 )
 
 // Date is a calendar day carried as YYYY-MM-DD in JSON.
@@ -124,6 +130,14 @@ type TitleInput struct {
 	OpenLibraryID *string  `json:"openlibrary_id"`
 	Notes         string   `json:"notes"`
 	CoverURL      *string  `json:"cover_url,omitempty"`
+	// Finished says whether the owner has watched, read or heard the title.
+	// A create without it makes an unfinished title; an update without it
+	// keeps the stored state and day. A title always carries it.
+	Finished *bool `json:"finished,omitempty" ts:",null"`
+	// FinishedOn is the latest day the title was finished, null when that
+	// day is unknown. It needs a finished title, implies one when Finished
+	// is left out, and cannot be after today in Poland (the store checks).
+	FinishedOn *Date `json:"finished_on,omitempty" ts:",null"`
 	// Rating is the owner's own rating, a whole number from MinRating to
 	// MaxRating; null clears it.
 	Rating *int `json:"rating,omitempty" ts:",null"`
@@ -193,8 +207,9 @@ type Edition struct {
 }
 
 // CopyInput is the body of POST and PUT /api/copies. Price and purchase date
-// apply only to owned and sold copies, the sale's day and price only to sold
-// ones; a sold copy needs its day. MaxPriceCents, the most a wishlist copy may
+// apply only to owned, sold and ordered copies, the sale's day and price only
+// to sold ones, the expected delivery only to ordered ones; a sold copy needs
+// its day. MaxPriceCents, the most a wishlist copy may
 // cost, and MaxMarketPercent, the share of the used market price it may
 // cost, apply only to wishlist copies: the deal hunter alerts on listings
 // at or below either.
@@ -215,8 +230,10 @@ type CopyInput struct {
 	// for, null when unknown.
 	SoldOn         *Date  `json:"sold_on,omitempty" ts:",null"`
 	SalePriceCents *int64 `json:"sale_price_cents,omitempty" ts:",null"`
+	// ExpectedOn is the day an ordered copy should arrive, null when unknown.
+	ExpectedOn *Date `json:"expected_on,omitempty" ts:",null"`
 	// Location is where an owned copy is stored, such as "Regał 2"; a
-	// wishlist or sold copy has none.
+	// wishlist, sold or ordered copy has none.
 	Location *string `json:"location,omitempty" ts:",null"`
 	// RequestKey makes a create safe to retry: a second create with the
 	// same key returns the first copy. Updates ignore it.
@@ -240,7 +257,7 @@ func normalizeRequestKey(key *string) (*string, *httpx.FieldError) {
 	return trimmed, nil
 }
 
-// Copy is one physical item, owned, wanted or sold.
+// Copy is one physical item, owned, wanted, sold or on order.
 type Copy struct {
 	ID int64 `json:"id"`
 	CopyInput
@@ -365,6 +382,9 @@ func (in *TitleInput) Normalize() *httpx.FieldError {
 	if in.TMDBID != nil && *in.TMDBID <= 0 {
 		return fieldErr("tmdb_id", "must be positive")
 	}
+	if fe := in.normalizeFinished(); fe != nil {
+		return fe
+	}
 	if len(in.Authors) > maxAuthors {
 		return fieldErr("authors", "too many authors")
 	}
@@ -374,6 +394,22 @@ func (in *TitleInput) Normalize() *httpx.FieldError {
 		}
 	}
 	return in.checkKindFields()
+}
+
+// normalizeFinished makes a finish day imply a finished title and refuses
+// one on a title marked unfinished.
+func (in *TitleInput) normalizeFinished() *httpx.FieldError {
+	if in.FinishedOn == nil {
+		return nil
+	}
+	if in.Finished == nil {
+		finished := true
+		in.Finished = &finished
+	}
+	if !*in.Finished {
+		return fieldErr("finished_on", "applies only to finished titles")
+	}
+	return nil
 }
 
 // TagList is the tags a title body carries: a JSON array of strings or
@@ -611,11 +647,14 @@ func (in *CopyInput) Normalize() *httpx.FieldError {
 	}
 	if in.Status == StatusWishlist {
 		if in.PriceCents != nil {
-			return fieldErr("price_cents", "applies only to owned and sold copies")
+			return fieldErr("price_cents", "applies only to owned, sold and ordered copies")
 		}
 		if in.PurchasedOn != nil {
-			return fieldErr("purchased_on", "applies only to owned and sold copies")
+			return fieldErr("purchased_on", "applies only to owned, sold and ordered copies")
 		}
+	}
+	if in.ExpectedOn != nil && in.Status != StatusOrdered {
+		return fieldErr("expected_on", "applies only to ordered copies")
 	}
 	if in.Location != nil && in.Status != StatusOwned {
 		return fieldErr("location", "applies only to owned copies")
@@ -682,6 +721,27 @@ func checkDue(due *Date, lentOn time.Time) *httpx.FieldError {
 	if due != nil && due.Before(lentOn) {
 		return fieldErr("due_on", "cannot be before lent_on")
 	}
+	return nil
+}
+
+// FinishInput is the body of PUT /api/titles/{id}/finished: the title's
+// finished state alone, so marking it never writes back a stale name or
+// notes. Finished is required unless FinishedOn names the day.
+type FinishInput struct {
+	Finished   *bool `json:"finished"`
+	FinishedOn *Date `json:"finished_on"`
+}
+
+// Normalize checks the input as TitleInput checks its finished fields.
+func (in *FinishInput) Normalize() *httpx.FieldError {
+	if in.Finished == nil && in.FinishedOn == nil {
+		return fieldErr("finished", "is required")
+	}
+	t := TitleInput{Finished: in.Finished, FinishedOn: in.FinishedOn}
+	if fe := t.normalizeFinished(); fe != nil {
+		return fe
+	}
+	in.Finished = t.Finished
 	return nil
 }
 

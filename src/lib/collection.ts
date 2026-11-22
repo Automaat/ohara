@@ -1,6 +1,6 @@
 import { trimSpace } from './go-text';
 import { tagKey, tagMatches, tagTerm } from './tags';
-import { editionCount, purchaseDate } from './polish';
+import { editionCount, orderedCount, purchaseDate } from './polish';
 import type {
 	AcquiredAs,
 	Binding,
@@ -35,6 +35,7 @@ export type {
 	Edition,
 	EditionDetail,
 	EditionPayload,
+	FinishPayload,
 	Format,
 	Kind,
 	Loan,
@@ -99,6 +100,7 @@ export const packagingLabels: Record<Packaging, string> = {
 };
 export const statusLabels: Record<CopyStatus, string> = {
 	owned: 'Na półce',
+	ordered: 'Zamówiony',
 	wishlist: 'Lista życzeń',
 	sold: 'Sprzedany'
 };
@@ -131,14 +133,23 @@ export function kindCounts(items: readonly Pick<CollectionItem, 'kind'>[]): Reco
 	return counts;
 }
 
-/** How many copies are on the shelf or on the wishlist: every copy but the sold ones. */
-export function shelvedCount(t: Pick<Totals, 'owned' | 'wishlist'>): number {
-	return t.owned + t.wishlist;
+/** How many copies are on the shelf, on order or on the wishlist: every copy but the sold ones. */
+export function shelvedCount(t: Pick<Totals, 'owned' | 'ordered' | 'wishlist'>): number {
+	return t.owned + (t.ordered ?? 0) + t.wishlist;
 }
 
-/** The collection header's one line, such as "20 na półce · 4 na liście życzeń". */
-export function shelfSummary(t: Pick<Totals, 'owned' | 'wishlist'>): string {
-	return `${count.format(t.owned)} na półce · ${count.format(t.wishlist)} na liście życzeń`;
+/**
+ * The collection header's one line, such as "20 na półce · 2 zamówione · 4 na liście życzeń";
+ * copies on order are named only when there are some.
+ */
+export function shelfSummary(t: Pick<Totals, 'owned' | 'ordered' | 'wishlist'>): string {
+	return [
+		`${count.format(t.owned)} na półce`,
+		t.ordered ? orderedCount(t.ordered) : null,
+		`${count.format(t.wishlist)} na liście życzeń`
+	]
+		.filter(Boolean)
+		.join(' · ');
 }
 
 /** Grosze as "49,99 zł"; null as an empty string. */
@@ -155,7 +166,7 @@ export function unpricedLabel(n: number): string {
 	return `${count.format(n)} bez ceny`;
 }
 
-/** What owned copies cost, and how many still have no price to fill in. */
+/** What owned and ordered copies cost, and how many owned ones still have no price to fill in. */
 export function spentLabel(t: Totals): string {
 	const unpriced = unpricedCount(t);
 	const spent = formatPLN(t.spent_cents);
@@ -268,9 +279,21 @@ export function saleLine(soldOn: string | null | undefined, priceCents: number |
 }
 
 /**
+ * An ordered copy's line under its name: the day it should arrive, such as "Dostawa 15 gru
+ * 2026", with "po terminie" once that day has passed, or "Zamówiony" without one. Today, as
+ * YYYY-MM-DD, is still on time.
+ */
+export function orderLine(expectedOn: string | null | undefined, today: string): string {
+	if (!expectedOn) return statusLabels.ordered;
+	const line = `Dostawa ${purchaseDate(expectedOn)}`;
+	return expectedOn < today ? `${line} · po terminie` : line;
+}
+
+/**
  * A shelf tile's line under the name: the wish and its limit for a wishlist copy, the sale for
- * a sold one, who has a lent copy, otherwise the creators and the edition, such as "Stanisław Lem
- * · Twarda oprawa". A loan is late once its due date is before today, the reader's local day.
+ * a sold one, the delivery for an ordered one, who has a lent copy, otherwise the creators and
+ * the edition, such as "Stanisław Lem · Twarda oprawa". A loan or a delivery is late once its
+ * day is before today, the reader's local day.
  */
 export function shelfLine(
 	item: Pick<
@@ -279,6 +302,7 @@ export function shelfLine(
 		| 'max_price_cents'
 		| 'sold_on'
 		| 'sale_price_cents'
+		| 'expected_on'
 		| 'authors'
 		| 'format'
 		| 'binding'
@@ -289,6 +313,7 @@ export function shelfLine(
 ): string {
 	if (item.status === 'wishlist') return wishLine(item.max_price_cents);
 	if (item.status === 'sold') return saleLine(item.sold_on, item.sale_price_cents);
+	if (item.status === 'ordered') return orderLine(item.expected_on, today);
 	if (item.loan_borrower != null) return loanLine(item.loan_borrower, item.loan_due_on, today);
 	return [item.authors?.join(', '), editionSummary({ ...item, barcode: null })]
 		.filter(Boolean)
@@ -303,6 +328,7 @@ export function shelfLine(
 export type CollectionStatus = CopyStatus | 'unpriced' | 'none';
 export const collectionStatusLabels: Record<CollectionStatus, string> = {
 	...statusLabels,
+	ordered: 'Zamówione',
 	sold: 'Sprzedane',
 	unpriced: 'Bez ceny',
 	none: 'Bez egzemplarzy'
@@ -310,6 +336,17 @@ export const collectionStatusLabels: Record<CollectionStatus, string> = {
 
 /** The filter that keeps only copies out on loan, the server's `?loaned=1`. */
 export const loanedLabel = 'Wypożyczone';
+
+/**
+ * The filter that keeps only owned copies of titles not yet watched, read or heard, the server's
+ * `?unfinished=1`.
+ */
+export const unfinishedLabel = 'Do nadrobienia';
+
+/** Whether a status leaves owned copies to list, so "Do nadrobienia" can narrow it. */
+export function listsOwned(status: CollectionFilter['status']): boolean {
+	return status === '' || status === 'owned' || status === 'unpriced';
+}
 
 export type CollectionFilter = {
 	kind: Kind | '';
@@ -320,13 +357,16 @@ export type CollectionFilter = {
 	q: string;
 	/** Only copies with an open loan; left out when off. */
 	loaned?: boolean;
+	/** Only owned copies of titles not finished; left out when off. */
+	unfinished?: boolean;
 	/** A tag of the title, the whole tag, case aside; absent for any title. */
 	tag?: string;
 };
 
 /**
  * The filter a collection address names. A title has no format, location or loan, so `none`
- * drops them.
+ * drops them; "Do nadrobienia" stays only beside a status that lists owned copies, as the sheet
+ * offers it.
  */
 export function readCollectionFilter(params: Pick<URLSearchParams, 'get'>): CollectionFilter {
 	function read<K extends string>(key: string, labels: Record<K, string>): K | '' {
@@ -344,6 +384,7 @@ export function readCollectionFilter(params: Pick<URLSearchParams, 'get'>): Coll
 		...(location ? { location } : {}),
 		q: params.get('q') ?? '',
 		...(status !== 'none' && params.get('loaned') === '1' ? { loaned: true } : {}),
+		...(listsOwned(status) && params.get('unfinished') === '1' ? { unfinished: true } : {}),
 		...(tag ? { tag } : {})
 	};
 }
@@ -354,6 +395,7 @@ export function collectionSearch(f: CollectionFilter): string {
 	if (f.format) params.set('format', f.format);
 	if (f.status) params.set('status', f.status);
 	if (f.loaned) params.set('loaned', '1');
+	if (f.unfinished) params.set('unfinished', '1');
 	const location = trimSpace(f.location ?? '');
 	if (location) params.set('location', location);
 	if (f.q.trim()) params.set('q', f.q.trim());
@@ -594,6 +636,7 @@ export type CopyForm = {
 	market_percent: string;
 	sold_on: string;
 	sale_price: string;
+	expected_on: string;
 	location: string;
 };
 
@@ -611,6 +654,7 @@ export function copyToForm(c: CopyPayload | null): CopyForm {
 		market_percent: c?.max_market_percent == null ? '' : String(c.max_market_percent),
 		sold_on: c?.sold_on ?? '',
 		sale_price: centsToInput(c?.sale_price_cents ?? null),
+		expected_on: c?.expected_on ?? '',
 		location: c?.location ?? ''
 	};
 }
@@ -625,14 +669,15 @@ export function parsePercent(input: string): number | null | undefined {
 }
 
 /**
- * The request body for a copy. A wishlist copy carries no price or purchase date, an owned or
- * sold copy no maximum price or market percent, only a sold copy its sale's day, which it needs,
- * and price, and only an owned copy its location. A field a copy does not carry is left out,
- * which the server reads as none, so a sold copy put back on the shelf drops its sale.
+ * The request body for a copy. A wishlist copy carries no price or purchase date, an owned, sold
+ * or ordered copy no maximum price or market percent, only a sold copy its sale's day, which it
+ * needs, and price, only an ordered copy its expected delivery and only an owned copy its
+ * location. A field a copy does not carry is left out, which the server reads as none, so a sold
+ * copy put back on the shelf drops its sale and a received one its delivery day.
  */
 export function copyPayload(f: CopyForm, editionID: number): Parsed<CopyPayload> {
 	const sold = f.status === 'sold';
-	const owned = f.status === 'owned' || sold;
+	const owned = f.status === 'owned' || sold || f.status === 'ordered';
 	const price = owned ? parsePLN(f.price) : null;
 	if (price === undefined) {
 		return {
@@ -668,6 +713,10 @@ export function copyPayload(f: CopyForm, editionID: number): Parsed<CopyPayload>
 	}
 	const sale = sold ? saleOf(f) : {};
 	if ('issue' in sale) return { ok: false, issue: sale.issue };
+	const expected = f.status === 'ordered' ? f.expected_on.trim() : '';
+	if (expected && !isDate(expected)) {
+		return { ok: false, issue: { field: 'expected_on', message: 'Data w formacie RRRR-MM-DD.' } };
+	}
 	return {
 		ok: true,
 		value: {
@@ -682,6 +731,7 @@ export function copyPayload(f: CopyForm, editionID: number): Parsed<CopyPayload>
 			max_price_cents: maxPrice,
 			...(marketPercent == null ? {} : { max_market_percent: marketPercent }),
 			...sale,
+			...(expected ? { expected_on: expected } : {}),
 			...(location ? { location } : {})
 		}
 	};

@@ -8,7 +8,11 @@ import {
 	kindLabels,
 	statusLabels,
 	type Copy,
+	type FinishPayload,
+	type FormIssue,
 	type Kind,
+	type Parsed,
+	type Title,
 	type TitleDetail
 } from '#lib/collection.js';
 import { copyCount, editionCount, purchaseDate } from '#lib/polish.js';
@@ -134,6 +138,91 @@ export function kindAndYear(t: Pick<TitleDetail, 'kind' | 'year'>): string {
 	return [kindLabels[t.kind], t.year?.toString()].filter(Boolean).join(' · ');
 }
 
+/** What a finished title is for its kind: watched, read or heard. */
+export const finishedLabels: Record<Kind, string> = {
+	movie: 'Obejrzane',
+	book: 'Przeczytane',
+	music: 'Przesłuchane'
+};
+
+/** The action that marks a title finished today, such as "Oznacz jako obejrzane". */
+export function finishAction(kind: Kind): string {
+	return `Oznacz jako ${finishedLabels[kind].toLocaleLowerCase('pl-PL')}`;
+}
+
+/**
+ * A finished title's line, such as "Obejrzane 12 maj 2026", or its label alone when the day is
+ * unknown; null while it is not finished.
+ */
+export function finishedLine(t: Pick<Title, 'kind' | 'finished' | 'finished_on'>): string | null {
+	if (!t.finished) return null;
+	return [finishedLabels[t.kind], purchaseDate(t.finished_on ?? null)].filter(Boolean).join(' ');
+}
+
+const warsawDay = new Intl.DateTimeFormat('en-CA', {
+	timeZone: 'Europe/Warsaw',
+	year: 'numeric',
+	month: '2-digit',
+	day: '2-digit'
+});
+
+/**
+ * The day it is in Poland at an instant, YYYY-MM-DD: the server's today, which no finish day may
+ * pass, whatever the reader's time zone.
+ */
+export function todayInPoland(now: Date): string {
+	return warsawDay.format(now);
+}
+
+/**
+ * The finish day a form's text names: null for an empty field, an unknown day. A day after
+ * today in Poland is refused as the server refuses it.
+ */
+export function finishDay(text: string, today: string): Parsed<string | null> {
+	const day = text.trim();
+	if (!day) return { ok: true, value: null };
+	if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return dayIssue('Data w formacie RRRR-MM-DD.');
+	if (day > today) return dayIssue('Data nie może być późniejsza niż dziś.');
+	return { ok: true, value: day };
+}
+
+function dayIssue(message: string): { ok: false; issue: FormIssue } {
+	return { ok: false, issue: { field: 'finished_on', message } };
+}
+
+/**
+ * Takes the finished state and day from a finish answer onto the title the page shows, and
+ * nothing else: the answer may come after a rename saved meanwhile, whose name it must not undo.
+ * An unknown day is absent from the answer, so it clears the day shown.
+ */
+export function applyFinish(
+	shown: Pick<Title, 'finished' | 'finished_on'>,
+	answer: Pick<Title, 'finished' | 'finished_on'>
+): void {
+	shown.finished = answer.finished ?? false;
+	shown.finished_on = answer.finished_on ?? null;
+}
+
+/**
+ * A title edit's answer without the finished state: an edit never changes that state, and an
+ * answer read before a finish confirmed since would show the title unfinished again.
+ */
+export function withoutFinish<T extends Pick<Title, 'finished' | 'finished_on'>>(
+	answer: T
+): Omit<T, 'finished' | 'finished_on'> {
+	const { finished: _finished, finished_on: _finishedOn, ...rest } = answer;
+	return rest;
+}
+
+/**
+ * The `PUT /api/titles/{id}/finished` body that records a title as finished on a day (null when
+ * unknown) or not finished. It carries nothing else, so a page holding an older title never
+ * writes its name or notes back.
+ */
+export function finishPayload(finished: boolean, day: string | null): FinishPayload {
+	return { finished, finished_on: finished ? day : null };
+}
+
 /** What an edition is, such as "4K UHD · Slipcover", never with its barcode. */
 export function editionName(e: TitleEdition): string {
 	return editionSummary({ ...e, barcode: null });
@@ -191,7 +280,10 @@ export function previewHero(p: TitlePreview): Hero {
 
 export type CopyFact = { label: string; value: string };
 
-/** A copy's facts for its card: what was paid, when and where, the sale, its state and where it is kept. */
+/**
+ * A copy's facts for its card: what was paid, when and where, the sale or the expected delivery,
+ * its state and where it is kept.
+ */
 export function copyFacts(c: Copy): CopyFact[] {
 	const state =
 		[
@@ -219,23 +311,29 @@ export function copyFacts(c: Copy): CopyFact[] {
 					{ label: 'Cena sprzedaży', value: formatPLN(c.sale_price_cents) || '—' }
 				]
 			: [];
+	const ordered = c.status === 'ordered';
+	const delivery = ordered
+		? [{ label: 'Spodziewana dostawa', value: purchaseDate(c.expected_on ?? null) || '—' }]
+		: [];
 	return [
 		{ label: 'Cena', value: formatPLN(c.price_cents) || '—' },
-		{ label: 'Kupiono', value: purchaseDate(c.purchased_on) || '—' },
+		{ label: ordered ? 'Zamówiono' : 'Kupiono', value: purchaseDate(c.purchased_on) || '—' },
 		{ label: 'Sklep', value: c.shop || '—' },
 		...sale,
+		...delivery,
 		{ label: 'Stan', value: state },
 		...(c.location ? [{ label: 'Miejsce', value: c.location }] : [])
 	];
 }
 
 /**
- * A copy's row in an edition card, such as "Na półce · 89,99 zł · Empik", "Lista życzeń · do
- * 60,00 zł" or, with what it sold for, "Sprzedany · 35,00 zł · Empik".
+ * A copy's row in an edition card, such as "Na półce · 89,99 zł · Empik", "Zamówiony · 129,99 zł
+ * · Allegro", "Lista życzeń · do 60,00 zł" or, with what it sold for, "Sprzedany · 35,00 zł ·
+ * Empik".
  */
 export function copyLine(c: Copy): string {
 	const price =
-		c.status === 'owned'
+		c.status === 'owned' || c.status === 'ordered'
 			? formatPLN(c.price_cents)
 			: c.status === 'sold'
 				? formatPLN(c.sale_price_cents)

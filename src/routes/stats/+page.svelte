@@ -72,6 +72,17 @@
 	);
 </script>
 
+{#snippet noValuation()}
+	<StatsCard id="stats-value-title" title="Wartość kolekcji">
+		<p class="note">
+			Nie ma jeszcze wyceny. Wartość według rodzaju i nośnika pojawi się po pierwszej wycenie.
+		</p>
+		<div>
+			<Button href="/valuation">Wartość</Button>
+		</div>
+	</StatsCard>
+{/snippet}
+
 <svelte:head>
 	<title>Statystyki · Ohara</title>
 </svelte:head>
@@ -103,6 +114,11 @@
 				<Button tone="signal" href="/scan">Skanuj</Button>
 			{/snippet}
 		</EmptyState>
+		{#if valuation && !valuation.last_valuation}
+			<div class="cards">
+				{@render noValuation()}
+			</div>
+		{/if}
 	{:else}
 		<div class="cards">
 			<StatsSpending {spending} />
@@ -114,6 +130,7 @@
 					title="Wartość według rodzaju"
 					groups={byKind}
 					day={valuation.last_valuation}
+					windowDays={valuation.window_days}
 					minObservations={valuation.min_observations}
 				/>
 				<StatsValue
@@ -121,17 +138,11 @@
 					title="Wartość według nośnika"
 					groups={byFormat}
 					day={valuation.last_valuation}
+					windowDays={valuation.window_days}
 					minObservations={valuation.min_observations}
 				/>
 			{:else if valuation}
-				<StatsCard id="stats-value-title" title="Wartość kolekcji">
-					<p class="note">
-						Nie ma jeszcze wyceny. Wartość według rodzaju i nośnika pojawi się po pierwszej wycenie.
-					</p>
-					<div>
-						<Button href="/valuation">Wartość</Button>
-					</div>
-				</StatsCard>
+				{@render noValuation()}
 			{/if}
 		</div>
 		{#if valuationFailure}

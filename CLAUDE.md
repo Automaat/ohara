@@ -734,12 +734,16 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   no format, as one group) give each group's summed used value, price paid
   (with its unpriced copies), copy count and how many copies have no used
   value or a low-confidence one, the most valuable group first; no history,
-  gains or movers. Before the first valuation (`last_valuation` null) one
-  "Wartość kolekcji" card says so and links to Wartość; a failed read shows
-  its own retry. Without an owned copy the page offers "Skanuj".
+  gains or movers. The figures are today's values from the window's prices,
+  as Wartość computes them, and the note names the last valuation's day
+  apart; a group priced from Discogs carries a `DiscogsCredit` per release.
+  Before the first valuation (`last_valuation` null) one "Wartość kolekcji"
+  card says so and links to Wartość, also beside the empty shelf; a failed
+  read shows its own retry. Without an owned copy the page offers "Skanuj".
 - Discogs data carries `DiscogsCredit`: "Data provided by Discogs." linked
   to its release page, never `nofollow`, under a quick confirm candidate
-  with a `discogs_release_id` and a copy priced from Discogs on Wartość.
+  with a `discogs_release_id`, a copy priced from Discogs on Wartość and,
+  once per release, a Statystyki value group with such a copy.
   `/informacje` shows the API terms' non-affiliation notice. Both stay in
   English, word for word (`src/lib/discogs.ts`).
 - `static/manifest.webmanifest` is linked with `crossorigin="use-credentials"`

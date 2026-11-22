@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { groupNotes, groupValue, valueShare, type ValueGroup } from '#lib/stats-value.js';
 	import { dayLabel } from '#lib/valuation.js';
+	import DiscogsCredit from './DiscogsCredit.svelte';
 	import StatsCard from './StatsCard.svelte';
 
 	let {
@@ -8,6 +9,7 @@
 		title,
 		groups,
 		day,
+		windowDays,
 		minObservations
 	}: {
 		id: string;
@@ -15,6 +17,8 @@
 		groups: ValueGroup[];
 		/** The day of the last valuation. */
 		day: string;
+		/** How many days back a price still counts in a value. */
+		windowDays: number;
 		/** How many prices a used value needs to be more than "mało danych". */
 		minObservations: number;
 	} = $props();
@@ -33,12 +37,20 @@
 						<span style:inline-size="{valueShare(g, groups)}%"></span>
 					</div>
 					<p class="notes">{groupNotes(g).join(' · ')}</p>
+					{#if g.discogsReleases.length > 0}
+						<div class="credits">
+							{#each g.discogsReleases as release (release)}
+								<DiscogsCredit {release} />
+							{/each}
+						</div>
+					{/if}
 				</li>
 			{/each}
 		</ul>
 		<p class="note">
-			Wartość używanych egzemplarzy z wyceny z {dayLabel(day)}. „Mało danych”: wartość z OLX oparta
-			na mniej niż {minObservations} ofertach.
+			Wartość używanych egzemplarzy na dziś, z cen ofert z ostatnich {windowDays} dni; ostatnia wycena:
+			{dayLabel(day)}. „Mało danych”: wartość z OLX oparta na mniej niż {minObservations}
+			ofertach.
 		</p>
 	{:else}
 		<p class="note">Ostatnia wycena nie objęła żadnego posiadanego egzemplarza.</p>
@@ -88,6 +100,13 @@
 		block-size: 100%;
 		border-radius: inherit;
 		background: var(--sui-chart-1);
+	}
+
+	.credits {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0 0.75rem;
+		min-inline-size: 0;
 	}
 
 	.notes {

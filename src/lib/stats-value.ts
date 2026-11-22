@@ -1,11 +1,12 @@
 import type { CopyValue, Format, Kind } from './api.gen';
 import { formatPLN } from '#lib/collection.js';
+import { discogsReleaseUrl } from '#lib/discogs.js';
 import { copyCount } from '#lib/polish.js';
 
 /** The fields of a `GET /api/valuation` copy the value statistics read. */
 export type ValueItem = Pick<
 	CopyValue,
-	'kind' | 'format' | 'price_cents' | 'mid' | 'low_confidence'
+	'kind' | 'format' | 'price_cents' | 'mid' | 'low_confidence' | 'discogs_release_id'
 >;
 
 /** A group of owned copies: a kind, or a format with books as one group. */
@@ -26,6 +27,8 @@ export type ValueGroup = {
 	paidCents: number;
 	/** How many copies have no purchase price. */
 	unpriced: number;
+	/** The Discogs releases whose suggestions priced copies of the group, each once. */
+	discogsReleases: number[];
 };
 
 export const kindGroupLabels: Record<Kind, string> = {
@@ -71,7 +74,8 @@ function groupBy<K extends ValueKey>(
 		unvalued: 0,
 		lowConfidence: 0,
 		paidCents: 0,
-		unpriced: 0
+		unpriced: 0,
+		discogsReleases: [] as number[]
 	}));
 	const byKey = new Map<ValueKey, ValueGroup>(groups.map((g) => [g.key, g]));
 	for (const c of copies) {
@@ -81,6 +85,10 @@ function groupBy<K extends ValueKey>(
 		if (c.mid) {
 			g.midCents += c.mid.cents;
 			if (c.low_confidence) g.lowConfidence += 1;
+			const release = c.mid.source === 'discogs' ? c.discogs_release_id : null;
+			if (release != null && discogsReleaseUrl(release) && !g.discogsReleases.includes(release)) {
+				g.discogsReleases.push(release);
+			}
 		} else {
 			g.unvalued += 1;
 		}

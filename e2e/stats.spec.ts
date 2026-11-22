@@ -89,6 +89,11 @@ test('Statystyki without owned copies leads to Skanuj', async ({ page }) => {
 	await expect(page.getByRole('heading', { name: 'Wydatki w miesiącach' })).toHaveCount(0);
 	await expectNoSideScroll(page);
 	// The tab bar's scan button shares the name, so the link is looked up on the page itself.
+	await expect(
+		page
+			.getByRole('region', { name: 'Wartość kolekcji' })
+			.getByRole('link', { name: 'Wartość', exact: true })
+	).toBeVisible();
 	await page.locator('.content').getByRole('link', { name: 'Skanuj', exact: true }).tap();
 	await expect(page).toHaveURL(/\/scan$/);
 });
@@ -242,6 +247,7 @@ test('Statystyki shows the value by kind and by format', async ({ page, request 
 	await page.route('**/api/collection', (route) => route.fulfill({ json: shelf }));
 	await routeValuation(page, {
 		last_valuation: pastDay(),
+		window_days: 90,
 		min_observations: 3,
 		copies: [
 			valued(1, { price_cents: 2_000_000, mid: olx(12_345_678), low_confidence: false }),
@@ -253,7 +259,8 @@ test('Statystyki shows the value by kind and by format', async ({ page, request 
 				format: 'vinyl',
 				price_cents: 8000,
 				mid: { cents: 12000, source: 'discogs', count: 1, trimmed: 0 },
-				low_confidence: false
+				low_confidence: false,
+				discogs_release_id: 456
 			}),
 			valued(6, { kind: 'music', format: 'cassette', price_cents: 1000 })
 		]
@@ -282,6 +289,16 @@ test('Statystyki shows the value by kind and by format', async ({ page, request 
 	await expect(formats.getByRole('listitem').filter({ hasText: 'Blu-ray' })).toContainText(
 		'mało danych: 1'
 	);
+	await expect(
+		formats
+			.getByRole('listitem')
+			.filter({ hasText: 'Winyl' })
+			.getByRole('link', { name: /^Data provided by Discogs\./ })
+	).toHaveAttribute('href', 'https://www.discogs.com/release/456');
+	await expect(kinds.getByRole('link', { name: /^Data provided by Discogs\./ })).toHaveCount(1);
+	await expect(
+		formats.getByText(/^Wartość używanych egzemplarzy na dziś, z cen ofert z ostatnich 90 dni/)
+	).toBeVisible();
 
 	await expectNoSideScroll(page);
 	await expectNoInnerScroll(kinds);

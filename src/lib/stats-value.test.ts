@@ -40,9 +40,17 @@ const shelf: ValueItem[] = [
 		format: 'vinyl',
 		price_cents: 8000,
 		mid: { cents: 12000, source: 'discogs', count: 1, trimmed: 0 },
-		low_confidence: false
+		low_confidence: false,
+		discogs_release_id: 456
 	}),
-	copy({ kind: 'music', format: 'cd', price_cents: 3500, mid: olx(1000), low_confidence: false }),
+	copy({
+		kind: 'music',
+		format: 'cd',
+		price_cents: 3500,
+		mid: olx(1000),
+		low_confidence: false,
+		discogs_release_id: 789
+	}),
 	copy({ kind: 'music', format: 'cassette', price_cents: null, mid: null, low_confidence: true })
 ];
 
@@ -57,7 +65,8 @@ describe('valueByKind', () => {
 				unvalued: 1,
 				lowConfidence: 0,
 				paidCents: 11500,
-				unpriced: 1
+				unpriced: 1,
+				discogsReleases: [456]
 			},
 			{
 				key: 'movie',
@@ -67,7 +76,8 @@ describe('valueByKind', () => {
 				unvalued: 1,
 				lowConfidence: 1,
 				paidCents: 7000,
-				unpriced: 1
+				unpriced: 1,
+				discogsReleases: []
 			},
 			{
 				key: 'book',
@@ -77,7 +87,8 @@ describe('valueByKind', () => {
 				unvalued: 0,
 				lowConfidence: 1,
 				paidCents: 3000,
-				unpriced: 0
+				unpriced: 0,
+				discogsReleases: []
 			}
 		]);
 	});
@@ -136,6 +147,26 @@ describe('valueByFormat', () => {
 	});
 });
 
+describe('Discogs releases', () => {
+	const discogs = (cents: number): Estimate => ({ cents, source: 'discogs', count: 1, trimmed: 0 });
+
+	it('names each release whose suggestion priced a copy once, for the credit', () => {
+		const groups = valueByFormat([
+			copy({ kind: 'music', format: 'vinyl', mid: discogs(5000), discogs_release_id: 1 }),
+			copy({ kind: 'music', format: 'vinyl', mid: discogs(5000), discogs_release_id: 1 }),
+			copy({ kind: 'music', format: 'vinyl', mid: discogs(7000), discogs_release_id: 2 }),
+			copy({ kind: 'music', format: 'vinyl', mid: olx(900), discogs_release_id: 3 }),
+			copy({ kind: 'music', format: 'vinyl', mid: null, discogs_release_id: 4 }),
+			copy({ kind: 'music', format: 'cd', mid: discogs(100), discogs_release_id: 0 }),
+			copy({ kind: 'music', format: 'cd', mid: discogs(100), discogs_release_id: null })
+		]);
+		expect(groups.map((g) => [g.key, g.discogsReleases])).toEqual([
+			['vinyl', [1, 2]],
+			['cd', []]
+		]);
+	});
+});
+
 describe('valueShare', () => {
 	it('measures each group against the most valuable one', () => {
 		const groups = valueByFormat(shelf);
@@ -158,6 +189,7 @@ function group(over: Partial<ValueGroup> = {}): ValueGroup {
 		lowConfidence: 0,
 		paidCents: 0,
 		unpriced: 0,
+		discogsReleases: [],
 		...over
 	};
 }

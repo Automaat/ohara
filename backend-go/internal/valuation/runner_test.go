@@ -310,6 +310,53 @@ func TestRecordKeepsAnEarlierEdition(t *testing.T) {
 	}
 }
 
+// TestMovedListingPricesNewTitle stores three "Diuna: Część druga" Blu-ray
+// listings against seed's owned "Diuna" Blu-ray, as a run before the
+// second title was owned did. A run that matches them to the owned
+// "Diuna: Część druga" Blu-ray prices that title with them, not "Diuna".
+func TestMovedListingPricesNewTitle(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	seed(t, pool)
+	ctx := context.Background()
+	exec(t, pool, `INSERT INTO title (id, kind, name, original_title) OVERRIDING SYSTEM VALUE
+		VALUES (3, 'movie', 'Diuna: Część druga', 'Dune: Part Two')`)
+	exec(t, pool, `INSERT INTO edition (id, title_id, barcode, format) OVERRIDING SYSTEM VALUE
+		VALUES (30, 3, '5902600069737', 'bluray')`)
+	exec(t, pool, `INSERT INTO copy (edition_id, status, price_cents) VALUES (30, 'owned', 6000)`)
+	found := []deals.Listing{
+		listing("d1", "Diuna Część druga Blu-ray", 4000, used()),
+		listing("d2", "Diuna Część druga Blu-ray PL", 4500, used()),
+		listing("d3", "Diuna Część druga Blu-ray stan idealny", 5000, used()),
+	}
+	exec(t, pool, `INSERT INTO price_observation (source, external_id, price_cents, acquired_as, edition_id, title_id)
+		VALUES ('olx', 'd1', 4000, 'used', 20, 2), ('olx', 'd2', 4500, 'used', 20, 2), ('olx', 'd3', 5000, 'used', 20, 2)`)
+	r := newTestRunner(pool, &fakeBuyBack{quotes: map[string]Quote{}}, &fakeSource{name: "olx", listings: found})
+	if _, err := r.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	copies, _, err := r.store.Valued(ctx, r.Window())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var priced bool
+	for _, c := range copies {
+		switch c.EditionID {
+		case 20:
+			if c.Mid != nil {
+				t.Fatalf("Diuna Blu-ray mid = %+v, want none from the moved listings", c.Mid)
+			}
+		case 30:
+			if c.Mid == nil || c.Mid.Count != 3 {
+				t.Fatalf("Diuna: Część druga Blu-ray mid = %+v, want the 3 moved listings", c.Mid)
+			}
+			priced = true
+		}
+	}
+	if !priced {
+		t.Fatal("no Diuna: Część druga Blu-ray copy valued")
+	}
+}
+
 // wishBluray adds a wished Blu-ray edition 22 of "Diuna" next to seed's
 // owned Blu-ray 20 and records found against it, as the deal hunter does.
 func wishBluray(t *testing.T, pool *pgxpool.Pool, found []deals.Listing) {

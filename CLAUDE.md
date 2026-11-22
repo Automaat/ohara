@@ -231,6 +231,12 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   queues one `deal_alert` per listing at or below the copy's
   `max_price_cents`; a listing seen again keeps its row, takes the new
   price and `last_seen_at`, and alerts if it has no alert yet. Alerts are retried up to 5 times within a week.
+  A hunt or valuation that matches a stored listing to another title (its
+  edition's) moves it to that title and the matched edition; a valuation
+  match drops the wish it was recorded for. Its unsent alert for a wish
+  of another title moves to the new wish, or to none, so the old wish
+  never gets it; a sent alert stays. Another edition of the same title
+  keeps the stored one.
   A sent alert stores the price it named (`deal_alert.alerted_price_cents`);
   a later price under it, within the limit, queues the same row again and
   its message names the earlier price ("było …"). An alert still waiting

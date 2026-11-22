@@ -145,10 +145,24 @@ type observationRaw struct {
 	Data           json.RawMessage `json:"data,omitempty"`
 }
 
+// listingTitle is the title a stored listing belongs to: its edition's,
+// else the one it was stored with.
+const listingTitle = `coalesce((SELECT e.title_id FROM edition e WHERE e.id = price_observation.edition_id),
+	price_observation.title_id)`
+
+// movedTitle holds in Record's upsert when the run matched the stored
+// listing to another title than the one it belongs to.
+const movedTitle = listingTitle + ` <> EXCLUDED.title_id`
+
 // Record stores l as an observation of w and, with alert, queues its
 // Telegram alert in the same transaction. A listing a source already
 // reported keeps its row and first observation time; its price and
-// last_seen_at move to now. The alert is queued when the listing has none
+// last_seen_at move to now. It keeps its edition too, unless w belongs to
+// another title: then it moves to w's title and edition, and a valuation
+// match, which names no wish, drops the wish the hunter recorded it for. An unsent alert
+// for a wish of another title than the listing's moves to w, or to no wish
+// when w is not one, so it is never sent for the old wish; an alert
+// already sent stays recorded. The alert is queued when the listing has none
 // yet, so a listing the valuation run stored first, or one whose price
 // dropped under the limit, still alerts. A listing whose alert was sent
 // alerts again when its price is under the one that alert named, unless
@@ -170,21 +184,33 @@ func (s *Store) Record(ctx context.Context, l *Listing, w *Want, alert bool) (bo
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	var id int64
 	var isNew, alerted bool
+	var titleID *int64
 	err = tx.QueryRow(ctx, `INSERT INTO price_observation
 			(source, external_id, price_cents, acquired_as, url, edition_id, title_id, raw)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		VALUES ($1, $2, $3, $4, $5, nullif($6::bigint, 0), nullif($7::bigint, 0), $8)
 		ON CONFLICT (source, external_id) WHERE external_id IS NOT NULL DO UPDATE SET
 			price_cents = EXCLUDED.price_cents,
 			last_seen_at = now(),
 			url = EXCLUDED.url,
-			raw = coalesce(price_observation.raw, '{}'::jsonb) || EXCLUDED.raw,
+			raw = CASE WHEN `+movedTitle+` THEN coalesce(price_observation.raw, '{}'::jsonb) - 'wishlist_copy_id'
+				ELSE coalesce(price_observation.raw, '{}'::jsonb) END || EXCLUDED.raw,
 			acquired_as = coalesce(EXCLUDED.acquired_as, price_observation.acquired_as),
-			edition_id = coalesce(price_observation.edition_id, EXCLUDED.edition_id),
-			title_id = coalesce(price_observation.title_id, EXCLUDED.title_id)
-		RETURNING id, xmax = 0`,
-		l.Source, l.ExternalID, l.PriceCents, l.AcquiredAs, l.URL, w.EditionID, w.TitleID, raw).Scan(&id, &isNew)
+			edition_id = CASE WHEN `+movedTitle+` THEN EXCLUDED.edition_id
+				ELSE coalesce(price_observation.edition_id, EXCLUDED.edition_id) END,
+			title_id = CASE WHEN `+movedTitle+` THEN EXCLUDED.title_id
+				ELSE coalesce(price_observation.title_id, EXCLUDED.title_id) END
+		RETURNING id, xmax = 0, `+listingTitle,
+		l.Source, l.ExternalID, l.PriceCents, l.AcquiredAs, l.URL, w.EditionID, w.TitleID, raw).Scan(&id, &isNew, &titleID)
 	if err != nil {
 		return false, false, fmt.Errorf("record observation: %w", err)
+	}
+	if titleID != nil && *titleID == w.TitleID {
+		if _, err := tx.Exec(ctx, `UPDATE deal_alert a SET copy_id = nullif($3::bigint, 0)
+			FROM copy c JOIN edition e ON e.id = c.edition_id
+			WHERE a.observation_id = $1 AND a.sent_at IS NULL AND c.id = a.copy_id AND e.title_id <> $2`,
+			id, w.TitleID, w.CopyID); err != nil {
+			return false, false, fmt.Errorf("record alert: move to title: %w", err)
+		}
 	}
 	if alert {
 		if alerted, err = queueAlert(ctx, tx, id, w.CopyID, l.PriceCents); err != nil {

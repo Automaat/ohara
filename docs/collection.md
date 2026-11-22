@@ -205,6 +205,80 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   that only grades loses nothing. Deals and valuation ignore the grades. The album copy form adds "Stan nośnika" and "Stan
   okładki" with the English names ("Very Good Plus (VG+)"), and the copy's
   facts show "Gradacja: Nośnik VG+ · Okładka NM".
+- `POST /api/copies/{id}/discogs` (`internal/discogscollection`) adds an
+  owned album copy whose edition has a `discogs_release_id` to the Discogs
+  collection of the `OHARA_DISCOGS_TOKEN` owner, in folder
+  `OHARA_DISCOGS_FOLDER_ID` (1, "Uncategorized", unless set). It reads
+  the owner from `/oauth/identity`, the field IDs and options of "Media
+  Condition" and "Sleeve Condition" from the collection's fields, and the
+  release's instances in every folder, then sets each grade the copy has
+  to its Discogs option ("Very Good Plus (VG+)"); a missing grade leaves
+  its field unset. A copy makes one instance, and is linked to it
+  (`copy.discogs_instance_id`, `discogs_instance_release_id`) only once
+  those conditions are set, so a Discogs error never leaves an instance
+  ID on the copy. The push holds the copy's row (`FOR NO KEY UPDATE`)
+  until it ends, so a delete or update of the copy waits for it, and
+  pushes run one at a time.
+- Every add is first recorded in `discogs_add` and committed, apart from
+  the push's transaction, then sent. Discogs' answer stores the instance
+  ID there; a later push sets the conditions of that instance and links
+  it, adding nothing. Discogs' listing can lag behind its answer, so an
+  answered instance the listing omits answers 409 "jeszcze się nie
+  rozstrzygnęło" for 10 minutes after the add, and only then counts as
+  removed by the owner. A clear refusal (a 4xx, such as 429) drops the
+  record. Any other failure (no answer, an answer cut off, a 5xx) leaves
+  the outcome unknown: no other add of the copy is sent, for any release,
+  until it is settled, and Ohara never adopts an instance by its date. A
+  push then answers 409: while the add's release is not in the collection
+  and the add is under 10 minutes old, "jeszcze się nie rozstrzygnęło";
+  after that an empty collection settles it and the push adds again; with
+  the release in the collection it asks the owner.
+  `POST /api/copies/{id}/discogs/adopt` is the owner's word that the
+  release's only instance is Ohara's (409 when it is not held exactly
+  once, leaving out instances other copies are linked to or recorded an
+  add of): it is graded and linked. `DELETE /api/copies/{id}/discogs/add`
+  is the owner's word that the add made nothing of theirs: the record
+  goes, and a push then treats any instance of the release as the
+  owner's; it answers 409 "jeszcze się nie rozstrzygnęło" while the add is
+  under 10 minutes old and the release is not listed. A push of a release
+  answers 409 while another copy's add of it has an unknown outcome, and
+  an add answers 409 "Inny egzemplarz tego wydania właśnie trafił do
+  kolekcji Discogs. Spróbuj ponownie za kilka minut." while another copy
+  of the release is linked less than 10 minutes ago or has an instance
+  recorded in `discogs_add` but not yet linked, since the listing may not
+  show it yet. Ages are measured by the database's clock. A unique index
+  keeps two copies from ever linking one instance.
+- Two owned copies of one release: only the first is pushed. The second
+  copy's push answers 409 "To wydanie jest już w Twojej kolekcji
+  Discogs.", since the release is held in an instance it did not make,
+  and if the owner adds a second instance by hand, both copies' updates
+  answer 409 from then on. Supporting this is #500.
+- A linked instance found in whatever folder the owner moved it to is only
+  re-graded. One the listing omits answers 409 "jeszcze się nie
+  rozstrzygnęło" for 10 minutes after it was linked
+  (`discogs_instance_linked_at`); after that it counts as removed by the
+  owner, is forgotten and a new one made;
+  one of a release the edition no longer names, still there, answers 409
+  "Ten egzemplarz jest już w kolekcji Discogs jako inne wydanie." and keeps
+  the link. Any instance of the release the copy did not make, beside its
+  own or alone, answers 409 "To wydanie jest już w Twojej kolekcji
+  Discogs." with nothing added or edited. A copy that is not owned, not an
+  album, or whose edition has no release answers 409 before any Discogs
+  request; without the token 503; a Discogs error (401, 429, 5xx, no
+  answer) or a fields list without the field or option a grade needs
+  answers 502 with a Polish message and logs a warning naming no token.
+  These error answers carry `field: "discogs_collection"`, whose message
+  the SPA shows as it is. Ohara never removes or edits another instance,
+  sends no rating or notes, and leaves Discogs alone when a copy is sold
+  or deleted.
+- `GET /api/copies/{id}/discogs` answers `enabled` (a token is set),
+  `pushable`, `instance_id` with `release_url` once the copy is linked to
+  an instance of its edition's release, and `add_unknown` while an add
+  awaits the owner. The copy page shows a "Discogs" part for a pushable,
+  pushed or waiting copy: "Dodaj do kolekcji Discogs", then "W kolekcji
+  Discogs" linking the release and "Zaktualizuj stan w Discogs"; while an
+  add awaits the owner, no push but "Potwierdź, że dodała je Ohara" and
+  "Porzuć to dodanie".
 - A copy carries its own collector marks, since copies of one edition
   differ in them: `signed` (an autograph, false when left out) and
   `copy_number` (a numbered copy's number, a whole number from 1; only

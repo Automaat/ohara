@@ -58,8 +58,12 @@ const fieldMessages: Record<string, Record<number, string>> = {
 	}
 };
 
+/** Fields whose errors carry a Polish message the page shows as it is. */
+const ownMessageFields = new Set(['discogs_collection']);
+
 function messageFor(status: number, body: ErrorBody): string {
 	const field = typeof body.field === 'string' ? body.field : undefined;
+	if (field && ownMessageFields.has(field) && typeof body.error === 'string') return body.error;
 	const known = field ? fieldMessages[field]?.[status] : undefined;
 	if (known) return known;
 	if (status === 404) return 'Nie znaleziono.';

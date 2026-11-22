@@ -38,7 +38,7 @@ cleanup() {
     status=$?
     trap - EXIT INT TERM
     if [[ $status -ne 0 ]]; then
-        "${compose[@]}" logs --no-color app >&2 || true
+        "${compose[@]}" logs --no-color app app-discogs >&2 || true
     fi
     "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
     docker network rm "$lock" >/dev/null 2>&1 || true

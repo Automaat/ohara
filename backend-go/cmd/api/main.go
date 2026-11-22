@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -24,6 +25,7 @@ import (
 	"github.com/Automaat/ohara/backend-go/internal/db"
 	"github.com/Automaat/ohara/backend-go/internal/deals"
 	"github.com/Automaat/ohara/backend-go/internal/discogs"
+	"github.com/Automaat/ohara/backend-go/internal/discogscollection"
 	"github.com/Automaat/ohara/backend-go/internal/export"
 	"github.com/Automaat/ohara/backend-go/internal/lookup"
 	"github.com/Automaat/ohara/backend-go/internal/lookup/books"
@@ -130,6 +132,11 @@ func run() int {
 	syncer := newWantlistSyncer(pool, logger)
 	syncer.Start(huntCtx)
 	defer syncer.Wait()
+	discogsShelf, err := newDiscogsCollection(pool, logger)
+	if err != nil {
+		logger.Error("discogs collection", "err", err)
+		return 2
+	}
 	queue := scanqueue.NewStore(pool)
 	metrics.RegisterScanQueueCollector(queue.Count)
 	searchers := titleSearchers()
@@ -145,14 +152,13 @@ func run() int {
 		wantlist.NewHandler(syncer, logger),
 		export.NewHandler(pool, valuer.Window(), logger),
 		shares,
+		discogsShelf,
 	}
 	if dir := os.Getenv("OHARA_WEB_DIR"); dir != "" {
-		webFS := os.DirFS(dir)
-		if err := web.Check(webFS); err != nil {
+		if deps.Web, err = frontend(dir); err != nil {
 			logger.Error("frontend", "dir", dir, "err", err)
 			return 2
 		}
-		deps.Web = webFS
 	}
 
 	metrics.SetBuildInfo(version)
@@ -375,6 +381,35 @@ func newWantlistSyncer(pool *pgxpool.Pool, logger *slog.Logger) *wantlist.Syncer
 	}
 	d.Priority = discogs.Background
 	return wantlist.NewSyncer(store, d, logger)
+}
+
+// frontend is the built SPA in dir, checked to be one.
+func frontend(dir string) (fs.FS, error) {
+	webFS := os.DirFS(dir)
+	if err := web.Check(webFS); err != nil {
+		return nil, err
+	}
+	return webFS, nil
+}
+
+// newDiscogsCollection adds owned album copies to the Discogs collection
+// of the OHARA_DISCOGS_TOKEN owner, in folder OHARA_DISCOGS_FOLDER_ID
+// (Uncategorized unless set); without the token its push answers 503.
+func newDiscogsCollection(pool *pgxpool.Pool, logger *slog.Logger) (*discogscollection.Handler, error) {
+	folder := int64(discogscollection.DefaultFolder)
+	if v := os.Getenv("OHARA_DISCOGS_FOLDER_ID"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || n < 1 {
+			return nil, fmt.Errorf("OHARA_DISCOGS_FOLDER_ID: want a positive folder ID, got %q", v)
+		}
+		folder = n
+	}
+	d := newDiscogs()
+	if d == nil {
+		logger.Info("discogs collection disabled: OHARA_DISCOGS_TOKEN not set")
+	}
+	store := discogscollection.NewStore(pool)
+	return discogscollection.NewHandler(discogscollection.NewPusher(store, d, folder), logger), nil
 }
 
 // newMusicProvider builds the music chain: Discogs when a token is set,

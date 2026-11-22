@@ -685,20 +685,20 @@ type Filter struct {
 type Item struct {
 	CopyID        int64    `json:"copy_id"`
 	CreatedAtUS   int64    `json:"created_at_us"`
-	Status        string   `json:"status"`
+	Status        string   `json:"status" ts:"CopyStatus"`
 	PriceCents    *int64   `json:"price_cents"`
 	MaxPriceCents *int64   `json:"max_price_cents"`
 	PurchasedOn   *Date    `json:"purchased_on"`
 	Shop          string   `json:"shop"`
-	AcquiredAs    *string  `json:"acquired_as"`
-	Condition     *string  `json:"condition"`
+	AcquiredAs    *string  `json:"acquired_as" ts:"AcquiredAs"`
+	Condition     *string  `json:"condition" ts:"Condition"`
 	EditionID     int64    `json:"edition_id"`
 	Barcode       *string  `json:"barcode"`
 	Label         string   `json:"label"`
-	Format        *string  `json:"format"`
-	Binding       *string  `json:"binding"`
+	Format        *string  `json:"format" ts:"Format"`
+	Binding       *string  `json:"binding" ts:"Binding"`
 	TitleID       int64    `json:"title_id"`
-	Kind          string   `json:"kind"`
+	Kind          string   `json:"kind" ts:"Kind"`
 	Name          string   `json:"name"`
 	OriginalTitle *string  `json:"original_title"`
 	PolishTitle   *string  `json:"polish_title"`

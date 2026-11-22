@@ -7,8 +7,10 @@ import {
 	ScanFlow,
 	checkTimeout,
 	announceSettle,
+	phaseTitle,
 	resetVisit,
 	resultAnnouncement,
+	type FlowPhase,
 	type Keeper
 } from './scan-flow.svelte';
 import { resetSession, session } from './session.svelte';
@@ -53,6 +55,7 @@ const movie: Candidate = {
 	title: { name: 'Diuna: Część druga', original_title: 'Dune: Part Two', year: 2024, tmdb_id: 1 },
 	edition: { barcode: '5901234123457', format: 'uhd', packaging: ['steelbook'] },
 	provider: 'movie',
+	sources: [],
 	confidence: 0.9
 };
 
@@ -61,6 +64,7 @@ const book: Candidate = {
 	title: { name: 'Lalka', authors: ['Bolesław Prus'] },
 	edition: { barcode: '5901234123457', binding: 'hardcover' },
 	provider: 'bn',
+	sources: [],
 	confidence: 0.5
 };
 
@@ -969,6 +973,7 @@ describe('ScanFlow without a barcode', () => {
 		title: { name: 'Kind of Blue', authors: ['Miles Davis'], year: 1959 },
 		edition: { barcode: '', format: 'vinyl', label: 'Columbia', discogs_release_id: 7 },
 		provider: 'discogs',
+		sources: [],
 		confidence: 0.6
 	};
 
@@ -1073,6 +1078,7 @@ describe('ScanFlow without a barcode', () => {
 			title: { name: 'Rejs', year: 1970, tmdb_id: 2 },
 			edition: { barcode: '', format: 'dvd' },
 			provider: 'tmdb',
+			sources: [],
 			confidence: 0.6
 		};
 		const diuna = { ...movie, edition: { barcode: '', format: 'uhd' as const } };
@@ -1184,6 +1190,7 @@ describe('ScanFlow without a barcode', () => {
 				edition: { barcode: '', format: 'dvd', label: long, publisher: 'Zespół', year: 2201 },
 				cover_url: 'ftp://img.example/rejs.jpg',
 				provider: 'tmdb',
+				sources: [],
 				confidence: 0.6
 			};
 			const s = server({
@@ -1443,6 +1450,37 @@ describe('ScanFlow.manual and dismiss', () => {
 		flow.dismiss();
 		flow.manual();
 		expect(recentScans.list).toHaveLength(0);
+	});
+});
+
+describe('phaseTitle', () => {
+	it.each([
+		[{ kind: 'loading' }, 'Sprawdzam kod…'],
+		[
+			{
+				kind: 'queued',
+				entry: {
+					id: 1,
+					barcode: '5901234123457',
+					reason: 'lookup_failed',
+					detail: '',
+					scans: 1,
+					created_at: '',
+					last_scanned_at: ''
+				}
+			},
+			'Nie znaleziono'
+		],
+		[{ kind: 'invalid', message: 'x' }, 'Nieprawidłowy kod'],
+		[{ kind: 'failed', message: 'x' }, 'Nie udało się sprawdzić kodu'],
+		[{ kind: 'offline' }, 'Zapisano bez połączenia'],
+		[{ kind: 'expired', saved: true }, 'Sesja wygasła'],
+		[{ kind: 'expired', saved: false }, 'Sesja wygasła'],
+		[{ kind: 'ready', status: 'found' }, 'Znaleziono'],
+		[{ kind: 'ready', status: 'owned' }, 'Masz już to wydanie'],
+		[{ kind: 'ready', status: 'missing' }, 'Dodaj ręcznie']
+	] satisfies [FlowPhase, string][])('titles %o as %s', (phase, title) => {
+		expect(phaseTitle(phase)).toBe(title);
 	});
 });
 

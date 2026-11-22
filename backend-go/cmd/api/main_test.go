@@ -24,11 +24,10 @@ import (
 
 // upstreams stands in for every outside source the deal hunter and the
 // valuation ask, serving recorded answers under one path prefix per source
-// and keeping each request's path and arrival time.
+// and keeping each request's path.
 type upstreams struct {
 	mu    sync.Mutex
 	paths []string
-	times []time.Time
 	srv   *httptest.Server
 }
 
@@ -43,7 +42,6 @@ func newUpstreams(t *testing.T) *upstreams {
 	u.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u.mu.Lock()
 		u.paths = append(u.paths, r.URL.Path)
-		u.times = append(u.times, time.Now())
 		u.mu.Unlock()
 		for prefix, file := range fixtures {
 			if !strings.HasPrefix(r.URL.Path, prefix) {
@@ -210,7 +208,10 @@ func TestHuntAndValuationSpaceTheirRequestsToOneSite(t *testing.T) {
 			t.Fatalf("%s: %v", sql, err)
 		}
 	}
-	u := newUpstreams(t)
+	newUpstreams(t)
+	sent := &sendTimes{base: http.DefaultTransport}
+	http.DefaultTransport = sent
+	t.Cleanup(func() { http.DefaultTransport = sent.base })
 	h, _, r, _, err := newRuns(pool, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatalf("newRuns: %v", err)
@@ -228,14 +229,7 @@ func TestHuntAndValuationSpaceTheirRequestsToOneSite(t *testing.T) {
 	})
 	wg.Wait()
 
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	var olx []time.Time
-	for i, p := range u.paths {
-		if strings.HasPrefix(p, "/olx/") {
-			olx = append(olx, u.times[i])
-		}
-	}
+	olx := sent.olx()
 	if len(olx) != 2 {
 		t.Fatalf("OLX asked %d times, want the hunt's canary and the valuation's book", len(olx))
 	}
@@ -243,6 +237,32 @@ func TestHuntAndValuationSpaceTheirRequestsToOneSite(t *testing.T) {
 	if gap := olx[1].Sub(olx[0]); gap < 500*time.Millisecond {
 		t.Fatalf("OLX asked twice %v apart, want at least half of the 1s source delay", gap)
 	}
+}
+
+// sendTimes stands in for http.DefaultTransport under the paced transport
+// and keeps when each request to OLX was handed on to be sent. The pacer
+// spaces requests by when they are sent, not by when the test server's
+// handler sees them, so arrival times can come out a little short of the
+// gap while send times cannot.
+type sendTimes struct {
+	base  http.RoundTripper
+	mu    sync.Mutex
+	times []time.Time
+}
+
+func (s *sendTimes) RoundTrip(req *http.Request) (*http.Response, error) {
+	if strings.HasPrefix(req.URL.Path, "/olx/") {
+		s.mu.Lock()
+		s.times = append(s.times, time.Now())
+		s.mu.Unlock()
+	}
+	return s.base.RoundTrip(req)
+}
+
+func (s *sendTimes) olx() []time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.times)
 }
 
 func TestDiscogsCallersShareOneBudget(t *testing.T) {

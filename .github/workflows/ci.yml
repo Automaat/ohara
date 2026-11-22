@@ -74,6 +74,16 @@ jobs:
         run: go vet ./...
         working-directory: backend-go
 
+      # npm run generate:api runs the same command.
+      - name: SPA API types match the Go structs
+        run: |
+          go run ./cmd/apitypes ../src/lib/api.gen.ts
+          if ! git diff --exit-code -- ../src/lib/api.gen.ts; then
+            echo "::error file=src/lib/api.gen.ts::Go structs changed without regenerating: run npm run generate:api and commit src/lib/api.gen.ts"
+            exit 1
+          fi
+        working-directory: backend-go
+
       - name: go test
         run: go test -race ./...
         working-directory: backend-go

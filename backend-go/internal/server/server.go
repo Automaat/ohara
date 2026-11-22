@@ -389,23 +389,33 @@ func requestObserver(logger *slog.Logger, accessLog bool) func(http.Handler) htt
 	}
 }
 
-// dbState is "ok", "unavailable" or "unconfigured".
+// Values of Status.Status and Status.Database.
+const (
+	ServiceOK       = "ok"
+	ServiceDegraded = "degraded"
+
+	DatabaseOK           = "ok"
+	DatabaseUnavailable  = "unavailable"
+	DatabaseUnconfigured = "unconfigured"
+)
+
+// dbState is DatabaseOK, DatabaseUnavailable or DatabaseUnconfigured.
 func dbState(ctx context.Context, logger *slog.Logger, db Pinger) string {
 	if db == nil {
-		return "unconfigured"
+		return DatabaseUnconfigured
 	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	if err := db.Ping(ctx); err != nil {
 		logger.Error("database ping failed", "err", err)
-		return "unavailable"
+		return DatabaseUnavailable
 	}
-	return "ok"
+	return DatabaseOK
 }
 
 func healthHandler(logger *slog.Logger, db Pinger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if dbState(r.Context(), logger, db) == "unavailable" {
+		if dbState(r.Context(), logger, db) == DatabaseUnavailable {
 			writeJSON(w, logger, http.StatusServiceUnavailable, map[string]string{"status": "unavailable"})
 			return
 		}
@@ -415,17 +425,17 @@ func healthHandler(logger *slog.Logger, db Pinger) http.HandlerFunc {
 
 // Status is the /api/status body the frontend shows on its home page.
 type Status struct {
-	Status   string `json:"status"`
+	Status   string `json:"status" ts:"ServiceState"`
 	Version  string `json:"version"`
-	Database string `json:"database"`
+	Database string `json:"database" ts:"DatabaseState"`
 }
 
 func statusHandler(logger *slog.Logger, version string, db Pinger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		st := Status{Status: "ok", Version: version, Database: dbState(r.Context(), logger, db)}
+		st := Status{Status: ServiceOK, Version: version, Database: dbState(r.Context(), logger, db)}
 		code := http.StatusOK
-		if st.Database == "unavailable" {
-			st.Status = "degraded"
+		if st.Database == DatabaseUnavailable {
+			st.Status = ServiceDegraded
 			code = http.StatusServiceUnavailable
 		}
 		writeJSON(w, logger, code, st)

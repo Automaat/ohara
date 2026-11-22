@@ -59,6 +59,7 @@ function title(over: Partial<Title> = {}): Title {
 		openlibrary_id: null,
 		notes: 'Pierwsze wydanie',
 		cover_url: 'https://image.test/solaris.jpg',
+		tags: [],
 		edition_count: 1,
 		copy_count: 0,
 		created_at: '2024-01-01T00:00:00Z',

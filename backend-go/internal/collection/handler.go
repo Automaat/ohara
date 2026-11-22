@@ -42,6 +42,8 @@ func (h *Handler) Mount(r chi.Router) {
 	r.Put("/titles/{id}/finished", h.setFinished)
 	r.Delete("/titles/{id}", h.deleteTitle)
 
+	r.Get("/tags", h.listTags)
+
 	r.Get("/editions", h.listEditions)
 	r.Post("/editions", h.createEdition)
 	r.Get("/editions/{id}", h.getEdition)
@@ -183,6 +185,7 @@ func (h *Handler) collection(w http.ResponseWriter, r *http.Request) {
 	f.Location = r.URL.Query().Get("location")
 	f.Query = r.URL.Query().Get("q")
 	f.Typed = f.Query
+	f.Tag = r.URL.Query().Get("tag")
 	if code, err := barcode.Normalize(f.Query); err == nil {
 		f.Query = code
 	}
@@ -200,7 +203,7 @@ func (h *Handler) listTitles(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteFieldError(w, h.logger, fe)
 		return
 	}
-	f := TitleFilter{Kind: kind, Query: r.URL.Query().Get("q")}
+	f := TitleFilter{Kind: kind, Query: r.URL.Query().Get("q"), Tag: r.URL.Query().Get("tag")}
 	if raw := r.URL.Query().Get("tmdb_id"); raw != "" {
 		id, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil || id <= 0 {
@@ -215,6 +218,16 @@ func (h *Handler) listTitles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, h.logger, http.StatusOK, titles)
+}
+
+// listTags answers the tags titles carry, with how many titles carry each.
+func (h *Handler) listTags(w http.ResponseWriter, r *http.Request) {
+	tags, err := h.store.ListTags(r.Context())
+	if err != nil {
+		h.writeErr(w, r, "list tags", err)
+		return
+	}
+	httpx.WriteJSON(w, h.logger, http.StatusOK, tags)
 }
 
 // EditionWithCopies is an edition in a title's detail view.
@@ -264,7 +277,7 @@ func (h *Handler) getTitle(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) decodeTitle(w http.ResponseWriter, r *http.Request) (*TitleInput, bool) {
 	var in TitleInput
-	if !httpx.DecodeJSON(w, r, h.logger, &in) {
+	if !httpx.DecodeJSONFields(w, r, h.logger, &in, "tags") {
 		return nil, false
 	}
 	if fe := in.Normalize(); fe != nil {

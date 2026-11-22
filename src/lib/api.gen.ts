@@ -51,6 +51,7 @@ export type TitlePayload = {
 	cover_url?: string;
 	finished?: boolean | null;
 	finished_on?: string | null;
+	tags?: string[];
 	request_key?: string;
 };
 
@@ -70,6 +71,7 @@ export type Title = {
 	finished?: boolean | null;
 	finished_on?: string | null;
 	request_key?: string;
+	tags: string[];
 	edition_count: number;
 	copy_count: number;
 	created_at: string;
@@ -191,6 +193,7 @@ export type TitleDetail = {
 	finished?: boolean | null;
 	finished_on?: string | null;
 	request_key?: string;
+	tags: string[];
 	edition_count: number;
 	copy_count: number;
 	created_at: string;
@@ -301,6 +304,7 @@ export type CollectionItem = {
 	loan_due_on?: string;
 	finished: boolean;
 	finished_on?: string;
+	tags?: string[];
 };
 
 export type Totals = {
@@ -314,6 +318,11 @@ export type Totals = {
 export type CollectionView = {
 	items: CollectionItem[];
 	totals: Totals;
+};
+
+export type TagCount = {
+	name: string;
+	title_count: number;
 };
 
 export type CandidateTitle = {

@@ -49,6 +49,7 @@ export type TitlePayload = {
 	openlibrary_id: string | null;
 	notes: string;
 	cover_url?: string;
+	tags?: string[];
 	request_key?: string;
 };
 
@@ -66,6 +67,7 @@ export type Title = {
 	notes: string;
 	cover_url?: string;
 	request_key?: string;
+	tags: string[];
 	edition_count: number;
 	copy_count: number;
 	created_at: string;
@@ -185,6 +187,7 @@ export type TitleDetail = {
 	notes: string;
 	cover_url?: string;
 	request_key?: string;
+	tags: string[];
 	edition_count: number;
 	copy_count: number;
 	created_at: string;
@@ -264,6 +267,7 @@ export type CollectionItem = {
 	year: number | null;
 	cover_url?: string;
 	authors?: string[];
+	tags?: string[];
 };
 
 export type Totals = {
@@ -277,6 +281,11 @@ export type Totals = {
 export type CollectionView = {
 	items: CollectionItem[];
 	totals: Totals;
+};
+
+export type TagCount = {
+	name: string;
+	title_count: number;
 };
 
 export type CandidateTitle = {

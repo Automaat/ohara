@@ -1,13 +1,23 @@
 <script lang="ts">
-	import { Button, Field, FormError, SegmentedControl, Textarea } from '@smykla-skalski/sui';
+	import {
+		Button,
+		Chip,
+		Combobox,
+		Field,
+		FormError,
+		SegmentedControl,
+		Textarea
+	} from '@smykla-skalski/sui';
 	import { tick } from 'svelte';
 	import {
+		addTag,
 		authorsLabel,
 		kindLabels,
 		options,
 		type FormIssue,
 		type TitleForm
 	} from '#lib/collection.js';
+	import { lowerCase } from '#lib/go-text.js';
 
 	let {
 		form = $bindable(),
@@ -15,6 +25,7 @@
 		saving,
 		submitLabel,
 		kindLocked = false,
+		tagSuggestions = [],
 		onsubmit,
 		oncancel
 	}: {
@@ -23,6 +34,8 @@
 		saving: boolean;
 		submitLabel: string;
 		kindLocked?: boolean;
+		/** The tags other titles carry, offered as the reader types one. */
+		tagSuggestions?: readonly string[];
 		onsubmit: () => void;
 		oncancel?: () => void;
 	} = $props();
@@ -38,10 +51,42 @@
 		'bn_id',
 		'openlibrary_id',
 		'cover_url',
-		'notes'
+		'notes',
+		'tags'
 	];
 	const general = $derived(issue && !fieldKeys.includes(issue.field) ? issue.message : null);
 	let titleForm: HTMLFormElement;
+
+	/** The tags in use the title does not carry yet, case aside. */
+	const tagChoices = $derived(
+		tagSuggestions
+			.filter((tag) => !form.tags.some((t) => lowerCase(t) === lowerCase(tag)))
+			.map((tag) => ({ value: tag, label: tag }))
+	);
+
+	let tagInput = $state<HTMLInputElement | null>(null);
+
+	/** Adds a tag and empties the field for the next one. */
+	function keepTag(tag: string) {
+		form.tags = addTag(form.tags, tag);
+		form.tag = '';
+	}
+
+	/**
+	 * Adds the tag the reader picked or settled with Enter. A tag left typed when the field loses
+	 * focus stays in it as a draft that saving adds: drawing its chip then would move the save
+	 * button between the press and its release.
+	 */
+	function pickTag(tag: string) {
+		if (tag && document.activeElement === tagInput) keepTag(tag);
+	}
+
+	function removeTag(tag: string) {
+		form.tags = form.tags.filter((t) => t !== tag);
+	}
+
+	/** Whether Enter came while a tag was typed: it adds the tag instead of sending the form. */
+	let enterAddsTag = false;
 
 	$effect(() => {
 		if (!issue?.field) return;
@@ -126,6 +171,56 @@
 		bind:value={form.cover_url}
 		error={errorFor('cover_url')}
 	/>
+	<div class="tags">
+		<Field
+			label="Tagi"
+			hint="Twoje grupy, np. gatunek lub „do sprzedania”. Enter dodaje tag."
+			error={errorFor('tags')}
+		>
+			{#snippet control(c)}
+				<div
+					role="presentation"
+					onkeydowncapture={(e) => {
+						if (e.key === 'Enter' && e.target instanceof HTMLInputElement) {
+							enterAddsTag = e.target.value.trim() !== '';
+						}
+					}}
+					onkeydown={(e) => {
+						if (e.key === 'Enter' && enterAddsTag) {
+							e.preventDefault();
+							if (form.tag.trim()) keepTag(form.tag);
+						}
+						enterAddsTag = false;
+					}}
+				>
+					<Combobox
+						{...c}
+						free
+						bind:value={form.tag}
+						bind:element={tagInput}
+						options={tagChoices}
+						onselect={pickTag}
+						emptyLabel="Brak takiego tagu"
+						useLabel={(text) => `Dodaj tag „${text}”`}
+						countLabel={(n) => `Podpowiedzi: ${n}`}
+						moreLabel={(n) => `i jeszcze ${n}`}
+					/>
+				</div>
+			{/snippet}
+		</Field>
+		{#if form.tags.length > 0}
+			<div class="tag-list" role="group" aria-label="Tagi tytułu">
+				{#each form.tags as tag (tag)}
+					<Chip
+						label={tag}
+						onremove={() => removeTag(tag)}
+						removeLabel={(t) => `Usuń tag ${t}`}
+						removedLabel={(t) => `Usunięto tag ${t}`}
+					/>
+				{/each}
+			</div>
+		{/if}
+	</div>
 	<Field label="Notatki" error={errorFor('notes')}>
 		{#snippet control(c)}
 			<Textarea {...c} rows={3} bind:value={form.notes} />
@@ -142,5 +237,14 @@
 	.actions {
 		display: flex;
 		gap: 0.5rem;
+	}
+	.tags {
+		display: grid;
+		gap: 0.5rem;
+	}
+	.tag-list {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.375rem;
 	}
 </style>

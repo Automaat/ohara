@@ -29,6 +29,7 @@ const (
 	maxText    = 500
 	maxNotes   = 10000
 	maxAuthors = 20
+	maxTags    = 20
 	// MaxPriceCents (1 000 000 zł) keeps collection totals far from int64 overflow.
 	MaxPriceCents = 100_000_000
 )
@@ -113,6 +114,9 @@ type TitleInput struct {
 	OpenLibraryID *string  `json:"openlibrary_id"`
 	Notes         string   `json:"notes"`
 	CoverURL      *string  `json:"cover_url,omitempty"`
+	// Tags are the owner's own groupings of the work. An update without
+	// them (nil) keeps the stored tags; an empty list clears them.
+	Tags []string `json:"tags,omitempty"`
 	// RequestKey makes a create safe to retry: a second create with the
 	// same key returns the first title. Updates ignore it.
 	RequestKey *string `json:"request_key,omitempty"`
@@ -122,6 +126,9 @@ type TitleInput struct {
 type Title struct {
 	ID int64 `json:"id"`
 	TitleInput
+	// Tags shadows TitleInput.Tags so an answer always lists them, each
+	// with the spelling it was first saved with, in the title's order.
+	Tags         []string  `json:"tags"`
 	EditionCount int       `json:"edition_count"`
 	CopyCount    int       `json:"copy_count"`
 	CreatedAt    time.Time `json:"created_at"`
@@ -296,6 +303,13 @@ func (in *TitleInput) Normalize() *httpx.FieldError {
 		}
 	}
 	in.Authors = authors
+	if in.Tags != nil {
+		tags, fe := normalizeTags(in.Tags)
+		if fe != nil {
+			return fe
+		}
+		in.Tags = tags
+	}
 
 	if !slices.Contains(kinds, in.Kind) {
 		return fieldErr("kind", "must be one of: "+strings.Join(kinds, ", "))
@@ -327,6 +341,43 @@ func (in *TitleInput) Normalize() *httpx.FieldError {
 		}
 	}
 	return in.checkKindFields()
+}
+
+// normalizeTags trims each tag, drops blank ones and keeps the first of
+// those that differ only in case, in their order. A non-nil input gives a
+// non-nil list, so an empty one still clears a title's tags.
+func normalizeTags(raw []string) ([]string, *httpx.FieldError) {
+	tags := make([]string, 0, len(raw))
+	seen := make(map[string]bool, len(raw))
+	for _, tag := range raw {
+		tag = strings.TrimSpace(tag)
+		if tag == "" {
+			continue
+		}
+		if e := checkLen("tags", tag, maxText); e != nil {
+			return nil, e
+		}
+		// Postgres text takes neither a NUL byte nor invalid UTF-8.
+		if strings.ContainsRune(tag, 0) || !utf8.ValidString(tag) {
+			return nil, fieldErr("tags", "is not valid")
+		}
+		key := tagKey(tag)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		tags = append(tags, tag)
+	}
+	if len(tags) > maxTags {
+		return nil, fieldErr("tags", "too many tags")
+	}
+	return tags, nil
+}
+
+// tagKey is what tags that differ only in case share: each character in
+// lower case, as Postgres's lower maps them.
+func tagKey(tag string) string {
+	return strings.Map(unicode.ToLower, tag)
 }
 
 func (in *TitleInput) checkKindFields() *httpx.FieldError {

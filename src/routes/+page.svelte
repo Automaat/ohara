@@ -33,6 +33,7 @@
 		shelvedCount,
 		spentLabel,
 		statusLabels,
+		tagsInUse,
 		uncopiedTitles,
 		unpricedCount,
 		unpricedLabel,
@@ -265,7 +266,8 @@
 				{ key: 'kind', label: filter.kind && kindLabels[filter.kind] },
 				{ key: 'format', label: filter.format && formatLabels[filter.format] },
 				{ key: 'location', label: filter.location },
-				{ key: 'status', label: filter.status && collectionStatusLabels[filter.status] }
+				{ key: 'status', label: filter.status && collectionStatusLabels[filter.status] },
+				{ key: 'tag', label: filter.tag }
 			] as const
 		).filter((entry) => entry.label)
 	);
@@ -291,6 +293,11 @@
 				key: 'location',
 				label: `Miejsce: ${filter.location}`,
 				remove: () => set('location', '')
+			},
+			!!filter.tag && {
+				key: 'tag',
+				label: `Tag: ${filter.tag}`,
+				remove: () => set('tag', '')
 			},
 			// The wishlist has its own chip beside the list.
 			filter.status &&
@@ -364,10 +371,13 @@
 		status={filter.status}
 		location={filter.location ?? ''}
 		{locations}
+		tag={filter.tag ?? ''}
+		tags={tagsInUse(collection?.items ?? [], uncopied ?? [])}
 		onsort={setSort}
 		onformat={(format) => set('format', format)}
 		onstatus={setStatus}
 		onlocation={(location) => set('location', location)}
+		ontag={(tag) => set('tag', tag)}
 	/>
 </div>
 

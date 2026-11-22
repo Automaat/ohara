@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -917,6 +918,197 @@ func TestListTitles(t *testing.T) {
 	a.fails(http.MethodGet, "/api/titles?kind=vinyl", nil, http.StatusUnprocessableEntity, "kind")
 	a.fails(http.MethodGet, "/api/titles?tmdb_id=x", nil, http.StatusUnprocessableEntity, "tmdb_id")
 	a.fails(http.MethodGet, "/api/titles?tmdb_id=0", nil, http.StatusUnprocessableEntity, "tmdb_id")
+}
+
+func titleTags(a *api, id int64) []string {
+	a.t.Helper()
+	var detail collection.TitleDetail
+	a.mustDo(http.MethodGet, fmt.Sprintf("/api/titles/%d", id), nil, &detail, http.StatusOK)
+	return detail.Tags
+}
+
+func TestTitleTags(t *testing.T) {
+	a := newAPI(t)
+	var created collection.Title
+	a.mustDo(http.MethodPost, "/api/titles", obj{
+		"kind": "movie", "name": "Obcy", "tags": []string{" Horror ", "", "sci-fi", "HORROR", "  "},
+	}, &created, http.StatusCreated)
+	if got := strings.Join(created.Tags, ","); got != "Horror,sci-fi" {
+		t.Fatalf("created tags = %q, want Horror,sci-fi", got)
+	}
+	path := fmt.Sprintf("/api/titles/%d", created.ID)
+	if got := strings.Join(titleTags(a, created.ID), ","); got != "Horror,sci-fi" {
+		t.Fatalf("detail tags = %q, want Horror,sci-fi", got)
+	}
+
+	// A body without tags keeps them, as it keeps cover_url; null does too.
+	var updated collection.Title
+	a.mustDo(http.MethodPut, path, obj{"kind": "movie", "name": "Obcy – 8. pasażer Nostromo"}, &updated, http.StatusOK)
+	if got := strings.Join(updated.Tags, ","); got != "Horror,sci-fi" {
+		t.Fatalf("tags after a PUT without them = %q", got)
+	}
+	a.mustDo(http.MethodPut, path, obj{"kind": "movie", "name": "Obcy", "tags": nil}, &updated, http.StatusOK)
+	if got := strings.Join(updated.Tags, ","); got != "Horror,sci-fi" {
+		t.Fatalf("tags after a PUT with null = %q", got)
+	}
+
+	// A tag keeps the spelling it was first saved with on every title.
+	other := a.title("movie", "Coś")
+	a.mustDo(http.MethodPut, fmt.Sprintf("/api/titles/%d", other), obj{
+		"kind": "movie", "name": "Coś", "tags": []string{"horror", "Kult"},
+	}, &updated, http.StatusOK)
+	if got := strings.Join(updated.Tags, ","); got != "Horror,Kult" {
+		t.Fatalf("other title's tags = %q, want Horror,Kult", got)
+	}
+
+	a.mustDo(http.MethodPut, path, obj{"kind": "movie", "name": "Obcy", "tags": []string{"Kult", "SCI-FI"}}, &updated, http.StatusOK)
+	if got := strings.Join(updated.Tags, ","); got != "Kult,SCI-FI" {
+		t.Fatalf("reordered tags = %q, want Kult,SCI-FI (sci-fi is no title's tag once replaced)", got)
+	}
+	a.mustDo(http.MethodPut, path, obj{"kind": "movie", "name": "Obcy", "tags": []string{}}, &updated, http.StatusOK)
+	if updated.Tags == nil || len(updated.Tags) != 0 {
+		t.Fatalf("tags after [] = %#v, want an empty list", updated.Tags)
+	}
+	if got := titleTags(a, created.ID); got == nil || len(got) != 0 {
+		t.Fatalf("detail tags after [] = %#v, want an empty list", got)
+	}
+
+	var plain collection.Title
+	a.mustDo(http.MethodPost, "/api/titles", obj{"kind": "book", "name": "Lalka"}, &plain, http.StatusCreated)
+	if plain.Tags == nil || len(plain.Tags) != 0 {
+		t.Fatalf("untagged title tags = %#v, want an empty list", plain.Tags)
+	}
+
+	tooMany := make([]string, 21)
+	for i := range tooMany {
+		tooMany[i] = fmt.Sprintf("tag %d", i)
+	}
+	twenty := slices.Clone(tooMany[:20])
+	twenty = append(twenty, "TAG 0", " ")
+	for _, body := range []obj{
+		{"kind": "movie", "name": "Obcy", "tags": tooMany},
+		{"kind": "movie", "name": "Obcy", "tags": []string{strings.Repeat("ą", 251)}},
+		{"kind": "movie", "name": "Obcy", "tags": []string{"a\x00b"}},
+	} {
+		a.fails(http.MethodPost, "/api/titles", body, http.StatusUnprocessableEntity, "tags")
+		a.fails(http.MethodPut, path, body, http.StatusUnprocessableEntity, "tags")
+	}
+	a.mustDo(http.MethodPut, path, obj{"kind": "movie", "name": "Obcy", "tags": twenty}, &updated, http.StatusOK)
+	if len(updated.Tags) != 20 {
+		t.Fatalf("20 tags after collapsing a duplicate and a blank = %d", len(updated.Tags))
+	}
+	a.mustDo(http.MethodPut, path, obj{"kind": "movie", "name": "Obcy", "tags": []string{strings.Repeat("ą", 250)}}, &updated, http.StatusOK)
+}
+
+func TestListTagsCountsTitles(t *testing.T) {
+	a := newAPI(t)
+	tag := func(id int64, kind, name string, tags ...string) {
+		if tags == nil {
+			tags = []string{} // clears them; null would keep them
+		}
+		a.mustDo(http.MethodPut, fmt.Sprintf("/api/titles/%d", id), obj{"kind": kind, "name": name, "tags": tags}, nil, http.StatusOK)
+	}
+	alien := a.title("movie", "Obcy")
+	thing := a.title("movie", "Coś")
+	lalka := a.title("book", "Lalka")
+	tag(alien, "movie", "Obcy", "Horror", "kult")
+	tag(thing, "movie", "Coś", "horror")
+	tag(lalka, "book", "Lalka", "Do sprzedania")
+
+	list := func() string {
+		var tags []collection.TagCount
+		a.mustDo(http.MethodGet, "/api/tags", nil, &tags, http.StatusOK)
+		parts := make([]string, 0, len(tags))
+		for _, c := range tags {
+			parts = append(parts, fmt.Sprintf("%s=%d", c.Name, c.Titles))
+		}
+		return strings.Join(parts, ",")
+	}
+	if got := list(); got != "Do sprzedania=1,Horror=2,kult=1" {
+		t.Fatalf("tags = %q", got)
+	}
+
+	// A tag no title carries is gone from the list, whether the title dropped it or went away.
+	tag(alien, "movie", "Obcy")
+	a.mustDo(http.MethodDelete, fmt.Sprintf("/api/titles/%d", lalka), nil, nil, http.StatusNoContent)
+	if got := list(); got != "Horror=1" {
+		t.Fatalf("tags after removals = %q, want Horror=1", got)
+	}
+	// One no title carries takes the spelling saved next.
+	tag(alien, "movie", "Obcy", "Kult")
+	if got := list(); got != "Horror=1,Kult=1" {
+		t.Fatalf("tags after a new spelling = %q, want Horror=1,Kult=1", got)
+	}
+	tag(thing, "movie", "Coś")
+	tag(alien, "movie", "Obcy")
+	if got := list(); got != "" {
+		t.Fatalf("tags with no tagged title = %q, want none", got)
+	}
+}
+
+func TestCollectionAndTitlesFilterByTag(t *testing.T) {
+	a := newAPI(t)
+	alien := a.title("movie", "Obcy")
+	a.mustDo(http.MethodPut, fmt.Sprintf("/api/titles/%d", alien), obj{"kind": "movie", "name": "Obcy", "tags": []string{"Horror"}}, nil, http.StatusOK)
+	thing := a.title("movie", "Coś")
+	a.mustDo(http.MethodPut, fmt.Sprintf("/api/titles/%d", thing), obj{"kind": "movie", "name": "Coś", "tags": []string{"horror", "Kult"}}, nil, http.StatusOK)
+	uncopied := a.title("movie", "Egzorcysta")
+	a.mustDo(http.MethodPut, fmt.Sprintf("/api/titles/%d", uncopied), obj{"kind": "movie", "name": "Egzorcysta", "tags": []string{"HORROR"}}, nil, http.StatusOK)
+	a.title("book", "Lalka")
+
+	alienDVD := a.edition(obj{"title_id": alien, "format": "dvd"})
+	alienBluray := a.edition(obj{"title_id": alien, "format": "bluray"})
+	thingDVD := a.edition(obj{"title_id": thing, "format": "dvd"})
+	a.copyOf(obj{"edition_id": alienDVD, "status": "owned"})
+	a.copyOf(obj{"edition_id": alienBluray, "status": "wishlist"})
+	a.copyOf(obj{"edition_id": thingDVD, "status": "owned"})
+
+	copies := []struct {
+		query string
+		want  int
+	}{
+		{"?tag=horror", 3},
+		{"?tag=HORROR&format=dvd", 2},
+		{"?tag=+Kult+", 1},
+		{"?tag=kult&status=wishlist", 0},
+		{"?tag=", 3},
+		{"?tag=hor", 0},
+	}
+	for _, tt := range copies {
+		var view collection.CollectionView
+		a.mustDo(http.MethodGet, "/api/collection"+tt.query, nil, &view, http.StatusOK)
+		if len(view.Items) != tt.want || view.Totals.Copies != tt.want {
+			t.Errorf("collection%s = %d copies, want %d", tt.query, len(view.Items), tt.want)
+		}
+	}
+
+	var view collection.CollectionView
+	a.mustDo(http.MethodGet, "/api/collection?tag=kult", nil, &view, http.StatusOK)
+	if got := strings.Join(view.Items[0].Tags, ","); got != "Horror,Kult" {
+		t.Fatalf("item tags = %q, want Horror,Kult", got)
+	}
+
+	titles := []struct {
+		query string
+		want  []string
+	}{
+		{"?tag=Horror", []string{"Coś", "Egzorcysta", "Obcy"}},
+		{"?tag=kult", []string{"Coś"}},
+		{"?tag=horror&q=egz", []string{"Egzorcysta"}},
+		{"?tag=horror&kind=book", []string{}},
+		{"?tag=", []string{"Coś", "Egzorcysta", "Lalka", "Obcy"}},
+	}
+	for _, tt := range titles {
+		var got []collection.Title
+		a.mustDo(http.MethodGet, "/api/titles"+tt.query, nil, &got, http.StatusOK)
+		names := make([]string, 0, len(got))
+		for i := range got {
+			names = append(names, got[i].Name)
+		}
+		if strings.Join(names, ",") != strings.Join(tt.want, ",") {
+			t.Errorf("titles%s = %v, want %v", tt.query, names, tt.want)
+		}
+	}
 }
 
 func TestBarcodeSpellingsShareOneEdition(t *testing.T) {

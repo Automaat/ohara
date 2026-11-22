@@ -66,6 +66,38 @@ describe('sortCopies', () => {
 		expect(sortCopies(tied, 'yearDesc').map(({ copy_id }) => copy_id)).toEqual([3, 2, 1]);
 		expect(sortCopies(tied, 'yearAsc').map(({ copy_id }) => copy_id)).toEqual([3, 2, 1]);
 	});
+
+	it('sorts by rating from 10 down, ties by title, unrated copies last', () => {
+		const rated = [
+			{ copy_id: 1, name: 'Zebra', rating: 8 },
+			{ copy_id: 2, name: 'Bez oceny', rating: undefined },
+			{ copy_id: 3, name: 'Lalka', rating: 10 },
+			{ copy_id: 4, name: 'Arka', rating: 8 },
+			{ copy_id: 5, name: 'Akacja', rating: undefined },
+			{ copy_id: 6, name: 'Łąka', rating: 1 },
+			{ copy_id: 7, name: 'Lalka', rating: 10 }
+		].map((copy) => ({
+			...copy,
+			created_at_us: copy.copy_id,
+			price_cents: null,
+			title_id: copy.copy_id,
+			edition_id: copy.copy_id
+		}));
+		expect(sortCopies(rated, 'ratingDesc').map(({ copy_id }) => copy_id)).toEqual([
+			3, 7, 4, 1, 6, 5, 2
+		]);
+		expect(rated.map(({ copy_id }) => copy_id)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+	});
+
+	it('keeps the copies of one rated title together, by edition and copy', () => {
+		const copy = { created_at_us: 1, name: 'Lalka', price_cents: null, rating: 7 };
+		const tied = [
+			{ ...copy, copy_id: 4, title_id: 2, edition_id: 2 },
+			{ ...copy, copy_id: 3, title_id: 1, edition_id: 1 },
+			{ ...copy, copy_id: 1, title_id: 1, edition_id: 1 }
+		];
+		expect(sortCopies(tied, 'ratingDesc').map(({ copy_id }) => copy_id)).toEqual([1, 3, 4]);
+	});
 });
 
 describe('sortTitles', () => {
@@ -101,5 +133,16 @@ describe('sortTitles', () => {
 	])('sorts by %s with titles without a year last', (sort, expected) => {
 		expect(sortTitles(dated, sort).map((t) => t.id)).toEqual(expected);
 		expect(dated.map((t) => t.id)).toEqual([1, 2, 3, 4, 5]);
+	});
+
+	it('sorts by rating with unrated titles last, ties A–Z', () => {
+		const rated = [
+			{ id: 1, name: 'Żaba', rating: 6 },
+			{ id: 2, name: 'Lalka', rating: null },
+			{ id: 3, name: 'Łąka', rating: 9 },
+			{ id: 4, name: 'Arka', rating: 6 },
+			{ id: 5, name: 'Bez oceny' }
+		];
+		expect(sortTitles(rated, 'ratingDesc').map((t) => t.id)).toEqual([3, 4, 1, 5, 2]);
 	});
 });

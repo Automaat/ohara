@@ -587,6 +587,147 @@ func TestDuplicateTMDBAndBadBodies(t *testing.T) {
 	a.fails(http.MethodPost, "/api/titles", obj{"kind": "movie", "name": strings.Repeat("x", 70000)}, http.StatusUnprocessableEntity, "body")
 }
 
+// ratingOf reads a title's rating from GET /api/titles/{id}.
+func (a *api) ratingOf(id int64) *int {
+	a.t.Helper()
+	var got collection.TitleDetail
+	a.mustDo(http.MethodGet, fmt.Sprintf("/api/titles/%d", id), nil, &got, http.StatusOK)
+	return got.Rating
+}
+
+// wantRating asserts a title's stored rating; 0 means unrated.
+func (a *api) wantRating(id int64, want int) {
+	a.t.Helper()
+	got := 0
+	if r := a.ratingOf(id); r != nil {
+		got = *r
+	}
+	if got != want {
+		a.t.Fatalf("title %d rating = %d, want %d", id, got, want)
+	}
+}
+
+func TestTitleRatingIsSetKeptAndCleared(t *testing.T) {
+	a := newAPI(t)
+	var created collection.Title
+	a.mustDo(http.MethodPost, "/api/titles", obj{"kind": "book", "name": "Lalka", "rating": 8}, &created, http.StatusCreated)
+	if created.Rating == nil || *created.Rating != 8 {
+		t.Fatalf("created rating = %v", created.Rating)
+	}
+	a.wantRating(created.ID, 8)
+	a.wantRating(a.title("movie", "Rejs"), 0)
+
+	path := fmt.Sprintf("/api/titles/%d", created.ID)
+	a.mustDo(http.MethodPut, path, obj{"kind": "book", "name": "Lalka", "notes": "Prus"}, nil, http.StatusOK)
+	a.wantRating(created.ID, 8)
+
+	for _, edge := range []int{1, 10} {
+		a.mustDo(http.MethodPut, path, obj{"kind": "book", "name": "Lalka", "rating": edge}, nil, http.StatusOK)
+		a.wantRating(created.ID, edge)
+	}
+	a.mustDo(http.MethodPut, path, obj{"kind": "book", "name": "Lalka", "rating": nil}, nil, http.StatusOK)
+	a.wantRating(created.ID, 0)
+}
+
+func TestTitleRatingRefusesValuesOffTheScale(t *testing.T) {
+	a := newAPI(t)
+	id := a.title("book", "Lalka")
+	path := fmt.Sprintf("/api/titles/%d", id)
+	a.mustDo(http.MethodPut, path, obj{"kind": "book", "name": "Lalka", "rating": 7}, nil, http.StatusOK)
+
+	for _, bad := range []any{0, 11, -1, 7.5, "8", true, []int{8}, obj{}, 1e10} {
+		a.fails(http.MethodPost, "/api/titles", obj{"kind": "movie", "name": "Miś", "rating": bad}, http.StatusUnprocessableEntity, "rating")
+		a.fails(http.MethodPut, path, obj{"kind": "book", "name": "Lalka", "rating": bad}, http.StatusUnprocessableEntity, "rating")
+	}
+	a.fails(http.MethodPut, path, []byte(`{"kind": "book", "name": "Lalka", "rating": 8.0}`), http.StatusUnprocessableEntity, "rating")
+	a.wantRating(id, 7)
+
+	var titles []collection.Title
+	a.mustDo(http.MethodGet, "/api/titles", nil, &titles, http.StatusOK)
+	if len(titles) != 1 {
+		t.Fatalf("a refused POST stored a title: %+v", titles)
+	}
+}
+
+func TestRateTitleChangesOnlyTheRating(t *testing.T) {
+	a := newAPI(t)
+	cover := "https://example.com/lalka.jpg"
+	var created collection.Title
+	a.mustDo(http.MethodPost, "/api/titles", obj{"kind": "book", "name": "Lalka", "notes": "Original", "cover_url": cover, "rating": 4}, &created, http.StatusCreated)
+	path := fmt.Sprintf("/api/titles/%d", created.ID)
+	a.mustDo(http.MethodPut, path, obj{"kind": "book", "name": "Lalka", "notes": "Corrected"}, nil, http.StatusOK)
+
+	var rated collection.Title
+	a.mustDo(http.MethodPut, path+"/rating", obj{"rating": 8}, &rated, http.StatusOK)
+	if rated.Rating == nil || *rated.Rating != 8 || rated.Notes != "Corrected" {
+		t.Fatalf("rated title = %+v", rated)
+	}
+	var detail collection.TitleDetail
+	a.mustDo(http.MethodGet, path, nil, &detail, http.StatusOK)
+	if detail.Notes != "Corrected" || detail.Name != "Lalka" || detail.CoverURL == nil || *detail.CoverURL != cover {
+		t.Fatalf("title after rating = %+v", detail.Title)
+	}
+	a.wantRating(created.ID, 8)
+
+	var cleared collection.Title
+	a.mustDo(http.MethodPut, path+"/rating", obj{"rating": nil}, &cleared, http.StatusOK)
+	if cleared.Rating != nil || cleared.Notes != "Corrected" {
+		t.Fatalf("cleared title = %+v", cleared)
+	}
+	a.wantRating(created.ID, 0)
+	a.mustDo(http.MethodPut, path+"/rating", obj{"rating": 10}, nil, http.StatusOK)
+
+	for _, bad := range []any{0, 11, 7.5, "8", true, obj{}} {
+		a.fails(http.MethodPut, path+"/rating", obj{"rating": bad}, http.StatusUnprocessableEntity, "rating")
+	}
+	a.fails(http.MethodPut, path+"/rating", obj{}, http.StatusUnprocessableEntity, "rating")
+	a.fails(http.MethodPut, path+"/rating", []byte(`{"rating": 8.0}`), http.StatusUnprocessableEntity, "rating")
+	a.fails(http.MethodPut, path+"/rating", "not an object", http.StatusUnprocessableEntity, "body")
+	a.wantRating(created.ID, 10)
+
+	a.fails(http.MethodPut, fmt.Sprintf("/api/titles/%d/rating", created.ID+1000), obj{"rating": 5}, http.StatusNotFound, "")
+}
+
+func TestTitleRatingAppliesToAWishedTitle(t *testing.T) {
+	a := newAPI(t)
+	wished := a.title("movie", "Miś")
+	a.copyOf(obj{"edition_id": a.edition(obj{"title_id": wished, "format": "dvd"}), "status": "wishlist"})
+	a.mustDo(http.MethodPut, fmt.Sprintf("/api/titles/%d", wished), obj{"kind": "movie", "name": "Miś", "rating": 10}, nil, http.StatusOK)
+	a.wantRating(wished, 10)
+
+	var titles []collection.Title
+	a.mustDo(http.MethodGet, "/api/titles", nil, &titles, http.StatusOK)
+	if len(titles) != 1 || titles[0].Rating == nil || *titles[0].Rating != 10 {
+		t.Fatalf("listed titles = %+v", titles)
+	}
+}
+
+func TestCollectionViewCarriesTitleRating(t *testing.T) {
+	a := newAPI(t)
+	rated := a.title("movie", "Seksmisja")
+	a.mustDo(http.MethodPut, fmt.Sprintf("/api/titles/%d", rated), obj{"kind": "movie", "name": "Seksmisja", "rating": 9}, nil, http.StatusOK)
+	a.copyOf(obj{"edition_id": a.edition(obj{"title_id": rated, "format": "dvd"}), "status": "owned"})
+	a.copyOf(obj{"edition_id": a.edition(obj{"title_id": rated, "format": "bluray"}), "status": "wishlist"})
+	a.copyOf(obj{"edition_id": a.edition(obj{"title_id": a.title("movie", "Rejs"), "format": "dvd"}), "status": "owned"})
+
+	var raw struct {
+		Items []map[string]any `json:"items"`
+	}
+	a.mustDo(http.MethodGet, "/api/collection", nil, &raw, http.StatusOK)
+	if len(raw.Items) != 3 {
+		t.Fatalf("items = %+v", raw.Items)
+	}
+	for _, it := range raw.Items {
+		got, has := it["rating"]
+		if it["name"] == "Seksmisja" && got != float64(9) {
+			t.Fatalf("rated copy %v rating = %v", it["copy_id"], got)
+		}
+		if it["name"] == "Rejs" && has {
+			t.Fatalf("unrated copy carries rating %v", got)
+		}
+	}
+}
+
 func TestCollectionViewFiltersAndTotals(t *testing.T) {
 	a := newAPI(t)
 	movie := a.title("movie", "Seksmisja")

@@ -30,6 +30,15 @@ export function soleCopy(t: TitleDetail): { edition: TitleEdition; copy: Copy } 
 	return copy ? { edition, copy } : null;
 }
 
+/** The rating select's value for a title without a rating; ratings run from 1 to 10. */
+export const noRating = 0;
+
+/** The rating select's options: no rating, then 1 to 10, as lubimyczytac.pl shows them. */
+export const ratingOptions = [
+	{ value: noRating, label: 'Brak oceny' },
+	...Array.from({ length: 10 }, (_, i) => ({ value: i + 1, label: `${i + 1} / 10` }))
+];
+
 /** A link to a title or edition page that opens the form for adding a copy once it loads. */
 export function addCopyHref(path: string): string {
 	return `${path}?add=copy`;

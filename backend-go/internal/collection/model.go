@@ -34,6 +34,10 @@ const (
 	maxTags    = 20
 	// MaxPriceCents (1 000 000 zł) keeps collection totals far from int64 overflow.
 	MaxPriceCents = 100_000_000
+	// MinRating and MaxRating bound a title's rating: the 1 to 10 scale
+	// Filmweb and lubimyczytac.pl use.
+	MinRating = 1
+	MaxRating = 10
 )
 
 var (
@@ -120,12 +124,24 @@ type TitleInput struct {
 	OpenLibraryID *string  `json:"openlibrary_id"`
 	Notes         string   `json:"notes"`
 	CoverURL      *string  `json:"cover_url,omitempty"`
+	// Rating is the owner's own rating, a whole number from MinRating to
+	// MaxRating; null clears it.
+	Rating *int `json:"rating,omitempty" ts:",null"`
+	// KeepRating makes an update leave the stored rating as it is, for a
+	// PUT body without rating. Creates ignore it.
+	KeepRating bool `json:"-"`
 	// Tags are the owner's own groupings of the work. An update without
 	// them (nil) keeps the stored tags; an empty list clears them.
 	Tags TagList `json:"tags,omitempty"`
 	// RequestKey makes a create safe to retry: a second create with the
 	// same key returns the first title. Updates ignore it.
 	RequestKey *string `json:"request_key,omitempty"`
+}
+
+// RatingInput is the body of PUT /api/titles/{id}/rating: the title's new
+// rating, or null to clear it. It changes nothing else of the title.
+type RatingInput struct {
+	Rating *int `json:"rating"`
 }
 
 // Title is a work: a film, a book or an album.
@@ -279,6 +295,16 @@ func checkYear(field string, year *int) *httpx.FieldError {
 	return nil
 }
 
+// ratingMsg says what a rating may be, for any value refused.
+const ratingMsg = "must be a whole number from 1 to 10"
+
+func checkRating(rating *int) *httpx.FieldError {
+	if rating != nil && (*rating < MinRating || *rating > MaxRating) {
+		return fieldErr("rating", ratingMsg)
+	}
+	return nil
+}
+
 func firstErr(errs ...*httpx.FieldError) *httpx.FieldError {
 	for _, e := range errs {
 		if e != nil {
@@ -332,6 +358,7 @@ func (in *TitleInput) Normalize() *httpx.FieldError {
 		checkLen("notes", in.Notes, maxNotes),
 		normalizeCoverURL(in.CoverURL),
 		checkYear("year", in.Year),
+		checkRating(in.Rating),
 	); e != nil {
 		return e
 	}

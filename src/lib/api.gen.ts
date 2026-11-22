@@ -49,6 +49,7 @@ export type TitlePayload = {
 	openlibrary_id: string | null;
 	notes: string;
 	cover_url?: string;
+	rating?: number | null;
 	tags?: string[];
 	request_key?: string;
 };
@@ -66,12 +67,17 @@ export type Title = {
 	openlibrary_id: string | null;
 	notes: string;
 	cover_url?: string;
+	rating?: number | null;
 	request_key?: string;
 	tags: string[];
 	edition_count: number;
 	copy_count: number;
 	created_at: string;
 	updated_at: string;
+};
+
+export type RatingPayload = {
+	rating: number | null;
 };
 
 export type EditionPayload = {
@@ -186,6 +192,7 @@ export type TitleDetail = {
 	openlibrary_id: string | null;
 	notes: string;
 	cover_url?: string;
+	rating?: number | null;
 	request_key?: string;
 	tags: string[];
 	edition_count: number;
@@ -289,6 +296,7 @@ export type CollectionItem = {
 	year: number | null;
 	cover_url?: string;
 	authors?: string[];
+	rating?: number;
 	loan_borrower?: string;
 	loan_due_on?: string;
 	tags?: string[];

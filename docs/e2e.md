@@ -13,7 +13,9 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   Kolekcja's filters, which also run at 1440 × 900, and its sort orders
   under active filters, tags from the title form to Kolekcja's filter,
   an album copy's grades (none on a film copy),
-  a copy's autograph and number against its edition's run,
+  a copy's autograph and number against its edition's run, an album copy
+  pushed to the Discogs collection and a release the collection already
+  holds,
   a book edition marked as an audiobook in its form, on the shelf and in
   the "Nośnik" filter, wishes kept out of Kolekcja and listed in
   Okazje's "Lista życzeń", series from the title form and Kolekcja to the
@@ -32,6 +34,11 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   Library with no match, so a scan of that ISBN puts the book in its BN
   series. Each test also fails on a browser request to another origin and
   checks that `ohara_source_requests_total` stayed 0 for every source but
-  those two. The camera starts only on "Włącz
+  those two. The Discogs collection flow
+  (`e2e/discogs-collection.spec.ts`) runs instead against `app-discogs` on
+  127.0.0.1:8101: the same image with its own database (`ohara_discogs`,
+  from `e2e/postgres-init.sql`), a Discogs token and `OHARA_DISCOGS_URL`
+  pointing at `scripts/e2e-discogs-double.mjs`, an in-memory Discogs
+  double that already holds release 2000002 and cuts off its answer to an add of 2000003. The camera starts only on "Włącz
   aparat" or a remembered choice, so a fresh browser gets no camera prompt.
   Needs `npx playwright install chromium` once.

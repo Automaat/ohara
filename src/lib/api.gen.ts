@@ -471,6 +471,14 @@ export type SeriesTotalPayload = {
 	total_volumes: number | null;
 };
 
+export type CopyDiscogs = {
+	enabled: boolean;
+	pushable: boolean;
+	instance_id: number | null;
+	release_url: string | null;
+	add_unknown: boolean;
+};
+
 export type CandidateTitle = {
 	name: string;
 	original_title?: string | null;

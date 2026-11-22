@@ -9,6 +9,8 @@ const (
 	maxAuthors = 20
 	minYear    = 1800
 	maxYear    = 2200
+	// maxSeriesNumber is the highest number a title has in its series.
+	maxSeriesNumber = 10000
 )
 
 // fit trims a provider candidate to what the collection accepts: long text
@@ -22,6 +24,10 @@ func fit(c *Candidate) {
 	t.BNID = cutPtr(t.BNID)
 	t.OpenLibraryID = cutPtr(t.OpenLibraryID)
 	t.Year = yearInRange(t.Year)
+	t.SeriesName = cutPtr(t.SeriesName)
+	if t.SeriesName == nil || (t.SeriesNumber != nil && (*t.SeriesNumber < 1 || *t.SeriesNumber > maxSeriesNumber)) {
+		t.SeriesNumber = nil
+	}
 	if len(t.Authors) > 0 {
 		authors := make([]string, 0, min(len(t.Authors), maxAuthors))
 		for _, a := range t.Authors[:min(len(t.Authors), maxAuthors)] {

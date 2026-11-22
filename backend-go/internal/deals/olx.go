@@ -15,6 +15,10 @@ import (
 // without notice; a failing parse surfaces as a source error in the run.
 const OLXURL = "https://www.olx.pl/api/v1/offers/"
 
+// olxLimit is how many offers one OLX query asks for; the source reads
+// only that first page.
+const olxLimit = 50
+
 // OLX searches olx.pl offers, 50 per query.
 type OLX struct {
 	Client  *http.Client
@@ -29,16 +33,31 @@ func (OLX) PerQuery() bool { return true }
 
 // Search implements Source.
 func (o OLX) Search(ctx context.Context, query string) ([]Listing, error) {
+	page, err := o.SearchPage(ctx, query)
+	return page.Listings, err
+}
+
+// SearchPage implements Pager: an answer with fewer offers than asked for
+// is complete, unless an offer's ID could not be read, since that offer
+// may be a stored listing still offered.
+func (o OLX) SearchPage(ctx context.Context, query string) (Page, error) {
 	u := o.BaseURL + "?" + url.Values{
 		"query":  {query},
 		"offset": {"0"},
-		"limit":  {"50"},
+		"limit":  {strconv.Itoa(olxLimit)},
 	}.Encode()
 	body, err := get(ctx, o.Client, o.Name(), u, "application/json")
 	if err != nil {
-		return nil, fmt.Errorf("olx: %w", err)
+		return Page{}, fmt.Errorf("olx: %w", err)
 	}
-	return parseOLX(body)
+	listings, seen, offers, err := parseOLXPage(body)
+	if err != nil {
+		return Page{}, err
+	}
+	for i := range listings {
+		listings[i].Query = query
+	}
+	return Page{Listings: listings, Seen: seen, Complete: offers < olxLimit && len(seen) == offers}, nil
 }
 
 type olxResponse struct {
@@ -74,17 +93,30 @@ type olxState struct {
 // parseOLX reads an OLX search response. Offers without a PLN price (free,
 // exchange or "price on request") are left out.
 func parseOLX(body []byte) ([]Listing, error) {
+	listings, _, _, err := parseOLXPage(body)
+	return listings, err
+}
+
+// parseOLXPage reads an OLX search response into its priced listings, the
+// external IDs of every offer it held, priced or not, and the number of
+// offers.
+func parseOLXPage(body []byte) ([]Listing, []string, int, error) {
 	var resp olxResponse
 	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, parseError{fmt.Errorf("olx: decode: %w", err)}
+		return nil, nil, 0, parseError{fmt.Errorf("olx: decode: %w", err)}
 	}
 	if resp.Data == nil {
-		return nil, parseError{errors.New("olx: response has no data")}
+		return nil, nil, 0, parseError{errors.New("olx: response has no data")}
 	}
+	seen := make([]string, 0, len(resp.Data))
 	out := make([]Listing, 0, len(resp.Data))
 	for _, raw := range resp.Data {
 		var o olxOffer
-		if err := json.Unmarshal(raw, &o); err != nil || o.ID == 0 || o.Title == "" {
+		err := json.Unmarshal(raw, &o)
+		if id, ok := olxOfferID(raw); ok {
+			seen = append(seen, id)
+		}
+		if err != nil || o.ID == 0 || o.Title == "" {
 			continue
 		}
 		l := Listing{
@@ -120,5 +152,17 @@ func parseOLX(body []byte) ([]Listing, error) {
 			out = append(out, l)
 		}
 	}
-	return out, nil
+	return out, seen, len(resp.Data), nil
+}
+
+// olxOfferID reads an offer's ID on its own, so an offer whose other
+// fields do not decode still counts as seen.
+func olxOfferID(raw json.RawMessage) (string, bool) {
+	var o struct {
+		ID int64 `json:"id"`
+	}
+	if json.Unmarshal(raw, &o) != nil || o.ID == 0 {
+		return "", false
+	}
+	return strconv.FormatInt(o.ID, 10), true
 }

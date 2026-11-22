@@ -254,8 +254,10 @@ type run struct {
 	wants  []Want
 	rules  Rules
 	titles Titles
-	res    RunResult
-	first  bool
+	// asOf is when the run read wants and titles, for RecordAsOf.
+	asOf  time.Time
+	res   RunResult
+	first bool
 	// tried holds the observations whose alert this run sent or failed to
 	// send; a failed one waits for the next run.
 	tried map[int64]bool
@@ -269,6 +271,10 @@ type run struct {
 // Source failures are collected in the result; a database failure or
 // cancellation stops the run.
 func (h *Hunter) Run(ctx context.Context) (RunResult, error) {
+	asOf, err := h.store.Now(ctx)
+	if err != nil {
+		return RunResult{}, err
+	}
 	wants, err := h.store.Wants(ctx)
 	if err != nil {
 		return RunResult{}, err
@@ -281,7 +287,7 @@ func (h *Hunter) Run(ctx context.Context) (RunResult, error) {
 	if err != nil {
 		return RunResult{}, err
 	}
-	r := &run{h: h, wants: wants, rules: rules, titles: titles, first: true, tried: map[int64]bool{}}
+	r := &run{h: h, wants: wants, rules: rules, titles: titles, asOf: asOf, first: true, tried: map[int64]bool{}}
 	r.res.Wants = len(wants)
 	r.res.Errors = []string{}
 	var queries []string
@@ -444,7 +450,7 @@ func (r *run) record(ctx context.Context, listings []Listing) error {
 		}
 		r.res.Matched++
 		alert := r.h.notifier != nil && w.MaxPriceCents != nil && l.PriceCents <= *w.MaxPriceCents
-		isNew, alerted, err := r.h.store.Record(ctx, l, w, alert)
+		isNew, alerted, err := r.h.store.RecordAsOf(ctx, l, w, alert, r.asOf)
 		if err != nil {
 			return err
 		}

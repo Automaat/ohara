@@ -77,6 +77,18 @@ func (s *Store) Record(ctx context.Context, l *deals.Listing, h *Holding) (bool,
 	return isNew, err
 }
 
+// RecordAsOf is Record for a run that read the holdings and titles it
+// matched l with at asOf, as deals.Store.RecordAsOf describes.
+func (s *Store) RecordAsOf(ctx context.Context, l *deals.Listing, h *Holding, asOf time.Time) (bool, error) {
+	isNew, _, err := s.deals.RecordAsOf(ctx, l, &h.Want, false, asOf)
+	return isNew, err
+}
+
+// Now returns the database's current time, when a run reads its holdings.
+func (s *Store) Now(ctx context.Context) (time.Time, error) {
+	return s.deals.Now(ctx)
+}
+
 // Prices returns the valuation sources' observations last seen within
 // window that value an owned edition. OLX prices of an edition without an
 // owned copy count when an edition of the same title and format is owned,

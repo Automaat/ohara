@@ -3,6 +3,7 @@ package deals
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -227,5 +228,60 @@ func TestSendAlertSkipsAnAlertMovedAway(t *testing.T) {
 	}
 	if got := stored(t, pool); got.AlertSent {
 		t.Fatalf("alert = %+v, want it unsent", got)
+	}
+}
+
+// TestRecordAsOfKeepsANewerMove follows a hunt that read the wishlist
+// before a valuation run moved its "Alien" listing to the owned "Alien:
+// Covenant" and matches the listing to "Alien" again afterwards: the
+// listing stays with "Alien: Covenant" and the old wish gets no alert. A
+// hunt that starts after the move moves it back.
+func TestRecordAsOfKeepsANewerMove(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	ctx := context.Background()
+	store := NewStore(pool)
+	alien := wished(t, pool, Want{Kind: "movie", Name: "Alien", Format: new("dvd"), MaxPriceCents: new(int64(5000))})
+	covenant := wished(t, pool, Want{Kind: "movie", Name: "Alien: Covenant", Format: new("dvd")})
+	if _, err := pool.Exec(ctx, `UPDATE copy SET status = 'owned' WHERE id = $1`, covenant.CopyID); err != nil {
+		t.Fatal(err)
+	}
+	covenant.CopyID = 0
+	l := Listing{Source: "olx", ExternalID: "1", Title: "Alien Covenant DVD", URL: "https://example.test/1", PriceCents: 3000}
+	now := func() time.Time {
+		t.Helper()
+		at, err := store.Now(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return at
+	}
+	if _, alerted, err := store.RecordAsOf(ctx, &l, &alien, true, now()); err != nil || !alerted {
+		t.Fatalf("first hunt = %v, %v; want an alert", alerted, err)
+	}
+	staleHunt := now()
+	if _, _, err := store.RecordAsOf(ctx, &l, &covenant, false, now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, alerted, err := store.RecordAsOf(ctx, &l, &alien, true, staleHunt); err != nil || alerted {
+		t.Fatalf("stale hunt = %v, %v; want no alert", alerted, err)
+	}
+	got := stored(t, pool)
+	if !is(got.TitleID, covenant.TitleID) || !is(got.EditionID, covenant.EditionID) ||
+		got.WishlistCopyID != nil || got.AlertCopyID != nil {
+		t.Fatalf("after the stale hunt listing = %+v, want it on edition %d with no wish", got, covenant.EditionID)
+	}
+	if pending, err := store.PendingAlerts(ctx); err != nil || len(pending) != 0 {
+		t.Fatalf("pending alerts = %+v, %v; want none", pending, err)
+	}
+
+	if _, _, err := store.RecordAsOf(ctx, &l, &alien, true, now()); err != nil {
+		t.Fatal(err)
+	}
+	got = stored(t, pool)
+	if !is(got.TitleID, alien.TitleID) || !is(got.WishlistCopyID, alien.CopyID) || !is(got.AlertCopyID, alien.CopyID) {
+		t.Fatalf("after a later hunt listing = %+v, want it back on wish %d", got, alien.CopyID)
+	}
+	if pending, err := store.PendingAlerts(ctx); err != nil || len(pending) != 1 || pending[0].TitleName != "Alien" {
+		t.Fatalf("pending alerts = %+v, %v; want the Alien alert", pending, err)
 	}
 }

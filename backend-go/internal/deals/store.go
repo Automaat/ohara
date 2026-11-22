@@ -150,9 +150,29 @@ type observationRaw struct {
 const listingTitle = `coalesce((SELECT e.title_id FROM edition e WHERE e.id = price_observation.edition_id),
 	price_observation.title_id)`
 
-// movedTitle holds in Record's upsert when the run matched the stored
+// otherTitle holds in Record's upsert when the run matched the stored
 // listing to another title than the one it belongs to.
-const movedTitle = listingTitle + ` <> EXCLUDED.title_id`
+const otherTitle = listingTitle + ` <> EXCLUDED.title_id`
+
+// assignedLater holds in Record's upsert when another run stored or moved
+// the listing after the recording run read the wishlist and titles it
+// matched with ($9); never without that time.
+const assignedLater = `coalesce(price_observation.moved_at, price_observation.observed_at) > $9::timestamptz`
+
+// movedTitle holds in Record's upsert when the listing moves to the
+// matched title: another title, matched from data at least as new as the
+// listing's current title.
+const movedTitle = `(` + otherTitle + ` AND NOT coalesce(` + assignedLater + `, false))`
+
+// Now returns the database's current time, the time a run reads its
+// wishlist and titles at for RecordAsOf.
+func (s *Store) Now(ctx context.Context) (time.Time, error) {
+	var now time.Time
+	if err := s.pool.QueryRow(ctx, `SELECT now()`).Scan(&now); err != nil {
+		return time.Time{}, fmt.Errorf("now: %w", err)
+	}
+	return now, nil
+}
 
 // Record stores l as an observation of w and, with alert, queues its
 // Telegram alert in the same transaction. A listing a source already
@@ -162,8 +182,10 @@ const movedTitle = listingTitle + ` <> EXCLUDED.title_id`
 // becomes now, and a valuation match, which names no wish, drops the wish
 // the hunter recorded it for. An unsent alert for a wish of another title
 // than the listing's moves to w, or to no wish when w is not one, so it is
-// never sent for the old wish; an alert already sent stays recorded. The alert is queued when the listing has none
-// yet, so a listing the valuation run stored first, or one whose price
+// never sent for the old wish; an alert already sent stays recorded. A
+// listing that still belongs to another title than w's, as RecordAsOf
+// allows, queues and moves no alert. The alert is queued when the listing
+// has none yet, so a listing the valuation run stored first, or one whose price
 // dropped under the limit, still alerts. A listing whose alert was sent
 // alerts again when its price is under the one that alert named, unless
 // an alert for it is still waiting to be sent: that one goes out at the
@@ -174,6 +196,19 @@ const movedTitle = listingTitle + ` <> EXCLUDED.title_id`
 // alert. It reports whether the listing was new and whether an alert was
 // queued.
 func (s *Store) Record(ctx context.Context, l *Listing, w *Want, alert bool) (bool, bool, error) {
+	return s.record(ctx, l, w, alert, nil)
+}
+
+// RecordAsOf is Record for a run that matched l to w from the wishlist and
+// titles it read at asOf. A listing another run stored or moved after asOf
+// keeps its title and edition when w belongs to another title, since that
+// run matched it from newer data; it is then not recorded for w, and no
+// alert is queued for w.
+func (s *Store) RecordAsOf(ctx context.Context, l *Listing, w *Want, alert bool, asOf time.Time) (bool, bool, error) {
+	return s.record(ctx, l, w, alert, &asOf)
+}
+
+func (s *Store) record(ctx context.Context, l *Listing, w *Want, alert bool, asOf *time.Time) (bool, bool, error) {
 	raw, err := json.Marshal(observationRaw{Title: l.Title, Data: l.Raw, PhotoURL: l.PhotoURL, WishlistCopyID: w.CopyID})
 	if err != nil {
 		return false, false, fmt.Errorf("record: encode raw: %w", err)
@@ -193,8 +228,9 @@ func (s *Store) Record(ctx context.Context, l *Listing, w *Want, alert bool) (bo
 			price_cents = EXCLUDED.price_cents,
 			last_seen_at = now(),
 			url = EXCLUDED.url,
-			raw = CASE WHEN `+movedTitle+` THEN coalesce(price_observation.raw, '{}'::jsonb) - 'wishlist_copy_id'
-				ELSE coalesce(price_observation.raw, '{}'::jsonb) END || EXCLUDED.raw,
+			raw = CASE WHEN `+movedTitle+` THEN coalesce(price_observation.raw, '{}'::jsonb) - 'wishlist_copy_id' || EXCLUDED.raw
+				WHEN `+otherTitle+` THEN coalesce(price_observation.raw, '{}'::jsonb) || (EXCLUDED.raw - 'wishlist_copy_id')
+				ELSE coalesce(price_observation.raw, '{}'::jsonb) || EXCLUDED.raw END,
 			acquired_as = coalesce(EXCLUDED.acquired_as, price_observation.acquired_as),
 			edition_id = CASE WHEN `+movedTitle+` THEN EXCLUDED.edition_id
 				ELSE coalesce(price_observation.edition_id, EXCLUDED.edition_id) END,
@@ -202,17 +238,21 @@ func (s *Store) Record(ctx context.Context, l *Listing, w *Want, alert bool) (bo
 				ELSE coalesce(price_observation.title_id, EXCLUDED.title_id) END,
 			moved_at = CASE WHEN `+movedTitle+` THEN now() ELSE price_observation.moved_at END
 		RETURNING id, xmax = 0, dismissed_at IS NOT NULL, `+listingTitle,
-		l.Source, l.ExternalID, l.PriceCents, l.AcquiredAs, l.URL, w.EditionID, w.TitleID, raw).Scan(&id, &isNew, &dismissed, &titleID)
+		l.Source, l.ExternalID, l.PriceCents, l.AcquiredAs, l.URL, w.EditionID, w.TitleID, raw, asOf).Scan(&id, &isNew, &dismissed, &titleID)
 	if err != nil {
 		return false, false, fmt.Errorf("record observation: %w", err)
 	}
-	if titleID != nil && *titleID == w.TitleID {
-		if _, err := tx.Exec(ctx, `UPDATE deal_alert a SET copy_id = nullif($3::bigint, 0)
-			FROM copy c JOIN edition e ON e.id = c.edition_id
-			WHERE a.observation_id = $1 AND a.sent_at IS NULL AND c.id = a.copy_id AND e.title_id <> $2`,
-			id, w.TitleID, w.CopyID); err != nil {
-			return false, false, fmt.Errorf("record alert: move to title: %w", err)
+	if titleID == nil || *titleID != w.TitleID {
+		if err := tx.Commit(ctx); err != nil {
+			return false, false, fmt.Errorf("record: commit: %w", err)
 		}
+		return isNew, false, nil
+	}
+	if _, err := tx.Exec(ctx, `UPDATE deal_alert a SET copy_id = nullif($3::bigint, 0)
+		FROM copy c JOIN edition e ON e.id = c.edition_id
+		WHERE a.observation_id = $1 AND a.sent_at IS NULL AND c.id = a.copy_id AND e.title_id <> $2`,
+		id, w.TitleID, w.CopyID); err != nil {
+		return false, false, fmt.Errorf("record alert: move to title: %w", err)
 	}
 	if alert && !dismissed {
 		if alerted, err = queueAlert(ctx, tx, id, w.CopyID, l.PriceCents); err != nil {

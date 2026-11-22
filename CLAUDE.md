@@ -237,7 +237,10 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   unsent alert for a wish of another title moves to the new wish, or to
   none (the deals view then shows no alert), so the old wish never gets
   it; a sent alert stays, and the deals view no longer shows the listing
-  under the old title's wish. Another edition of the same title keeps the
+  under the old title's wish. A run does not move a listing another run
+  stored or moved after it read its wishlist or holdings and titles (it
+  matched from older data), and queues no alert for a wish of another
+  title than the listing's. Another edition of the same title keeps the
   stored one.
   A sent alert stores the price it named (`deal_alert.alerted_price_cents`);
   a later price under it, within the limit, queues the same row again and

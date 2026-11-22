@@ -125,3 +125,34 @@ function apply(codes: Set<string>, c: Change) {
 
 /** The tab's one tally: the scanner shows it, and adds and their undos keep it current. */
 export const queueTally = new QueueTally();
+
+/** How often the scanner reads the queue again while its count is unknown after a failed read. */
+export const retryInterval = 20_000;
+
+/**
+ * Reads the queue again while the tally's count is unknown, as after a failed read: when the
+ * browser comes online, when the app is shown again and every interval, so a count lost to one
+ * failed read comes back once the API answers. Returns what stops it.
+ */
+export function retryUnknown(
+	tally: QueueTally,
+	fetchFn: typeof fetch,
+	win: Pick<EventTarget, 'addEventListener' | 'removeEventListener'>,
+	doc: Pick<Document, 'addEventListener' | 'removeEventListener' | 'visibilityState'>,
+	every = retryInterval
+): () => void {
+	const retry = () => {
+		if (tally.count === null) void tally.load(fetchFn);
+	};
+	const shown = () => {
+		if (doc.visibilityState === 'visible') retry();
+	};
+	win.addEventListener('online', retry);
+	doc.addEventListener('visibilitychange', shown);
+	const timer = setInterval(retry, every);
+	return () => {
+		win.removeEventListener('online', retry);
+		doc.removeEventListener('visibilitychange', shown);
+		clearInterval(timer);
+	};
+}

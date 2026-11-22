@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { QueueTally } from './queue-tally.svelte';
+import { QueueTally, retryUnknown } from './queue-tally.svelte';
 
 const entry = (id: number, barcode: string) => ({
 	id,
@@ -182,5 +182,73 @@ describe('QueueTally', () => {
 		queue.answer(0, new Response(null, { status: 503 }));
 		await older;
 		expect(tally.count).toBe(1);
+	});
+});
+
+describe('retryUnknown', () => {
+	function page() {
+		const win = new EventTarget();
+		const doc = Object.assign(new EventTarget(), {
+			visibilityState: 'visible' as DocumentVisibilityState
+		});
+		return { win, doc };
+	}
+
+	it('reads the queue again after a failed read, once online, shown or on the interval', async () => {
+		vi.useFakeTimers();
+		const answers: number[] = [503, 503, 503, 200];
+		let asked = 0;
+		const fetchFn: typeof fetch = async () => {
+			asked++;
+			const status = answers.shift() ?? 200;
+			return status === 200 ? listing('5901234123457') : new Response('{}', { status });
+		};
+		const tally = new QueueTally();
+		await tally.load(fetchFn);
+		expect(tally.count).toBeNull();
+		const { win, doc } = page();
+		const stop = retryUnknown(tally, fetchFn, win, doc, 1000);
+
+		win.dispatchEvent(new Event('online'));
+		await vi.advanceTimersByTimeAsync(0);
+		expect(asked).toBe(2);
+		doc.visibilityState = 'hidden';
+		doc.dispatchEvent(new Event('visibilitychange'));
+		await vi.advanceTimersByTimeAsync(0);
+		expect(asked).toBe(2);
+		doc.visibilityState = 'visible';
+		doc.dispatchEvent(new Event('visibilitychange'));
+		await vi.advanceTimersByTimeAsync(0);
+		expect(asked).toBe(3);
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(asked).toBe(4);
+		expect(tally.count).toBe(1);
+
+		await vi.advanceTimersByTimeAsync(5000);
+		win.dispatchEvent(new Event('online'));
+		await vi.advanceTimersByTimeAsync(0);
+		expect(asked).toBe(4);
+		stop();
+		vi.useRealTimers();
+	});
+
+	it('stops reading once stopped', async () => {
+		vi.useFakeTimers();
+		let asked = 0;
+		const fetchFn: typeof fetch = async () => {
+			asked++;
+			return new Response('{}', { status: 503 });
+		};
+		const tally = new QueueTally();
+		const { win, doc } = page();
+		const stop = retryUnknown(tally, fetchFn, win, doc, 1000);
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(asked).toBe(1);
+		stop();
+		win.dispatchEvent(new Event('online'));
+		doc.dispatchEvent(new Event('visibilitychange'));
+		await vi.advanceTimersByTimeAsync(5000);
+		expect(asked).toBe(1);
+		vi.useRealTimers();
 	});
 });

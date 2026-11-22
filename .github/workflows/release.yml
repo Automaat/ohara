@@ -4,6 +4,13 @@ name: Release
 # image ghcr.io/<repo>:vX.Y.Z, then tags vX.Y.Z and cuts a GitHub release.
 # An empty version bumps the minor of the newest tag. The image tags that
 # follow main come from ci.yml alone.
+#
+# GitHub runs the copy of this file on the chosen ref, and branches cut
+# before a change keep the old copy. So the tags are guarded outside the
+# file: a ruleset on refs/tags/v* admits only deploy keys to create, move
+# or drop such a tag, and the one deploy key is the RELEASE_DEPLOY_KEY
+# secret of the release environment, which admits main alone. Old copies
+# cannot tag, and with no tag they cannot cut a release (docs/ci.md).
 on:
   workflow_dispatch:
     inputs:
@@ -18,9 +25,9 @@ permissions:
   packages: write
 
 # Two releases at once could pick the same version and overwrite each
-# other's image before either tag exists. The group is per ref, so a
-# dispatch on another ref, which fails at its first step, never replaces
-# a main release waiting in the queue.
+# other's image before either tag exists. The group is per ref, so a run
+# on another ref, which the release environment refuses, never takes the
+# place of a main release waiting in the queue.
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
@@ -28,6 +35,7 @@ concurrency:
 jobs:
   release:
     runs-on: ubuntu-26.04
+    environment: release
     steps:
       - name: Require main
         run: |
@@ -114,11 +122,26 @@ jobs:
           provenance: mode=max
 
       - name: Tag and push
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_DEPLOY_KEY: ${{ secrets.RELEASE_DEPLOY_KEY }}
         run: |
+          # The ruleset refuses a v* tag from GITHUB_TOKEN; only the deploy
+          # key may push one.
+          if [ -z "$RELEASE_DEPLOY_KEY" ]; then
+            echo "::error::the release environment has no RELEASE_DEPLOY_KEY secret"
+            exit 1
+          fi
+          SSH_DIR="$RUNNER_TEMP/release-ssh"
+          install -d -m 700 "$SSH_DIR"
+          trap 'rm -rf "$SSH_DIR"' EXIT
+          (umask 077 && printf '%s\n' "$RELEASE_DEPLOY_KEY" > "$SSH_DIR/key")
+          gh api meta --jq '.ssh_keys[] | "github.com " + .' > "$SSH_DIR/known_hosts"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag "v$VERSION"
-          git push origin "v$VERSION"
+          GIT_SSH_COMMAND="ssh -i $SSH_DIR/key -o IdentitiesOnly=yes -o UserKnownHostsFile=$SSH_DIR/known_hosts -o StrictHostKeyChecking=yes" \
+            git push "git@github.com:$GITHUB_REPOSITORY.git" "refs/tags/v$VERSION"
 
       - name: Create GitHub release
         env:
@@ -130,4 +153,5 @@ jobs:
           else
             NOTES=$(git log --oneline)
           fi
-          gh release create "v$VERSION" --title "v$VERSION" --notes "$NOTES"
+          # --verify-tag: never create the tag here, only release the pushed one.
+          gh release create "v$VERSION" --verify-tag --title "v$VERSION" --notes "$NOTES"

@@ -205,6 +205,19 @@ func TestCompressionRange(t *testing.T) {
 	if !bytes.Equal(gunzip(t, body), file) {
 		t.Fatal("gzip range body is not the whole file")
 	}
+
+	png := fileData(t, webFS, "apple-touch-icon.png")
+	resp, body = fetch(t, http.MethodGet, srv.URL+"/apple-touch-icon.png",
+		map[string]string{"Accept-Encoding": "gzip", "Range": "bytes=0-9"})
+	if resp.StatusCode != http.StatusPartialContent {
+		t.Fatalf("PNG range status = %d, want 206", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Content-Encoding"); got != "" {
+		t.Fatalf("PNG range Content-Encoding = %q, want none", got)
+	}
+	if !bytes.Equal(body, png[:10]) {
+		t.Fatalf("PNG range body = %q, want %q", body, png[:10])
+	}
 }
 
 // TestCompressionAcceptEncoding checks the coding choice against quality
@@ -283,20 +296,38 @@ func TestCompressionETag(t *testing.T) {
 	if got := plain.Header.Get("ETag"); got != `"v1"` {
 		t.Fatalf("plain ETag = %q, want \"v1\"", got)
 	}
+	resp, _ := fetch(t, http.MethodGet, srv.URL+"/api/tagged",
+		map[string]string{"Accept-Encoding": "gzip", "If-None-Match": `W/"v1"`})
+	if resp.StatusCode != http.StatusNotModified {
+		t.Fatalf("revalidation status = %d, want 304", resp.StatusCode)
+	}
+	if got := resp.Header.Get("ETag"); got != `W/"v1"` {
+		t.Fatalf("304 ETag = %q, want W/\"v1\"", got)
+	}
+	resp, _ = fetch(t, http.MethodGet, srv.URL+"/api/tagged", map[string]string{"If-None-Match": `"v1"`})
+	if got := resp.Header.Get("ETag"); resp.StatusCode != http.StatusNotModified || got != `"v1"` {
+		t.Fatalf("plain revalidation = %d %q, want 304 \"v1\"", resp.StatusCode, got)
+	}
 }
 
-// etagAPI answers JSON with a strong ETag.
+// etagAPI answers JSON with a strong ETag and 304 to a matching
+// If-None-Match, weak or strong, as a weak comparison does.
 type etagAPI struct{ logger *slog.Logger }
 
 func (a etagAPI) Mount(r chi.Router) {
-	r.Get("/tagged", func(w http.ResponseWriter, _ *http.Request) {
+	r.Get("/tagged", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("ETag", `"v1"`)
+		if inm := r.Header.Get("If-None-Match"); inm == `"v1"` || inm == `W/"v1"` {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
 		httpx.WriteJSON(w, a.logger, http.StatusOK, map[string]string{"v": "1"})
 	})
 }
 
 // TestCompressionHead checks that HEAD announces the same encoding as GET
-// without a body.
+// without a body, and that a handler writing a body for HEAD, like the JSON
+// 404, does not leave net/http to size the gzip answer from plain bytes.
 func TestCompressionHead(t *testing.T) {
 	srv := newServer(t, server.Deps{DB: fakeDB{}, Web: compressFS()})
 	resp, body := fetch(t, http.MethodHead, srv.URL+"/", map[string]string{"Accept-Encoding": "gzip"})
@@ -305,6 +336,17 @@ func TestCompressionHead(t *testing.T) {
 	}
 	if got := resp.Header.Get("Content-Encoding"); got != "gzip" {
 		t.Fatalf("Content-Encoding = %q, want gzip", got)
+	}
+
+	resp, _ = fetch(t, http.MethodHead, srv.URL+"/api/nope", map[string]string{"Accept-Encoding": "gzip"})
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("HEAD /api/nope = %d, want 404", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Content-Encoding"); got != "gzip" {
+		t.Fatalf("HEAD /api/nope Content-Encoding = %q, want gzip", got)
+	}
+	if got := resp.Header.Get("Content-Length"); got != "" {
+		t.Fatalf("HEAD /api/nope Content-Length = %q, want none", got)
 	}
 }
 

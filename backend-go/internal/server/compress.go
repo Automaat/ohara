@@ -5,6 +5,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"path"
 	"slices"
 	"strconv"
 	"strings"
@@ -42,11 +43,13 @@ var gzipWriters = sync.Pool{New: func() any {
 // too, so no cache hands one encoding to a client that asked for the other.
 // A response that already has a Content-Encoding, like /metrics' own gzip, is
 // left alone. A client that accepts gzip gets the whole resource for a Range
-// request: a range of the plain bytes appended to a gzip body it already has
-// would corrupt it, and a range of the gzip body would differ between two
-// compressions. A compressed answer drops Accept-Ranges and weakens an ETag,
-// since its bytes are not the plain resource's. A client without gzip gets
-// plain bodies and its ranges as before.
+// request on a path that may be compressed: a range of the plain bytes
+// appended to a gzip body it already has would corrupt it, and a range of the
+// gzip body would differ between two compressions. A path whose extension
+// names a type that is never compressed, like a PNG, keeps its range. A
+// compressed answer drops Accept-Ranges and weakens an ETag, since its bytes
+// are not the plain resource's; a 304 that revalidates such a weak ETag keeps
+// it weak. A client without gzip gets plain bodies and its ranges as before.
 func compress(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Add("Vary", "Accept-Encoding")
@@ -54,15 +57,31 @@ func compress(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if r.Header.Get("Range") != "" || r.Header.Get("If-Range") != "" {
+		if (r.Header.Get("Range") != "" || r.Header.Get("If-Range") != "") && mayCompress(r.URL.Path) {
 			r = r.Clone(r.Context())
 			r.Header.Del("Range")
 			r.Header.Del("If-Range")
 		}
-		gw := &gzipResponseWriter{ResponseWriter: w, head: r.Method == http.MethodHead}
+		gw := &gzipResponseWriter{
+			ResponseWriter: w,
+			head:           r.Method == http.MethodHead,
+			ifNoneMatch:    r.Header.Values("If-None-Match"),
+		}
 		defer gw.close()
 		next.ServeHTTP(gw, r)
 	})
+}
+
+// mayCompress reports whether the answer for a path may be compressed: false
+// only when its extension names a known type outside compressibleTypes. SPA
+// routes have no extension and get index.html, which is compressed.
+func mayCompress(urlPath string) bool {
+	ext := path.Ext(urlPath)
+	if ext == "" {
+		return true
+	}
+	mediaType, _, err := mime.ParseMediaType(mime.TypeByExtension(ext))
+	return err != nil || slices.Contains(compressibleTypes, mediaType)
 }
 
 // acceptsGzip reports whether the Accept-Encoding values allow gzip: gzip or
@@ -111,7 +130,9 @@ func quality(params string) float64 {
 type gzipResponseWriter struct {
 	http.ResponseWriter
 	head        bool
+	ifNoneMatch []string
 	wroteHeader bool
+	encoded     bool
 	zw          *gzip.Writer
 }
 
@@ -123,12 +144,34 @@ func (g *gzipResponseWriter) WriteHeader(code int) {
 	g.wroteHeader = true
 	if g.compressible(code) {
 		g.startGzip()
+	} else if code == http.StatusNotModified {
+		g.keepWeakETag()
 	}
 	g.ResponseWriter.WriteHeader(code)
 }
 
+// keepWeakETag weakens a 304's strong ETag when the client revalidates the
+// weak one a compressed answer gave it, so its stored validator stays the same.
+func (g *gzipResponseWriter) keepWeakETag() {
+	h := g.Header()
+	etag := h.Get("ETag")
+	if etag == "" || strings.HasPrefix(etag, "W/") {
+		return
+	}
+	weak := "W/" + etag
+	for _, v := range g.ifNoneMatch {
+		for tag := range strings.SplitSeq(v, ",") {
+			if strings.TrimSpace(tag) == weak {
+				h.Set("ETag", weak)
+				return
+			}
+		}
+	}
+}
+
 // startGzip marks the response as gzip and, unless it answers a HEAD, takes
-// the writer its body goes through.
+// the writer its body goes through. A HEAD answer's body is dropped, so
+// net/http does not size the header from the plain bytes.
 func (g *gzipResponseWriter) startGzip() {
 	if !g.head {
 		zw, ok := gzipWriters.Get().(*gzip.Writer)
@@ -138,6 +181,7 @@ func (g *gzipResponseWriter) startGzip() {
 		zw.Reset(g.ResponseWriter)
 		g.zw = zw
 	}
+	g.encoded = true
 	h := g.Header()
 	h.Set("Content-Encoding", "gzip")
 	h.Del("Content-Length")
@@ -168,6 +212,9 @@ func (g *gzipResponseWriter) Write(b []byte) (int, error) {
 	}
 	if g.zw != nil {
 		return g.zw.Write(b)
+	}
+	if g.encoded {
+		return len(b), nil
 	}
 	return g.ResponseWriter.Write(b)
 }

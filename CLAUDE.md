@@ -86,8 +86,11 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   answer carries `Vary: Accept-Encoding`. Other images go out as they are and
   a response that already has a `Content-Encoding` (`/metrics`) is left
   alone. A client that accepts gzip gets the whole resource for a `Range`
-  request, and a compressed answer drops `Accept-Ranges` and weakens its
-  `ETag`; a client without gzip keeps its ranges.
+  request unless the path's extension names a type never compressed (a
+  PNG keeps its range). A compressed answer drops `Accept-Ranges` and
+  weakens its `ETag` (a 304 for that weak `ETag` keeps it weak) and a
+  compressed HEAD sends no `Content-Length`; a client without gzip keeps
+  its ranges.
 - Money is integer grosze (`price_cents`). Barcodes are stored normalized
   (`barcode.Normalize`: EAN-8, EAN-13 or GTIN-14; a UPC-A becomes its
   EAN-13 with a leading 0, ISBN-10 becomes ISBN-13), one edition per barcode.

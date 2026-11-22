@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -120,21 +121,72 @@ func TestCrawlClockSpacesRequestsPerHost(t *testing.T) {
 	ctx := context.Background()
 	start := time.Now()
 	for range 3 {
-		if err := c.wait(ctx, "shop.test", delay); err != nil {
-			t.Fatalf("wait: %v", err)
+		release, err := c.acquire(ctx, "shop.test", delay)
+		if err != nil {
+			t.Fatalf("acquire: %v", err)
 		}
+		release()
 	}
 	if got := time.Since(start); got < 2*delay {
 		t.Fatalf("3 requests to one host took %v, want at least %v", got, 2*delay)
 	}
 	other := time.Now()
-	if err := c.wait(ctx, "other.test", delay); err != nil || time.Since(other) > delay/2 {
+	release, err := c.acquire(ctx, "other.test", delay)
+	if err != nil || time.Since(other) > delay/2 {
 		t.Fatalf("another host waited %v (err %v), want no wait", time.Since(other), err)
 	}
+	release()
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
-	if err := c.wait(canceled, "shop.test", time.Hour); err == nil {
-		t.Fatal("a canceled wait returned no error")
+	if _, err := c.acquire(canceled, "shop.test", time.Hour); err == nil {
+		t.Fatal("a canceled acquire returned no error")
+	}
+	if release, err := c.acquire(ctx, "shop.test", delay); err != nil {
+		t.Fatalf("acquire after a canceled one: %v", err)
+	} else {
+		release()
+	}
+}
+
+// TestCrawlDelayedSpacesArrivals checks the gap where the shop sees it:
+// between the arrivals of concurrent and redirected requests, measured by
+// the server.
+func TestCrawlDelayedSpacesArrivals(t *testing.T) {
+	const delay = 20 * time.Millisecond
+	var mu sync.Mutex
+	var arrivals []time.Time
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		arrivals = append(arrivals, time.Now())
+		mu.Unlock()
+		if r.URL.Path == "/hop" {
+			http.Redirect(w, r, "/end", http.StatusFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	client := crawlDelayed(srv.Client(), newCrawlClock(), delay)
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Go(func() {
+			resp, err := client.Get(srv.URL + "/hop")
+			if err != nil {
+				t.Errorf("get: %v", err)
+				return
+			}
+			_ = resp.Body.Close()
+		})
+	}
+	wg.Wait()
+	mu.Lock()
+	defer mu.Unlock()
+	slices.SortFunc(arrivals, func(a, b time.Time) int { return a.Compare(b) })
+	if len(arrivals) != 8 {
+		t.Fatalf("server saw %d requests, want 8", len(arrivals))
+	}
+	for i := 1; i < len(arrivals); i++ {
+		if gap := arrivals[i].Sub(arrivals[i-1]); gap < delay {
+			t.Fatalf("arrivals %d and %d were %v apart, want at least %v", i-1, i, gap, delay)
+		}
 	}
 }
 
@@ -214,8 +266,7 @@ func winylowniaDouble(t *testing.T) (*httptest.Server, *string, *[]time.Time) {
 		mu.Lock()
 		defer mu.Unlock()
 		for i := 1; i < len(all); i++ {
-			// 5 ms covers the loopback's scheduling noise.
-			if gap := all[i].Sub(all[i-1]); gap < winylowniaCrawlDelay-5*time.Millisecond {
+			if gap := all[i].Sub(all[i-1]); gap < winylowniaCrawlDelay {
 				t.Errorf("requests %d and %d to the shop were %v apart, want at least %v", i-1, i, gap, winylowniaCrawlDelay)
 			}
 		}

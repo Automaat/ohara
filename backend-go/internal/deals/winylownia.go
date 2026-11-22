@@ -43,7 +43,8 @@ func (Winylownia) Kinds() []string { return []string{"music"} }
 // winylowniaCrawlDelay is the gap the shop's robots.txt asks between two
 // requests (Crawl-delay: 1). The hunter's jittered OHARA_DEALS_DELAY can
 // fall below it, and a search's redirect hops are not paced at all, so
-// every request to the shop's host waits for it on winylowniaClock.
+// every request to the shop's host, hops included, takes its turn on
+// winylowniaClock.
 const winylowniaCrawlDelay = time.Second
 
 // winylowniaClock spaces every request sent to the Winylownia host.
@@ -72,47 +73,68 @@ func (s Winylownia) Search(ctx context.Context, query string) ([]Listing, error)
 	return parseIdoSellSearch(s.Name(), s.BaseURL, resp.Body)
 }
 
-// crawlClock spaces the requests sent to each host.
+// crawlClock spaces the requests sent to each host. A host has one turn:
+// a request takes it, waits until delay has passed since the previous
+// request's answer arrived, and keeps it until its own answer's headers
+// arrive. The shop receives a request before it answers, so no two
+// requests reach it less than delay apart, however fast either travels.
 type crawlClock struct {
-	mu   sync.Mutex
-	next map[string]time.Time
+	mu    sync.Mutex
+	hosts map[string]*crawlTurn
 }
 
-func newCrawlClock() *crawlClock { return &crawlClock{next: map[string]time.Time{}} }
+// crawlTurn is one host's turn: a token in a one-slot channel, and when
+// the next request may be sent, read and written only by its holder.
+type crawlTurn struct {
+	token chan struct{}
+	next  time.Time
+}
 
-// wait books the next free slot for host, delay after the one before, and
-// blocks until it comes or ctx ends; the slot after it starts delay after
-// the wait ends. A slot booked for a request that was then canceled stays
-// taken.
-func (c *crawlClock) wait(ctx context.Context, host string, delay time.Duration) error {
+func newCrawlClock() *crawlClock { return &crawlClock{hosts: map[string]*crawlTurn{}} }
+
+func (c *crawlClock) turn(host string) *crawlTurn {
 	c.mu.Lock()
-	at := c.next[host]
-	if now := time.Now(); at.Before(now) {
-		at = now
+	defer c.mu.Unlock()
+	t, ok := c.hosts[host]
+	if !ok {
+		t = &crawlTurn{token: make(chan struct{}, 1)}
+		t.token <- struct{}{}
+		c.hosts[host] = t
 	}
-	c.next[host] = at.Add(delay)
-	c.mu.Unlock()
-	d := time.Until(at)
-	if d <= 0 {
-		return nil
+	return t
+}
+
+// acquire takes host's turn and waits until a request may be sent, or
+// returns ctx's error. The caller sends the request and calls the returned
+// release once its answer's headers arrived, or it failed; the next
+// request then waits delay from that moment.
+func (c *crawlClock) acquire(ctx context.Context, host string, delay time.Duration) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	t := time.NewTimer(d)
-	defer t.Stop()
+	t := c.turn(host)
 	select {
-	case <-t.C:
+	case <-t.token:
 	case <-ctx.Done():
-		return ctx.Err()
+		return nil, ctx.Err()
 	}
-	// The timer fires a little late; the next slot counts from now.
-	c.mu.Lock()
-	if later := time.Now().Add(delay); later.After(c.next[host]) {
-		c.next[host] = later
+	if d := time.Until(t.next); d > 0 {
+		timer := time.NewTimer(d)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			t.token <- struct{}{}
+			return nil, ctx.Err()
+		}
 	}
-	c.mu.Unlock()
-	return nil
+	return func() {
+		t.next = time.Now().Add(delay)
+		t.token <- struct{}{}
+	}, nil
 }
 
-// crawlDelayTransport sends each request once clock lets it through.
+// crawlDelayTransport sends each request in its host's turn on clock.
 type crawlDelayTransport struct {
 	base  http.RoundTripper
 	clock *crawlClock
@@ -121,9 +143,11 @@ type crawlDelayTransport struct {
 
 // RoundTrip implements http.RoundTripper.
 func (t crawlDelayTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	if err := t.clock.wait(r.Context(), r.URL.Host, t.delay); err != nil {
+	release, err := t.clock.acquire(r.Context(), r.URL.Host, t.delay)
+	if err != nil {
 		return nil, err
 	}
+	defer release()
 	return t.base.RoundTrip(r)
 }
 

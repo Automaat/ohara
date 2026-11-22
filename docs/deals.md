@@ -205,9 +205,11 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   zgody właściciela i administratora strony", so a listing keeps no photo
   or description, only the tile's title, price and link; it does not
   forbid automated access. robots.txt asks `Crawl-delay: 1`: every request to the shop's host,
-  redirect hops included, waits until 1 s has passed since the last one
-  (`deals.crawlClock`), since the jittered `OHARA_DEALS_DELAY` can fall to
-  half its value and a lane never paces its own hops.
+  redirect hops included, takes the host's one turn (`deals.crawlClock`),
+  is sent 1 s after the previous answer's headers arrived and holds the
+  turn until its own answer's do, so the shop never receives two requests
+  less than 1 s apart. The jittered `OHARA_DEALS_DELAY` alone can fall to
+  half its value, and a lane never paces its own hops.
 
 ## Tezeusz
 

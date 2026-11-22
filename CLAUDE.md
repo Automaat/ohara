@@ -243,7 +243,12 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
 - Deal sources implement `deals.Source`. Matching folds every Latin
   letter with a diacritic to its base letter ("Bjork" for "Björk") in
   names, listing titles and phrases; search queries keep the want's
-  spelling. A run matches listing titles to wishlist copies (all title
+  spelling. A want's names are its Polish title, original title and
+  name; a Polish book edition (`deals.PolishBookEdition`: an ISBN-13
+  starting `97883`, or no barcode)
+  drops the original title, which names foreign editions, from both its
+  matching and its queries, in hunts and valuations alike. A run
+  matches listing titles to wishlist copies (all title
   words; a name of words of at most two letters ("M", "Up", "It") only
   where it stands as the title: at the start, after a separator, a media
   word or the author (in any case), and before the end, a separator, a
@@ -367,7 +372,11 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   its edition's latest SkupSzop offer (0 when the shop does not buy it);
   mid = median of OLX prices not marked new, outliers beyond 1.5 IQR
   dropped, pooled over every edition of the same title and format, owned,
-  wished or without copies; an unowned edition's prices count only when
+  wished or without copies, a title's Polish book editions apart from its
+  other ones (the used market of a wish still pools both), and a Polish
+  book edition's stored OLX price only while its listing title still
+  matches the edition (a barcode that turned Polish drops the foreign
+  listings matched before); an unowned edition's prices count only when
   first seen, or moved to it from another title (`moved_at`), after its
   last change. A mid from fewer than 3 prices is low
   confidence. Only a Discogs release has a ceiling. A stored OLX listing
@@ -476,6 +485,20 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   a listing it stored met no rule, and queues the alerts of those that now
   meet it, so a listing counts in the market that judges it, as on later
   runs.
+- A title carries the owner's tags (`tag`, `title_tag`): the bodies of
+  `POST` and `PUT /api/titles` take `tags`, each trimmed, blank ones
+  dropped and those differing only in case collapsed, at most 500 bytes
+  each and 20 per title (else 422 on `tags`). A `PUT` without `tags` (or with null) keeps
+  them, `[]` clears them. A tag matches by `tag.key`, the Go case fold
+  `foldCase` locations use (final sigma as σ; the browser's `tagKey`
+  mirrors it, not Postgres's `lower`), and shows with the spelling it was
+  first saved with; one no title carries any more takes the next spelling
+  saved. A save locks its tags in key order, then checks their use in a
+  statement of its own, so concurrent saves neither deadlock nor respell a
+  tag another title carries. `GET /api/tags` lists the tags in use with their
+  title counts. `GET /api/collection?tag=` and `GET /api/titles?tag=`
+  list what carries a tag, case aside; collection items carry their
+  title's tags for the browser's filter.
 - A barcode no provider resolves goes to `scan_queue`; a trigger on `edition`
   removes it once an edition carries that barcode. `ohara_scan_queue_size`
   counts it on each scrape. The trigger keeps the entry it removes in
@@ -570,6 +593,10 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   count as its toggle, hidden at 0.
   Its "Sprzedane" switch (`?status=sold`) lists the sold copies, which
   every other view, the counts and the default shelf leave out.
+  Its "Tag" (`?tag=`) offers the tags the loaded copies and titles carry,
+  "Każdy" first; a title page's tags link there, and its form's "Tagi"
+  suggests `GET /api/tags`. Enter or a suggestion adds a tag; one left
+  typed stays a draft that saving adds.
   Its "Miejsce" (`?location=`) lists the copies stored at one location,
   the whole value, case aside, picked from the loaded copies' locations,
   the most used first. An owned copy's `location` is one free-text place
@@ -618,7 +645,8 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   "Cofnij", "Dodaj tytuł" by hand, the scan sheet sending no deals or queue
   read, the queue count following a queued scan, its add and undo,
   Kolekcja's filters, which also run at 1440 × 900, and its sort orders
-  under active filters, cover photo uploads and the collection export. `scripts/e2e.sh` builds
+  under active filters, tags from the title form to Kolekcja's filter,
+  cover photo uploads and the collection export. `scripts/e2e.sh` builds
   the image (or takes one as its first argument), starts it from
   `e2e/compose.yaml`
   with Postgres, `OHARA_LOOKUP_STUB=true`, `OHARA_MUSICBRAINZ=false` and no

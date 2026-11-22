@@ -156,7 +156,7 @@ func (s *Store) Wants(ctx context.Context) ([]Want, error) {
 		return nil, fmt.Errorf("wants: %w", err)
 	}
 	rows, err := s.pool.Query(ctx, `SELECT c.id, e.id, t.id, t.kind, t.name, t.original_title,
-			t.polish_title, t.authors, e.format, c.max_price_cents, c.max_market_percent,
+			t.polish_title, t.authors, e.format, e.barcode, c.max_price_cents, c.max_market_percent,
 			CASE WHEN c.max_market_percent IS NOT NULL THEN m.cents END
 		FROM copy c JOIN edition e ON e.id = c.edition_id JOIN title t ON t.id = e.title_id
 		`+marketJoin("e", 1)+`
@@ -167,7 +167,8 @@ func (s *Store) Wants(ctx context.Context) ([]Want, error) {
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Want, error) {
 		var w Want
 		err := row.Scan(&w.CopyID, &w.EditionID, &w.TitleID, &w.Kind, &w.Name, &w.OriginalTitle,
-			&w.PolishTitle, &w.Authors, &w.Format, &w.MaxPriceCents, &w.MaxMarketPercent, &w.MarketCents)
+			&w.PolishTitle, &w.Authors, &w.Format, &w.Barcode, &w.MaxPriceCents, &w.MaxMarketPercent,
+			&w.MarketCents)
 		return w, err
 	})
 }

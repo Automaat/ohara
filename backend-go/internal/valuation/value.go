@@ -18,6 +18,8 @@ import (
 	"math"
 	"slices"
 	"time"
+
+	"github.com/Automaat/ohara/backend-go/internal/deals"
 )
 
 // Sources the valuation reads from price_observation.
@@ -129,6 +131,10 @@ type Price struct {
 	SeenAt      time.Time
 	FirstSeenAt time.Time
 	GoneAt      *time.Time
+	// Kind and Barcode are the edition's title kind and barcode, which
+	// keep a Polish book edition's prices apart (poolOf).
+	Kind    string
+	Barcode *string
 }
 
 // likelySold reports a used listing gone within LikelySoldWithin of being
@@ -139,10 +145,13 @@ func (p *Price) likelySold() bool {
 
 // group is the set of editions whose listings price each other: one title
 // in one format. Listings rarely tell a book's printings apart, and a
-// matched listing is stored against only one of them.
+// matched listing is stored against only one of them. A title's Polish
+// book editions (deals.PolishBookEdition) form a group of their own, as a
+// foreign edition's listings do not price a Polish one.
 type group struct {
-	titleID int64
-	format  string
+	titleID    int64
+	format     string
+	polishBook bool
 }
 
 func groupOf(titleID int64, format *string) group {
@@ -150,6 +159,14 @@ func groupOf(titleID int64, format *string) group {
 	if format != nil {
 		g.format = *format
 	}
+	return g
+}
+
+// poolOf is the group of an edition of titleID in format, of kind with
+// code as its barcode.
+func poolOf(titleID int64, format *string, kind string, code *string) group {
+	g := groupOf(titleID, format)
+	g.polishBook = deals.PolishBookEdition(kind, code)
 	return g
 }
 
@@ -168,6 +185,7 @@ func groupOf(titleID int64, format *string) group {
 type Ranges struct {
 	floors       map[int64]*Estimate
 	mids         map[group]*Estimate
+	markets      map[group]*Estimate
 	sold         map[group]*Estimate
 	discogsMids  map[int64]map[string]*Estimate
 	discogsCeils map[int64]*Estimate
@@ -197,14 +215,17 @@ var estimateSources = map[string]string{
 func NewRanges(prices []Price) Ranges {
 	latest := map[editionPrice]*Price{}
 	used := map[group][]int64{}
+	pooled := map[group][]int64{}
 	sold := map[group][]int64{}
 	for i := range prices {
 		p := &prices[i]
-		g := groupOf(p.TitleID, p.Format)
+		g := poolOf(p.TitleID, p.Format, p.Kind, p.Barcode)
 		switch p.Source {
 		case SourceOLX:
 			if p.AcquiredAs == nil || *p.AcquiredAs != "new" {
 				used[g] = append(used[g], p.Cents)
+				m := groupOf(p.TitleID, p.Format)
+				pooled[m] = append(pooled[m], p.Cents)
 				if p.likelySold() {
 					sold[g] = append(sold[g], p.Cents)
 				}
@@ -227,8 +248,9 @@ func NewRanges(prices []Price) Ranges {
 	}
 	r := Ranges{
 		floors:       map[int64]*Estimate{},
-		mids:         make(map[group]*Estimate, len(used)),
-		sold:         make(map[group]*Estimate, len(sold)),
+		mids:         olxMedians(used),
+		markets:      olxMedians(pooled),
+		sold:         olxMedians(sold),
 		discogsMids:  map[int64]map[string]*Estimate{},
 		discogsCeils: map[int64]*Estimate{},
 	}
@@ -249,17 +271,21 @@ func NewRanges(prices []Price) Ranges {
 			r.discogsMids[k.editionID][k.source] = e
 		}
 	}
-	for g, v := range used {
-		r.mids[g] = trimmedMedian(v, SourceOLX)
-	}
-	for g, v := range sold {
-		r.sold[g] = trimmedMedian(v, SourceOLX)
-	}
 	return r
 }
 
+// olxMedians is the trimmed median of each group's OLX prices.
+func olxMedians(prices map[group][]int64) map[group]*Estimate {
+	out := make(map[group]*Estimate, len(prices))
+	for g, v := range prices {
+		out[g] = trimmedMedian(v, SourceOLX)
+	}
+	return out
+}
+
 // LikelySold is the likely-sold price of titleID in format, nil when no
-// used listing of it was gone soon enough.
+// used listing of it was gone soon enough. It and For and ForCopy read an
+// edition that is no Polish book; Value reads each copy's own group.
 func (r Ranges) LikelySold(titleID int64, format *string) *Estimate {
 	return r.sold[groupOf(titleID, format)]
 }
@@ -277,7 +303,11 @@ func (r Ranges) For(editionID, titleID int64, format *string) Range {
 // to is the middle; without a condition or a suggestion for its grade,
 // the Very Good Plus one is.
 func (r Ranges) ForCopy(editionID, titleID int64, format, condition *string) (Range, string) {
-	g := groupOf(titleID, format)
+	return r.forCopyIn(groupOf(titleID, format), editionID, condition)
+}
+
+// forCopyIn is ForCopy for an edition of group g.
+func (r Ranges) forCopyIn(g group, editionID int64, condition *string) (Range, string) {
 	out := Range{Floor: r.floors[editionID], Mid: r.mids[g], Ceiling: r.discogsCeils[editionID]}
 	suggested := r.discogsMids[editionID]
 	grade := GradeVGPlus
@@ -304,14 +334,15 @@ type Market struct {
 }
 
 // Markets lists the middle of every title and format with used prices,
-// by title, then format.
+// by title, then format, from every edition of it, Polish books with the
+// rest.
 func (r Ranges) Markets() []Market {
-	groups := slices.SortedFunc(maps.Keys(r.mids), func(a, b group) int {
+	groups := slices.SortedFunc(maps.Keys(r.markets), func(a, b group) int {
 		return cmp.Or(cmp.Compare(a.titleID, b.titleID), cmp.Compare(a.format, b.format))
 	})
 	out := make([]Market, 0, len(groups))
 	for _, g := range groups {
-		e := r.mids[g]
+		e := r.markets[g]
 		if e == nil {
 			continue
 		}
@@ -444,11 +475,12 @@ type Summary struct {
 func Value(copies []CopyValue, ranges Ranges) {
 	for i := range copies {
 		c := &copies[i]
-		r, grade := ranges.ForCopy(c.EditionID, c.TitleID, c.Format, c.Condition)
+		g := poolOf(c.TitleID, c.Format, c.Kind, c.Barcode)
+		r, grade := ranges.forCopyIn(g, c.EditionID, c.Condition)
 		c.Floor, c.Mid, c.Ceiling = r.Floor, r.Mid, r.Ceiling
 		c.MidGrade = grade
 		c.LowConfidence = r.LowConfidence()
-		c.LikelySold = ranges.LikelySold(c.TitleID, c.Format)
+		c.LikelySold = ranges.sold[g]
 	}
 }
 

@@ -332,6 +332,36 @@ describe('sold copies', () => {
 	});
 });
 
+describe('the tag filter', () => {
+	/** Copies of tagged titles, as `GET /api/collection` gives each the title's tags. */
+	const tagged: CollectionItem[] = [
+		item({ copy_id: 1, name: 'Obcy', format: 'dvd', tags: ['Horror', 'Kult'] }),
+		item({ copy_id: 2, name: 'Coś', format: 'bluray', tags: ['horror'] }),
+		item({ copy_id: 3, kind: 'book', name: 'Lalka', tags: ['Do sprzedania'] }),
+		item({ copy_id: 4, kind: 'book', name: 'Lód', status: 'wishlist', tags: ['Ścisła'] }),
+		item({ copy_id: 5, name: 'Rejs' }),
+		item({ copy_id: 6, kind: 'music', name: 'Ήχοι', tags: ['ΟΣ', 'Ᲊ'] })
+	];
+
+	it.each([
+		['an empty tag lists every copy', { tag: '' }, [1, 2, 3, 4, 5, 6]],
+		['a tag of spaces is no tag', { tag: '  ' }, [1, 2, 3, 4, 5, 6]],
+		['a final sigma folds as the server folds it', { tag: 'ος' }, [6]],
+		['a capital the server folds by Go, not Postgres', { tag: 'ᲊ' }, [6]],
+		['case aside', { tag: 'HORROR' }, [1, 2]],
+		['trimmed as the server trims it', { tag: '\u00a0kult\t' }, [1]],
+		['Polish letters, case aside', { tag: 'ŚCISŁA' }, [4]],
+		['the whole tag, not a part', { tag: 'horr' }, []],
+		['a tag of several words', { tag: 'do sprzedania' }, [3]],
+		['with a medium', { tag: 'horror', format: 'bluray' }, [2]],
+		['with a status', { tag: 'ścisła', status: 'owned' }, []],
+		['with a search', { tag: 'horror', q: 'obcy' }, [1]]
+	] as [string, Partial<CollectionFilter>, number[]][])('%s', (_name, filter, copies) => {
+		const listed = filterCollection(tagged, { ...none, ...filter });
+		expect(listed.map((i) => i.copy_id)).toEqual(copies);
+	});
+});
+
 describe('searchBarcode', () => {
 	it.each([
 		['9788374690997', '9788374690997'],

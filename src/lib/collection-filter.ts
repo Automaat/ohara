@@ -8,8 +8,11 @@
  * shows.
  */
 import type { CollectionFilter, CollectionItem } from './collection';
-import { trimSpace } from './go-text';
+import { lowerCase, trimSpace } from './go-text';
 import { canonicalBarcode, checkDigitMatches } from './scan';
+import { tagMatches } from './tags';
+
+export { lowerCase };
 
 /**
  * The code the server's barcode.Normalize makes of a search: spaces, tabs and hyphens dropped,
@@ -27,20 +30,6 @@ export function searchBarcode(raw: string): string | null {
  */
 export function searchTerm(q: string): string {
 	return searchBarcode(q) ?? trimSpace(q);
-}
-
-/**
- * Lower case one character at a time, as PostgreSQL's `lower` and Go's unicode.ToLower map each
- * character on its own: a final capital sigma becomes σ, not ς, and a character whose lower case
- * is longer keeps only its first.
- */
-export function lowerCase(text: string): string {
-	let out = '';
-	for (const char of text) {
-		const lower = char.toLowerCase();
-		out += [...lower][0] ?? lower;
-	}
-	return out;
 }
 
 /**
@@ -83,7 +72,7 @@ function hasStatus(item: CollectionItem, status: CollectionFilter['status']): bo
 }
 
 /**
- * The copies the filter lists, in their order: of its kind, medium, status and location, out on
+ * The copies the filter lists, in their order: of its kind, medium, status, location and tag, out on
  * loan when it asks for that, whose barcode is the searched code or whose text holds the search,
  * case aside. A search that reads as a barcode still finds a location holding it as typed, as the
  * server does.
@@ -102,6 +91,7 @@ export function filterCollection(
 			(!f.format || item.format === f.format) &&
 			hasStatus(item, f.status) &&
 			(!f.loaned || item.loan_borrower != null) &&
+			tagMatches(item.tags, f.tag) &&
 			(!place || (item.location != null && foldLocation(item.location) === place)) &&
 			(!term ||
 				item.barcode === term ||

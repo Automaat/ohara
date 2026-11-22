@@ -639,3 +639,83 @@ func checkFolds(t *testing.T, name *regexp.Regexp, r rune, checked *int) {
 		t.Errorf("words(%q) (%U %s) = %q, want %q", string(r), r, n, got, want)
 	}
 }
+
+// diuna is a "Diuna" book wish in an edition with barcode, nil for one
+// without.
+func diuna(barcode *string) Want {
+	return Want{
+		CopyID: 7, EditionID: 70, TitleID: 700, Kind: "book", Name: "Diuna",
+		OriginalTitle: new("Dune"), Authors: []string{"Frank Herbert"}, Barcode: barcode,
+	}
+}
+
+func TestPolishBookWants(t *testing.T) {
+	solaris := Want{
+		CopyID: 8, EditionID: 80, TitleID: 800, Kind: "book", Name: "Solaris",
+		OriginalTitle: new("Solaris"), Authors: []string{"Stanisław Lem"}, Barcode: new("9788308049068"),
+	}
+	tests := []struct {
+		name    string
+		want    Want
+		matches map[string]bool
+		queries []string
+	}{
+		{"Polish ISBN", diuna(new("9788381880206")), map[string]bool{
+			"Dune Frank Herbert paperback English":  false,
+			"Frank Herbert - Dune (Ace Books 1990)": false,
+			"Diuna Frank Herbert Rebis":             true,
+		}, []string{"Diuna herbert"}},
+		{"no barcode", diuna(nil), map[string]bool{
+			"Dune Frank Herbert paperback English": false,
+			"Diuna Frank Herbert Rebis":            true,
+		}, []string{"Diuna herbert"}},
+		{"English ISBN", diuna(new("9780441013593")), map[string]bool{
+			"Frank Herbert - Dune (Ace Books 1990)": true,
+			"Diuna Frank Herbert Rebis":             true,
+		}, []string{"Dune herbert", "Diuna herbert"}},
+		{"same original and Polish title", solaris, map[string]bool{"Solaris Lem": true}, []string{"Solaris lem"}},
+		{"Polish prefix on a barcode that is no ISBN", diuna(new("97883128")), map[string]bool{
+			"Frank Herbert - Dune (Ace Books 1990)": true,
+		}, []string{"Dune herbert", "Diuna herbert"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for title, want := range tt.matches {
+				if got := tt.want.Matches(title); got != want {
+					t.Errorf("Matches(%q) = %v, want %v", title, got, want)
+				}
+			}
+			if got := tt.want.Queries(); !slices.Equal(got, tt.queries) {
+				t.Errorf("Queries() = %q, want %q", got, tt.queries)
+			}
+		})
+	}
+}
+
+func TestPolishBookWantFollowsBarcodeChange(t *testing.T) {
+	w := diuna(new("9780441013593"))
+	w.Prepare()
+	w.Barcode = new("9788381880206")
+	if w.Matches("Dune Frank Herbert paperback English") {
+		t.Error("a prepared want whose edition turned Polish still matches its original title")
+	}
+}
+
+// TestKnownTitlesKeepOriginalTitles checks that a known title, which has
+// no edition, keeps its original title for Outranks: "Dune Messiah" names
+// the sequel, not the English "Dune" wished.
+func TestKnownTitlesKeepOriginalTitles(t *testing.T) {
+	dune := diuna(new("9780441013593"))
+	messiah := Want{
+		TitleID: 701, Kind: "book", Name: "Mesjasz Diuny", OriginalTitle: new("Dune Messiah"),
+		Authors: []string{"Frank Herbert"},
+	}
+	titles := NewTitles([]Want{dune, messiah})
+	const listing = "Dune Messiah Frank Herbert paperback"
+	if !dune.Matches(listing) {
+		t.Fatalf("English Dune wish does not match %q", listing)
+	}
+	if !titles.Outranks(&dune, listing) {
+		t.Errorf("Outranks(%q) = false, want the known Dune Messiah to outrank Dune", listing)
+	}
+}

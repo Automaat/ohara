@@ -3,6 +3,8 @@ package server_test
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -51,12 +53,13 @@ func TestRemoteUserRequired(t *testing.T) {
 		{"metrics with a trailing slash", http.MethodGet, "/metrics/", "", nil, http.StatusUnauthorized, ""},
 		{"health spelled with an escape", http.MethodGet, "/heal%74h", "", nil, http.StatusUnauthorized, ""},
 		{"metrics spelled with an escape", http.MethodGet, "/metric%73", "", nil, http.StatusUnauthorized, ""},
-		{"health HEAD without header", http.MethodHead, "/health", "", nil, http.StatusUnauthorized, ""},
+		{"health HEAD spelled with an escape", http.MethodHead, "/heal%74h", "", nil, http.StatusUnauthorized, ""},
 		{"metrics HEAD without header", http.MethodHead, "/metrics", "", nil, http.StatusUnauthorized, ""},
 		{"health POST without header", http.MethodPost, "/health", "", nil, http.StatusUnauthorized, ""},
 
 		{"health without header", http.MethodGet, "/health", "", nil, http.StatusOK, ""},
 		{"metrics without header", http.MethodGet, "/metrics", "", nil, http.StatusOK, ""},
+		{"health HEAD without header", http.MethodHead, "/health", "", nil, http.StatusOK, ""},
 
 		{"API read with header", http.MethodGet, "/api/titles", "", []string{"someone"}, http.StatusOK, "GET /titles"},
 		{"API write with header", http.MethodPost, "/api/titles", `{"name":"x"}`, []string{"someone"}, http.StatusCreated, "POST /titles"},
@@ -105,6 +108,74 @@ func TestRemoteUserRequired(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestHealthHead checks that HEAD /health answers as GET /health does, status
+// and headers without the body, from the database ping, and that with the
+// Remote-User check on it needs no header, for monitors that probe with HEAD.
+func TestHealthHead(t *testing.T) {
+	tests := []struct {
+		name     string
+		require  bool
+		db       server.Pinger
+		wantCode int
+	}{
+		{"database ok, check on", true, fakeDB{}, http.StatusOK},
+		{"database down, check on", true, fakeDB{err: errors.New("down")}, http.StatusServiceUnavailable},
+		{"no database, check on", true, nil, http.StatusOK},
+		{"database ok, check off", false, fakeDB{}, http.StatusOK},
+		{"database down, check off", false, fakeDB{err: errors.New("down")}, http.StatusServiceUnavailable},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logger := slog.New(slog.DiscardHandler)
+			webFS := fstest.MapFS{"index.html": {Data: []byte("<title>Ohara</title>")}}
+			cfg := server.Config{RequireRemoteUser: tt.require}
+			srv := httptest.NewServer(server.New(cfg, logger, server.Deps{DB: tt.db, Web: webFS}))
+			t.Cleanup(srv.Close)
+
+			head := healthResponse(t, http.MethodHead, srv.URL)
+			get := healthResponse(t, http.MethodGet, srv.URL)
+			if head.code != tt.wantCode || get.code != tt.wantCode {
+				t.Fatalf("HEAD /health = %d, GET /health = %d, want %d", head.code, get.code, tt.wantCode)
+			}
+			if head.body != "" {
+				t.Fatalf("HEAD /health body = %q, want none", head.body)
+			}
+			for _, name := range []string{"Content-Type", "Content-Length", "Cache-Control"} {
+				if h, g := head.header.Get(name), get.header.Get(name); h != g {
+					t.Fatalf("HEAD /health %s = %q, GET has %q", name, h, g)
+				}
+			}
+		})
+	}
+}
+
+type healthResult struct {
+	code   int
+	header http.Header
+	body   string
+}
+
+func healthResponse(t *testing.T, method, base string) healthResult {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), method, base+"/health", http.NoBody)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	// Without compression the GET keeps its Content-Length to compare.
+	client := &http.Client{Transport: &http.Transport{DisableCompression: true}}
+	defer client.CloseIdleConnections()
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("%s /health: %v", method, err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	return healthResult{code: resp.StatusCode, header: resp.Header, body: string(body)}
 }
 
 func TestRemoteUserNotRequired(t *testing.T) {

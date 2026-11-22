@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ApiError } from './api';
+import { queueTally } from './queue-tally.svelte';
 import { logScan, recentScans } from './recent.svelte';
 import {
 	addLine,
@@ -161,6 +162,23 @@ describe('undoAdd', () => {
 		});
 		await undoAdd(s.fetchFn, add({ createdEdition: true }));
 		expect(s.calls).toEqual(['DELETE /api/copies/40', 'DELETE /api/editions/21?requeue=1']);
+	});
+
+	it.each([
+		['counts the code again once the edition is gone', gone, 1],
+		['leaves the count while another copy keeps the edition', [409, { error: 'in use' }], 0]
+	] satisfies [string, Reply, number][])('%s', async (_, editionReply, count) => {
+		await queueTally.load(
+			server({ 'GET /api/scan-queue': [200, [{ id: 1, barcode: '5901234123457' }]] }).fetchFn
+		);
+		queueTally.resolved(21, '5901234123457');
+		expect(queueTally.count).toBe(0);
+		const s = server({
+			'DELETE /api/copies/40': gone,
+			'DELETE /api/editions/21?requeue=1': editionReply
+		});
+		await undoAdd(s.fetchFn, add({ createdEdition: true }));
+		expect(queueTally.count).toBe(count);
 	});
 
 	it('undoes an add without a barcode and leaves the recent scans alone', async () => {

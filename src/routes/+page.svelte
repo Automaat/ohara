@@ -347,6 +347,7 @@
 		{/snippet}
 		{#snippet actions()}
 			{#if !emptyShelf}
+				<Button href="/series">Serie</Button>
 				<Button tone="signal" href="/titles/new">Dodaj tytuł</Button>
 			{/if}
 			<SettingsSheet />
@@ -357,6 +358,7 @@
 		<h1>Kolekcja</h1>
 		<div class="phone-add">
 			{#if !emptyShelf}
+				<Button href="/series">Serie</Button>
 				<Button href="/titles/new">Dodaj tytuł</Button>
 			{/if}
 			<SettingsSheet />

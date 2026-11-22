@@ -38,7 +38,7 @@ Same layout and tooling as `../baratie`. `package.json` and
     /seed/             # `api seed`: demo data for an empty local database
     /reqlog/           # slog handler adding a request's request_id, method and path to *Context log lines
 /src/                  # SvelteKit SPA (adapter-static, ssr off)
-  /routes/             # pages; /scan is the scanner, /scan/queue the unresolved barcodes
+  /routes/             # pages; /scan is the scanner, /scan/queue the unresolved barcodes, /series the series
   /lib/                # nav table, API client, generated API types (api.gen.ts), form helpers, scan flow (pure TS, unit tested)
   /lib/components/     # forms shared by create and edit pages, camera and quick confirm
   /service-worker/     # SUI service worker (index.ts): precache, update only on the reader's consent
@@ -155,6 +155,31 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   shown rating. `GET /api/collection` items carry it (absent while unrated),
   and Kolekcja's "Ocena malejąco" lists rated copies from 10 down,
   unrated ones last, ties in title order.
+- A series (`series`) holds titles of one kind (a composite reference to
+  `(id, kind)`), and a title sits in at most one, optionally with a whole
+  `series_number` from 1 to 10000, unique in the series (409 on
+  `series_number`). `POST` and `PUT /api/titles` name it by `series_name`,
+  not by ID, so a lookup candidate could carry one: a name matching a
+  series of the title's kind by the Go case fold `foldCase` (trimmed) joins
+  it, a new one creates it, blank or null is none. A number without a name,
+  below 1, past 10000 or a fraction answers 422 on `series_number`; a
+  `PUT` without both fields keeps the stored series, and a title turned
+  into another kind takes its series' name and number into a series of
+  that kind. A series has an optional `total_volumes` (`PUT
+  /api/series/{id}`, the key required, null clears it). `GET
+  /api/series/{id}` lists its titles by number, those without one last, each
+  `owned`, `ordered`, `wishlist` or `none` by its copies (sold ones count as
+  none), and `missing`: every number from 1 to the larger of the total and
+  the highest number held whose title has no owned copy, with that title and
+  its state, or none. `GET /api/series` lists every series with its title
+  and missing counts. The `title_series_drop_empty` trigger deletes a series
+  once its last title leaves it or is deleted, after locking its row, which
+  a save joining a title holds; a title moving between two series locks
+  both in key order. Kolekcja's header links to `/series`, the list; a
+  series page (`/series/{id}`) shows the volumes, "Brakujące tomy" and the
+  "Liczba tomów" field; the title form has "Seria" (suggesting the series
+  of the title's kind) and "Tom"; the title page shows "<series> · tom <n>"
+  linking to its series.
 - A loan (`loan`) records who has an owned copy: `POST /api/copies/{id}/loans`
   (`borrower` trimmed, at most 500 bytes; `lent_on` today in Poland when
   null; optional `due_on`, not before it) answers 201, 409 for a wish or a
@@ -665,7 +690,8 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   "Cofnij", "Dodaj tytuł" by hand, the scan sheet sending no deals or queue
   read, the queue count following a queued scan, its add and undo,
   Kolekcja's filters, which also run at 1440 × 900, and its sort orders
-  under active filters, tags from the title form to Kolekcja's filter, and
+  under active filters, tags from the title form to Kolekcja's filter,
+  series from the title form and Kolekcja to the series page, and
   cover photo uploads. `scripts/e2e.sh` builds
   the image (or takes one as its first argument), starts it from
   `e2e/compose.yaml`

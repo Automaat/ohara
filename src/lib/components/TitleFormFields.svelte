@@ -14,7 +14,9 @@
 		authorsLabel,
 		kindLabels,
 		options,
+		seriesNames,
 		type FormIssue,
+		type Series,
 		type TitleForm
 	} from '#lib/collection.js';
 	import { tagKey } from '#lib/tags.js';
@@ -26,6 +28,7 @@
 		submitLabel,
 		kindLocked = false,
 		tagSuggestions = [],
+		seriesSuggestions = [],
 		onsubmit,
 		oncancel
 	}: {
@@ -36,6 +39,8 @@
 		kindLocked?: boolean;
 		/** The tags other titles carry, offered as the reader types one. */
 		tagSuggestions?: readonly string[];
+		/** The series in use, of every kind; the form offers those of the title's kind. */
+		seriesSuggestions?: readonly Pick<Series, 'kind' | 'name'>[];
 		onsubmit: () => void;
 		oncancel?: () => void;
 	} = $props();
@@ -52,7 +57,9 @@
 		'openlibrary_id',
 		'cover_url',
 		'notes',
-		'tags'
+		'tags',
+		'series_name',
+		'series_number'
 	];
 	const general = $derived(issue && !fieldKeys.includes(issue.field) ? issue.message : null);
 	let titleForm: HTMLFormElement;
@@ -72,6 +79,17 @@
 	function suggestTags(typed: string) {
 		const key = tagKey(typed);
 		return Promise.resolve(tagChoices.filter((choice) => tagKey(choice.label).includes(key)));
+	}
+
+	/** The series of the title's kind, offered as the reader types its name. */
+	const seriesChoices = $derived(
+		seriesNames(seriesSuggestions, form.kind).map((name) => ({ value: name, label: name }))
+	);
+
+	/** The series whose names hold what was typed, compared by the key the server matches by. */
+	function suggestSeries(typed: string) {
+		const key = tagKey(typed.trim());
+		return Promise.resolve(seriesChoices.filter((choice) => tagKey(choice.label).includes(key)));
 	}
 
 	let tagInput = $state<HTMLInputElement | null>(null);
@@ -139,6 +157,35 @@
 			{/snippet}
 		</Field>
 	{/if}
+	<div class="series">
+		<Field
+			label="Seria"
+			hint="Np. „Wiedźmin”. Tytuły o tej samej nazwie serii trafiają do niej razem."
+			error={errorFor('series_name')}
+		>
+			{#snippet control(c)}
+				<Combobox
+					{...c}
+					free
+					bind:value={form.series_name}
+					options={seriesChoices}
+					search={suggestSeries}
+					searchingLabel="Szukam…"
+					failedLabel="Nie udało się wczytać podpowiedzi"
+					emptyLabel="Brak takiej serii"
+					useLabel={(text) => `Nowa seria „${text}”`}
+					countLabel={(n) => `Podpowiedzi: ${n}`}
+					moreLabel={(n) => `i jeszcze ${n}`}
+				/>
+			{/snippet}
+		</Field>
+		<Field
+			label="Tom"
+			inputmode="numeric"
+			bind:value={form.series_number}
+			error={errorFor('series_number')}
+		/>
+	</div>
 	{@render optionalFields()}
 	<div class="actions">
 		<Button tone="signal" type="submit" loading={saving}>{submitLabel}</Button>
@@ -254,6 +301,12 @@
 	.tags {
 		display: grid;
 		gap: 0.5rem;
+	}
+	.series {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) 6rem;
+		gap: 0.75rem;
+		align-items: start;
 	}
 	.tag-list {
 		display: flex;

@@ -26,6 +26,7 @@
 		displayName,
 		editionPayload,
 		editionToForm,
+		seriesLine,
 		tagHref,
 		titlePayload,
 		titleToForm,
@@ -34,6 +35,7 @@
 		type Edition,
 		type FormIssue,
 		type RatingPayload,
+		type Series,
 		type TagCount,
 		type Title,
 		type TitleDetail
@@ -110,6 +112,8 @@
 	let savingTitle = $state(false);
 	/** The tags in use, read when the title form opens; without them the form takes typed tags. */
 	let tagSuggestions = $state<string[]>([]);
+	/** The series in use, read when the title form opens, for its "Seria" suggestions. */
+	let seriesSuggestions = $state<Series[]>([]);
 
 	let copySheet = $state(false);
 	let copyTarget = $state<CopyTarget | null>(null);
@@ -269,6 +273,12 @@
 			(tags) => (tagSuggestions = tags.map((tag) => tag.name)),
 			() => {
 				// Suggestions only help; a tag can still be typed.
+			}
+		);
+		request<Series[]>(fetch, 'GET', '/api/series').then(
+			(series) => (seriesSuggestions = series),
+			() => {
+				// Suggestions only help; a series can still be typed.
 			}
 		);
 	}
@@ -609,6 +619,12 @@
 			</Card>
 		{/if}
 
+		{#if t.series_id != null && seriesLine(t)}
+			<p class="series">
+				<a href={`/series/${t.series_id}`}>{seriesLine(t)}</a>
+			</p>
+		{/if}
+
 		{#if t.tags.length > 0}
 			<ul class="tags" aria-label="Tagi">
 				{#each t.tags as tag (tag)}
@@ -660,6 +676,7 @@
 			saving={savingTitle}
 			kindLocked={t.edition_count > 0}
 			{tagSuggestions}
+			{seriesSuggestions}
 			submitLabel="Zapisz zmiany"
 			onsubmit={saveTitle}
 			oncancel={() => (titleSheet = false)}
@@ -904,6 +921,17 @@
 	.notes {
 		margin: 0;
 		white-space: pre-wrap;
+	}
+	.series {
+		margin: 0;
+	}
+	.series a {
+		color: var(--sui-link);
+		overflow-wrap: anywhere;
+	}
+	.series a:focus-visible {
+		outline: 2px solid var(--sui-focus);
+		outline-offset: 2px;
 	}
 	.tags {
 		display: flex;

@@ -25,6 +25,10 @@ import {
 	parsePLN,
 	readCollectionFilter,
 	saleLine,
+	seriesLine,
+	seriesNames,
+	seriesSummary,
+	seriesTotalPayload,
 	shelfLine,
 	shelfSummary,
 	tagHref,
@@ -498,6 +502,73 @@ describe('title form', () => {
 		const parsed = titlePayload({ ...titleToForm(null), ...patch });
 		expect(parsed.ok).toBe(false);
 		expect(!parsed.ok && parsed.issue.field).toBe(field);
+	});
+});
+
+describe('series', () => {
+	it('round-trips a title in a series', () => {
+		const form = titleToForm({ ...title, series_name: 'Wiedźmin', series_number: 3 });
+		expect(form).toMatchObject({ series_name: 'Wiedźmin', series_number: '3' });
+		const parsed = titlePayload({ ...form, series_name: '  Wiedźmin ', series_number: ' 4 ' });
+		expect(parsed.ok && parsed.value).toMatchObject({ series_name: 'Wiedźmin', series_number: 4 });
+	});
+
+	it('sends no series for blank fields, so a save takes the title out of one', () => {
+		const parsed = titlePayload(titleToForm(title));
+		expect(parsed.ok && parsed.value).toMatchObject({ series_name: null, series_number: null });
+		const unnumbered = titlePayload({ ...titleToForm(title), series_name: 'Diuna' });
+		expect(unnumbered.ok && unnumbered.value).toMatchObject({
+			series_name: 'Diuna',
+			series_number: null
+		});
+	});
+
+	it.each([
+		[{ series_name: 'Saga', series_number: '0' }, 'series_number'],
+		[{ series_name: 'Saga', series_number: '2.5' }, 'series_number'],
+		[{ series_name: 'Saga', series_number: '-1' }, 'series_number'],
+		[{ series_name: 'Saga', series_number: '10001' }, 'series_number'],
+		[{ series_name: ' ', series_number: '2' }, 'series_name']
+	])('rejects %j on %s', (patch, field) => {
+		const parsed = titlePayload({ ...titleToForm(null), name: 'x', ...patch });
+		expect(!parsed.ok && parsed.issue.field).toBe(field);
+	});
+
+	it.each([
+		[{ series_name: 'Wiedźmin', series_number: 3 }, 'Wiedźmin · tom 3'],
+		[{ series_name: 'Wiedźmin', series_number: null }, 'Wiedźmin'],
+		[{ series_name: null, series_number: null }, null],
+		[{}, null]
+	])('places %j as %s', (t, want) => {
+		expect(seriesLine(t)).toBe(want);
+	});
+
+	it.each([
+		[{ title_count: 1, missing_count: 0 }, '1 tytuł · komplet'],
+		[{ title_count: 4, missing_count: 2 }, '4 tytuły · brakuje 2'],
+		[{ title_count: 12, missing_count: 1 }, '12 tytułów · brakuje 1']
+	])('sums up %j as %s', (s, want) => {
+		expect(seriesSummary(s)).toBe(want);
+	});
+
+	it('suggests the series of the title kind only', () => {
+		const series = [
+			{ kind: 'book' as const, name: 'Wiedźmin' },
+			{ kind: 'movie' as const, name: 'Bond' },
+			{ kind: 'book' as const, name: 'Diuna' }
+		];
+		expect(seriesNames(series, 'book')).toEqual(['Wiedźmin', 'Diuna']);
+		expect(seriesNames(series, 'music')).toEqual([]);
+	});
+
+	it.each([
+		['8', { ok: true, value: { total_volumes: 8 } }],
+		[' ', { ok: true, value: { total_volumes: null } }],
+		['0', { ok: false }],
+		['abc', { ok: false }],
+		['10001', { ok: false }]
+	])('reads a total of %j', (input, want) => {
+		expect(seriesTotalPayload(input)).toMatchObject(want);
 	});
 });
 

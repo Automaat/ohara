@@ -2,11 +2,13 @@
 package server
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"io"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"runtime/debug"
@@ -157,12 +159,14 @@ func (m *methodNotAllowedWriter) Write(b []byte) (int, error) {
 func (m *methodNotAllowedWriter) Unwrap() http.ResponseWriter { return m.ResponseWriter }
 
 // recoverer turns a handler panic into a logged error, with its stack, and a
-// JSON 500 when nothing was written yet. Like chi's Recoverer it lets
-// http.ErrAbortHandler itself through and sends no 500 on a protocol upgrade.
+// JSON 500 while the response is still writable: nothing was written and the
+// connection was not hijacked. Like chi's Recoverer it lets
+// http.ErrAbortHandler itself through. A Connection: Upgrade header alone
+// does not count as an upgrade; only a hijack does.
 func recoverer(logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+			ww, hj := watchResponse(w, r)
 			defer func() {
 				rvr := recover()
 				if rvr == nil {
@@ -178,7 +182,7 @@ func recoverer(logger *slog.Logger) func(http.Handler) http.Handler {
 					"panic", rvr,
 					"stack", string(debug.Stack()),
 				)
-				if ww.Status() == 0 && r.Header.Get("Connection") != "Upgrade" {
+				if ww.Status() == 0 && !hj.hijacked {
 					writeFallback(ww, logger, http.StatusInternalServerError, "internal server error")
 				}
 			}()
@@ -188,23 +192,62 @@ func recoverer(logger *slog.Logger) func(http.Handler) http.Handler {
 }
 
 // timeoutAfter cancels the request context after d. A handler that returns
-// past the deadline without writing gets a JSON 504; one that already wrote
-// keeps its answer.
+// past the deadline without writing or hijacking gets a JSON 504; one that
+// already wrote keeps its answer. A handler that panics gets no 504: the
+// panic goes on to recoverer, which answers 500.
 func timeoutAfter(d time.Duration, logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx, cancel := context.WithTimeout(r.Context(), d)
-			ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
-			defer func() {
-				cancel()
-				if errors.Is(ctx.Err(), context.DeadlineExceeded) && ww.Status() == 0 {
-					writeFallback(ww, logger, http.StatusGatewayTimeout, "gateway timeout")
-				}
-			}()
+			defer cancel()
+			ww, hj := watchResponse(w, r)
 			next.ServeHTTP(ww, r.WithContext(ctx))
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) && ww.Status() == 0 && !hj.hijacked {
+				writeFallback(ww, logger, http.StatusGatewayTimeout, "gateway timeout")
+			}
 		})
 	}
 }
+
+// watchResponse wraps w for a middleware that answers in a handler's place:
+// the WrapResponseWriter's Status tells whether the handler wrote, and the
+// hijackRecorder under it whether the handler took the connection over.
+func watchResponse(w http.ResponseWriter, r *http.Request) (middleware.WrapResponseWriter, *hijackRecorder) {
+	hj := &hijackRecorder{ResponseWriter: w}
+	return middleware.NewWrapResponseWriter(hj, r.ProtoMajor), hj
+}
+
+// hijackRecorder notes a successful Hijack. It offers Flush, Hijack and
+// ReadFrom, so the WrapResponseWriter around it keeps all three for the
+// handler, and passes each to the writer it wraps through
+// http.ResponseController or, for ReadFrom, that writer's own ReadFrom when
+// it has one.
+type hijackRecorder struct {
+	http.ResponseWriter
+	hijacked bool
+}
+
+func (h *hijackRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	conn, rw, err := http.NewResponseController(h.ResponseWriter).Hijack()
+	if err == nil {
+		h.hijacked = true
+	}
+	return conn, rw, err
+}
+
+func (h *hijackRecorder) Flush() {
+	_ = http.NewResponseController(h.ResponseWriter).Flush()
+}
+
+func (h *hijackRecorder) ReadFrom(src io.Reader) (int64, error) {
+	if rf, ok := h.ResponseWriter.(io.ReaderFrom); ok {
+		return rf.ReadFrom(src)
+	}
+	return io.Copy(h.ResponseWriter, src)
+}
+
+// Unwrap lets http.ResponseController reach the underlying writer.
+func (h *hijackRecorder) Unwrap() http.ResponseWriter { return h.ResponseWriter }
 
 // isAbortHandler reports a panic with http.ErrAbortHandler itself, the value
 // net/http and chi's Recoverer compare against; a wrapped one is an ordinary

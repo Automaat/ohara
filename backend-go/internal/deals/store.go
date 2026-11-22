@@ -555,11 +555,13 @@ func closeConn(ctx context.Context, conn *pgxpool.Conn) {
 
 // Prune deletes the listings neither seen with a price (last_seen_at) nor
 // offered at all (last_offered_at) within olderThan, in batches of
-// pruneBatch, and reports how many it deleted. A listing whose alert is
-// still unsent with attempts left and younger than the alert window stays,
-// whatever its age, and a listing another transaction holds (a run
-// recording it, an alert on its way) is left for the next prune. Their
-// alerts go with them through deal_alert's cascade. Every answer that
+// pruneBatch, and reports how many it deleted. A dismissed listing and one
+// with an alert, sent or not, stay whatever their age: a listing still
+// offered past every answer would otherwise come back as a new row, not
+// dismissed and alerting again, and a "Kupione" press needs its listing
+// and alert (telegram_press and telegram_purchase stay with them). A
+// listing another transaction holds (a run recording it, an alert on its
+// way) is left for the next prune. Every answer that
 // holds a stored listing moves one of the two as it arrives, and Prune
 // takes the run lock exclusive without waiting: while a hunt or valuation
 // runs, in this process or holding the lock from another, it deletes
@@ -598,10 +600,10 @@ func prune(ctx context.Context, conn *pgxpool.Conn, olderThan time.Duration) (in
 		tag, err := conn.Exec(ctx, `DELETE FROM price_observation WHERE id IN (
 			SELECT o.id FROM price_observation o
 			WHERE greatest(o.last_seen_at, o.last_offered_at) < now() - make_interval(secs => $1)
-				AND NOT EXISTS (SELECT FROM deal_alert a WHERE a.observation_id = o.id
-					AND a.sent_at IS NULL AND a.attempts < $2 AND a.created_at > now() - `+alertWindow+`)
-			ORDER BY o.id LIMIT $3 FOR UPDATE SKIP LOCKED)`,
-			olderThan.Seconds(), MaxAttempts, pruneBatch)
+				AND o.dismissed_at IS NULL
+				AND NOT EXISTS (SELECT FROM deal_alert a WHERE a.observation_id = o.id)
+			ORDER BY o.id LIMIT $2 FOR UPDATE SKIP LOCKED)`,
+			olderThan.Seconds(), pruneBatch)
 		if err != nil {
 			return total, fmt.Errorf("prune listings: %w", err)
 		}

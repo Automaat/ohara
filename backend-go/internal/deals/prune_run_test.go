@@ -252,3 +252,90 @@ func TestGoneKeepsAListingANewerAnswerOffered(t *testing.T) {
 		t.Fatalf("marked %d gone: %v; want only the listing no answer offered after the run started", n, gone)
 	}
 }
+
+// ageListings makes every stored listing last seen and offered 40 days ago.
+func ageListings(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	if _, err := pool.Exec(context.Background(), `UPDATE price_observation
+		SET last_seen_at = now() - interval '40 days', last_offered_at = now() - interval '40 days'`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func listingID(t *testing.T, pool *pgxpool.Pool, externalID string) int64 {
+	t.Helper()
+	var id int64
+	if err := pool.QueryRow(context.Background(), `SELECT id FROM price_observation WHERE external_id = $1`,
+		externalID).Scan(&id); err != nil {
+		t.Fatalf("listing %s: %v", externalID, err)
+	}
+	return id
+}
+
+func TestPruneKeepsDismissedAndAlertedListings(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("a dismissed alerted listing a later hunt finds again alerts no more", func(t *testing.T) {
+		pool := dbtest.Migrated(t)
+		wishlist(t, pool, wantBluray(new(int64(5000))))
+		src := &fakeSource{name: "olx", perQuery: true, listings: []Listing{bladeRunnerListing("still-listed", 3000)}}
+		n := &fakeNotifier{}
+		h := newTestHunter(pool, n, src)
+		mustRun(t, h)
+		store := NewStore(pool)
+		if err := store.Dismiss(ctx, listingID(t, pool, "still-listed")); err != nil {
+			t.Fatal(err)
+		}
+		ageListings(t, pool)
+		if got := pruneAt30Days(t, pool); !slices.Equal(got, []string{"still-listed"}) {
+			t.Fatalf("listings %v after prune, want the dismissed one kept", got)
+		}
+		mustRun(t, h)
+		if msgs := n.messages(); len(msgs) != 1 {
+			t.Fatalf("%d Telegram messages, want the first alert only: %v", len(msgs), msgs)
+		}
+		if !isDismissed(t, pool, listingID(t, pool, "still-listed")) {
+			t.Fatal("the listing lost its dismissal")
+		}
+	})
+
+	t.Run("a dismissed listing without an alert stays dismissed", func(t *testing.T) {
+		pool := dbtest.Migrated(t)
+		wishlist(t, pool, wantBluray(nil))
+		src := &fakeSource{name: "olx", perQuery: true, listings: []Listing{bladeRunnerListing("ignored", 3000)}}
+		h := newTestHunter(pool, nil, src)
+		mustRun(t, h)
+		if err := NewStore(pool).Dismiss(ctx, listingID(t, pool, "ignored")); err != nil {
+			t.Fatal(err)
+		}
+		ageListings(t, pool)
+		if got := pruneAt30Days(t, pool); !slices.Equal(got, []string{"ignored"}) {
+			t.Fatalf("listings %v after prune, want the dismissed one kept", got)
+		}
+		mustRun(t, h)
+		if !isDismissed(t, pool, listingID(t, pool, "ignored")) {
+			t.Fatal("the listing lost its dismissal")
+		}
+	})
+
+	t.Run("Kupione works for a listing the seller took down", func(t *testing.T) {
+		pool := dbtest.Migrated(t)
+		wish := wishlist(t, pool, wantBluray(new(int64(5000))))
+		src := &fakeSource{name: "olx", perQuery: true, listings: []Listing{bladeRunnerListing("sold", 3000)}}
+		n := &fakeNotifier{}
+		mustRun(t, newTestHunter(pool, n, src))
+		if len(n.messages()) != 1 {
+			t.Fatalf("%d Telegram messages, want the alert", len(n.messages()))
+		}
+		ageListings(t, pool)
+		if got := pruneAt30Days(t, pool); !slices.Equal(got, []string{"sold"}) {
+			t.Fatalf("listings %v after prune, want the alerted one kept", got)
+		}
+		if err := NewStore(pool).BuyPress(ctx, "q1", listingID(t, pool, "sold"), wish); err != nil {
+			t.Fatalf("Kupione after prune: %v", err)
+		}
+		if c := readCopy(t, pool, wish); c.Status != "owned" || c.PriceCents == nil || *c.PriceCents != 3000 {
+			t.Fatalf("copy = %+v, want owned at 30 zł", c)
+		}
+	})
+}

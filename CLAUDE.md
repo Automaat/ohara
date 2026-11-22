@@ -369,9 +369,12 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   holds if that lock's session ends; a prune takes the lock exclusive
   without waiting and checks the count, so it never runs during one: it
   deletes nothing and tries again 10 minutes later. A
-  listing whose alert is unsent with attempts left and younger than a week
-  stays, as does one an alert holds; its other alerts go through the
-  cascade. A listing the runs still see is never pruned.
+  dismissed listing and one with a `deal_alert` row, sent or not, are
+  never pruned, so a listing still offered past every answer keeps its
+  dismissal and alert (it does not come back as a new row that alerts
+  again) and a "Kupione" press keeps its listing, alert, `telegram_press`
+  and `telegram_purchase` rows; neither is one a transaction holds. A
+  listing the runs still see is never pruned.
   Beside its range each copy gets `likely_sold`: the trimmed
   median latest price of the same pool's used OLX listings whose `gone_at`
   is at most `valuation.LikelySoldWithin` (21 days, under OLX's 30-day

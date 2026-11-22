@@ -2,6 +2,7 @@ package deals
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -61,21 +62,27 @@ func TestPrune(t *testing.T) {
 		}
 	})
 
-	t.Run("keeps an old listing whose alert is still pending", func(t *testing.T) {
+	t.Run("keeps an old listing with an alert or a dismissal", func(t *testing.T) {
 		pool := dbtest.Migrated(t)
 		alertFor(t, pool, listingSeen(t, pool, "pending", 3), 3, false, 0)
 		alertFor(t, pool, listingSeen(t, pool, "sent", 3), 3, true, 1)
 		alertFor(t, pool, listingSeen(t, pool, "gave-up", 3), 3, false, MaxAttempts)
 		alertFor(t, pool, listingSeen(t, pool, "expired", 10), 8, false, 0)
+		dismissed := listingSeen(t, pool, "dismissed", 3)
+		if _, err := pool.Exec(ctx, `UPDATE price_observation SET dismissed_at = now() WHERE id = $1`, dismissed); err != nil {
+			t.Fatal(err)
+		}
+		listingSeen(t, pool, "plain", 3)
 		n, err := NewStore(pool).Prune(ctx, day)
 		if err != nil {
 			t.Fatalf("Prune: %v", err)
 		}
-		if got := listings(t, pool); n != 3 || len(got) != 1 || got[0] != "pending" {
-			t.Fatalf("pruned %d, left %v; want 3 pruned and [pending] left", n, got)
+		want := []string{"dismissed", "expired", "gave-up", "pending", "sent"}
+		if got := listings(t, pool); n != 1 || !slices.Equal(got, want) {
+			t.Fatalf("pruned %d, left %v; want only [plain] pruned", n, got)
 		}
-		if alerts := count(t, pool, `SELECT count(*) FROM deal_alert`); alerts != 1 {
-			t.Fatalf("%d alerts left, want only the pending one: the others go with their listing", alerts)
+		if alerts := count(t, pool, `SELECT count(*) FROM deal_alert`); alerts != 4 {
+			t.Fatalf("%d alerts left, want all 4", alerts)
 		}
 	})
 

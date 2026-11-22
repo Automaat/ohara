@@ -35,6 +35,7 @@ func newUpstreams(t *testing.T) *upstreams {
 	t.Helper()
 	fixtures := map[string]string{
 		"/olx/":     "../../internal/deals/testdata/olx.json",
+		"/bluedvd/": "../../internal/deals/testdata/bluedvd.json",
 		"/pepper":   "../../internal/deals/testdata/pepper.xml",
 		"/skupszop": "",
 	}
@@ -62,6 +63,8 @@ func newUpstreams(t *testing.T) *upstreams {
 	}))
 	t.Cleanup(u.srv.Close)
 	t.Setenv("OHARA_DEALS_OLX_URL", u.srv.URL+"/olx/")
+	t.Setenv("OHARA_DEALS_BLUEDVD_URL", u.srv.URL+"/bluedvd/wp-json/wc/store/v1/products")
+	t.Setenv("OHARA_BLUEDVD", "true")
 	t.Setenv("OHARA_DEALS_PEPPER_URL", u.srv.URL+"/pepper")
 	t.Setenv("OHARA_VALUATION_SKUPSZOP_URL", u.srv.URL+"/skupszop")
 	t.Setenv("OHARA_DEALS_DELAY", "1s")
@@ -130,7 +133,7 @@ func sample(body, series string) (float64, bool) {
 func checkSources(t *testing.T) {
 	t.Helper()
 	for _, s := range metricSources(t, "ohara_source_") {
-		if !slices.Contains([]string{"olx", "pepper", "skupszop"}, s) {
+		if !slices.Contains([]string{"bluedvd", "olx", "pepper", "skupszop"}, s) {
 			t.Errorf("metrics name source %q", s)
 		}
 	}
@@ -147,16 +150,35 @@ func TestHunterAsksOnlyItsSources(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if got, paths := u.asked(); !slices.Equal(got, []string{"olx", "pepper"}) {
-		t.Fatalf("asked %v (paths %v), want olx and pepper only", got, paths)
+	if got, paths := u.asked(); !slices.Equal(got, []string{"olx", "bluedvd", "pepper"}) {
+		t.Fatalf("asked %v (paths %v), want olx, bluedvd and pepper only", got, paths)
 	}
 	if len(res.Errors) != 0 {
 		t.Fatalf("errors = %q", res.Errors)
 	}
-	if got := metricSources(t, "ohara_source_canary_ok"); !slices.Equal(got, []string{"olx", "pepper"}) {
-		t.Fatalf("canary series for %v, want olx and pepper only", got)
+	if got := metricSources(t, "ohara_source_canary_ok"); !slices.Equal(got, []string{"bluedvd", "olx", "pepper"}) {
+		t.Fatalf("canary series for %v, want bluedvd, olx and pepper only", got)
+	}
+	if got, ok := sample(scrape(t), `ohara_source_canary_ok{source="bluedvd"}`); !ok || got != 1 {
+		t.Fatalf("bluedvd canary = %v (exported %v), want 1", got, ok)
 	}
 	checkSources(t)
+}
+
+func TestHunterLeavesBlueDVDOutWhenTurnedOff(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	u := newUpstreams(t)
+	t.Setenv("OHARA_BLUEDVD", "false")
+	h, _, err := newHunter(pool, deals.NewPacer(0).Lane(), slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatalf("newHunter: %v", err)
+	}
+	if _, err := h.Run(context.Background()); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got, paths := u.asked(); !slices.Equal(got, []string{"olx", "pepper"}) {
+		t.Fatalf("asked %v (paths %v), want olx and pepper only", got, paths)
+	}
 }
 
 func TestValuationAsksOnlyItsSources(t *testing.T) {

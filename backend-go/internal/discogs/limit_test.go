@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -14,6 +15,10 @@ import (
 
 	"github.com/Automaat/ohara/backend-go/internal/discogs"
 )
+
+// noneForSale is a marketplace stats answer for a release with no copy
+// for sale, as testdata/stats_none_for_sale.json records it.
+const noneForSale = `{"num_for_sale":0,"lowest_price":null,"blocked_from_sale":false}`
 
 // arrivals stands in for the Discogs API inside a synctest bubble: it
 // answers every endpoint and keeps each request's arrival on the bubble's
@@ -46,9 +51,12 @@ func (a *arrivals) RoundTrip(r *http.Request) (*http.Response, error) {
 		rec.WriteHeader(http.StatusFound)
 		return rec.Result(), nil
 	}
-	if r.URL.Path == "/database/search" {
+	switch {
+	case r.URL.Path == "/database/search":
 		_, _ = rec.WriteString(`{"results":[{"id":1,"title":"Artist - Album"}]}`)
-	} else {
+	case strings.HasPrefix(r.URL.Path, "/marketplace/stats/"):
+		_, _ = rec.WriteString(noneForSale)
+	default:
 		_, _ = rec.WriteString(`{}`)
 	}
 	return rec.Result(), nil
@@ -488,7 +496,7 @@ func TestHTTPClientOpensConnectionPerRequest(t *testing.T) {
 	var mu sync.Mutex
 	conns := 0
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{}`))
+		_, _ = w.Write([]byte(noneForSale))
 	}))
 	srv.Config.ConnState = func(_ net.Conn, state http.ConnState) {
 		if state == http.StateNew {

@@ -54,13 +54,17 @@ type Allegro struct {
 // store ends with the latest pair. chain lists the refresh tokens of the
 // pairs this process loaded or issued since the store last confirmed one:
 // a stored pair outside it came from another process, such as
-// `api allegro-login`.
+// `api allegro-login`. A tokenOp is also the first load of the stored
+// pair, which the lookup that starts it runs itself (see load).
 type tokenOp struct {
 	done    chan struct{}
 	refresh bool
 	chain   []string
 	access  string
 	err     error
+	// abandoned marks a load that failed because the lookup running it
+	// gave up, so a lookup still waiting loads again.
+	abandoned bool
 }
 
 // Token is an OAuth token pair.
@@ -90,6 +94,7 @@ type TokenSwapper interface {
 // Allegro errors. ErrAllegroRefused is the issue's stop-and-flag condition:
 // the app is not allowed to read the catalog.
 var (
+	errLoadAborted          = errors.New("load aborted")
 	ErrAllegroNotAuthorized = errors.New("allegro not authorized: run `api allegro-login`")
 	ErrAllegroRefused       = errors.New("allegro refused catalog access")
 )
@@ -97,7 +102,7 @@ var (
 // tokenLeeway refreshes a token this long before it expires.
 const tokenLeeway = time.Minute
 
-// defaultTokenTimeout bounds one token refresh and one token save.
+// defaultTokenTimeout bounds one token load, refresh and save.
 const defaultTokenTimeout = 20 * time.Second
 
 // Name is "allegro".
@@ -157,51 +162,58 @@ func (a *Allegro) Products(ctx context.Context, code string) ([]Product, error) 
 // or force is set. A lookup that stops waiting leaves the refresh running.
 func (a *Allegro) accessToken(ctx context.Context, force bool) (string, error) {
 	for {
-		access, op, err := a.currentToken(ctx, force)
+		access, op, load, err := a.currentToken(ctx, force)
 		if op == nil {
 			return access, err
 		}
-		select {
-		case <-op.done:
-		case <-ctx.Done():
-			return "", fmt.Errorf("allegro: wait for token refresh: %w", ctx.Err())
+		if load {
+			a.load(ctx, op)
+		} else {
+			select {
+			case <-op.done:
+			case <-ctx.Done():
+				return "", fmt.Errorf("allegro: wait for token refresh: %w", ctx.Err())
+			}
 		}
-		if op.refresh {
+		switch {
+		case op.abandoned && !load:
+			continue
+		case op.refresh || op.err != nil:
 			return op.access, op.err
 		}
 	}
 }
 
 // currentToken returns a usable access token, or the operation to wait for
-// before asking again. A pair whose save failed is saved again in the
-// background.
-func (a *Allegro) currentToken(ctx context.Context, force bool) (string, *tokenOp, error) {
+// before asking again. With no pair loaded yet, the caller gets a load to
+// run itself, with load set, unless another lookup runs one already. A pair
+// whose save failed is saved again in the background.
+func (a *Allegro) currentToken(ctx context.Context, force bool) (string, *tokenOp, bool, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.token == nil {
-		t, ok, err := a.Store.Load(ctx, a.Name())
-		if err != nil {
-			return "", nil, fmt.Errorf("allegro: load token: %w", err)
+		if a.op != nil {
+			return "", a.op, false, nil
 		}
-		if !ok {
-			return "", nil, ErrAllegroNotAuthorized
+		if err := ctx.Err(); err != nil {
+			return "", nil, false, fmt.Errorf("allegro: load token: %w", err)
 		}
-		a.token = &t
-		a.chain = []string{t.Refresh}
+		a.op = &tokenOp{done: make(chan struct{})}
+		return "", a.op, true, nil
 	}
 	if !force && a.now().Add(tokenLeeway).Before(a.token.Expiry) {
 		if a.unsaved && a.op == nil {
 			a.startOp(ctx, *a.token, false)
 		}
-		return a.token.Access, nil, nil
+		return a.token.Access, nil, false, nil
 	}
 	if a.op == nil {
 		if err := ctx.Err(); err != nil {
-			return "", nil, fmt.Errorf("allegro: token refresh: %w", err)
+			return "", nil, false, fmt.Errorf("allegro: token refresh: %w", err)
 		}
 		a.startOp(ctx, *a.token, true)
 	}
-	return "", a.op, nil
+	return "", a.op, false, nil
 }
 
 // startOp runs a refresh of t, or a save of t, in its own goroutine. The
@@ -211,6 +223,36 @@ func (a *Allegro) startOp(ctx context.Context, t Token, refresh bool) {
 	op := &tokenOp{done: make(chan struct{}), refresh: refresh, chain: append(slices.Clone(a.chain), t.Refresh)}
 	a.op = op
 	go a.runOp(reqlog.Detach(context.WithoutCancel(ctx)), op, t)
+}
+
+// load runs op, the load of the stored pair, on the lookup's own context
+// bounded by the token timeout. It runs outside a.mu, so a lookup waiting
+// for it stops at its own deadline, and in the lookup's goroutine, so a
+// panicking store reaches the provider's recovery. A failed or panicked
+// load leaves no pair, so the next lookup loads again.
+func (a *Allegro) load(ctx context.Context, op *tokenOp) {
+	var t Token
+	var ok bool
+	err := errLoadAborted
+	defer func() {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		defer close(op.done)
+		a.op = nil
+		switch {
+		case err != nil:
+			op.err = fmt.Errorf("allegro: load token: %w", err)
+			op.abandoned = ctx.Err() != nil
+		case !ok:
+			op.err = ErrAllegroNotAuthorized
+		case a.token == nil:
+			a.token = &t
+			a.chain = []string{t.Refresh}
+		}
+	}()
+	loadCtx, cancel := context.WithTimeout(ctx, a.timeout())
+	defer cancel()
+	t, ok, err = a.Store.Load(loadCtx, a.Name())
 }
 
 // runOp drops a refresh token Allegro rejects, so the next lookup loads

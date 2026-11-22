@@ -171,8 +171,14 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   Hunts and valuations share one `deals.Pacer`, built in `cmd/api`, each
   in a lane of its own that paces every request of its HTTP client,
   redirects too: a request to a host is sent at least half of
-  `OHARA_DEALS_DELAY` after the other lane's last one there. A request
-  holds the site until it is written, never while it waits for an answer,
+  `OHARA_DEALS_DELAY` after the other lane's last one there. Sent means
+  its last bytes reached the connection: HTTP/1 reports a request
+  written while its end still sits in a buffer, so the pacer waits for
+  the flush, and the lane's transport sends each TLS record whole so a
+  flush is one write. HTTP/2 flushes before it reports a request
+  written, as does HTTP/1 a Content-Length body larger than the buffer;
+  those count as sent when reported written. A
+  request holds the site until it is sent, never while it waits for an answer,
   so neither run waits for the other to finish; a lane never waits for
   itself, so a run on its own keeps its pacing.
   Every run also asks each query source the canary query, wishlist or not,
@@ -488,8 +494,14 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   prices can outlive a listing and do not establish a sale. Exact-edition
   wishes require positive edition details on both sides of the comparison.
   The card shows the state, discount and sample size. Offers without a
-  baseline stay in "Wszystkie" with the reason. The navigation badge and
-  Telegram alerts use the manual limits.
+  baseline stay in "Wszystkie" with the reason. The navigation badge uses
+  the manual limits.
+- Set `OHARA_DEALS_AUTOMATIC_ALERTS=true` with the Telegram bot and chat
+  configured to send these automatic deals. The setting defaults to
+  off. At the end of each run, the hunter queues qualifying offers it
+  matched in that run and rechecks the comparison before each send,
+  including retries. Automatic alerts share the manual queue's dismissal,
+  retry and price-drop rules. Sent automatic alerts appear in "Wysłane".
 - Okazje (`/deals`) lists every wish in its "Lista życzeń" section, with
   or without offers, since Kolekcja lists none. The page asks for them
   beside the offers (`GET /api/collection?status=wishlist`) and lists

@@ -598,9 +598,12 @@ func newHunter(pool *pgxpool.Pool, lane *deals.Lane, logger *slog.Logger) (*deal
 	case token != "" || chat != "":
 		return nil, nil, errors.New("set both OHARA_TELEGRAM_BOT_TOKEN and OHARA_TELEGRAM_CHAT_ID, or neither")
 	}
+	cfg := deals.Config{
+		Interval: interval, Delay: delay, CanaryQuery: envOr("OHARA_DEALS_CANARY_QUERY", "dvd"),
+		AutomaticAlerts: os.Getenv("OHARA_DEALS_AUTOMATIC_ALERTS") == "true",
+	}
 	logger.Info("deal hunter", "interval", interval, "delay", delay, "telegram", notifier != nil,
-		"discogs_sellers", len(sellers))
-	cfg := deals.Config{Interval: interval, Delay: delay, CanaryQuery: envOr("OHARA_DEALS_CANARY_QUERY", "dvd")}
+		"automatic_alerts", cfg.AutomaticAlerts && notifier != nil, "discogs_sellers", len(sellers))
 	hunter := deals.NewHunter(store, sources, notifier, cfg, logger)
 	if poller != nil {
 		hunter.PollTelegram(poller)

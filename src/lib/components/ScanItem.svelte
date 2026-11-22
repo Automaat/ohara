@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Button, Callout, Field, Skeleton, TextInput } from '@smykla-skalski/sui';
+	import { Button, Callout, Field, Skeleton, TextInput, VisuallyHidden } from '@smykla-skalski/sui';
 	import { tick, untrack } from 'svelte';
 	import CollectionCover from '#lib/components/CollectionCover.svelte';
 	import DiscogsCredit from '#lib/components/DiscogsCredit.svelte';
@@ -93,7 +93,7 @@
 			const t = e.title;
 			const copies = e.copies.filter((c) => c.status === 'owned').length;
 			return {
-				overline: 'Masz już to wydanie',
+				overline: flow.resultLine,
 				tone: 'owned',
 				name: displayName(t),
 				meta: line([kindLabels[t.kind], t.authors.join(', '), t.year?.toString()]),
@@ -103,7 +103,7 @@
 		}
 		if (p.status === 'missing') {
 			return {
-				overline: candidate ? `Znaleziono · ${providerLabel(candidate)}` : 'Dodaj ręcznie',
+				overline: flow.resultLine,
 				tone: candidate ? 'ok' : 'quiet',
 				name: flow.form.name.trim() || undefined,
 				meta: kindLabels[flow.form.kind],
@@ -112,16 +112,12 @@
 			};
 		}
 		if (flow.choosing) {
-			const n = item?.candidates.length ?? 0;
-			return {
-				overline: n === 1 ? 'Znaleziono propozycję' : `Znaleziono propozycje: ${n}`,
-				tone: 'ok'
-			};
+			return { overline: flow.resultLine, tone: 'ok' };
 		}
 		const c = candidate;
 		const same = c?.type === flow.form.kind ? c : null;
 		return {
-			overline: c ? `Znaleziono · ${providerLabel(c)}` : 'Znaleziono',
+			overline: flow.resultLine,
 			tone: 'ok',
 			name: flow.form.name.trim() || undefined,
 			meta: line([
@@ -225,6 +221,7 @@
 {/snippet}
 
 <div class="item">
+	<VisuallyHidden role="status">{flow.announcement}</VisuallyHidden>
 	<header class={['found', { covered: header.cover }]}>
 		{#if header.cover}
 			<span class="cover">

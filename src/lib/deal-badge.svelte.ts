@@ -12,8 +12,8 @@ import {
 /**
  * The listings at or under their wish's price limit from the newest answer, null before the
  * first one, how many there are, for the Okazje tab's badge, and when its request was asked on
- * the age clock (ageClock), null before the first. The deals page lists these same listings under "Pod limitem", so a refresh
- * from any page moves the badge and the segment together.
+ * the age clock (ageClock), null before the first. The deals page adds its automatic offers to
+ * these listings under "Pod limitem".
  */
 export const dealBadge = $state<{
 	count: number;
@@ -39,8 +39,7 @@ let applied = 0;
 let watch: ReturnType<typeof setInterval> | undefined;
 
 /**
- * Asks the server for the listings under the limit and counts them in the badge, so a page that
- * lists the same answer, such as the deals page's "Pod limitem", never disagrees with the badge.
+ * Asks the server for the listings under a manual limit and counts them in the badge.
  * Each request is numbered as it starts, and an answer that arrives after a later request's
  * answer still reaches its caller but leaves the badge alone. The listings of expiring sources
  * leave the badge once their answer no longer confirms them (expireUnconfirmed), unless a newer

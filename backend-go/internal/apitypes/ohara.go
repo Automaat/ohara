@@ -92,9 +92,10 @@ func Ohara() API {
 			Of[deals.RunResult]("DealsRunResult"),
 			Of[deals.Status]("HunterStatus"),
 			Of[deals.View]("DealsView"),
+			Of[deals.AutomaticDeal]("AutomaticDeal"),
+			Of[deals.MatchedView]("MatchedDealsView"),
 			Of[deals.Keyword]("Keyword"),
 			Of[deals.KeywordInput]("KeywordPayload"),
-
 			Of[wishshare.ShareLink]("ShareLink"),
 
 			Of[valuation.Estimate]("Estimate"),

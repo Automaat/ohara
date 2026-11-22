@@ -47,6 +47,17 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   `max_price_cents` or its `max_market_percent` (1 to 100) of the
   title and format's used market price, when either holds; a listing seen again keeps its row, takes the new
   price and `last_seen_at`, and alerts if it has no alert yet. Alerts are retried up to 5 times within a week.
+  An answer that contradicts a stored listing keeps its stored price,
+  but takes its unsent alert to none (`Store.Unmatch`), so the alert
+  never goes out at that price, even in a later run that no answer
+  carries the listing. An answer contradicts it when it holds the
+  listing under a title that matches no wish (a Blu-ray listing renamed
+  "4K UHD"), the canary's answer included, or without a price, also
+  next to the listing under a matching title with a price; that record
+  is not stored, so a sent alert stays sent. `Store.Unmatch` takes the
+  listing's row as `Store.SendAlert` does, so a message already on its
+  way goes out first. An answer that matches the listing again within a
+  wish's limit queues it for that wish at the new price.
   A hunt or valuation that matches a stored listing to another title (its
   edition's) moves it to that title and the matched edition and sets
   `moved_at`; a valuation match drops the wish it was recorded for. Its
@@ -457,6 +468,17 @@ Moved from `CLAUDE.md`, whose conventions still apply.
 
 ## Frontend
 
+- For a wish with neither price limit, Okazje puts an offer in
+  "Pod limitem" when it is at least 20% below the typical asking price.
+  `GET /api/deals/matched` returns the matched offers and their comparisons.
+  The typical price is the median of at least five other verified listings
+  for the same title, medium and known new or used state, priced within
+  90 days. Repeated sightings of a source listing count once. Stored asking
+  prices can outlive a listing and do not establish a sale. Exact-edition
+  wishes require positive edition details on both sides of the comparison.
+  The card shows the state, discount and sample size. Offers without a
+  baseline stay in "Wszystkie" with the reason. The navigation badge and
+  Telegram alerts use the manual limits.
 - Okazje (`/deals`) lists every wish in its "Lista życzeń" section, with
   or without offers, since Kolekcja lists none. The page asks for them
   beside the offers (`GET /api/collection?status=wishlist`) and lists
@@ -466,7 +488,7 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   market percent), and its "Edytuj" opens the copy's form at
   `/copies/<id>`. A failed answer keeps the last list with a retry; with
   no wish the section is left out and the page's "Lista życzeń jest
-  pusta" stands. The offer segments are unchanged.
+  pusta" stands.
 - "Szukaj na Allegro" opens a new tab on click with the wish's title and,
   where available, its TV season, album artist and format. Rendering the
   wishlist makes no request to Allegro.

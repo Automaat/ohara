@@ -511,6 +511,34 @@ func (s *Store) MarkOffered(ctx context.Context, source string, externalIDs []st
 	return nil
 }
 
+// Unmatch takes the unsent alerts of source's stored listings with
+// externalIDs, which an answer held under a title that matches no want,
+// off their wishes. Like the alert of a listing moved to a title no one
+// wishes for, each goes to none, so the price it was queued at, which
+// the answer contradicts, is never sent. Its attempts, age and prices
+// stay: a later answer that matches the listing within a wish's limit
+// queues it for that wish again (queueAlert). Sent alerts and IDs of
+// listings never stored are left alone. It takes the listings' rows as
+// SendAlert does, so a message already on its way goes out first and its
+// sent alert stays.
+func (s *Store) Unmatch(ctx context.Context, source string, externalIDs []string) error {
+	if len(externalIDs) == 0 {
+		return nil
+	}
+	if _, err := s.pool.Exec(ctx, `WITH locked AS (
+			SELECT o.id FROM price_observation o
+			WHERE o.source = $1 AND o.external_id = ANY ($2) AND EXISTS (SELECT FROM deal_alert d
+				WHERE d.observation_id = o.id AND d.sent_at IS NULL AND d.copy_id IS NOT NULL)
+			ORDER BY o.id FOR UPDATE OF o)
+		UPDATE deal_alert a SET copy_id = NULL
+		FROM locked
+		WHERE a.observation_id = locked.id AND a.sent_at IS NULL AND a.copy_id IS NOT NULL`,
+		source, externalIDs); err != nil {
+		return fmt.Errorf("unmatch alerts: %w", err)
+	}
+	return nil
+}
+
 // ForgetStale deletes the listings of expiring sources that no answer has
 // offered for discogsKeep, with their alerts and purchases, dismissed or
 // not: the source's terms let them be kept only while they serve. It
@@ -974,18 +1002,23 @@ func unverifiedAlbums(ctx context.Context, q querier) ([]int64, error) {
 // Recent returns the newest deal observations that pass f. It rechecks album
 // associations before paging so an ambiguous match cannot displace a valid one.
 func (s *Store) Recent(ctx context.Context, f RecentFilter) ([]Observation, error) {
+	observations, _, err := s.recent(ctx, f, false)
+	return observations, err
+}
+
+func (s *Store) recent(ctx context.Context, f RecentFilter, automatic bool) ([]Observation, []AutomaticDeal, error) {
 	markets, err := s.marketTable(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("recent observations: %w", err)
+		return nil, nil, fmt.Errorf("recent observations: %w", err)
 	}
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
-		return nil, fmt.Errorf("recent observations: %w", err)
+		return nil, nil, fmt.Errorf("recent observations: %w", err)
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	unverified, err := unverifiedAlbums(ctx, tx)
 	if err != nil {
-		return nil, fmt.Errorf("verify stored album matches: %w", err)
+		return nil, nil, fmt.Errorf("verify stored album matches: %w", err)
 	}
 	listings := allListings
 	if f.Matched || f.UnderLimit || f.Sent {
@@ -1025,9 +1058,14 @@ func (s *Store) Recent(ctx context.Context, f RecentFilter) ([]Observation, erro
 		f.Limit, MaxAttempts, sources, f.UnderLimit, f.Matched, f.Sent, markets.titles, markets.formats, markets.cents,
 		unverified)
 	if err != nil {
-		return nil, fmt.Errorf("recent observations: %w", err)
+		return nil, nil, fmt.Errorf("recent observations: %w", err)
 	}
-	return pgx.CollectRows(rows, pgx.RowToStructByPos[Observation])
+	observations, err := pgx.CollectRows(rows, pgx.RowToStructByPos[Observation])
+	if err != nil || !automatic {
+		return observations, nil, err
+	}
+	deals, err := automaticDeals(ctx, tx, observations)
+	return observations, deals, err
 }
 
 // Dismiss hides the deal listing id from the deals view and keeps its

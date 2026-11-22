@@ -20,6 +20,7 @@
 	import { dealBadge, forgetDealListing, loadUnderLimit } from '#lib/deal-badge.svelte.js';
 	import { options, type FormIssue } from '#lib/collection.js';
 	import DealCard from '#lib/components/DealCard.svelte';
+	import { WantlistSync } from '#lib/wantlist-sync.svelte.js';
 	import WishlistShare from '#lib/components/WishlistShare.svelte';
 	import { DealDismissals } from '#lib/deal-dismissals.svelte.js';
 	import {
@@ -36,6 +37,8 @@
 		searchedFor,
 		segmentLabel,
 		sentPath,
+		wantlistPath,
+		wantlistSummary,
 		withoutDismissed,
 		type DealSegment,
 		type DealsView,
@@ -44,7 +47,8 @@
 		type KeywordKind,
 		type MarketPrice,
 		type MarketView,
-		type Observation
+		type Observation,
+		type WantlistStatus
 	} from '#lib/deals.js';
 
 	type Deals = {
@@ -167,9 +171,16 @@
 	 */
 	const reloadEvery = 10 * 60_000;
 
+	/** The Discogs wantlist sync; without a Discogs token the server says it is disabled. */
+	const wantlist = new WantlistSync({
+		status: () => request<WantlistStatus>(fetch, 'GET', wantlistPath),
+		start: () => request<WantlistStatus>(fetch, 'POST', `${wantlistPath}/sync`)
+	});
+
 	onMount(() => {
 		void load();
 		void loadKeywords();
+		void wantlist.load();
 		const clock = setInterval(() => (now = new Date()), 30_000);
 		const reload = setInterval(() => {
 			if (document.visibilityState === 'visible') void load();
@@ -181,6 +192,7 @@
 		return () => {
 			dismissals.destroy();
 			clearTimeout(poll);
+			wantlist.destroy();
 			clearInterval(clock);
 			clearInterval(reload);
 			document.removeEventListener('visibilitychange', onvisibility);
@@ -254,6 +266,8 @@
 			? `Kolejne wyszukiwanie ${intervalLabel(status)}.`
 			: 'Wyszukaj oferty przyciskiem „Szukaj teraz”.'
 	);
+
+	const syncSummary = $derived(wantlistSummary(wantlist.status?.last_result ?? null));
 
 	/** The add page started as a wish, searching titles the same way the scanner does. */
 	const addWish = '/titles/new?from=deals';
@@ -369,6 +383,32 @@
 				</Callout>
 			{/if}
 		{/if}
+	{/if}
+
+	{#if wantlist.status?.enabled}
+		<Section
+			title="Lista życzeń Discogs"
+			description="Dodaje albumy z listy życzeń, które mają wydanie Discogs, do Twojej listy życzeń na Discogs. Usuwa tylko te, które dodała Ohara, gdy znikną z listy życzeń."
+		>
+			<FormError message={wantlist.error ?? wantlist.failure} />
+			<div>
+				<Button loading={wantlist.syncing} onclick={() => void wantlist.sync()}>
+					{wantlist.status.running ? 'Synchronizuję…' : 'Synchronizuj z Discogs'}
+				</Button>
+			</div>
+			{#if syncSummary}
+				<p class="status metadata" role="status">{syncSummary}</p>
+			{/if}
+		</Section>
+	{:else if wantlist.failure}
+		<ErrorState
+			title="Nie udało się sprawdzić synchronizacji z Discogs"
+			description={wantlist.failure}
+			onretry={() => void wantlist.load()}
+			busy={wantlist.loading}
+			retryLabel="Spróbuj ponownie"
+			retryingLabel="Ponawianie…"
+		/>
 	{/if}
 
 	<WishlistShare />

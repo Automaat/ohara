@@ -160,6 +160,27 @@ func TestDoStatusWithBrokenBody(t *testing.T) {
 	}
 }
 
+// TestDoSkipBody checks that an accepted write answer is not read, so a
+// body cut short does not fail it, while a refused one still is an error.
+func TestDoSkipBody(t *testing.T) {
+	status := http.StatusCreated
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "100")
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte("short"))
+	}))
+	t.Cleanup(srv.Close)
+	req := Request{Method: http.MethodPut, URL: srv.URL, MaxBody: testCap, OK: []int{http.StatusCreated}, SkipBody: true}
+	resp, err := Do(t.Context(), srv.Client(), req)
+	if err != nil || resp.Status != http.StatusCreated || resp.Body != nil {
+		t.Fatalf("Do = %d %q, %v; want the accepted status without a body", resp.Status, resp.Body, err)
+	}
+	status = http.StatusBadRequest
+	if _, err := Do(t.Context(), srv.Client(), req); err == nil {
+		t.Fatal("a refused write with SkipBody returned no error")
+	}
+}
+
 // TestDoRefusalWithStalledBody checks that a 429 returns with its headers
 // while its page never ends.
 func TestDoRefusalWithStalledBody(t *testing.T) {

@@ -213,6 +213,64 @@ Moved from `CLAUDE.md`, whose conventions still apply.
 - The valuation never reads `discogs_inventory`, and wants are not
   matched by Discogs release ID.
 
+## Discogs wantlist
+
+- `internal/wantlist` mirrors the album wishes to the Discogs wantlist of
+  the `OHARA_DISCOGS_TOKEN` owner (`GET /oauth/identity`), push only. Okazje
+  shows "Synchronizuj z Discogs" when `GET /api/discogs/wantlist` says
+  `enabled`; `POST /api/discogs/wantlist/sync` answers 202 and runs the sync
+  in the background, 409 while one runs and 503 without the token. The page
+  asks for the status every 2 s while a sync runs and shows its counts.
+- A sync reads the whole wantlist (every page of
+  `GET /users/{username}/wants`, at most 10,000 wants), then puts on it
+  (`PUT .../wants/{release_id}`, no notes or rating) every distinct
+  `discogs_release_id` of a music wishlist copy's edition that is not
+  there yet. It counts those added, those already there and the album
+  wishes (wishlist copies) whose edition has no release ID (skipped).
+- `discogs_want` records the wants Ohara added, per username. A want is
+  removed (`DELETE`) only while it is provably Ohara's: its add was
+  confirmed (Discogs answered 2xx) and the row holds the want's
+  `date_added`. Right after its adds the same sync reads the wantlist
+  again and keeps each confirmed want's `date_added` when it falls between
+  the add leaving (after its turn in the Discogs budget, which
+  `discogs.Client.AddWant` returns) and its answer, give or take 10 s of
+  clock skew; no later sync does. Before each `DELETE` the sync reads
+  again only the page (100 wants) that held the want in its latest full
+  read and sends the `DELETE` only when the want is there with that
+  `date_added`. Listed there with another `date_added` it is the owner's
+  and its row is forgotten; missing from that page (gone, or moved as the
+  list changed) it waits for the next sync's full read. A want that was
+  there before, one the owner re-added by hand (a new `date_added`) and
+  one left unidentified (an add with no confirmation: a canceled sync, a
+  lost answer, a 5xx; or a failed second read) is never removed; its row
+  is forgotten instead.
+- What can still pass as Ohara's: a hand add or re-add of the same release
+  whose `date_added` lands within 10 s of Ohara's add request (before it
+  left or after its answer), and a hand re-add between the answer to the
+  page read before a `DELETE` and the `DELETE` leaving: one turn in the
+  Discogs budget, about 1.2 s when it is busy. Discogs has no conditional
+  delete, and no documentation found confirms a newest-first `sort` for
+  the wantlist, so the sync does not rely on one.
+- Cost on a wantlist of P pages: one full read (P requests), one more
+  after any adds (P), one request per add, and two per removal (its page
+  and the `DELETE`), all as `Background` in the shared budget. A sync
+  with nothing to change sends no write.
+- An add writes its row first, so a database failure stops the sync
+  before the request; Discogs refusing it (a redirect or a 4xx, 429
+  included) drops the row. A removal forgets the row only after Discogs
+  confirms it (2xx or 404), so a failed one is retried by the next sync
+  while the listed want keeps its `date_added`. A write is judged by its
+  status alone, its body unread, and a redirect that would turn it into a
+  GET is not followed. The first failure stops the sync; the status keeps
+  the counts so far and the failure. The last sync's status lives until
+  the process restarts. Sync requests wait in the Discogs budget as
+  `Background` ([lookup.md](lookup.md)); deal runs never start a sync, and
+  the sync never changes matching, limits or alerts.
+- `WantlistSync` (`src/lib/wantlist-sync.svelte.ts`) polls the status for
+  Okazje. When the status request fails before any status arrives, the
+  page shows the error with "Spróbuj ponownie" instead of the section;
+  leaving the page stops the polling, also for an answer still on its way.
+
 ## Wishlist share link
 
 - `internal/wishshare` keeps at most one read-only link to the wishlist

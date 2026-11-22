@@ -182,6 +182,11 @@ func (c *Client) httpClient() *http.Client {
 	paced.Transport = hopTimeout{next: client.Transport}
 	check := client.CheckRedirect
 	paced.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if req.Method != via[0].Method {
+			// net/http turns a PUT or DELETE answered 301, 302 or 303 into a
+			// GET; that GET's answer would say nothing about the write.
+			return http.ErrUseLastResponse
+		}
 		if check != nil {
 			if err := check(req, via); err != nil {
 				return err
@@ -226,22 +231,64 @@ func (b cancelOnClose) Close() error {
 }
 
 // get waits for the token's budget, fetches path, decodes the JSON body
-// into out and runs check on it. The outcome counts in the source health
-// metrics: ok only once the body decodes and passes check; a request the
-// budget kept back was never sent and does not count. A base URL that does
-// not parse counts as an error and is timed like a sent request. Errors name the
-// path without the query.
+// into out and runs check on it; see send.
 func (c *Client) get(ctx context.Context, path string, out any, check func() error) error {
-	body, err := c.send(ctx, Source, path)
-	if err != nil {
-		if _, ok := errors.AsType[notSentError](err); !ok {
-			metrics.ObserveSource(Source, outcome(err))
-		}
-		return err
+	return c.send(ctx, http.MethodGet, path, nil, out, check, nil)
+}
+
+// send waits for the token's budget, sends method to path and, when out
+// is not nil, decodes the JSON body into out and runs check on it. ok
+// lists the accepted statuses, 200 when empty; with out nil the body is
+// not read. A redirect that would change the method is not followed, so it
+// answers with its own status. The outcome counts in the
+// source health metrics: ok only once the body decodes and passes check; a
+// request the budget kept back was never sent and does not count. A base
+// URL that does not parse counts as an error and is timed like a sent
+// request. Errors name the path without the query. When sent is not nil
+// it gets the time the request left, after its turn in the budget.
+func (c *Client) send(ctx context.Context, method, path string, ok []int, out any, check func() error, sent *time.Time) error {
+	base := c.BaseURL
+	if base == "" {
+		base = BaseURL
 	}
-	if err := json.Unmarshal(body, out); err != nil {
-		metrics.ObserveSource(Source, metrics.SourceParseError)
-		return fmt.Errorf("discogs: parse: %w", err)
+	start := time.Now()
+	u, err := url.Parse(base + path)
+	if err != nil {
+		metrics.ObserveSource(Source, metrics.SourceError)
+		metrics.ObserveSourceDuration(Source, time.Since(start))
+		return errors.New("discogs: build request: invalid URL")
+	}
+	if err := c.Limiter.Wait(ctx, c.Priority); err != nil {
+		return fmt.Errorf("discogs: %s %s: wait for rate budget: %w", method, u.Path, err)
+	}
+	if sent != nil {
+		*sent = time.Now()
+	}
+	resp, err := fetch.Do(ctx, c.httpClient(), fetch.Request{
+		Source: Source,
+		Method: method,
+		URL:    base + path,
+		Header: http.Header{
+			"Accept":        {"application/vnd.discogs.v2.discogs+json"},
+			"User-Agent":    {UserAgent},
+			"Authorization": {"Discogs token=" + c.Token},
+		},
+		MaxBody:  maxBody,
+		OK:       ok,
+		SkipBody: out == nil,
+	})
+	if err != nil {
+		metrics.ObserveSource(Source, fetch.Outcome(err))
+		if se, ok := errors.AsType[fetch.StatusError](err); ok {
+			return StatusError{Code: se.Code}
+		}
+		return fmt.Errorf("discogs: %w", err)
+	}
+	if out != nil {
+		if err := json.Unmarshal(resp.Body, out); err != nil {
+			metrics.ObserveSource(Source, metrics.SourceParseError)
+			return fmt.Errorf("discogs: parse: %w", err)
+		}
 	}
 	if check != nil {
 		if err := check(); err != nil {
@@ -253,28 +300,12 @@ func (c *Client) get(ctx context.Context, path string, out any, check func() err
 	return nil
 }
 
-// notSentError is a request the budget kept back: it never reached Discogs.
-type notSentError struct{ err error }
-
-func (e notSentError) Error() string { return e.err.Error() }
-
-func (e notSentError) Unwrap() error { return e.err }
-
-// outcome is the source health status of a request send failed.
-func outcome(err error) string {
-	if se, ok := errors.AsType[StatusError](err); ok {
-		return "http_" + strconv.Itoa(se.Code)
-	}
-	return fetch.Outcome(err)
-}
-
-// send waits for the token's budget and returns the body of path's 200
-// answer, timed under source in the request duration metric. An answer
-// with another status is a StatusError; a request the budget kept back
-// is a notSentError. A base URL that does not
-// parse is timed like a sent request. Errors name the path without the
-// query.
-func (c *Client) send(ctx context.Context, source, path string) ([]byte, error) {
+// inventoryBody waits for the token's budget and returns the body of
+// path's 200 answer, timed under source in the request duration metric
+// and counted in no source health metric: the caller counts it. An answer
+// with another status is a StatusError. A base URL that does not parse is
+// timed like a sent request. Errors name the path without the query.
+func (c *Client) inventoryBody(ctx context.Context, source, path string) ([]byte, error) {
 	base := c.BaseURL
 	if base == "" {
 		base = BaseURL
@@ -286,7 +317,7 @@ func (c *Client) send(ctx context.Context, source, path string) ([]byte, error) 
 		return nil, errors.New("discogs: build request: invalid URL")
 	}
 	if err := c.Limiter.Wait(ctx, c.Priority); err != nil {
-		return nil, notSentError{fmt.Errorf("discogs: GET %s: wait for rate budget: %w", u.Path, err)}
+		return nil, fmt.Errorf("discogs: GET %s: wait for rate budget: %w", u.Path, err)
 	}
 	resp, err := fetch.Do(ctx, c.httpClient(), fetch.Request{
 		Source: source,
@@ -316,5 +347,5 @@ const InventorySize = 100
 // counts it under source, which also times it.
 func (c *Client) Inventory(ctx context.Context, source, seller string) ([]byte, error) {
 	q := url.Values{"sort": {"listed"}, "sort_order": {"desc"}, "per_page": {strconv.Itoa(InventorySize)}}
-	return c.send(ctx, source, "/users/"+url.PathEscape(seller)+"/inventory?"+q.Encode())
+	return c.inventoryBody(ctx, source, "/users/"+url.PathEscape(seller)+"/inventory?"+q.Encode())
 }

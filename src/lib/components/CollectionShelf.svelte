@@ -205,6 +205,7 @@
 		{#each drawn as row, i (row.copy_id)}
 			{@const name = displayName(row)}
 			{@const wish = row.status === 'wishlist'}
+			{@const lent = row.loan_borrower != null}
 			{@const sold = row.status === 'sold'}
 			<li
 				data-cover-title={row.title_id}
@@ -213,10 +214,10 @@
 				aria-posinset={i + 1}
 			>
 				<div class="artwork">
-					<CollectionCover kind={row.kind} url={row.cover_url} large {name} {wish} />
+					<CollectionCover kind={row.kind} url={row.cover_url} large {name} {wish} {lent} />
 				</div>
 				<Link href={`/titles/${row.title_id}`}>{name}</Link>
-				<span class="meta" class:wish class:sold>{shelfLine(row)}</span>
+				<span class="meta" class:wish class:sold class:lent>{shelfLine(row)}</span>
 			</li>
 		{/each}
 	</ul>
@@ -312,8 +313,10 @@
 			white-space: nowrap;
 		}
 
+		/* A wish's limit, a sale and a loan's "po terminie" wrap rather than vanish past the edge. */
 		.meta.wish,
-		.meta.sold {
+		.meta.sold,
+		.meta.lent {
 			white-space: normal;
 			overflow-wrap: anywhere;
 		}

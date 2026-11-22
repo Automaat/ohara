@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/Automaat/ohara/backend-go/internal/barcode"
@@ -75,6 +76,10 @@ var (
 	ErrHasCopies        = errors.New("edition still has copies")
 	// ErrRequestDiscarded refuses a create whose request key a discard gave up.
 	ErrRequestDiscarded = errors.New("this add was already undone")
+	ErrNotOwned         = errors.New("only owned copies can be lent")
+	ErrAlreadyLent      = errors.New("this copy is already lent")
+	ErrLentCopyStays    = errors.New("a lent copy stays owned until it comes back")
+	ErrReturned         = errors.New("this loan is already returned")
 )
 
 // Date is a calendar day carried as YYYY-MM-DD in JSON.
@@ -185,6 +190,9 @@ type CopyInput struct {
 	// for, null when unknown.
 	SoldOn         *Date  `json:"sold_on,omitempty" ts:",null"`
 	SalePriceCents *int64 `json:"sale_price_cents,omitempty" ts:",null"`
+	// Location is where an owned copy is stored, such as "Regał 2"; a
+	// wishlist or sold copy has none.
+	Location *string `json:"location,omitempty" ts:",null"`
 	// RequestKey makes a create safe to retry: a second create with the
 	// same key returns the first copy. Updates ignore it.
 	RequestKey *string `json:"request_key,omitempty"`
@@ -234,6 +242,16 @@ func trimOpt(s *string) *string {
 func checkLen(field, value string, limit int) *httpx.FieldError {
 	if len(value) > limit {
 		return fieldErr(field, "is too long")
+	}
+	return nil
+}
+
+// checkText refuses control characters in one-line text: Postgres text
+// cannot hold a NUL, and a line break or tab would not survive the form's
+// one-line field, which would rewrite the value on its next save.
+func checkText(field, value string) *httpx.FieldError {
+	if strings.ContainsFunc(value, unicode.IsControl) {
+		return fieldErr(field, "is not valid")
 	}
 	return nil
 }
@@ -454,6 +472,7 @@ func (in *CopyInput) Normalize() *httpx.FieldError {
 	in.Notes = strings.TrimSpace(in.Notes)
 	in.AcquiredAs = trimOpt(in.AcquiredAs)
 	in.Condition = trimOpt(in.Condition)
+	in.Location = trimOpt(in.Location)
 	key, fe := normalizeRequestKey(in.RequestKey)
 	if fe != nil {
 		return fe
@@ -493,11 +512,16 @@ func (in *CopyInput) Normalize() *httpx.FieldError {
 			return fieldErr("purchased_on", "applies only to owned and sold copies")
 		}
 	}
+	if in.Location != nil && in.Status != StatusOwned {
+		return fieldErr("location", "applies only to owned copies")
+	}
 	if e := in.checkSale(); e != nil {
 		return e
 	}
 	return firstErr(
 		checkLen("shop", in.Shop, maxText),
+		checkLen("location", deref(in.Location), maxText),
+		checkText("location", deref(in.Location)),
 		checkLen("notes", in.Notes, maxNotes),
 		checkEnum("acquired_as", in.AcquiredAs, acquiredAs),
 		checkEnum("condition", in.Condition, conditions),
@@ -520,6 +544,57 @@ func (in *CopyInput) checkSale() *httpx.FieldError {
 		return fieldErr("sale_price_cents", "applies only to sold copies")
 	}
 	return nil
+}
+
+// LoanInput is the body of POST /api/copies/{id}/loans: who borrows an owned
+// copy, since when (today in Poland when null) and until when (optional).
+type LoanInput struct {
+	Borrower string `json:"borrower"`
+	LentOn   *Date  `json:"lent_on"`
+	DueOn    *Date  `json:"due_on"`
+}
+
+// Normalize trims the input in place and checks it. A due date before a
+// lent_on left out is checked against today by the store.
+func (in *LoanInput) Normalize() *httpx.FieldError {
+	in.Borrower = strings.TrimSpace(in.Borrower)
+	switch {
+	case in.Borrower == "":
+		return fieldErr("borrower", "cannot be empty")
+	case len(in.Borrower) > maxText:
+		return fieldErr("borrower", "is too long")
+	case strings.ContainsRune(in.Borrower, 0):
+		return fieldErr("borrower", "is not valid")
+	}
+	if in.LentOn != nil {
+		return checkDue(in.DueOn, in.LentOn.Time)
+	}
+	return nil
+}
+
+// checkDue refuses a due date before the day the copy was lent.
+func checkDue(due *Date, lentOn time.Time) *httpx.FieldError {
+	if due != nil && due.Before(lentOn) {
+		return fieldErr("due_on", "cannot be before lent_on")
+	}
+	return nil
+}
+
+// ReturnInput is the body of PUT /api/loans/{id}: the day the copy came back.
+type ReturnInput struct {
+	ReturnedOn *Date `json:"returned_on"`
+}
+
+// Loan is one lending of an owned copy; ReturnedOn is null while it is out.
+type Loan struct {
+	ID         int64     `json:"id"`
+	CopyID     int64     `json:"copy_id"`
+	Borrower   string    `json:"borrower"`
+	LentOn     Date      `json:"lent_on"`
+	DueOn      *Date     `json:"due_on"`
+	ReturnedOn *Date     `json:"returned_on"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 func checkPrice(field string, cents *int64) *httpx.FieldError {

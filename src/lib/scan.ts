@@ -407,11 +407,7 @@ export function stickyAfter(sticky: Sticky, f: QuickForm): Sticky {
 	return { shop, acquired_as: f.acquired_as, shops: rememberShop(sticky.shops, shop) };
 }
 
-/** A date as the API and a date field take it, YYYY-MM-DD, in local time. */
-export function isoDate(d: Date): string {
-	const pad = (n: number) => String(n).padStart(2, '0');
-	return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
+export { isoDate } from './collection';
 
 /**
  * The quick confirm for a candidate, or a blank one for a barcode added by hand. The price
@@ -587,7 +583,8 @@ export function scanCopyPayload(f: QuickForm, editionID: number, requestKey: str
 			max_price: owned ? '' : f.price,
 			market_percent: '',
 			sold_on: '',
-			sale_price: ''
+			sale_price: '',
+			location: ''
 		},
 		editionID
 	);

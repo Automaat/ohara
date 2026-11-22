@@ -28,6 +28,7 @@
 		formatLabels,
 		formatPLN,
 		kindLabels,
+		loanedLabel,
 		readCollectionFilter,
 		shelfSummary,
 		shelvedCount,
@@ -39,7 +40,7 @@
 		type CollectionFilter,
 		type CollectionItem
 	} from '#lib/collection.js';
-	import { filterCollection } from '#lib/collection-filter.js';
+	import { filterCollection, locationsInUse } from '#lib/collection-filter.js';
 	import {
 		collectionSortLabels,
 		sortCopies,
@@ -151,7 +152,7 @@
 	});
 
 	function set<K extends keyof CollectionFilter>(key: K, value: CollectionFilter[K]) {
-		if (key === 'q') query = value;
+		if (key === 'q' && typeof value === 'string') query = value;
 		updateFilter({ ...filter, [key]: value });
 	}
 
@@ -200,9 +201,20 @@
 	}
 
 	function setStatus(status: CollectionFilter['status']) {
-		// A title has no format, so listing titles without copies drops the format filter.
-		updateFilter({ ...filter, status, format: status === 'none' ? '' : filter.format });
+		// A title has no format, location or loan, so listing titles without copies drops those
+		// filters.
+		const titles = status === 'none';
+		updateFilter({
+			...filter,
+			status,
+			format: titles ? '' : filter.format,
+			location: titles ? '' : filter.location,
+			loaned: titles ? false : filter.loaned
+		});
 	}
+
+	/** The places the loaded copies are stored at, for the sheet's "Miejsce". */
+	const locations = $derived(locationsInUse(collection?.items ?? []));
 
 	// A no-break space keeps the line's height until the counts arrive, so nothing below moves.
 	const summary = $derived(overview ? shelfSummary(overview.totals) : '\u00a0');
@@ -255,7 +267,9 @@
 				{ key: 'q', label: filter.q.trim() },
 				{ key: 'kind', label: filter.kind && kindLabels[filter.kind] },
 				{ key: 'format', label: filter.format && formatLabels[filter.format] },
-				{ key: 'status', label: filter.status && collectionStatusLabels[filter.status] }
+				{ key: 'location', label: filter.location },
+				{ key: 'status', label: filter.status && collectionStatusLabels[filter.status] },
+				{ key: 'loaned', label: filter.loaned ? loanedLabel : '' }
 			] as const
 		).filter((entry) => entry.label)
 	);
@@ -277,13 +291,23 @@
 				label: formatLabels[filter.format],
 				remove: () => set('format', '')
 			},
+			!!filter.location && {
+				key: 'location',
+				label: `Miejsce: ${filter.location}`,
+				remove: () => set('location', '')
+			},
 			// The wishlist has its own chip beside the list.
 			filter.status &&
 				filter.status !== 'wishlist' && {
 					key: 'status',
 					label: collectionStatusLabels[filter.status],
 					remove: () => set('status', '')
-				}
+				},
+			filter.loaned === true && {
+				key: 'loaned',
+				label: loanedLabel,
+				remove: () => set('loaned', false)
+			}
 		].filter((choice) => choice !== false && choice !== '')
 	);
 </script>
@@ -347,9 +371,14 @@
 		{sort}
 		format={filter.format}
 		status={filter.status}
+		loaned={filter.loaned ?? false}
+		location={filter.location ?? ''}
+		{locations}
 		onsort={setSort}
 		onformat={(format) => set('format', format)}
 		onstatus={setStatus}
+		onloaned={(loaned) => set('loaned', loaned)}
+		onlocation={(location) => set('location', location)}
 	/>
 </div>
 
@@ -483,7 +512,7 @@
 							<div class="status-details">
 								<Link href={`/copies/${row.copy_id}`}>
 									<Pill tone={row.status === 'owned' ? 'success' : 'neutral'}>
-										{statusLabels[row.status]}
+										{row.loan_borrower != null ? 'Wypożyczony' : statusLabels[row.status]}
 									</Pill>
 								</Link>
 								{#if row.status === 'sold'}

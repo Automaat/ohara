@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { purchaseDate } from './polish';
 import {
 	centsToInput,
 	collectionSearch,
@@ -13,7 +14,11 @@ import {
 	formatOptions,
 	formatPLN,
 	kindCounts,
+	loanPayload,
+	loanSummary,
+	loanToForm,
 	options,
+	returnDay,
 	parsePLN,
 	readCollectionFilter,
 	saleLine,
@@ -29,6 +34,8 @@ import {
 	unpricedLabel,
 	wishLine,
 	withoutCopies,
+	type CopyForm,
+	type CopyPayload,
 	type Title
 } from './collection';
 
@@ -133,6 +140,28 @@ describe('collection search links', () => {
 		expect(readCollectionFilter(new URLSearchParams(collectionSearch(filter)))).toEqual(filter);
 	});
 
+	it('keeps the lent copies in the address, as the server reads them, with the other filters', () => {
+		const filter = { kind: 'book', format: '', status: 'owned', q: 'Lem', loaned: true } as const;
+		expect(collectionSearch(filter)).toBe('?kind=book&status=owned&loaned=1&q=Lem');
+		expect(readCollectionFilter(new URLSearchParams(collectionSearch(filter)))).toEqual(filter);
+		expect(collectionSearch({ ...filter, loaned: false })).toBe('?kind=book&status=owned&q=Lem');
+		expect(readCollectionFilter(new URLSearchParams('loaned=true'))).toEqual({
+			kind: '',
+			format: '',
+			status: '',
+			q: ''
+		});
+	});
+
+	it('drops the loan filter while titles without copies are listed', () => {
+		expect(readCollectionFilter(new URLSearchParams('status=none&loaned=1'))).toEqual({
+			kind: '',
+			format: '',
+			status: 'none',
+			q: ''
+		});
+	});
+
 	it('keeps the sold copies in the address, with kind, format and search', () => {
 		const filter = { kind: 'movie', format: 'dvd', status: 'sold', q: 'Alien' } as const;
 		expect(collectionSearch(filter)).toBe('?kind=movie&format=dvd&status=sold&q=Alien');
@@ -155,6 +184,97 @@ describe('collection search links', () => {
 			status: 'none',
 			q: ''
 		});
+	});
+});
+
+describe('the location in collection links', () => {
+	it('round-trips a location with the other filters', () => {
+		const filter = {
+			kind: 'movie',
+			format: 'dvd',
+			status: 'owned',
+			location: 'Regał 2 & pudło',
+			q: 'Alien'
+		} as const;
+		expect(collectionSearch(filter)).toBe(
+			'?kind=movie&format=dvd&status=owned&location=Rega%C5%82+2+%26+pud%C5%82o&q=Alien'
+		);
+		expect(readCollectionFilter(new URLSearchParams(collectionSearch(filter)))).toEqual(filter);
+	});
+
+	it('leaves out a blank location and trims one with spaces', () => {
+		const blank = { kind: '', format: '', status: '', location: '  ', q: '' } as const;
+		expect(collectionSearch(blank)).toBe('');
+		expect(readCollectionFilter(new URLSearchParams('location=%20Rega%C5%82%202%20'))).toEqual({
+			kind: '',
+			format: '',
+			status: '',
+			location: 'Regał 2',
+			q: ''
+		});
+		expect(readCollectionFilter(new URLSearchParams('location=%20'))).not.toHaveProperty(
+			'location'
+		);
+	});
+
+	it('drops the location while titles without copies are listed', () => {
+		expect(
+			readCollectionFilter(new URLSearchParams('status=none&location=Rega%C5%82%202'))
+		).not.toHaveProperty('location');
+	});
+});
+
+const anyFilter = { kind: '', format: '', status: '', q: '' } as const;
+
+/** The copy a form describes, as the server would answer it. */
+function copyPayloadOf(form: CopyForm): CopyPayload {
+	const parsed = copyPayload(form, 3);
+	if (!parsed.ok) throw new Error(parsed.issue.message);
+	return parsed.value;
+}
+
+describe('the location of a copy', () => {
+	const owned = { ...copyToForm(null), location: '  Regał 2 ' };
+
+	it('round-trips through the copy form', () => {
+		const form = copyToForm({
+			edition_id: 3,
+			status: 'owned',
+			price_cents: null,
+			purchased_on: null,
+			shop: '',
+			acquired_as: null,
+			condition: null,
+			notes: '',
+			max_price_cents: null,
+			location: 'Regał 2'
+		});
+		expect(form.location).toBe('Regał 2');
+		const parsed = copyPayload(form, 3);
+		expect(parsed.ok && parsed.value.location).toBe('Regał 2');
+	});
+
+	it('is sent trimmed for an owned copy', () => {
+		const parsed = copyPayload(owned, 3);
+		expect(parsed.ok && parsed.value.location).toBe('Regał 2');
+	});
+
+	it('keeps a byte order mark the server keeps, so saving other fields leaves it', () => {
+		const form = copyToForm({ ...copyPayloadOf(owned), location: '\ufeffRegał' });
+		const parsed = copyPayload({ ...form, notes: 'Nowe' }, 3);
+		expect(parsed.ok && parsed.value.location).toBe('\ufeffRegał');
+		expect(
+			readCollectionFilter(
+				new URLSearchParams(collectionSearch({ ...anyFilter, location: '\ufeffRegał' }))
+			).location
+		).toBe('\ufeffRegał');
+	});
+
+	it('is left out when blank or on a wish', () => {
+		const blank = copyPayload({ ...owned, location: ' ' }, 3);
+		expect(blank.ok && 'location' in blank.value).toBe(false);
+		const wish = copyPayload({ ...owned, status: 'wishlist' }, 3);
+		expect(wish.ok && 'location' in wish.value).toBe(false);
 	});
 });
 
@@ -646,6 +766,25 @@ describe('shelf tile line', () => {
 	});
 
 	it.each([
+		{ due: '2026-05-09', want: 'Wypożyczony: Ania · po terminie' },
+		{ due: '2026-05-10', want: 'Wypożyczony: Ania' },
+		{ due: '2026-05-11', want: 'Wypożyczony: Ania' },
+		{ due: undefined, want: 'Wypożyczony: Ania' }
+	])('names who has a lent copy due on $due, late only after that day', ({ due, want }) => {
+		const lent = { ...owned, loan_borrower: 'Ania', loan_due_on: due };
+		expect(shelfLine(lent, '2026-05-10')).toBe(want);
+	});
+
+	it('takes the reader’s today when none is given', () => {
+		expect(shelfLine({ ...owned, loan_borrower: 'Ania', loan_due_on: '2000-01-01' })).toBe(
+			'Wypożyczony: Ania · po terminie'
+		);
+		expect(shelfLine({ ...owned, loan_borrower: 'Ania', loan_due_on: '2999-01-01' })).toBe(
+			'Wypożyczony: Ania'
+		);
+	});
+
+	it.each([
 		{ sold: '2026-05-10', cents: 3500, want: /^Sprzedany 10 maj 2026 · 35,00\szł$/ },
 		{ sold: '2026-05-10', cents: null, want: /^Sprzedany 10 maj 2026$/ },
 		{ sold: '2026-05-10', cents: 0, want: /^Sprzedany 10 maj 2026 · 0,00\szł$/ }
@@ -660,5 +799,61 @@ describe('shelf tile line', () => {
 		expect(shelfLine(owned)).toBe('Stanisław Lem · Twarda oprawa');
 		expect(shelfLine({ ...owned, authors: [], format: 'bluray', binding: null })).toBe('Blu-ray');
 		expect(shelfLine({ ...owned, authors: undefined, binding: null })).toBe('Wydanie bez opisu');
+	});
+});
+
+describe('loans', () => {
+	it('starts a loan form lent today, with no borrower or due date', () => {
+		expect(loanToForm('2026-05-10')).toEqual({ borrower: '', lent_on: '2026-05-10', due_on: '' });
+	});
+
+	it.each([
+		{
+			form: { borrower: '  Ania ', lent_on: '2026-05-10', due_on: '2026-06-01' },
+			want: { ok: true, value: { borrower: 'Ania', lent_on: '2026-05-10', due_on: '2026-06-01' } }
+		},
+		{
+			form: { borrower: 'Ania', lent_on: ' ', due_on: '' },
+			want: { ok: true, value: { borrower: 'Ania', lent_on: null, due_on: null } }
+		},
+		{
+			form: { borrower: 'Ania', lent_on: '2026-05-10', due_on: '2026-05-10' },
+			want: { ok: true, value: { borrower: 'Ania', lent_on: '2026-05-10', due_on: '2026-05-10' } }
+		},
+		{ form: { borrower: ' ', lent_on: '', due_on: '' }, field: 'borrower' },
+		{ form: { borrower: 'Ania', lent_on: '10.05.2026', due_on: '' }, field: 'lent_on' },
+		{ form: { borrower: 'Ania', lent_on: '', due_on: 'jutro' }, field: 'due_on' },
+		{ form: { borrower: 'Ania', lent_on: '2026-05-10', due_on: '2026-05-09' }, field: 'due_on' }
+	])('reads a loan form $form', ({ form, want, field }) => {
+		const parsed = loanPayload(form);
+		if (want) expect(parsed).toEqual(want);
+		else expect(!parsed.ok && parsed.issue.field).toBe(field);
+	});
+
+	const loan = { borrower: 'Ania', lent_on: '2026-05-01', due_on: null, returned_on: null };
+	const may = (d: number) => purchaseDate(`2026-05-${String(d).padStart(2, '0')}`);
+	it.each([
+		{ over: {}, want: `Ania · od ${may(1)}` },
+		{ over: { due_on: '2026-05-10' }, want: `Ania · od ${may(1)} · termin ${may(10)}` },
+		{
+			over: { due_on: '2026-05-09' },
+			want: `Ania · od ${may(1)} · termin ${may(9)} · po terminie`
+		},
+		{
+			over: { due_on: '2026-05-09', returned_on: '2026-05-20' },
+			want: `Ania · ${may(1)} – ${may(20)}`
+		}
+	])('sums up a loan $over on 10 May', ({ over, want }) => {
+		expect(loanSummary({ ...loan, ...over }, '2026-05-10')).toBe(want);
+	});
+});
+
+describe('return day', () => {
+	it.each([
+		{ lent: '2026-05-01', today: '2026-05-10', want: '2026-05-10' },
+		{ lent: '2026-05-10', today: '2026-05-10', want: '2026-05-10' },
+		{ lent: '2026-05-11', today: '2026-05-10', want: '2026-05-11' }
+	])('returns a loan from $lent on $today on $want', ({ lent, today, want }) => {
+		expect(returnDay(lent, today)).toBe(want);
 	});
 });

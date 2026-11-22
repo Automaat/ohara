@@ -631,6 +631,70 @@ func TestCollectionViewFiltersAndTotals(t *testing.T) {
 	}
 }
 
+func TestCollectionViewLoans(t *testing.T) {
+	a := newAPI(t)
+	dvd := a.edition(obj{"title_id": a.title("movie", "Seksmisja"), "format": "dvd"})
+	paper := a.edition(obj{"title_id": a.title("book", "Solaris")})
+	lentDue := a.copyOf(obj{"edition_id": dvd, "status": "owned", "price_cents": 2000})
+	lentOpen := a.copyOf(obj{"edition_id": paper, "status": "owned"})
+	back := a.copyOf(obj{"edition_id": paper, "status": "owned", "price_cents": 1500})
+	a.copyOf(obj{"edition_id": dvd, "status": "owned"})
+	a.copyOf(obj{"edition_id": dvd, "status": "wishlist"})
+
+	lend := func(copyID int64, body obj) collection.Loan {
+		t.Helper()
+		var l collection.Loan
+		a.mustDo(http.MethodPost, fmt.Sprintf("/api/copies/%d/loans", copyID), body, &l, http.StatusCreated)
+		return l
+	}
+	lend(lentDue, obj{"borrower": "Ania", "lent_on": "2026-05-01", "due_on": "2026-06-01"})
+	lend(lentOpen, obj{"borrower": "Bartek"})
+	returned := lend(back, obj{"borrower": "Celina", "lent_on": "2026-04-01"})
+	a.mustDo(http.MethodPut, fmt.Sprintf("/api/loans/%d", returned.ID), obj{"returned_on": "2026-04-20"}, nil, http.StatusOK)
+
+	var view collection.CollectionView
+	a.mustDo(http.MethodGet, "/api/collection", nil, &view, http.StatusOK)
+	want := map[int64][2]string{lentDue: {"Ania", "2026-06-01"}, lentOpen: {"Bartek", ""}}
+	for _, it := range view.Items {
+		borrower := ""
+		if it.LoanBorrower != nil {
+			borrower = *it.LoanBorrower
+		}
+		if got := [2]string{borrower, day(it.LoanDueOn)}; got != want[it.CopyID] {
+			t.Errorf("copy %d loan = %q, want %q", it.CopyID, got, want[it.CopyID])
+		}
+	}
+	if want := (collection.Totals{Copies: 5, Owned: 4, Wishlist: 1, Priced: 2, SpentCents: 3500}); view.Totals != want {
+		t.Fatalf("totals = %+v, want %+v: a lent copy stays owned", view.Totals, want)
+	}
+
+	tests := []struct {
+		query string
+		want  []int64
+	}{
+		{"?loaned=1", []int64{lentDue, lentOpen}},
+		{"?loaned=1&kind=book", []int64{lentOpen}},
+		{"?loaned=1&status=wishlist", nil},
+		{"?loaned=1&q=ania", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			var view collection.CollectionView
+			a.mustDo(http.MethodGet, "/api/collection"+tt.query, nil, &view, http.StatusOK)
+			got := make([]int64, 0, len(view.Items))
+			for _, it := range view.Items {
+				got = append(got, it.CopyID)
+			}
+			if fmt.Sprint(got) != fmt.Sprint(append([]int64{}, tt.want...)) {
+				t.Fatalf("copies = %v, want %v", got, tt.want)
+			}
+		})
+	}
+	for _, q := range []string{"?loaned=0", "?loaned=true"} {
+		a.fails(http.MethodGet, "/api/collection"+q, nil, http.StatusUnprocessableEntity, "loaned")
+	}
+}
+
 func TestSoldCopy(t *testing.T) {
 	a := newAPI(t)
 	movie := a.title("movie", "Rejs")
@@ -1278,6 +1342,192 @@ func TestCreatesRacingADiscardAnswerTheirRowOrAConflict(t *testing.T) {
 			if err := <-errs; err != nil {
 				t.Fatalf("%s: %v", key, err)
 			}
+		}
+	}
+}
+
+func TestCopyLocation(t *testing.T) {
+	a := newAPI(t)
+	edition := a.edition(obj{"title_id": a.title("movie", "Rejs"), "format": "dvd"})
+
+	var created collection.Copy
+	a.mustDo(http.MethodPost, "/api/copies", obj{"edition_id": edition, "status": "owned", "location": "  Regał 2 "}, &created, http.StatusCreated)
+	if created.Location == nil || *created.Location != "Regał 2" {
+		t.Fatalf("created copy = %+v", created)
+	}
+	path := fmt.Sprintf("/api/copies/%d", created.ID)
+	var detail collection.CopyDetail
+	a.mustDo(http.MethodGet, path, nil, &detail, http.StatusOK)
+	if detail.Location == nil || *detail.Location != "Regał 2" {
+		t.Fatalf("GET copy location = %v", detail.Location)
+	}
+	var view collection.CollectionView
+	a.mustDo(http.MethodGet, "/api/collection", nil, &view, http.StatusOK)
+	if len(view.Items) != 1 || view.Items[0].Location == nil || *view.Items[0].Location != "Regał 2" {
+		t.Fatalf("collection items = %+v", view.Items)
+	}
+
+	put := func(status string, location any) *string {
+		t.Helper()
+		var c collection.Copy
+		a.mustDo(http.MethodPut, path, obj{"edition_id": edition, "status": status, "location": location}, &c, http.StatusOK)
+		return c.Location
+	}
+	longest := strings.Repeat("ł", 250)
+	if got := put("owned", longest); got == nil || *got != longest {
+		t.Fatalf("500-byte location = %v", got)
+	}
+	a.fails(http.MethodPut, path, obj{"edition_id": edition, "status": "owned", "location": longest + "x"}, http.StatusUnprocessableEntity, "location")
+	for _, control := range []string{"Regał\u00002", "Półka\nPółeczka", "Regał\t2", "Regał\u00852"} {
+		a.fails(http.MethodPut, path, obj{"edition_id": edition, "status": "owned", "location": control}, http.StatusUnprocessableEntity, "location")
+	}
+	if got := put("owned", "   "); got != nil {
+		t.Fatalf("blank location stored as %q", *got)
+	}
+
+	a.fails(http.MethodPost, "/api/copies", obj{"edition_id": edition, "status": "wishlist", "location": "Regał 2"}, http.StatusUnprocessableEntity, "location")
+	put("owned", "Pudło")
+	a.fails(http.MethodPut, path, obj{"edition_id": edition, "status": "wishlist", "location": "Pudło"}, http.StatusUnprocessableEntity, "location")
+	a.fails(http.MethodPut, path, obj{"edition_id": edition, "status": "sold", "sold_on": "2026-05-10", "location": "Pudło"}, http.StatusUnprocessableEntity, "location")
+	if got := put("wishlist", nil); got != nil {
+		t.Fatalf("wished copy kept location %q", *got)
+	}
+}
+
+func TestCopyLocationsInUse(t *testing.T) {
+	a := newAPI(t)
+	var locations []string
+	a.mustDo(http.MethodGet, "/api/copies/locations", nil, &locations, http.StatusOK)
+	if locations == nil || len(locations) != 0 {
+		t.Fatalf("locations without any = %#v, want []", locations)
+	}
+
+	edition := a.edition(obj{"title_id": a.title("movie", "Rejs"), "format": "dvd"})
+	for _, location := range []string{"Pudło", "regał 2", "Regał 2", "Regał 2", "Strych", "Strych", "Szafa"} {
+		a.copyOf(obj{"edition_id": edition, "status": "owned", "location": location})
+	}
+	a.copyOf(obj{"edition_id": edition, "status": "owned"})
+	a.copyOf(obj{"edition_id": edition, "status": "wishlist"})
+
+	a.mustDo(http.MethodGet, "/api/copies/locations", nil, &locations, http.StatusOK)
+	want := []string{"Regał 2", "Strych", "Pudło", "Szafa"}
+	if fmt.Sprint(locations) != fmt.Sprint(want) {
+		t.Fatalf("locations = %q, want %q", locations, want)
+	}
+}
+
+func TestCollectionViewFiltersByLocation(t *testing.T) {
+	a := newAPI(t)
+	movie := a.title("movie", "Seksmisja")
+	dvd := a.edition(obj{"title_id": movie, "format": "dvd"})
+	book := a.title("book", "Solaris")
+	paper := a.edition(obj{"title_id": book, "binding": "paperback"})
+
+	shelf := a.copyOf(obj{"edition_id": dvd, "status": "owned", "location": "Regał 2"})
+	box := a.copyOf(obj{"edition_id": dvd, "status": "owned", "location": "Regał 2 dolny"})
+	a.copyOf(obj{"edition_id": dvd, "status": "owned"})
+	a.copyOf(obj{"edition_id": dvd, "status": "wishlist"})
+	shelfBook := a.copyOf(obj{"edition_id": paper, "status": "owned", "location": "regał 2"})
+
+	tests := []struct {
+		query string
+		want  []int64
+	}{
+		{"?location=" + url.QueryEscape("Regał 2"), []int64{shelf, shelfBook}},
+		{"?location=" + url.QueryEscape(" REGAŁ 2 "), []int64{shelf, shelfBook}},
+		{"?location=" + url.QueryEscape("Regał"), []int64{}},
+		{"?location=" + url.QueryEscape("regał 2") + "&kind=book", []int64{shelfBook}},
+		{"?location=" + url.QueryEscape("Regał 2") + "&status=wishlist", []int64{}},
+		{"?q=dolny", []int64{box}},
+		{"?q=" + url.QueryEscape("REGAŁ"), []int64{shelf, box, shelfBook}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			var view collection.CollectionView
+			a.mustDo(http.MethodGet, "/api/collection"+tt.query, nil, &view, http.StatusOK)
+			got := []int64{}
+			for _, it := range view.Items {
+				got = append(got, it.CopyID)
+			}
+			if fmt.Sprint(got) != fmt.Sprint(tt.want) {
+				t.Fatalf("copies = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLocationMatchesAsTheBrowserDoes(t *testing.T) {
+	a := newAPI(t)
+	edition := a.edition(obj{"title_id": a.title("movie", "Rejs"), "format": "dvd"})
+	boxed := a.copyOf(obj{"edition_id": edition, "status": "owned", "location": "Box 012345678905"})
+	marked := a.copyOf(obj{"edition_id": edition, "status": "owned", "location": "\ufeffRegał"})
+	upper := a.copyOf(obj{"edition_id": edition, "status": "owned", "location": "\U00010D50"})
+	lower := a.copyOf(obj{"edition_id": edition, "status": "owned", "location": "\U00010D70"})
+
+	var c collection.Copy
+	a.mustDo(http.MethodGet, fmt.Sprintf("/api/copies/%d", marked), nil, &c, http.StatusOK)
+	if c.Location == nil || *c.Location != "\ufeffRegał" {
+		t.Fatalf("location with a byte order mark = %q", deref(c.Location))
+	}
+
+	tests := []struct {
+		query string
+		want  []int64
+	}{
+		{"?q=012345678905", []int64{boxed}},
+		{"?location=" + url.QueryEscape("\ufeffregał"), []int64{marked}},
+		{"?location=" + url.QueryEscape("Regał"), []int64{}},
+		{"?location=" + url.QueryEscape("\U00010D50"), []int64{upper, lower}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			var view collection.CollectionView
+			a.mustDo(http.MethodGet, "/api/collection"+tt.query, nil, &view, http.StatusOK)
+			got := []int64{}
+			for _, it := range view.Items {
+				got = append(got, it.CopyID)
+			}
+			if fmt.Sprint(got) != fmt.Sprint(tt.want) {
+				t.Fatalf("copies = %v, want %v", got, tt.want)
+			}
+		})
+	}
+
+	var locations []string
+	a.mustDo(http.MethodGet, "/api/copies/locations", nil, &locations, http.StatusOK)
+	want := []string{"\U00010D50", "Box 012345678905", "\ufeffRegał"}
+	if fmt.Sprint(locations) != fmt.Sprint(want) {
+		t.Fatalf("locations = %q, want %q", locations, want)
+	}
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return "<nil>"
+	}
+	return *s
+}
+
+func TestLocationFinalSigmaIsOnePlace(t *testing.T) {
+	a := newAPI(t)
+	edition := a.edition(obj{"title_id": a.title("movie", "Rejs"), "format": "dvd"})
+	upper := a.copyOf(obj{"edition_id": edition, "status": "owned", "location": "ΟΣ"})
+	lower := a.copyOf(obj{"edition_id": edition, "status": "owned", "location": "ος"})
+
+	var locations []string
+	a.mustDo(http.MethodGet, "/api/copies/locations", nil, &locations, http.StatusOK)
+	if fmt.Sprint(locations) != fmt.Sprint([]string{"ΟΣ"}) {
+		t.Fatalf("locations = %q, want one place", locations)
+	}
+	for _, place := range []string{"ΟΣ", "ος", "οσ"} {
+		var view collection.CollectionView
+		a.mustDo(http.MethodGet, "/api/collection?location="+url.QueryEscape(place), nil, &view, http.StatusOK)
+		got := []int64{}
+		for _, it := range view.Items {
+			got = append(got, it.CopyID)
+		}
+		if fmt.Sprint(got) != fmt.Sprint([]int64{upper, lower}) {
+			t.Fatalf("location %q lists %v, want %v", place, got, []int64{upper, lower})
 		}
 	}
 }

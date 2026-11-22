@@ -314,6 +314,13 @@ describe('copyFacts', () => {
 	});
 });
 
+describe('copyFacts with a location', () => {
+	it('shows where an owned copy is kept, last', () => {
+		const facts = copyFacts(copy({ location: 'Regał 2' }));
+		expect(facts.at(-1)).toEqual({ label: 'Miejsce', value: 'Regał 2' });
+	});
+});
+
 describe('copyFacts of a sold copy', () => {
 	it('keeps the purchase and adds the sale', () => {
 		const facts = copyFacts(

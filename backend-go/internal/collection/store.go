@@ -1,11 +1,14 @@
 package collection
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -99,26 +102,20 @@ func scanEdition(row pgx.Row) (Edition, error) {
 
 const copyColumns = `c.id, c.edition_id, c.status, c.price_cents, c.purchased_on, c.shop,
 	c.acquired_as, c.condition, c.notes, c.max_price_cents, c.max_market_percent, c.sold_on,
-	c.sale_price_cents, c.created_at, c.updated_at`
+	c.sale_price_cents, c.location, c.created_at, c.updated_at`
 
 func scanCopy(row pgx.Row) (Copy, error) {
 	var c Copy
 	var purchased, sold *time.Time
 	err := row.Scan(&c.ID, &c.EditionID, &c.Status, &c.PriceCents, &purchased, &c.Shop,
 		&c.AcquiredAs, &c.Condition, &c.Notes, &c.MaxPriceCents, &c.MaxMarketPercent, &sold,
-		&c.SalePriceCents, &c.CreatedAt, &c.UpdatedAt)
+		&c.SalePriceCents, &c.Location, &c.CreatedAt, &c.UpdatedAt)
 	c.PurchasedOn = dateOf(purchased)
 	c.SoldOn = dateOf(sold)
 	return c, err
 }
 
 // dateOf carries a nullable date column as a Date.
-func dateOf(t *time.Time) *Date {
-	if t == nil {
-		return nil
-	}
-	return &Date{*t}
-}
 
 func collect[T any](rows pgx.Rows, scan func(pgx.Row) (T, error), op string) ([]T, error) {
 	defer rows.Close()
@@ -508,12 +505,6 @@ func getCopy(ctx context.Context, q rowQuerier, id int64) (Copy, error) {
 }
 
 // timeOf is the column value of an optional date.
-func timeOf(d *Date) *time.Time {
-	if d == nil {
-		return nil
-	}
-	return &d.Time
-}
 
 // CreateCopy inserts a normalized copy; ErrEditionNotFound when its edition
 // does not exist. With a request key already used, it returns that key's copy
@@ -528,12 +519,12 @@ func (s *Store) CreateCopy(ctx context.Context, in *CopyInput) (Copy, bool, erro
 		var id int64
 		err := tx.QueryRow(ctx, `INSERT INTO copy (edition_id, status, price_cents, purchased_on,
 			shop, acquired_as, condition, notes, max_price_cents, max_market_percent, sold_on,
-			sale_price_cents, request_key)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+			sale_price_cents, location, request_key)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 			ON CONFLICT (request_key) DO NOTHING RETURNING id`,
 			in.EditionID, in.Status, in.PriceCents, timeOf(in.PurchasedOn), in.Shop, in.AcquiredAs,
 			in.Condition, in.Notes, in.MaxPriceCents, in.MaxMarketPercent, timeOf(in.SoldOn),
-			in.SalePriceCents, in.RequestKey).Scan(&id)
+			in.SalePriceCents, in.Location, in.RequestKey).Scan(&id)
 		switch {
 		case errors.Is(err, pgx.ErrNoRows) && in.RequestKey != nil:
 			created = false
@@ -556,22 +547,181 @@ func (s *Store) CreateCopy(ctx context.Context, in *CopyInput) (Copy, bool, erro
 }
 
 // UpdateCopy replaces a copy and returns it as this update left it, so an
-// answer never shows what a concurrent update wrote.
+// answer never shows what a concurrent update wrote. A lent copy stays owned
+// (ErrLentCopyStays) until it comes back: only owned copies are lent.
 func (s *Store) UpdateCopy(ctx context.Context, id int64, in *CopyInput) (Copy, error) {
-	c, err := scanCopy(s.pool.QueryRow(ctx, `UPDATE copy c SET edition_id = $2, status = $3, price_cents = $4,
-		purchased_on = $5, shop = $6, acquired_as = $7, condition = $8, notes = $9,
-		max_price_cents = $10, max_market_percent = $11, sold_on = $12, sale_price_cents = $13,
-		updated_at = now() WHERE c.id = $1 RETURNING `+copyColumns,
-		id, in.EditionID, in.Status, in.PriceCents, timeOf(in.PurchasedOn), in.Shop, in.AcquiredAs,
-		in.Condition, in.Notes, in.MaxPriceCents, in.MaxMarketPercent, timeOf(in.SoldOn),
-		in.SalePriceCents))
-	if isFKViolation(err, "copy_edition_id_fkey") {
-		return Copy{}, ErrEditionNotFound
-	}
+	var c Copy
+	err := s.inTx(ctx, func(tx pgx.Tx) error {
+		if in.Status != StatusOwned {
+			if err := checkNotLent(ctx, tx, id); err != nil {
+				return err
+			}
+		}
+		var err error
+		c, err = scanCopy(tx.QueryRow(ctx, `UPDATE copy c SET edition_id = $2, status = $3, price_cents = $4,
+			purchased_on = $5, shop = $6, acquired_as = $7, condition = $8, notes = $9,
+			max_price_cents = $10, max_market_percent = $11, sold_on = $12, sale_price_cents = $13,
+			location = $14, updated_at = now() WHERE c.id = $1 RETURNING `+copyColumns,
+			id, in.EditionID, in.Status, in.PriceCents, timeOf(in.PurchasedOn), in.Shop, in.AcquiredAs,
+			in.Condition, in.Notes, in.MaxPriceCents, in.MaxMarketPercent, timeOf(in.SoldOn),
+			in.SalePriceCents, in.Location))
+		if isFKViolation(err, "copy_edition_id_fkey") {
+			return ErrEditionNotFound
+		}
+		if err != nil {
+			return mapErr(err, ErrNotFound, "update copy")
+		}
+		return nil
+	})
 	if err != nil {
-		return Copy{}, mapErr(err, ErrNotFound, "update copy")
+		return Copy{}, err
 	}
 	return c, nil
+}
+
+// lockCopy locks copy id against a concurrent loan or status change and
+// returns its status; ErrNotFound when there is none.
+func lockCopy(ctx context.Context, tx pgx.Tx, id int64) (string, error) {
+	var status string
+	err := tx.QueryRow(ctx, `SELECT status FROM copy WHERE id = $1 FOR UPDATE`, id).Scan(&status)
+	return status, mapErr(err, ErrNotFound, "lock copy")
+}
+
+// checkNotLent locks the copy, then looks for its open loan as its own
+// statement, as checkNoEditions does, so it sees a loan committed while the
+// lock waited.
+func checkNotLent(ctx context.Context, tx pgx.Tx, id int64) error {
+	if _, err := lockCopy(ctx, tx, id); err != nil {
+		return err
+	}
+	var lent bool
+	err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM loan WHERE copy_id = $1 AND returned_on IS NULL)`, id).
+		Scan(&lent)
+	if err != nil {
+		return fmt.Errorf("check open loan: %w", err)
+	}
+	if lent {
+		return ErrLentCopyStays
+	}
+	return nil
+}
+
+const loanColumns = `l.id, l.copy_id, l.borrower, l.lent_on, l.due_on, l.returned_on, l.created_at, l.updated_at`
+
+func scanLoan(row pgx.Row) (Loan, error) {
+	var l Loan
+	var due, returned *time.Time
+	err := row.Scan(&l.ID, &l.CopyID, &l.Borrower, &l.LentOn.Time, &due, &returned, &l.CreatedAt, &l.UpdatedAt)
+	l.DueOn = dateOf(due)
+	l.ReturnedOn = dateOf(returned)
+	return l, err
+}
+
+func dateOf(t *time.Time) *Date {
+	if t == nil {
+		return nil
+	}
+	return &Date{*t}
+}
+
+func timeOf(d *Date) *time.Time {
+	if d == nil {
+		return nil
+	}
+	return &d.Time
+}
+
+func getLoan(ctx context.Context, q rowQuerier, id int64) (Loan, error) {
+	l, err := scanLoan(q.QueryRow(ctx, `SELECT `+loanColumns+` FROM loan l WHERE l.id = $1`, id))
+	return l, mapErr(err, ErrNotFound, "get loan")
+}
+
+// ListLoans returns the loans of copyID, newest first, returned ones included.
+func (s *Store) ListLoans(ctx context.Context, copyID int64) ([]Loan, error) {
+	rows, err := s.pool.Query(ctx, `SELECT `+loanColumns+` FROM loan l
+		WHERE l.copy_id = $1 ORDER BY l.lent_on DESC, l.id DESC`, copyID)
+	if err != nil {
+		return nil, fmt.Errorf("list loans: %w", err)
+	}
+	return collect(rows, scanLoan, "list loans")
+}
+
+// LendCopy opens a loan of owned copy copyID, lent today in Poland unless
+// in names the day. Errors: ErrNotFound, ErrNotOwned, ErrAlreadyLent or a
+// *httpx.FieldError for a due date before that day.
+func (s *Store) LendCopy(ctx context.Context, copyID int64, in *LoanInput) (Loan, error) {
+	var l Loan
+	err := s.inTx(ctx, func(tx pgx.Tx) error {
+		status, err := lockCopy(ctx, tx, copyID)
+		if err != nil {
+			return err
+		}
+		if status != StatusOwned {
+			return ErrNotOwned
+		}
+		var lentOn time.Time
+		err = tx.QueryRow(ctx, `SELECT COALESCE($1::date, (now() AT TIME ZONE 'Europe/Warsaw')::date)`,
+			timeOf(in.LentOn)).Scan(&lentOn)
+		if err != nil {
+			return fmt.Errorf("lent on: %w", err)
+		}
+		if fe := checkDue(in.DueOn, lentOn); fe != nil {
+			return fe
+		}
+		var id int64
+		err = tx.QueryRow(ctx, `INSERT INTO loan (copy_id, borrower, lent_on, due_on)
+			VALUES ($1, $2, $3, $4) RETURNING id`, copyID, in.Borrower, lentOn, timeOf(in.DueOn)).Scan(&id)
+		if code, constraint := pgCode(err); code == pgUniqueViolation && constraint == "loan_open_key" {
+			return ErrAlreadyLent
+		}
+		if err != nil {
+			return fmt.Errorf("lend copy: %w", err)
+		}
+		l, err = getLoan(ctx, tx, id)
+		return err
+	})
+	if err != nil {
+		return Loan{}, err
+	}
+	return l, nil
+}
+
+// ReturnLoan records the day loan id came back. A loan already back keeps
+// its day: the same day again answers it unchanged, another one is
+// ErrReturned, so a stale "Zwrócono" cannot move it. Errors: ErrNotFound,
+// ErrReturned or a *httpx.FieldError for a day before the loan began,
+// checked first, whether the loan is out or back.
+func (s *Store) ReturnLoan(ctx context.Context, id int64, returnedOn time.Time) (Loan, error) {
+	var l Loan
+	err := s.inTx(ctx, func(tx pgx.Tx) error {
+		var lentOn time.Time
+		var returned *time.Time
+		err := tx.QueryRow(ctx, `SELECT lent_on, returned_on FROM loan WHERE id = $1 FOR UPDATE`, id).
+			Scan(&lentOn, &returned)
+		if err != nil {
+			return mapErr(err, ErrNotFound, "lock loan")
+		}
+		if returnedOn.Before(lentOn) {
+			return fieldErr("returned_on", "cannot be before lent_on")
+		}
+		if returned != nil {
+			if !returned.Equal(returnedOn) {
+				return ErrReturned
+			}
+			l, err = getLoan(ctx, tx, id)
+			return err
+		}
+		_, err = tx.Exec(ctx, `UPDATE loan SET returned_on = $2, updated_at = now() WHERE id = $1`, id, returnedOn)
+		if err != nil {
+			return fmt.Errorf("return loan: %w", err)
+		}
+		l, err = getLoan(ctx, tx, id)
+		return err
+	})
+	if err != nil {
+		return Loan{}, err
+	}
+	return l, nil
 }
 
 // DeleteCopy removes a copy.
@@ -603,11 +753,16 @@ func (s *Store) DiscardRequest(ctx context.Context, key string) error {
 			ON CONFLICT DO NOTHING`, key); err != nil {
 			return fmt.Errorf("record discarded key: %w", err)
 		}
-		// A copy someone edited since the add made it is theirs now.
-		if _, err := tx.Exec(ctx, `DELETE FROM copy WHERE request_key = $1 AND updated_at = created_at`, key); err != nil {
+		// A copy someone edited or lent since the add made it is theirs now. Its row is locked
+		// before the loan check, as LendCopy locks it, so a loan committed meanwhile is seen.
+		err := discardUnused(ctx, tx, key,
+			`SELECT id FROM copy WHERE request_key = $1 AND updated_at = created_at FOR UPDATE`,
+			`SELECT EXISTS (SELECT 1 FROM loan WHERE copy_id = $1)`,
+			`DELETE FROM copy WHERE id = $1`)
+		if err != nil {
 			return fmt.Errorf("discard copy: %w", err)
 		}
-		err := discardUnused(ctx, tx, key,
+		err = discardUnused(ctx, tx, key,
 			`SELECT id FROM edition WHERE request_key = $1 AND barcode IS NULL AND edited_at IS NULL FOR UPDATE`,
 			`SELECT EXISTS (SELECT 1 FROM copy WHERE edition_id = $1)`,
 			`DELETE FROM edition WHERE id = $1`)
@@ -686,11 +841,32 @@ func discardUnused(ctx context.Context, tx pgx.Tx, key, lock, used, remove strin
 }
 
 // Filter narrows the collection view; empty fields match everything.
+// Location matches a copy's whole location, case aside. Query is the search
+// as barcode.Normalize leaves it, Typed as the reader typed it: a location
+// holding a code is found by the code as typed.
 type Filter struct {
-	Kind   string
-	Format string
-	Status string
-	Query  string
+	Kind     string
+	Format   string
+	Status   string
+	Location string
+	Query    string
+	Typed    string
+	// Loaned keeps only copies with an open loan.
+	Loaned bool
+}
+
+// foldCase lower-cases text one character at a time, the key locations
+// match and merge by, with a final sigma as σ, since ΟΣ and ος name one
+// place. The browser's foldLocation folds the same way, so the filter it
+// applies to the loaded collection lists what this one does; Postgres's
+// lower follows the database's older Unicode tables.
+func foldCase(text string) string {
+	return strings.Map(func(r rune) rune {
+		if r = unicode.ToLower(r); r == 'ς' {
+			return 'σ'
+		}
+		return r
+	}, text)
 }
 
 // Item is one copy in the collection view with its edition and title.
@@ -707,6 +883,7 @@ type Item struct {
 	// SoldOn and SalePriceCents are a sold copy's sale.
 	SoldOn         *Date    `json:"sold_on,omitempty" ts:",null"`
 	SalePriceCents *int64   `json:"sale_price_cents,omitempty" ts:",null"`
+	Location       *string  `json:"location,omitempty" ts:",null"`
 	EditionID      int64    `json:"edition_id"`
 	Barcode        *string  `json:"barcode"`
 	Label          string   `json:"label"`
@@ -720,18 +897,23 @@ type Item struct {
 	Year           *int     `json:"year"`
 	CoverURL       *string  `json:"cover_url,omitempty"`
 	Authors        []string `json:"authors,omitempty"`
+	// LoanBorrower and LoanDueOn come from the copy's open loan, if any.
+	LoanBorrower *string `json:"loan_borrower,omitempty"`
+	LoanDueOn    *Date   `json:"loan_due_on,omitempty"`
 }
 
 func scanItem(row pgx.Row) (Item, error) {
 	var it Item
 	var createdAt time.Time
-	var purchased, sold *time.Time
+	var purchased, sold, due *time.Time
 	err := row.Scan(&it.CopyID, &createdAt, &it.Status, &it.PriceCents, &it.MaxPriceCents, &purchased, &it.Shop,
-		&it.AcquiredAs, &it.Condition, &sold, &it.SalePriceCents, &it.EditionID, &it.Barcode, &it.Label, &it.Format, &it.Binding,
-		&it.TitleID, &it.Kind, &it.Name, &it.OriginalTitle, &it.PolishTitle, &it.Year, &it.CoverURL, &it.Authors)
+		&it.AcquiredAs, &it.Condition, &sold, &it.SalePriceCents, &it.Location, &it.EditionID, &it.Barcode, &it.Label, &it.Format, &it.Binding,
+		&it.TitleID, &it.Kind, &it.Name, &it.OriginalTitle, &it.PolishTitle, &it.Year, &it.CoverURL, &it.Authors,
+		&it.LoanBorrower, &due)
 	it.CreatedAtUS = createdAt.UnixMicro()
 	it.PurchasedOn = dateOf(purchased)
 	it.SoldOn = dateOf(sold)
+	it.LoanDueOn = dateOf(due)
 	return it, err
 }
 
@@ -740,20 +922,85 @@ func scanItem(row pgx.Row) (Item, error) {
 // filter them itself.
 func (s *Store) Collection(ctx context.Context, f Filter) ([]Item, error) {
 	rows, err := s.pool.Query(ctx, `SELECT c.id, c.created_at, c.status, c.price_cents, c.max_price_cents,
-			c.purchased_on, c.shop, c.acquired_as, c.condition, c.sold_on, c.sale_price_cents,
+			c.purchased_on, c.shop, c.acquired_as, c.condition, c.sold_on, c.sale_price_cents, c.location,
 			e.id, e.barcode, e.label, e.format, e.binding,
 			t.id, t.kind, t.name, t.original_title, t.polish_title, t.year,
-			`+CoverURL+`, t.authors
+			`+CoverURL+`, t.authors, l.borrower, l.due_on
 		FROM copy c JOIN edition e ON e.id = c.edition_id JOIN title t ON t.id = e.title_id
+		LEFT JOIN loan l ON l.copy_id = c.id AND l.returned_on IS NULL
 		WHERE ($1 = '' OR t.kind = $1) AND ($2 = '' OR e.format = $2) AND ($3 = '' OR c.status = $3)
 		  AND ($4 = '' OR e.barcode = $4 OR strpos(lower(concat_ws(' ', t.name, t.original_title,
-		       t.polish_title, array_to_string(t.authors, ' '), e.label, c.shop)), lower($4)) > 0)
+		       t.polish_title, array_to_string(t.authors, ' '), e.label, c.shop, c.location)), lower($4)) > 0
+		       OR strpos(lower(c.location), lower($5)) > 0)
+		  AND (NOT $6 OR l.id IS NOT NULL)
 		ORDER BY lower(t.name), t.id, e.id, c.id`,
-		f.Kind, f.Format, f.Status, strings.TrimSpace(f.Query))
+		f.Kind, f.Format, f.Status, strings.TrimSpace(f.Query), strings.TrimSpace(f.Typed), f.Loaned)
 	if err != nil {
 		return nil, fmt.Errorf("collection: %w", err)
 	}
-	return collect(rows, scanItem, "collection")
+	items, err := collect(rows, scanItem, "collection")
+	if err != nil {
+		return nil, err
+	}
+	if place := foldCase(strings.TrimSpace(f.Location)); place != "" {
+		items = slices.DeleteFunc(items, func(it Item) bool {
+			return it.Location == nil || foldCase(*it.Location) != place
+		})
+	}
+	return items, nil
+}
+
+// Locations returns the locations copies are stored at, each once whatever
+// its letter case (foldCase), the most used first. A place spelled several
+// ways goes by its most used spelling. Ties go in code point order, as the
+// browser's locationsInUse orders them.
+func (s *Store) Locations(ctx context.Context) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `SELECT location, count(*) FROM copy
+		WHERE location IS NOT NULL GROUP BY location`)
+	if err != nil {
+		return nil, fmt.Errorf("locations: %w", err)
+	}
+	type spelling struct {
+		text   string
+		copies int
+	}
+	spellings, err := collect(rows, func(row pgx.Row) (spelling, error) {
+		var sp spelling
+		err := row.Scan(&sp.text, &sp.copies)
+		return sp, err
+	}, "locations")
+	if err != nil {
+		return nil, err
+	}
+	type place struct {
+		key, name   string
+		copies, top int
+	}
+	byKey := map[string]*place{}
+	for _, sp := range spellings {
+		key := foldCase(sp.text)
+		p := byKey[key]
+		if p == nil {
+			p = &place{key: key}
+			byKey[key] = p
+		}
+		p.copies += sp.copies
+		if sp.copies > p.top || (sp.copies == p.top && sp.text < p.name) {
+			p.name, p.top = sp.text, sp.copies
+		}
+	}
+	places := make([]*place, 0, len(byKey))
+	for _, p := range byKey {
+		places = append(places, p)
+	}
+	slices.SortFunc(places, func(a, b *place) int {
+		return cmp.Or(cmp.Compare(b.copies, a.copies), cmp.Compare(a.key, b.key))
+	})
+	names := make([]string, len(places))
+	for i, p := range places {
+		names[i] = p.name
+	}
+	return names, nil
 }
 
 func (s *Store) inTx(ctx context.Context, fn func(pgx.Tx) error) error {

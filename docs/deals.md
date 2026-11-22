@@ -488,8 +488,14 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   prices can outlive a listing and do not establish a sale. Exact-edition
   wishes require positive edition details on both sides of the comparison.
   The card shows the state, discount and sample size. Offers without a
-  baseline stay in "Wszystkie" with the reason. The navigation badge and
-  Telegram alerts use the manual limits.
+  baseline stay in "Wszystkie" with the reason. The navigation badge uses
+  the manual limits.
+- Set `OHARA_DEALS_AUTOMATIC_ALERTS=true` with the Telegram bot and chat
+  configured to send these automatic deals. The setting defaults to
+  off. At the end of each run, the hunter queues qualifying offers it
+  matched in that run and rechecks the comparison before each send,
+  including retries. Automatic alerts share the manual queue's dismissal,
+  retry and price-drop rules. Sent automatic alerts appear in "Wysłane".
 - Okazje (`/deals`) lists every wish in its "Lista życzeń" section, with
   or without offers, since Kolekcja lists none. The page asks for them
   beside the offers (`GET /api/collection?status=wishlist`) and lists

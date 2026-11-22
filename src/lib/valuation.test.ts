@@ -382,7 +382,7 @@ describe('page summary', () => {
 			copies: [],
 			history: [],
 			last_valuation: '2026-11-18',
-			mover_days: 30,
+			moves_from: null,
 			moves: []
 		});
 		const now = new Date(2026, 10, 19, 9);
@@ -693,7 +693,6 @@ describe('copy rows', () => {
 describe('movers', () => {
 	const move = (copy_id: number, from: number | null, to: number | null): CopyValueMove => ({
 		copy_id,
-		from_day: '2026-10-19',
 		from_cents: from,
 		to_cents: to
 	});
@@ -745,8 +744,7 @@ describe('movers', () => {
 		['no value at the start', move(1, null, 6000)],
 		['no value now', move(1, 4000, null)],
 		['no value at either end', move(1, null, null)],
-		['an unchanged value', move(1, 4000, 4000)],
-		['a change under half a złoty', move(1, 4000, 4049)]
+		['an unchanged value', move(1, 4000, 4000)]
 	])('leaves out a copy with %s', (_, m) => {
 		expect(movers(owned(1), [m])).toEqual({ rising: [], falling: [] });
 	});
@@ -757,6 +755,13 @@ describe('movers', () => {
 
 	it('has nothing to list without moves', () => {
 		expect(movers(owned(1, 2), [])).toEqual({ rising: [], falling: [] });
+	});
+
+	it('keeps a change under half a złoty and writes it in grosze', () => {
+		const { rising, falling } = movers(owned(1, 2), [move(1, 4000, 4049), move(2, 4000, 3999)]);
+
+		expect(rising.map((m) => nbsp(m.change))).toEqual(['+0,49 zł · +1%']);
+		expect(falling.map((m) => nbsp(m.change))).toEqual(['−0,01 zł · 0%']);
 	});
 
 	it('writes a change from 0 zł without a percent', () => {

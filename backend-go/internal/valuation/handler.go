@@ -17,7 +17,8 @@ const historyDays = 365
 
 // moverDays is the period over which the view compares each copy's used
 // value, and moverSlack how many days further back its start may lie when
-// no valuation ran on the day exactly moverDays before the last one.
+// no valuation ran on the day exactly moverDays before the last one. All
+// copies share that start day.
 const (
 	moverDays  = 30
 	moverSlack = 7
@@ -52,8 +53,9 @@ func (h *Handler) Mount(r chi.Router) {
 // the day of the newest one, null before the first valuation.
 // LikelySoldDays is how soon after it was first seen a used listing must
 // be gone to count toward a copy's likely-sold price. Moves holds each
-// copy's stored used value on the last valuation day and MoverDays before
-// it, empty before the first valuation.
+// copy's stored used value on the last valuation day and on MovesFrom,
+// the valuation day moverDays (up to moverDays+moverSlack) before it;
+// MovesFrom is null and Moves empty without such a day.
 type View struct {
 	Status          Status         `json:"status"`
 	WindowDays      int            `json:"window_days"`
@@ -63,7 +65,7 @@ type View struct {
 	Copies          []CopyValue    `json:"copies"`
 	History         []HistoryPoint `json:"history"`
 	LastValuation   *string        `json:"last_valuation"`
-	MoverDays       int            `json:"mover_days"`
+	MovesFrom       *string        `json:"moves_from"`
 	Moves           []Move         `json:"moves"`
 }
 
@@ -87,14 +89,17 @@ func (h *Handler) view(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteInternal(w, r, h.logger, "valuation latest", err)
 		return
 	}
-	var last *string
+	var last, movesFrom *string
 	moves := []Move{}
 	if ok {
 		last = &latest.Day
-		moves, err = h.store.Moves(r.Context(), latest.Day, moverDays, moverSlack)
+		from, found, hasStart, err := h.store.Moves(r.Context(), latest.Day, moverDays, moverSlack)
 		if err != nil {
 			httpx.WriteInternal(w, r, h.logger, "valuation moves", err)
 			return
+		}
+		if hasStart {
+			movesFrom, moves = &from, found
 		}
 	}
 	httpx.WriteJSON(w, h.logger, http.StatusOK, View{
@@ -106,7 +111,7 @@ func (h *Handler) view(w http.ResponseWriter, r *http.Request) {
 		Copies:          copies,
 		History:         history,
 		LastValuation:   last,
-		MoverDays:       moverDays,
+		MovesFrom:       movesFrom,
 		Moves:           moves,
 	})
 }

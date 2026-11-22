@@ -194,8 +194,8 @@
 	{:else if view}
 		<ValuationHero summary={view.summary} history={recent} />
 		<ValuationHistory history={recent} lastValuation={view.last_valuation} />
-		{#if moved.rising.length > 0 || moved.falling.length > 0}
-			<ValuationMovers rising={moved.rising} falling={moved.falling} days={view.mover_days} />
+		{#if view.moves_from && (moved.rising.length > 0 || moved.falling.length > 0)}
+			<ValuationMovers rising={moved.rising} falling={moved.falling} from={view.moves_from} />
 		{/if}
 
 		{#if copies.length === 0}

@@ -486,7 +486,6 @@ export type RunnerStatus = {
 
 export type CopyValueMove = {
 	copy_id: number;
-	from_day: string;
 	from_cents: number | null;
 	to_cents: number | null;
 };
@@ -500,7 +499,7 @@ export type ValuationView = {
 	copies: CopyValue[];
 	history: HistoryPoint[];
 	last_valuation: string | null;
-	mover_days: number;
+	moves_from: string | null;
 	moves: CopyValueMove[];
 };
 

@@ -1,8 +1,8 @@
 <script lang="ts">
-	import { copyMeta, type Mover } from '#lib/valuation.js';
+	import { copyMeta, dayLabel, type Mover } from '#lib/valuation.js';
 	import CollectionCover from './CollectionCover.svelte';
 
-	let { rising, falling, days }: { rising: Mover[]; falling: Mover[]; days: number } = $props();
+	let { rising, falling, from }: { rising: Mover[]; falling: Mover[]; from: string } = $props();
 </script>
 
 {#snippet group(id: string, label: string, list: Mover[], tone: 'up' | 'down')}
@@ -30,7 +30,7 @@
 <section class="movers" aria-labelledby="valuation-movers-title">
 	<div class="head">
 		<h2 id="valuation-movers-title">Największe zmiany</h2>
-		<span class="span">Wartość używanych, ostatnie {days} dni</span>
+		<span class="span">Wartość używanych od {dayLabel(from)}</span>
 	</div>
 	<div class="groups">
 		{@render group('valuation-movers-rising', 'Wzrosty', rising, 'up')}

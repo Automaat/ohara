@@ -1599,6 +1599,47 @@ func TestStartWithoutHistoryWaitsFiveMinutes(t *testing.T) {
 	}
 }
 
+// TestStartWithoutHistoryJittersTheFirstWait pins the hunter's first wait
+// without a stored run: five minutes jittered by 20%, never below five
+// minutes.
+func TestStartWithoutHistoryJittersTheFirstWait(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	for _, tc := range []struct {
+		name   string
+		sample float64
+		want   time.Duration
+	}{
+		{"top of the spread", 1, 6 * time.Minute},
+		{"middle of the spread", 0.5, 5*time.Minute + 30*time.Second},
+		{"bottom of the spread", -1, 5 * time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := NewHunter(NewStore(pool), nil, nil, Config{Interval: 2 * time.Hour}, slog.New(slog.DiscardHandler))
+			h.startJitter = func(d time.Duration, spread float64) time.Duration {
+				return time.Duration(float64(d) * (1 + tc.sample*spread))
+			}
+			waits := make(chan time.Duration, 1)
+			h.sleep = func(_ context.Context, d time.Duration) error {
+				waits <- d
+				return context.Canceled
+			}
+			h.Start(t.Context())
+			h.Wait()
+			if got := <-waits; got != tc.want {
+				t.Fatalf("first wait = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestZeroHunterReportsAndWaits(t *testing.T) {
+	var h Hunter
+	h.Wait()
+	if s := h.Status(); s.Running || s.LastStartedAt != nil {
+		t.Fatalf("zero hunter status = %+v", s)
+	}
+}
+
 // sameStatus fails unless after holds before's last run.
 func sameStatus(t *testing.T, before, after Status) {
 	t.Helper()

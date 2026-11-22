@@ -25,6 +25,10 @@ type sample struct {
 	Note     *string    `json:"note"`
 	Cover    *string    `json:"cover,omitempty"`
 	Failure  string     `json:"failure,omitempty"`
+	Version  string     `json:"version,omitzero"`
+	Year     *int       `json:"year,omitempty" ts:",null"`
+	Shade    *string    `json:"shade,omitzero" ts:"Color,null"`
+	Tags     []string   `json:"tags" ts:",null"`
 	Colors   []string   `json:"colors" ts:"Color"`
 	Maybe    *string    `json:"maybe" ts:"Color"`
 	Seen     time.Time  `json:"seen"`
@@ -72,6 +76,10 @@ export type Sample = {
 	note: string | null;
 	cover?: string;
 	failure?: string;
+	version?: string;
+	year?: number | null;
+	shade?: Color | null;
+	tags: string[] | null;
 	colors: Color[];
 	maybe: Color | null;
 	seen: string;
@@ -118,6 +126,14 @@ type selfMarshaled struct {
 	On day `json:"on"`
 }
 
+type stringOption struct {
+	Count int `json:"count,string"`
+}
+
+type unknownTSOption struct {
+	Name string `json:"name" ts:",maybe"`
+}
+
 type withMap struct {
 	Tags map[string]string `json:"tags"`
 }
@@ -137,6 +153,8 @@ func TestGenerateRefusesWhatItCannotName(t *testing.T) {
 		{"enum on a number", API{Enums: color, Types: []Named{Of[enumOnNumber]("T")}}, "only strings"},
 		{"struct without a name", API{Types: []Named{Of[nested]("T")}}, "has no TypeScript name"},
 		{"marshaler not listed as scalar", API{Types: []Named{Of[selfMarshaled]("T")}}, "marshals itself"},
+		{"json string option", API{Types: []Named{Of[stringOption]("T")}}, `json tag option "string"`},
+		{"unknown ts option", API{Types: []Named{Of[unknownTSOption]("T")}}, `ts tag option "maybe"`},
 		{"map", API{Types: []Named{Of[withMap]("T")}}, "not supported"},
 		{"interface", API{Types: []Named{Of[withAny]("T")}}, "not supported"},
 		{"name used twice", API{Enums: color, Types: []Named{Of[inner]("Color")}}, "used twice"},
@@ -169,6 +187,10 @@ func TestOharaKeepsTheSPAsUnionsAndNullability(t *testing.T) {
 		if !strings.Contains(item, want) {
 			t.Errorf("CollectionItem lacks %q:\n%s", want, item)
 		}
+	}
+	edition := block(t, got, "CandidateEdition")
+	if !strings.Contains(edition, "\tformat?: Format | null;\n") {
+		t.Errorf("CandidateEdition lost its nullable format:\n%s", edition)
 	}
 	for _, want := range []string{
 		"export type CopyStatus = 'owned' | 'wishlist';\n",

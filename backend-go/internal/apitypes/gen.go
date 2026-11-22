@@ -4,9 +4,11 @@
 // A struct becomes an object type named by its entry in the list given to
 // Generate, with its fields in Go order and embedded structs flattened as
 // encoding/json flattens them. A pointer field may be null unless it is
-// omitempty, which drops a nil pointer: such a field may be absent instead.
-// Types listed as scalars (time.Time, collection.Date) are strings. A string
-// field tagged `ts:"Name"` takes the values of the enum Name instead.
+// omitempty or omitzero, which drop a nil pointer: such a field may be absent
+// instead. Types listed as scalars (time.Time, collection.Date) are strings.
+// A string field tagged `ts:"Name"` takes the values of the enum Name
+// instead, and `ts:",null"` or `ts:"Name,null"` also admits null, for a
+// field the SPA has always read or sent as nullable.
 package apitypes
 
 import (
@@ -209,10 +211,10 @@ func (g *generator) fields(t reflect.Type, depth int) ([]field, error) {
 		if name == "" {
 			name = sf.Name
 		}
-		if hasOption(opts, "string") {
-			return nil, fmt.Errorf("field %s: the json string option is not supported", sf.Name)
+		omitEmpty, err := omitOption(opts)
+		if err != nil {
+			return nil, fmt.Errorf("field %s: %w", sf.Name, err)
 		}
-		omitEmpty := hasOption(opts, "omitempty")
 		ts, err := g.fieldType(sf, omitEmpty)
 		if err != nil {
 			return nil, fmt.Errorf("field %s: %w", sf.Name, err)
@@ -222,13 +224,21 @@ func (g *generator) fields(t reflect.Type, depth int) ([]field, error) {
 	return out, nil
 }
 
-func hasOption(opts, option string) bool {
+// omitOption reports whether the json tag options let encoding/json leave
+// the field out. Any other option changes the encoding in a way the
+// generator does not model, so it fails rather than write a wrong type.
+func omitOption(opts string) (bool, error) {
+	omit := false
 	for o := range strings.SplitSeq(opts, ",") {
-		if o == option {
-			return true
+		switch o {
+		case "":
+		case "omitempty", "omitzero":
+			omit = true
+		default:
+			return false, fmt.Errorf("json tag option %q is not supported", o)
 		}
 	}
-	return false
+	return omit, nil
 }
 
 // dominant keeps, for each JSON name, the field encoding/json writes: the
@@ -263,9 +273,17 @@ func (g *generator) fieldType(sf reflect.StructField, omitEmpty bool) (string, e
 		t = t.Elem()
 		nullable = !omitEmpty
 	}
+	enum, opt, _ := strings.Cut(sf.Tag.Get("ts"), ",")
+	switch opt {
+	case "":
+	case "null":
+		nullable = true
+	default:
+		return "", fmt.Errorf("ts tag option %q is not supported", opt)
+	}
 	var ts string
 	var err error
-	if enum, ok := sf.Tag.Lookup("ts"); ok {
+	if enum != "" {
 		ts, err = g.enumType(t, enum)
 	} else {
 		ts, err = g.tsType(t)

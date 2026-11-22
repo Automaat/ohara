@@ -291,8 +291,9 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   `status.ts` re-export them. `internal/apitypes.Ohara` lists each struct
   under its TypeScript name and each enum with its values, taken from the
   Go constants or validation lists. A pointer field is `T | null`, an
-  omitempty one optional, and a string field tagged `ts:"Kind"` takes the
-  enum's union. CI's `go-tests` job regenerates the file and fails on any
+  omitempty or omitzero one optional, a string field tagged `ts:"Kind"`
+  takes the enum's union, and `ts:",null"` (or `ts:"Kind,null"`) also
+  admits null; any other json tag option fails the generator. CI's `go-tests` job regenerates the file and fails on any
   difference, so change a JSON struct, then regenerate and commit.
 - Build UI from SUI components; import `@smykla-skalski/sui/styles.css` once in
   the root layout. `build.cssTarget` in `vite.config.ts` keeps SUI's

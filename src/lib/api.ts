@@ -1,3 +1,5 @@
+import type { ErrorBody as GeneratedErrorBody } from './api.gen';
+
 /** An API failure with a Polish message and, for validation errors, the field it names. */
 export class ApiError extends Error {
 	constructor(
@@ -9,7 +11,8 @@ export class ApiError extends Error {
 	}
 }
 
-type ErrorBody = { error?: unknown; field?: unknown };
+/** The server's error body, read without trusting its value types. */
+type ErrorBody = { [K in keyof GeneratedErrorBody]?: unknown };
 
 /** What the server's 422 for a barcode means: the shape fits, the check digit does not. */
 export const invalidBarcodeMessage = 'Nieprawidłowy kod kreskowy: sprawdź cyfry.';

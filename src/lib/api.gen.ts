@@ -264,26 +264,26 @@ export type CollectionView = {
 
 export type CandidateTitle = {
 	name: string;
-	original_title?: string;
-	polish_title?: string;
-	year?: number;
-	tmdb_id?: number;
+	original_title?: string | null;
+	polish_title?: string | null;
+	year?: number | null;
+	tmdb_id?: number | null;
 	authors?: string[];
-	bn_id?: string;
-	openlibrary_id?: string;
+	bn_id?: string | null;
+	openlibrary_id?: string | null;
 };
 
 export type CandidateEdition = {
 	barcode: string;
 	label?: string;
 	publisher?: string;
-	year?: number;
-	format?: Format;
+	year?: number | null;
+	format?: Format | null;
 	pl_subtitles?: TriState;
 	pl_voiceover?: TriState;
 	packaging?: Packaging[];
-	binding?: Binding;
-	discogs_release_id?: number;
+	binding?: Binding | null;
+	discogs_release_id?: number | null;
 };
 
 export type Candidate = {
@@ -293,7 +293,7 @@ export type Candidate = {
 	cover_url?: string;
 	description?: string;
 	provider: string;
-	sources: string[];
+	sources: string[] | null;
 	confidence: number;
 };
 
@@ -407,7 +407,7 @@ export type CopyValue = {
 	barcode: string | null;
 	price_cents: number | null;
 	cover_url?: string;
-	discogs_release_id?: number;
+	discogs_release_id?: number | null;
 	floor: Estimate | null;
 	mid: Estimate | null;
 	ceiling: Estimate | null;
@@ -478,4 +478,9 @@ export type Status = {
 	status: ServiceState;
 	version: string;
 	database: DatabaseState;
+};
+
+export type ErrorBody = {
+	error: string;
+	field?: string;
 };

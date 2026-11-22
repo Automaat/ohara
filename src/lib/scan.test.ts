@@ -557,7 +557,7 @@ describe('scan payloads', () => {
 			ok: true,
 			value: { format: 'vinyl', discogs_release_id: null }
 		});
-		const unknown = { ...album, edition: { ...album.edition, format: undefined } };
+		const unknown = { ...album, edition: { ...album.edition, format: null } };
 		expect(scanEditionPayload(vinyl, unknown, '', 7)).toMatchObject({
 			ok: true,
 			value: { discogs_release_id: null }

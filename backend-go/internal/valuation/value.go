@@ -219,7 +219,7 @@ type CopyValue struct {
 	CoverURL   *string `json:"cover_url,omitempty"`
 	// DiscogsReleaseID is the album edition's Discogs release, so a price
 	// from Discogs can credit it.
-	DiscogsReleaseID *int64    `json:"discogs_release_id,omitempty"`
+	DiscogsReleaseID *int64    `json:"discogs_release_id,omitempty" ts:",null"`
 	Floor            *Estimate `json:"floor"`
 	Mid              *Estimate `json:"mid"`
 	Ceiling          *Estimate `json:"ceiling"`

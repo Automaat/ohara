@@ -5,6 +5,7 @@ import (
 
 	"github.com/Automaat/ohara/backend-go/internal/collection"
 	"github.com/Automaat/ohara/backend-go/internal/deals"
+	"github.com/Automaat/ohara/backend-go/internal/httpx"
 	"github.com/Automaat/ohara/backend-go/internal/lookup"
 	"github.com/Automaat/ohara/backend-go/internal/scanqueue"
 	"github.com/Automaat/ohara/backend-go/internal/server"
@@ -83,6 +84,7 @@ func Ohara() API {
 			Of[valuation.TitleCopies]("TitleValues"),
 
 			Of[server.Status]("Status"),
+			Of[httpx.Error]("ErrorBody"),
 		},
 	}
 }

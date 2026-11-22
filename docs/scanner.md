@@ -39,7 +39,11 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   (`src/lib/pending-scans.svelte.ts`, barcode only, once in the server's
   normalized form) and posted to `/api/scan-queue` as `lookup_failed` on app
   start, on `online`, when the app is shown and every 20 s, by one tab at a
-  time (Web Locks), each POST within 15 s. A run first waits until the
+  time (Web Locks), each POST within 15 s. A POST without an answer (15 s
+  passed or the request failed) ends the run, and that tab's next run
+  starts with the code after it and sends it last, so one code the server
+  never answers cannot hold back the rest; no code is posted twice in a
+  run. A 401 ends the run without moving it. A run first waits until the
   browser has settled the scan queue DELETEs this tab has on their way
   (`src/lib/queue-deletes.ts`). `request`'s 20 s deadline fails a DELETE
   that gets no answer (the queue page shows its error and keeps the

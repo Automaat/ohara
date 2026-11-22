@@ -105,7 +105,7 @@ func TestHangingSourceLeavesTMDBTime(t *testing.T) {
 		{name: "tmdb at 1.2 s per search", sources: []NameSource{catalog, upcitemdb}, tmdb: slowSearcher{delay: 1200 * time.Millisecond}, failed: []string{"upcitemdb"}, candidates: 1, maxTaken: 10 * time.Second},
 		{name: "source ignoring its context", sources: []NameSource{catalog, stuckSource{release: release}}, failed: []string{"stuck"}, candidates: 1, maxTaken: 5 * time.Second},
 		{name: "hanging source, fallback names it", sources: []NameSource{upcitemdb}, fallbacks: []NameSource{namedSource{name: "fallback"}}, tmdb: slowSearcher{delay: 1200 * time.Millisecond}, failed: []string{"upcitemdb"}, candidates: 1, maxTaken: 10 * time.Second},
-		{name: "hanging source, slow fallback", sources: []NameSource{upcitemdb}, fallbacks: []NameSource{namedSource{name: "fallback", delay: 3 * time.Second}}, failed: []string{"upcitemdb", "fallback"}, maxTaken: 7 * time.Second},
+		{name: "hanging source, slow fallback", sources: []NameSource{upcitemdb}, fallbacks: []NameSource{namedSource{name: "fallback", delay: 3 * time.Second}}, failed: []string{"upcitemdb"}, candidates: 1, maxTaken: 10 * time.Second},
 		{name: "hanging source, tmdb down", sources: []NameSource{catalog, upcitemdb}, tmdb: slowSearcher{err: tmdbDown}, failed: []string{"upcitemdb", "tmdb"}, maxTaken: 5 * time.Second},
 	}
 	for _, tc := range tests {
@@ -141,6 +141,98 @@ func TestHangingSourceLeavesTMDBTime(t *testing.T) {
 			defer cache.mu.Unlock()
 			if cache.puts != 0 {
 				t.Fatalf("answer cached %d times", cache.puts)
+			}
+		})
+	}
+}
+
+// emptySource answers with no product after delay, or fails when its
+// context ends first.
+type emptySource struct {
+	name  string
+	delay time.Duration
+}
+
+func (s emptySource) Name() string { return s.name }
+
+func (s emptySource) Products(ctx context.Context, _ string) ([]Product, error) {
+	select {
+	case <-time.After(s.delay):
+		return []Product{}, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// TestSlowAllegroMissLeavesUPCitemdbTime runs the lookup with its real
+// limits: Allegro answering nothing after 6 s still leaves UPCitemdb,
+// answering after 5 s, and TMDB the time to resolve the barcode, and
+// UPCitemdb is not asked when Allegro names a searchable title.
+func TestSlowAllegroMissLeavesUPCitemdbTime(t *testing.T) {
+	tests := []struct {
+		name     string
+		allegro  NameSource
+		failed   []string
+		asked    int
+		cached   int
+		maxTaken time.Duration
+	}{
+		{name: "slow miss", allegro: emptySource{name: "allegro", delay: 6 * time.Second}, failed: []string{"allegro"}, asked: 1, maxTaken: 11 * time.Second},
+		{name: "slow hit", allegro: namedSource{name: "allegro", delay: 3 * time.Second}, asked: 0, cached: 1, maxTaken: 5 * time.Second},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var mu sync.Mutex
+			asked := 0
+			srv := serve(t, func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				asked++
+				mu.Unlock()
+				select {
+				case <-time.After(5 * time.Second):
+				case <-r.Context().Done():
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"code":"OK","total":1,"items":[{"title":"Kursk (2019) [Blu-ray]","category":"Media > DVDs & Videos"}]}`))
+			})
+			upcitemdb := UPCitemdb{Client: &http.Client{Timeout: 8 * time.Second}, BaseURL: srv.URL}
+			p := &Provider{Sources: []NameSource{tc.allegro}, Fallbacks: []NameSource{upcitemdb}, TMDB: slowSearcher{}}
+			registry := &lookup.Registry{}
+			if err := registry.Register(p, time.Hour); err != nil {
+				t.Fatal(err)
+			}
+			cache := &countingCache{}
+			svc := lookup.NewService(registry, cache, slog.New(slog.DiscardHandler))
+
+			start := time.Now()
+			res := svc.Lookup(context.Background(), "5906190326195")
+			taken := time.Since(start)
+
+			if taken > tc.maxTaken {
+				t.Errorf("lookup took %v, want at most %v", taken, tc.maxTaken)
+			}
+			if len(res.Candidates) != 1 || res.Candidates[0].Title.Name != "Kursk" {
+				t.Fatalf("candidates = %+v, errors = %+v", res.Candidates, res.Errors)
+			}
+			if len(res.Errors) != len(tc.failed) {
+				t.Fatalf("errors = %+v, want %d", res.Errors, len(tc.failed))
+			}
+			for _, name := range tc.failed {
+				if res.Errors[0].Provider != "movie" || !strings.Contains(res.Errors[0].Error, name+":") {
+					t.Errorf("error %+v does not name %s", res.Errors[0], name)
+				}
+			}
+			mu.Lock()
+			if asked != tc.asked {
+				t.Errorf("upcitemdb asked %d times, want %d", asked, tc.asked)
+			}
+			mu.Unlock()
+			cache.mu.Lock()
+			defer cache.mu.Unlock()
+			if cache.puts != tc.cached {
+				t.Fatalf("answer cached %d times, want %d", cache.puts, tc.cached)
 			}
 		})
 	}

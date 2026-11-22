@@ -99,6 +99,14 @@ type Fallback interface {
 	Fallback(barcode string) bool
 }
 
+// Timed is implemented by providers whose fetch needs its own time limit
+// instead of the service's provider timeout, such as the movie chain, which
+// asks its fallback sources only after the first ones answered. The
+// lookup's overall budget still caps it.
+type Timed interface {
+	FetchTimeout() time.Duration
+}
+
 // Cache stores raw provider responses keyed by provider and barcode.
 type Cache interface {
 	Get(ctx context.Context, provider, barcode string, maxAge time.Duration) (json.RawMessage, bool, error)
@@ -395,7 +403,11 @@ func (s *Service) query(ctx context.Context, e entry, code string, recheck bool,
 			return cands, err
 		}
 	}
-	if limit := time.Now().Add(s.timeout); limit.Before(deadline) {
+	timeout := s.timeout
+	if t, ok := p.(Timed); ok && t.FetchTimeout() > 0 {
+		timeout = t.FetchTimeout()
+	}
+	if limit := time.Now().Add(timeout); limit.Before(deadline) {
 		deadline = limit
 	}
 	fetchCtx, cancel := context.WithDeadline(ctx, deadline)

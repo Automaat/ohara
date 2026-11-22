@@ -621,6 +621,49 @@ func TestLookupFallbackRoundEndsWithinTheBudget(t *testing.T) {
 	}
 }
 
+// timedProvider has its own fetch limit and records its fetch deadline.
+type timedProvider struct {
+	fixedProvider
+	timeout  time.Duration
+	deadline time.Time
+}
+
+func (p *timedProvider) FetchTimeout() time.Duration { return p.timeout }
+
+func (p *timedProvider) Fetch(ctx context.Context, code string) (json.RawMessage, error) {
+	p.deadline, _ = ctx.Deadline()
+	return p.fixedProvider.Fetch(ctx, code)
+}
+
+func TestLookupProviderFetchTimeout(t *testing.T) {
+	tests := []struct {
+		name    string
+		timeout time.Duration
+		want    time.Duration
+	}{
+		{name: "own limit past the default", timeout: 3 * time.Second, want: 3 * time.Second},
+		{name: "own limit under the default", timeout: 500 * time.Millisecond, want: 500 * time.Millisecond},
+		{name: "budget caps the own limit", timeout: 10 * time.Second, want: 4 * time.Second},
+		{name: "no own limit", want: time.Second},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := &timedProvider{fixedProvider: fixedProvider{name: "movie"}, timeout: tt.timeout}
+			r := &lookup.Registry{}
+			if err := r.Register(p, 0); err != nil {
+				t.Fatal(err)
+			}
+			svc := lookup.NewService(r, nil, discard())
+			lookup.SetTimeouts(svc, time.Second, 4*time.Second)
+			start := time.Now()
+			svc.Lookup(context.Background(), "5906190326195")
+			if got := p.deadline.Sub(start); got < tt.want-200*time.Millisecond || got > tt.want+200*time.Millisecond {
+				t.Fatalf("fetch deadline %v after the start, want about %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestLookupStubWaitsWithTheFallbackProviders(t *testing.T) {
 	const isbn = "9788375780635"
 	tests := []struct {

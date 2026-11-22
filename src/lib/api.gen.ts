@@ -415,6 +415,7 @@ export type CopyValue = {
 	ceiling: Estimate | null;
 	mid_grade?: DiscogsGrade;
 	low_confidence: boolean;
+	likely_sold: Estimate | null;
 };
 
 export type Bound = {
@@ -474,6 +475,7 @@ export type ValuationView = {
 	status: RunnerStatus;
 	window_days: number;
 	min_observations: number;
+	likely_sold_days: number;
 	summary: Summary;
 	copies: CopyValue[];
 	history: HistoryPoint[];

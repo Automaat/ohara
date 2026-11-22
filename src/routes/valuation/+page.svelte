@@ -31,6 +31,8 @@
 		estimateValue,
 		intervalLabel,
 		lastRunSummary,
+		likelySold,
+		likelySoldLabel,
 		offers,
 		pageSummary,
 		recentHistory,
@@ -91,6 +93,7 @@
 		{ key: 'floor', label: boundLabels.floor, numeric: true },
 		{ key: 'mid', label: boundLabels.mid, numeric: true },
 		{ key: 'ceiling', label: boundLabels.ceiling, numeric: true },
+		{ key: 'likely_sold', label: likelySoldLabel, numeric: true },
 		{ key: 'gain', label: 'Względem zakupu', numeric: true },
 		{ key: 'low_confidence', label: 'Pewność' }
 	];
@@ -103,6 +106,8 @@
 	const runSummary = $derived(lastRunSummary(status?.last_result ?? null));
 	const sourceErrors = $derived(status?.last_result?.errors ?? []);
 	const busy = $derived(starting || !!status?.running);
+	const minObservations = $derived(view?.min_observations ?? 0);
+	const fewOffers = $derived(offers(minObservations));
 </script>
 
 <svelte:head>
@@ -191,7 +196,7 @@
 			<p class="status">Brak posiadanych egzemplarzy.</p>
 		{:else}
 			<div class="mobile-results">
-				<ValuationRows {copies} />
+				<ValuationRows {copies} {minObservations} />
 			</div>
 			<DataTable
 				class="desktop-results"
@@ -213,6 +218,14 @@
 					{:else if column.key === 'floor' || column.key === 'mid' || column.key === 'ceiling'}
 						{estimateValue(row[column.key])}
 						<span class="meta">{estimateSource(column.key, row[column.key], row.mid_grade)}</span>
+					{:else if column.key === 'likely_sold'}
+						{@const sold = likelySold(row, minObservations)}
+						{#if sold}
+							{sold.value}
+							<span class="meta">{sold.note}</span>
+						{:else}
+							—
+						{/if}
 					{:else if column.key === 'gain'}
 						{copyGain(row)}
 					{:else if column.key === 'low_confidence'}
@@ -241,6 +254,14 @@
 				Ceny z OLX pochodzą z ogłoszeń. Nie znamy cen, po których zawarto transakcje. Uwzględniamy
 				oferty z ostatnich {view.window_days} dni. Wycena używanych egzemplarzy na podstawie mniej niż
 				{offers(view.min_observations)} ma niską pewność i jest oznaczona jako „mało danych”.
+			</p>
+			<p class="methodology">
+				<strong>{likelySoldLabel}:</strong> mediana ostatnich cen używanych egzemplarzy tego samego
+				tytułu i formatu z ogłoszeń OLX, które zniknęły w ciągu {view.likely_sold_days} dni od pojawienia
+				się, bez wartości odstających. To nie są znane ceny sprzedaży: zakładamy tylko, że tak szybko
+				zdjęte ogłoszenie zakończyło się sprzedażą. Cenę opartą na mniej niż {fewOffers} oznaczamy jako
+				„mało danych”, a bez takich ogłoszeń jej nie pokazujemy. Nie wliczamy jej do sum ani do historii
+				wartości.
 			</p>
 		</Disclosure>
 	{/if}

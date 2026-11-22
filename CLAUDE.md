@@ -324,7 +324,12 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   sighting. A first page, a failed or skipped query tells nothing, and a
   gone listing any answer holds again, matching or not, is no longer gone.
   Gone listings stay stored and price as before; no request is sent per
-  listing. An owned album edition
+  listing. Beside its range each copy gets `likely_sold`: the trimmed
+  median latest price of the same pool's used OLX listings whose `gone_at`
+  is at most `valuation.LikelySoldWithin` (21 days, under OLX's 30-day
+  listing run) after `observed_at`. Wartość shows it as "Prawdopodobnie
+  sprzedane", "mało danych" under 3 listings, nothing without one; it
+  never enters the range, the summary or the history. An owned album edition
   with a `discogs_release_id` is
   priced on Discogs (marketplace stats in EUR, price suggestions in the
   seller-settings currency, converted to PLN at the NBP table A rate): its

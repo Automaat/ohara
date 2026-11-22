@@ -432,6 +432,30 @@ export function copyNote(c: CopyValue): string {
 	return c.mid?.source === 'discogs' ? `${range} · sugestia ${c.mid_grade ?? defaultGrade}` : range;
 }
 
+export const likelySoldLabel = 'Prawdopodobnie sprzedane';
+
+/**
+ * A copy's likely-sold price: the amount in whole złoty and how many vanished listings it rests
+ * on, as "3 oferty", "1 oferta · mało danych" under minObservations, or with the outliers left
+ * out. Null when no listing of its title and format vanished soon enough.
+ */
+export function likelySold(
+	c: CopyValue,
+	minObservations: number
+): { value: string; note: string; low: boolean } | null {
+	const e = c.likely_sold;
+	if (!e) return null;
+	const low = e.count < minObservations;
+	const counted = e.trimmed > 0 ? `${offers(e.count)} (${e.trimmed} odrzucone)` : offers(e.count);
+	return { value: wholeZl(e.cents), note: low ? `${counted} · mało danych` : counted, low };
+}
+
+/** The line under a copy's value on a phone, "Prawdopodobnie sprzedane: 50 zł · 3 oferty". */
+export function likelySoldLine(c: CopyValue, minObservations: number): string | null {
+	const sold = likelySold(c, minObservations);
+	return sold ? `${likelySoldLabel}: ${sold.value} · ${sold.note}` : null;
+}
+
 /** The Discogs release a copy's shown prices come from, or null when none is from Discogs. */
 export function discogsRelease(c: CopyValue): number | null {
 	const priced = [c.floor, c.mid, c.ceiling].some((e) => e?.source === 'discogs');

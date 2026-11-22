@@ -41,10 +41,13 @@ func (h *Handler) Mount(r chi.Router) {
 // View is the GET /api/valuation body: every owned copy valued from the
 // prices in the window now, the stored daily totals of the last year and
 // the day of the newest one, null before the first valuation.
+// LikelySoldDays is how soon after it was first seen a used listing must
+// be gone to count toward a copy's likely-sold price.
 type View struct {
 	Status          Status         `json:"status"`
 	WindowDays      int            `json:"window_days"`
 	MinObservations int            `json:"min_observations"`
+	LikelySoldDays  int            `json:"likely_sold_days"`
 	Summary         Summary        `json:"summary"`
 	Copies          []CopyValue    `json:"copies"`
 	History         []HistoryPoint `json:"history"`
@@ -79,6 +82,7 @@ func (h *Handler) view(w http.ResponseWriter, r *http.Request) {
 		Status:          status,
 		WindowDays:      int(window.Hours() / 24),
 		MinObservations: MinObservations,
+		LikelySoldDays:  int(LikelySoldWithin.Hours() / 24),
 		Summary:         sum,
 		Copies:          copies,
 		History:         history,

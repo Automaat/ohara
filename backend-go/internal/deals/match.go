@@ -443,8 +443,21 @@ func NewListingText(title string, rules Rules) *ListingText {
 // (Rules.RejectedFor) and it names no other title of titles more
 // specifically (Titles.Outranks).
 func (l *ListingText) Belongs(w *Want, titles Titles) bool {
+	return l.rejection(w, titles) == ""
+}
+
+func (l *ListingText) rejection(w *Want, titles Titles) rejectionReason {
 	p := w.text()
-	return l.matches(w, p) && !l.rejectedFor(p) && !titles.outranks(w, p, l)
+	if reason := l.mismatch(w, p); reason != "" {
+		return reason
+	}
+	if l.rejectedFor(p) {
+		return rejectionKeyword
+	}
+	if titles.outranks(w, p, l) {
+		return rejectionOtherTitle
+	}
+	return ""
 }
 
 // rejectedFor reports whether the listing holds a reject phrase the want
@@ -708,10 +721,23 @@ func (w *Want) Matches(title string) bool {
 
 // matches is Matches for the want of p.
 func (l *ListingText) matches(w *Want, p *wantText) bool {
-	if p.selfTitled {
-		return l.identifiesAlbum(w, p)
+	return l.mismatch(w, p) == ""
+}
+
+func (l *ListingText) mismatch(w *Want, p *wantText) rejectionReason {
+	if reason := l.qualification(w, p); reason != "" {
+		return reason
 	}
-	return qualifies(w, p, l) && l.fitsBookMedium(w, p) && p.carries(w.Kind, l) && !l.lotFor(w.Kind, p)
+	switch {
+	case !l.fitsBookMedium(w, p):
+		return rejectionFormat
+	case !l.matchesTitle(w, p):
+		return rejectionTitle
+	case l.lotFor(w.Kind, p):
+		return rejectionLot
+	default:
+		return ""
+	}
 }
 
 // VerifiesAlbum reports whether a stored listing still identifies a self-titled
@@ -721,12 +747,12 @@ func (w *Want) VerifiesAlbum(listing *Listing) bool {
 		return true
 	}
 	p := w.text()
-	return !p.selfTitled || listing.text(Rules{}).identifiesAlbum(w, p)
+	return !p.selfTitled || listing.text(Rules{}).matches(w, p)
 }
 
-func (l *ListingText) identifiesAlbum(w *Want, p *wantText) bool {
-	if !qualifies(w, p, l) || l.lotFor(w.Kind, p) {
-		return false
+func (l *ListingText) matchesTitle(w *Want, p *wantText) bool {
+	if !p.selfTitled {
+		return p.carries(w.Kind, l)
 	}
 	if l.releaseID > 0 && w.DiscogsReleaseID != nil && l.releaseID == *w.DiscogsReleaseID {
 		return true
@@ -927,28 +953,32 @@ func lotWords(text []string) (bool, []int) {
 // artist's words and a fitting medium for an album, and the edition's
 // details for a want of only its edition (editionNamed).
 func qualifies(w *Want, p *wantText, l *ListingText) bool {
+	return l.qualification(w, p) == ""
+}
+
+func (l *ListingText) qualification(w *Want, p *wantText) rejectionReason {
 	text := l.words
 	if w.Kind == "movie" && w.Format != nil && l.format != *w.Format {
-		return false
+		return rejectionFormat
 	}
 	if !editionNamed(w, l.details) {
-		return false
+		return rejectionEdition
 	}
 	if w.Kind == "book" && p.surname != "" && !namesSurname(text, p.surname) {
-		return false
+		return rejectionCreator
 	}
 	if l.medium != "" && w.Kind != "music" {
-		return false
+		return rejectionKind
 	}
 	if w.Kind == "music" {
 		if !containsAll(text, p.artist) {
-			return false
+			return rejectionCreator
 		}
 		if w.Format != nil && !l.albumMedium(p, *w.Format) {
-			return false
+			return rejectionFormat
 		}
 	}
-	return true
+	return ""
 }
 
 // albumMedium reports whether the listing can be the wanted album format:
@@ -1286,11 +1316,14 @@ func pick(wants []Want, l *Listing, rules Rules, titles Titles) *Want {
 // pickOf is pick among the wants of kinds, or among every want when kinds
 // is nil. A listing with Kinds also goes to no want of another kind.
 func pickOf(wants []Want, kinds []string, l *Listing, rules Rules, titles Titles) *Want {
-	text := l.text(rules)
+	return pickListing(wants, kinds, l, l.text(rules), titles)
+}
+
+func pickListing(wants []Want, kinds []string, l *Listing, text *ListingText, titles Titles) *Want {
 	var first *Want
 	for i := range wants {
 		w := &wants[i]
-		if kinds != nil && !slices.Contains(kinds, w.Kind) || l.Kinds != nil && !slices.Contains(l.Kinds, w.Kind) {
+		if !allowsKind(kinds, w.Kind) || !allowsKind(l.Kinds, w.Kind) {
 			continue
 		}
 		if !text.Belongs(w, titles) {
@@ -1313,4 +1346,8 @@ func (l *Listing) text(rules Rules) *ListingText {
 		text.releaseID = l.DiscogsReleaseID
 	}
 	return text
+}
+
+func allowsKind(kinds []string, kind string) bool {
+	return kinds == nil || slices.Contains(kinds, kind)
 }

@@ -161,6 +161,19 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   The last run, scheduled, manual or cut short by shutdown, is kept in
   `deal_run`: after a restart the status shows it and the first scheduled
   run comes one interval after it started, at least 5 minutes on.
+- Operators can read the last run's coverage with
+  `SELECT result->'coverage' FROM deal_run`. Each row identifies a source
+  and wishlist copy. It counts successful replies (including empty ones),
+  empty replies, failed requests, refusals and queries skipped after a
+  refusal. A shared query credits each wish that asked for it, and feeds
+  credit each eligible wish. A canary counts only when reused for a wish.
+  Candidates count listing appearances, including repeats across queries.
+  A match reached through another wish's query also credits the wish it
+  was assigned to. Unique matches count each listing ID once per source
+  and wish. Rejection counts show the first matcher reason for each
+  rejected candidate, so the highest counts show the main causes.
+  The summary keeps up to 1,000 source and wish pairs and sets
+  `truncated` when it omits a pair. Prometheus keeps its source-level labels.
 - BlueDVD (bluedvd.pl, a shop of 4K UHD and Blu-ray discs, steelbooks and
   preorders) is a query source, on unless `OHARA_BLUEDVD=false`. Each
   query is one GET of the shop's WooCommerce Store API,
@@ -454,3 +467,6 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   `/copies/<id>`. A failed answer keeps the last list with a retry; with
   no wish the section is left out and the page's "Lista życzeń jest
   pusta" stands. The offer segments are unchanged.
+- "Szukaj na Allegro" opens a new tab on click with the wish's title and,
+  where available, its TV season, album artist and format. Rendering the
+  wishlist makes no request to Allegro.

@@ -56,9 +56,40 @@ var ErrLinkedElsewhere = errors.New("copy already in the discogs collection as a
 // LinkedElsewhereMessage is what the page shows for ErrLinkedElsewhere.
 const LinkedElsewhereMessage = "Ten egzemplarz jest już w kolekcji Discogs jako inne wydanie."
 
-// addSlack is how much earlier than Ohara's clock Discogs may date an
-// instance an add made, so that the instance still counts as that add's.
-const addSlack = 5 * time.Minute
+// settleAfter is how long after an add whose outcome is unknown Discogs
+// can no longer make its instance: far past RequestTimeout. Until then an
+// empty collection does not prove the add made nothing.
+const settleAfter = 10 * time.Minute
+
+// ErrAddUnknown is an add of the copy whose outcome is unknown while the
+// release is in the collection: only the owner can say whether Ohara made
+// that instance.
+var ErrAddUnknown = errors.New("outcome of an earlier discogs add unknown")
+
+// AddUnknownMessage is what the page shows for ErrAddUnknown.
+const AddUnknownMessage = "Nie wiadomo, czy poprzednie dodanie do Discogs się udało. " +
+	"Jeśli to wydanie w kolekcji Discogs dodała Ohara, potwierdź je; jeśli nie, porzuć to dodanie."
+
+// ErrAddUnsettled is an add of the copy whose outcome is unknown, sent
+// less than settleAfter ago, while the release is not in the collection.
+var ErrAddUnsettled = errors.New("earlier discogs add not settled yet")
+
+// AddUnsettledMessage is what the page shows for ErrAddUnsettled.
+const AddUnsettledMessage = "Poprzednie dodanie do Discogs jeszcze się nie rozstrzygnęło. Spróbuj za kilka minut."
+
+// ErrAdoptNotOne is an owner's confirmation of an add when the release is
+// not in the collection exactly once.
+var ErrAdoptNotOne = errors.New("release not held exactly once")
+
+// AdoptNotOneMessage is what the page shows for ErrAdoptNotOne.
+const AdoptNotOneMessage = "Nie można potwierdzić: tego wydania nie ma w kolekcji Discogs dokładnie raz."
+
+// ErrNoUnknownAdd is a confirmation or discard without an add whose
+// outcome is unknown.
+var ErrNoUnknownAdd = errors.New("no discogs add with an unknown outcome")
+
+// NoUnknownAddMessage is what the page shows for ErrNoUnknownAdd.
+const NoUnknownAddMessage = "Nie ma dodania do Discogs, które czeka na potwierdzenie."
 
 // lockTimeout bounds how long a push holds its copy, whatever becomes of
 // the request.
@@ -78,8 +109,12 @@ func (e *FieldError) Error() string {
 	return fmt.Sprintf("discogs collection has no field %q with option %q", e.Field, e.Option)
 }
 
-// UpstreamError is a Discogs request that failed.
-type UpstreamError struct{ Err error }
+// UpstreamError is a Discogs request that failed. Unknown marks an add
+// whose outcome is unknown: Discogs may have made the instance.
+type UpstreamError struct {
+	Err     error
+	Unknown bool
+}
 
 func (e *UpstreamError) Error() string { return e.Err.Error() }
 
@@ -103,6 +138,9 @@ type State struct {
 	Pushable   bool    `json:"pushable"`
 	InstanceID *int64  `json:"instance_id"`
 	ReleaseURL *string `json:"release_url"`
+	// AddUnknown says an earlier add's outcome is unknown: the owner
+	// confirms or discards it.
+	AddUnknown bool `json:"add_unknown"`
 }
 
 // Pusher adds copies to the Discogs collection, one push at a time, so
@@ -137,7 +175,8 @@ func refusal(t *Target) string {
 func (p *Pusher) state(t *Target) State {
 	s := State{Enabled: p.client != nil}
 	s.Pushable = s.Enabled && refusal(t) == ""
-	if id := t.Instance(); id != nil && t.Synced && t.ReleaseID != nil {
+	s.AddUnknown = t.Pending != nil && t.Pending.InstanceID == nil
+	if id := t.Instance(); id != nil && t.ReleaseID != nil {
 		s.InstanceID = id
 		u := "https://www.discogs.com/release/" + strconv.FormatInt(*t.ReleaseID, 10)
 		s.ReleaseURL = &u
@@ -182,16 +221,18 @@ func edits(fields []discogs.Field, t *Target) ([]edit, error) {
 }
 
 // Push adds copy id to the collection, or updates the conditions of the
-// instance it made before, and returns its new state. It answers
-// ErrDisabled without a client, ErrNotFound for a missing copy, a
-// RefusedError for a copy it cannot push, ErrForeignInstance when the
-// release is in the collection in an instance the copy did not make,
-// ErrLinkedElsewhere when the copy's instance of another release is still
-// there, a FieldError when the collection's fields do not fit its grades
-// and an UpstreamError when Discogs fails. The copy stays locked
-// throughout; what the push learned of Discogs is kept whatever its
-// outcome.
-func (p *Pusher) Push(ctx context.Context, id int64) (State, error) {
+// instance it made before, and returns its new state; with adopt, the
+// owner confirms that the release's only instance is the one an add of
+// unknown outcome made. It answers ErrDisabled without a client,
+// ErrNotFound for a missing copy, a RefusedError for a copy it cannot
+// push, ErrForeignInstance when the release is in the collection in an
+// instance the copy did not make, ErrLinkedElsewhere when the copy's
+// instance of another release is still there, ErrAddUnknown,
+// ErrAddUnsettled, ErrAdoptNotOne or ErrNoUnknownAdd while an earlier add
+// is unsettled, a FieldError when the collection's fields do not fit its
+// grades and an UpstreamError when Discogs fails. The copy stays locked
+// throughout and is linked only once its instance's conditions are set.
+func (p *Pusher) Push(ctx context.Context, id int64, adopt bool) (State, error) {
 	if p.client == nil {
 		return State{}, ErrDisabled
 	}
@@ -207,12 +248,18 @@ func (p *Pusher) Push(ctx context.Context, id int64) (State, error) {
 	if reason := refusal(&t); reason != "" {
 		return State{}, &RefusedError{Reason: reason}
 	}
-	pushErr := p.push(ctx, dbctx, lk, &t)
+	linked, pushErr := p.push(ctx, dbctx, lk, &t, adopt)
 	if _, ok := errors.AsType[*FieldError](pushErr); ok {
 		return State{}, pushErr
 	}
 	if err := lk.Commit(dbctx); err != nil {
 		return State{}, err
+	}
+	if linked && t.Pending != nil {
+		if err := p.store.EndAdd(dbctx, id); err != nil {
+			return State{}, err
+		}
+		t.Pending = nil
 	}
 	if pushErr != nil {
 		return State{}, pushErr
@@ -220,136 +267,161 @@ func (p *Pusher) Push(ctx context.Context, id int64) (State, error) {
 	return p.state(&t), nil
 }
 
-func (p *Pusher) push(ctx, dbctx context.Context, lk *Locked, t *Target) error {
-	release := *t.ReleaseID
+// Discard drops copy id's add whose outcome is unknown, at the owner's
+// word that it made nothing of theirs, and returns its state.
+func (p *Pusher) Discard(ctx context.Context, id int64) (State, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	dropped, err := p.store.DiscardUnknownAdd(ctx, id)
+	if err != nil {
+		return State{}, err
+	}
+	t, err := p.store.Target(ctx, id)
+	if err != nil {
+		return State{}, err
+	}
+	if !dropped {
+		return State{}, ErrNoUnknownAdd
+	}
+	return p.state(&t), nil
+}
+
+// push sets t's grades on its instance, adding one when the copy has
+// none, and reports whether it linked the copy.
+func (p *Pusher) push(ctx, dbctx context.Context, lk *Locked, t *Target, adopt bool) (bool, error) {
 	if p.username == "" {
 		user, err := p.client.Identity(ctx)
 		if err != nil {
-			return upstream(err)
+			return false, upstream(err)
 		}
 		p.username = user
 	}
 	fields, err := p.client.CollectionFields(ctx, p.username)
 	if err != nil {
-		return upstream(err)
+		return false, upstream(err)
 	}
 	sets, err := edits(fields, t)
 	if err != nil {
-		return err
+		return false, err
 	}
-	own, held, err := p.own(ctx, dbctx, lk, t)
+	own, release, held, err := p.own(ctx, dbctx, lk, t, adopt)
 	if err != nil {
-		return err
+		return false, err
 	}
 	for _, h := range held {
 		if own == nil || h.InstanceID != own.InstanceID {
-			return ErrForeignInstance
+			return false, ErrForeignInstance
 		}
 	}
 	if own == nil {
-		if own, err = p.add(ctx, dbctx, lk, t); err != nil {
-			return err
+		if own, err = p.add(ctx, dbctx, t); err != nil {
+			return false, err
 		}
 	}
 	for _, e := range sets {
 		err := p.client.SetInstanceField(ctx, p.username, own.FolderID, release, own.InstanceID, e.field, e.value)
 		if err != nil {
-			return upstream(err)
+			return false, upstream(err)
 		}
 	}
-	if err := lk.Synced(dbctx); err != nil {
-		return err
+	if err := lk.Link(dbctx, release, own.InstanceID); err != nil {
+		return false, err
 	}
-	t.Synced = true
-	return nil
+	t.InstanceID, t.InstanceReleaseID = &own.InstanceID, &release
+	if release != *t.ReleaseID {
+		return true, ErrLinkedElsewhere
+	}
+	return true, nil
 }
 
-// own finds the instance t made of its edition's release among held, the
-// release's instances in the collection, which it also returns. A link to
-// an instance Discogs no longer has is dropped; a link to another
-// release's instance that is still there is ErrLinkedElsewhere. An add
-// whose answer never came is adopted when its instance is provably the
-// one it made: alone and added after it was sent.
-func (p *Pusher) own(ctx, dbctx context.Context, lk *Locked, t *Target) (*discogs.Instance, []discogs.Instance, error) {
+// own finds the copy's instance, the release it is of and that release's
+// instances in the collection. An unfinished add comes first: the
+// instance Discogs answered it with, or, when its outcome is unknown, the
+// release's only instance at the owner's word (adopt); an empty
+// collection long after it was sent means it made nothing. Then the
+// linked instance: one Discogs no longer has is dropped, one of another
+// release still there is ErrLinkedElsewhere. With none, it returns the
+// instances of the edition's release, which any add must find empty.
+func (p *Pusher) own(ctx, dbctx context.Context, lk *Locked, t *Target, adopt bool) (*discogs.Instance, int64, []discogs.Instance, error) {
 	release := *t.ReleaseID
+	if pending := t.Pending; pending != nil {
+		held, err := p.client.ReleaseInstances(ctx, p.username, pending.ReleaseID)
+		if err != nil {
+			return nil, 0, nil, upstream(err)
+		}
+		switch made := pending.InstanceID; {
+		case made != nil:
+			if i := slices.IndexFunc(held, func(h discogs.Instance) bool { return h.InstanceID == *made }); i >= 0 {
+				return &held[i], pending.ReleaseID, held, nil
+			}
+		case adopt:
+			if len(held) != 1 {
+				return nil, 0, nil, ErrAdoptNotOne
+			}
+			return &held[0], pending.ReleaseID, held, nil
+		case len(held) > 0:
+			return nil, 0, nil, ErrAddUnknown
+		case time.Since(pending.Since) < settleAfter:
+			return nil, 0, nil, ErrAddUnsettled
+		}
+		if err := p.store.EndAdd(dbctx, t.CopyID); err != nil {
+			return nil, 0, nil, err
+		}
+		t.Pending = nil
+	}
+	if adopt {
+		return nil, 0, nil, ErrNoUnknownAdd
+	}
 	if t.InstanceID != nil {
 		linked := *t.InstanceReleaseID
 		held, err := p.client.ReleaseInstances(ctx, p.username, linked)
 		if err != nil {
-			return nil, nil, upstream(err)
+			return nil, 0, nil, upstream(err)
 		}
 		if i := slices.IndexFunc(held, func(h discogs.Instance) bool { return h.InstanceID == *t.InstanceID }); i >= 0 {
 			if linked != release {
-				return nil, nil, ErrLinkedElsewhere
+				return nil, 0, nil, ErrLinkedElsewhere
 			}
-			return &held[i], held, nil
+			return &held[i], release, held, nil
 		}
 		if err := lk.Forget(dbctx); err != nil {
-			return nil, nil, err
+			return nil, 0, nil, err
 		}
-		t.InstanceID, t.InstanceReleaseID, t.Synced = nil, nil, false
+		t.InstanceID, t.InstanceReleaseID = nil, nil
 	}
 	held, err := p.client.ReleaseInstances(ctx, p.username, release)
 	if err != nil {
-		return nil, nil, upstream(err)
+		return nil, 0, nil, upstream(err)
 	}
-	if t.AddReleaseID == nil {
-		return nil, held, nil
-	}
-	pending := *t.AddReleaseID == release
-	since := *t.AddSince
-	t.AddReleaseID, t.AddSince = nil, nil
-	if pending {
-		if made := provenAdd(held, since); made != nil {
-			return made, held, p.link(dbctx, lk, t, made.InstanceID)
-		}
-	}
-	return nil, held, lk.ClearAdd(dbctx)
+	return nil, release, held, nil
 }
 
-// provenAdd is the instance an add sent at since made: the release's only
-// instance, added no earlier than since.
-func provenAdd(held []discogs.Instance, since time.Time) *discogs.Instance {
-	if len(held) != 1 {
-		return nil
-	}
-	added, err := time.Parse(time.RFC3339, held[0].DateAdded)
-	if err != nil || added.Before(since.Add(-addSlack)) {
-		return nil
-	}
-	return &held[0]
-}
-
-func (p *Pusher) link(dbctx context.Context, lk *Locked, t *Target, instance int64) error {
+// add makes a new instance of t's release in the folder. The add is
+// recorded and committed before it is sent. Discogs refusing it (a 4xx)
+// drops the record; any other failure leaves the outcome unknown and the
+// record in place, so no other add of the copy is sent until it is
+// settled. The instance Discogs answers with is recorded at once; the
+// copy is linked only after its conditions are set.
+func (p *Pusher) add(ctx, dbctx context.Context, t *Target) (*discogs.Instance, error) {
 	release := *t.ReleaseID
-	if err := lk.Link(dbctx, release, instance); err != nil {
-		return err
-	}
-	t.InstanceID, t.InstanceReleaseID, t.Synced = &instance, &release, false
-	return nil
-}
-
-// add makes a new instance of t's release in the folder and links it. The
-// add is marked before it is sent; when its answer does not come, the
-// release's instances are read again and the add's instance adopted if
-// provably its own, else the mark stays for a later push to settle.
-func (p *Pusher) add(ctx, dbctx context.Context, lk *Locked, t *Target) (*discogs.Instance, error) {
-	release := *t.ReleaseID
-	since, err := lk.MarkAdd(dbctx, release)
-	if err != nil {
+	if err := p.store.BeginAdd(dbctx, t.CopyID, release); err != nil {
 		return nil, err
 	}
-	made, addErr := p.client.AddToFolder(ctx, p.username, p.folder, release)
-	if addErr == nil {
-		return &discogs.Instance{InstanceID: made, FolderID: p.folder}, p.link(dbctx, lk, t, made)
-	}
-	held, err := p.client.ReleaseInstances(dbctx, p.username, release)
+	t.Pending = &Pending{ReleaseID: release, Since: time.Now()}
+	made, err := p.client.AddToFolder(ctx, p.username, p.folder, release)
 	if err != nil {
-		return nil, upstream(addErr)
+		if se, ok := errors.AsType[discogs.StatusError](err); ok && se.Code >= 400 && se.Code < 500 {
+			if endErr := p.store.EndAdd(dbctx, t.CopyID); endErr != nil {
+				return nil, endErr
+			}
+			t.Pending = nil
+			return nil, upstream(err)
+		}
+		return nil, &UpstreamError{Err: err, Unknown: true}
 	}
-	adopted := provenAdd(held, since)
-	if adopted == nil {
-		return nil, upstream(addErr)
+	if err := p.store.AddMade(dbctx, t.CopyID, made); err != nil {
+		return nil, err
 	}
-	return adopted, p.link(dbctx, lk, t, adopted.InstanceID)
+	t.Pending.InstanceID = &made
+	return &discogs.Instance{InstanceID: made, FolderID: p.folder}, nil
 }

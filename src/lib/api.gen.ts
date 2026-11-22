@@ -467,6 +467,7 @@ export type CopyDiscogs = {
 	pushable: boolean;
 	instance_id: number | null;
 	release_url: string | null;
+	add_unknown: boolean;
 };
 
 export type CandidateTitle = {

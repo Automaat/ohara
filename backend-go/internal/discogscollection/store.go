@@ -28,10 +28,18 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
+// Pending is an add of a copy's release that has not finished: sent at
+// Since, with the instance Discogs answered with, nil while the add's
+// outcome is unknown.
+type Pending struct {
+	ReleaseID  int64
+	Since      time.Time
+	InstanceID *int64
+}
+
 // Target is what a push needs of a copy: its status, its title's kind,
-// its edition's Discogs release, its grades, the instance it was pushed
-// to with that instance's release and whether its conditions were set,
-// and an add whose answer never came: the release and when it was sent.
+// its edition's Discogs release, its grades, the instance it is linked
+// to with that instance's release, and an add that has not finished.
 type Target struct {
 	CopyID            int64
 	Status            string
@@ -41,13 +49,11 @@ type Target struct {
 	SleeveGrade       *string
 	InstanceID        *int64
 	InstanceReleaseID *int64
-	Synced            bool
-	AddReleaseID      *int64
-	AddSince          *time.Time
+	Pending           *Pending
 }
 
-// Instance is the instance the copy made of its edition's current
-// release, nil when it made none or made it of another release.
+// Instance is the instance the copy is linked to of its edition's current
+// release, nil when it is linked to none or to another release's.
 func (t *Target) Instance() *int64 {
 	if t.InstanceID == nil || t.ReleaseID == nil || t.InstanceReleaseID == nil || *t.InstanceReleaseID != *t.ReleaseID {
 		return nil
@@ -56,20 +62,25 @@ func (t *Target) Instance() *int64 {
 }
 
 const targetQuery = `SELECT c.status, ti.kind, e.discogs_release_id, c.media_grade, c.sleeve_grade,
-		c.discogs_instance_id, c.discogs_instance_release_id, c.discogs_instance_synced,
-		c.discogs_add_release_id, c.discogs_add_since
+		c.discogs_instance_id, c.discogs_instance_release_id, a.release_id, a.sent_at, a.instance_id
 	FROM copy c JOIN edition e ON e.id = c.edition_id JOIN title ti ON ti.id = e.title_id
+		LEFT JOIN discogs_add a ON a.copy_id = c.id
 	WHERE c.id = $1`
 
 func scanTarget(row pgx.Row, id int64) (Target, error) {
 	t := Target{CopyID: id}
+	var addRelease, addInstance *int64
+	var addSince *time.Time
 	err := row.Scan(&t.Status, &t.Kind, &t.ReleaseID, &t.MediaGrade, &t.SleeveGrade,
-		&t.InstanceID, &t.InstanceReleaseID, &t.Synced, &t.AddReleaseID, &t.AddSince)
+		&t.InstanceID, &t.InstanceReleaseID, &addRelease, &addSince, &addInstance)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Target{}, ErrNotFound
 	}
 	if err != nil {
 		return Target{}, fmt.Errorf("discogs target: %w", err)
+	}
+	if addRelease != nil && addSince != nil {
+		t.Pending = &Pending{ReleaseID: *addRelease, Since: *addSince, InstanceID: addInstance}
 	}
 	return t, nil
 }
@@ -79,9 +90,47 @@ func (s *Store) Target(ctx context.Context, id int64) (Target, error) {
 	return scanTarget(s.pool.QueryRow(ctx, targetQuery, id), id)
 }
 
+// BeginAdd records, and commits at once, that an add of release for copy
+// id is about to be sent; it outlives the push that sends it.
+func (s *Store) BeginAdd(ctx context.Context, id, release int64) error {
+	if _, err := s.pool.Exec(ctx, `INSERT INTO discogs_add (copy_id, release_id) VALUES ($1, $2)`, id, release); err != nil {
+		return fmt.Errorf("begin discogs add: %w", err)
+	}
+	return nil
+}
+
+// AddMade records the instance Discogs answered copy id's add with.
+func (s *Store) AddMade(ctx context.Context, id, instance int64) error {
+	if _, err := s.pool.Exec(ctx, `UPDATE discogs_add SET instance_id = $2 WHERE copy_id = $1`, id, instance); err != nil {
+		return fmt.Errorf("record discogs add: %w", err)
+	}
+	return nil
+}
+
+// EndAdd drops copy id's unfinished add: it is linked, refused or
+// discarded.
+func (s *Store) EndAdd(ctx context.Context, id int64) error {
+	if _, err := s.pool.Exec(ctx, `DELETE FROM discogs_add WHERE copy_id = $1`, id); err != nil {
+		return fmt.Errorf("end discogs add: %w", err)
+	}
+	return nil
+}
+
+// DiscardUnknownAdd drops copy id's add whose outcome is unknown, at the
+// owner's word that it made nothing of theirs; false when there is none.
+func (s *Store) DiscardUnknownAdd(ctx context.Context, id int64) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM discogs_add WHERE copy_id = $1 AND instance_id IS NULL`, id)
+	if err != nil {
+		return false, fmt.Errorf("discard discogs add: %w", err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
 // Locked is a copy held for one push: no other push, update or delete of
 // it runs until Commit or Rollback, so a copy deleted mid-push cannot
-// leave an instance on Discogs that Ohara no longer knows of.
+// leave an instance on Discogs that Ohara no longer knows of. Its
+// unfinished add is written through the Store, outside the lock's
+// transaction, so that it is kept whatever becomes of the push.
 type Locked struct {
 	tx pgx.Tx
 	id int64
@@ -102,48 +151,25 @@ func (s *Store) Lock(ctx context.Context, id int64) (*Locked, Target, error) {
 	return &Locked{tx: tx, id: id}, t, nil
 }
 
-func (l *Locked) exec(ctx context.Context, op, sql string, args ...any) error {
-	if _, err := l.tx.Exec(ctx, sql, append([]any{l.id}, args...)...); err != nil {
-		return fmt.Errorf("%s: %w", op, err)
+// Link records that the copy's instance is instance of release, its
+// conditions set.
+func (l *Locked) Link(ctx context.Context, release, instance int64) error {
+	_, err := l.tx.Exec(ctx, `UPDATE copy SET discogs_instance_id = $2, discogs_instance_release_id = $3
+		WHERE id = $1`, l.id, instance, release)
+	if err != nil {
+		return fmt.Errorf("link discogs instance: %w", err)
 	}
 	return nil
 }
 
-// Link records that the copy made instance of release, its conditions not
-// yet set, and drops any pending add.
-func (l *Locked) Link(ctx context.Context, release, instance int64) error {
-	return l.exec(ctx, "link discogs instance", `UPDATE copy SET discogs_instance_id = $2,
-		discogs_instance_release_id = $3, discogs_instance_synced = false,
-		discogs_add_release_id = NULL, discogs_add_since = NULL WHERE id = $1`, instance, release)
-}
-
-// Synced records that the linked instance's conditions are set.
-func (l *Locked) Synced(ctx context.Context) error {
-	return l.exec(ctx, "sync discogs instance", `UPDATE copy SET discogs_instance_synced = true WHERE id = $1`)
-}
-
 // Forget drops the link: Discogs no longer has that instance.
 func (l *Locked) Forget(ctx context.Context) error {
-	return l.exec(ctx, "forget discogs instance", `UPDATE copy SET discogs_instance_id = NULL,
-		discogs_instance_release_id = NULL, discogs_instance_synced = false WHERE id = $1`)
-}
-
-// MarkAdd records that an add of release is about to be sent and returns
-// when; an instance of it added since then and alone is the copy's.
-func (l *Locked) MarkAdd(ctx context.Context, release int64) (time.Time, error) {
-	var since time.Time
-	err := l.tx.QueryRow(ctx, `UPDATE copy SET discogs_add_release_id = $2, discogs_add_since = now()
-		WHERE id = $1 RETURNING discogs_add_since`, l.id, release).Scan(&since)
+	_, err := l.tx.Exec(ctx, `UPDATE copy SET discogs_instance_id = NULL, discogs_instance_release_id = NULL
+		WHERE id = $1`, l.id)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("mark discogs add: %w", err)
+		return fmt.Errorf("forget discogs instance: %w", err)
 	}
-	return since, nil
-}
-
-// ClearAdd drops a pending add.
-func (l *Locked) ClearAdd(ctx context.Context) error {
-	return l.exec(ctx, "clear discogs add", `UPDATE copy SET discogs_add_release_id = NULL,
-		discogs_add_since = NULL WHERE id = $1`)
+	return nil
 }
 
 // Commit keeps what the push recorded and lets the copy go.

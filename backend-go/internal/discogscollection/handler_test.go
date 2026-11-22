@@ -66,6 +66,12 @@ type double struct {
 	cutDone         bool
 	// beforeLookup runs, unlocked, before every release lookup.
 	beforeLookup func()
+	// onAdd runs before an add is made.
+	onAdd func()
+	// lateAdds answer the next adds 503 and make their instance only when
+	// commitLate runs.
+	lateAdds int
+	late     []func()
 }
 
 func newDouble(t *testing.T) (*double, *httptest.Server) {
@@ -112,8 +118,21 @@ func newDouble(t *testing.T) (*double, *httptest.Server) {
 		writeJSON(w, http.StatusOK, obj{"pagination": obj{"page": 1, "pages": 1}, "releases": out})
 	})
 	mux.HandleFunc("POST "+user+"/folders/{folder}/releases/{release}", func(w http.ResponseWriter, r *http.Request) {
-		d.nextID++
+		if d.onAdd != nil {
+			d.onAdd()
+		}
 		folder, id := pathInt(r, "folder"), pathInt(r, "release")
+		if d.lateAdds > 0 {
+			d.lateAdds--
+			d.late = append(d.late, func() {
+				d.nextID++
+				d.instances[id] = append(d.instances[id], discogs.Instance{InstanceID: d.nextID, FolderID: folder})
+				d.adds = append(d.adds, fieldEdit{folder: folder, release: id, instance: d.nextID})
+			})
+			writeJSON(w, http.StatusServiceUnavailable, obj{"message": "busy"})
+			return
+		}
+		d.nextID++
 		d.instances[id] = append(d.instances[id], discogs.Instance{
 			InstanceID: d.nextID, FolderID: folder, DateAdded: time.Now().Format(time.RFC3339),
 		})
@@ -195,14 +214,14 @@ func (d *double) moveTo(id, folder int64) {
 	}
 }
 
-// age dates every instance of release id by ago earlier.
-func (d *double) age(id int64, ago time.Duration) {
+// commitLate makes the instances of the adds answered 503.
+func (d *double) commitLate() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	held := d.instances[id]
-	for i := range held {
-		held[i].DateAdded = time.Now().Add(-ago).Format(time.RFC3339)
+	for _, f := range d.late {
+		f()
 	}
+	d.late = nil
 }
 
 // removeRelease takes release id out of the collection, as the owner can.
@@ -536,7 +555,7 @@ func (a *api) state(id int64) discogscollection.State {
 	return s
 }
 
-func TestPushFieldEditFailureKeepsInstance(t *testing.T) {
+func TestPushFieldEditFailureStoresNoInstance(t *testing.T) {
 	d, srv := newDouble(t)
 	a := newAPI(t, srv.URL, discogscollection.DefaultFolder)
 	id := a.album(obj{"status": "owned", "media_grade": "mint"})
@@ -545,20 +564,17 @@ func TestPushFieldEditFailureKeepsInstance(t *testing.T) {
 	if code, raw, _ := a.push(id); code != http.StatusBadGateway {
 		t.Fatalf("push = %d %s, want 502", code, raw)
 	}
-	adds, _, _ := d.snapshot()
-	if inst, _ := a.stored(id); len(adds) != 1 || inst == nil || *inst != adds[0].instance {
-		t.Fatalf("stored %v after adds %+v, want the made instance kept for a retry", inst, adds)
+	if inst, _ := a.stored(id); inst != nil {
+		t.Fatalf("stored instance %d after a failed grade write", *inst)
 	}
-	if s := a.state(id); s.InstanceID != nil || s.ReleaseURL != nil || !s.Pushable {
-		t.Fatalf("state = %+v, want no instance shown before its conditions are set", s)
+	if s := a.state(id); s.InstanceID != nil || s.AddUnknown {
+		t.Fatalf("state = %+v, want no instance and no add waiting for the owner", s)
 	}
 	d.failWith(0, "")
 	code, raw, s := a.push(id)
-	if code != http.StatusOK || s.InstanceID == nil || *s.InstanceID != adds[0].instance {
-		t.Fatalf("retry = %d %s", code, raw)
-	}
-	if adds, _, _ = d.snapshot(); len(adds) != 1 {
-		t.Fatalf("adds = %+v, want the retry to add none", adds)
+	adds, _, _ := d.snapshot()
+	if code != http.StatusOK || len(adds) != 1 || s.InstanceID == nil || *s.InstanceID != adds[0].instance {
+		t.Fatalf("retry = %d %s, adds %+v; want the made instance finished, none added", code, raw, adds)
 	}
 }
 
@@ -663,42 +679,88 @@ func TestPushAfterEditionNamesAnotherRelease(t *testing.T) {
 	}
 }
 
-func TestPushAdoptsAddWhoseAnswerWasCut(t *testing.T) {
+func TestPushLeavesCutAddToOwner(t *testing.T) {
 	d, srv := newDouble(t)
 	a := newAPI(t, srv.URL, discogscollection.DefaultFolder)
 	id := a.album(obj{"status": "owned", "media_grade": "mint"})
 	d.mu.Lock()
 	d.cutAdd = 1
 	d.mu.Unlock()
-	code, raw, s := a.push(id)
-	adds, edits, _ := d.snapshot()
-	if code != http.StatusOK || len(adds) != 1 || s.InstanceID == nil || *s.InstanceID != adds[0].instance ||
-		len(edits) != 1 || edits[0].instance != adds[0].instance {
-		t.Fatalf("push = %d %s, adds %+v, edits %+v; want the cut add adopted", code, raw, adds, edits)
-	}
-}
-
-func TestPushSettlesCutAddOnRetry(t *testing.T) {
-	d, srv := newDouble(t)
-	a := newAPI(t, srv.URL, discogscollection.DefaultFolder)
-	id := a.album(obj{"status": "owned"})
-	d.mu.Lock()
-	d.cutAdd, d.cutList = 1, 1
-	d.mu.Unlock()
-	if code, raw, _ := a.push(id); code != http.StatusBadGateway {
-		t.Fatalf("push = %d %s, want 502", code, raw)
+	if code, raw, _ := a.push(id); code != http.StatusBadGateway || !strings.Contains(raw, "Nie wiadomo") {
+		t.Fatalf("push = %d %s, want 502 saying the outcome is unknown", code, raw)
 	}
 	if inst, _ := a.stored(id); inst != nil {
-		t.Fatalf("stored instance %d before the add is settled", *inst)
+		t.Fatalf("stored instance %d", *inst)
 	}
-	code, raw, s := a.push(id)
-	adds, _, _ := d.snapshot()
-	if code != http.StatusOK || len(adds) != 1 || s.InstanceID == nil || *s.InstanceID != adds[0].instance {
-		t.Fatalf("retry = %d %s, adds %+v; want the earlier add adopted", code, raw, adds)
+	if s := a.state(id); !s.AddUnknown || s.InstanceID != nil {
+		t.Fatalf("state = %+v, want the add waiting for the owner", s)
+	}
+	code, raw, _ := a.push(id)
+	if _, edits, _ := d.snapshot(); code != http.StatusConflict || !strings.Contains(raw, "potwierdź") || len(edits) != 0 {
+		t.Fatalf("push = %d %s, edits %+v; want 409 asking the owner, nothing edited", code, raw, edits)
+	}
+	var s discogscollection.State
+	a.must(http.MethodPost, fmt.Sprintf("/api/copies/%d/discogs/adopt", id), nil, &s, http.StatusOK)
+	adds, edits, _ := d.snapshot()
+	if len(adds) != 1 || s.InstanceID == nil || *s.InstanceID != adds[0].instance || s.AddUnknown ||
+		len(edits) != 1 || edits[0].instance != adds[0].instance {
+		t.Fatalf("adopt = %+v, adds %+v, edits %+v", s, adds, edits)
+	}
+	if code, raw := a.do(http.MethodPost, fmt.Sprintf("/api/copies/%d/discogs/adopt", id), nil, nil); code != http.StatusConflict {
+		t.Fatalf("second adopt = %d %s, want 409", code, raw)
 	}
 }
 
-func TestPushDoesNotAdoptOlderInstance(t *testing.T) {
+func TestPushDiscardedAddLeavesInstanceAlone(t *testing.T) {
+	d, srv := newDouble(t)
+	a := newAPI(t, srv.URL, discogscollection.DefaultFolder)
+	id := a.album(obj{"status": "owned", "media_grade": "mint"})
+	d.mu.Lock()
+	d.cutAdd = 1
+	d.mu.Unlock()
+	if code, _, _ := a.push(id); code != http.StatusBadGateway {
+		t.Fatalf("push = %d, want 502", code)
+	}
+	var s discogscollection.State
+	a.must(http.MethodDelete, fmt.Sprintf("/api/copies/%d/discogs/add", id), nil, &s, http.StatusOK)
+	if s.AddUnknown {
+		t.Fatalf("state after discard = %+v", s)
+	}
+	code, raw, _ := a.push(id)
+	adds, edits, _ := d.snapshot()
+	if code != http.StatusConflict || !strings.Contains(raw, discogscollection.ForeignInstanceMessage) ||
+		len(adds) != 1 || len(edits) != 0 {
+		t.Fatalf("push = %d %s, adds %+v, edits %+v; want 409 and the instance left alone", code, raw, adds, edits)
+	}
+	if code, _ := a.do(http.MethodDelete, fmt.Sprintf("/api/copies/%d/discogs/add", id), nil, nil); code != http.StatusConflict {
+		t.Fatalf("second discard = %d, want 409", code)
+	}
+}
+
+// S1: a refused add leaves nothing pending, so a manual instance added
+// before the retry is the owner's and is never edited.
+func TestPushRefusedAddThenManualInstance(t *testing.T) {
+	d, srv := newDouble(t)
+	a := newAPI(t, srv.URL, discogscollection.DefaultFolder)
+	id := a.album(obj{"status": "owned", "media_grade": "mint"})
+	d.failWith(http.StatusTooManyRequests, "POST /users/")
+	if code, _, _ := a.push(id); code != http.StatusBadGateway {
+		t.Fatalf("push = %d, want 502", code)
+	}
+	if s := a.state(id); s.AddUnknown {
+		t.Fatalf("state = %+v, want nothing pending after a refusal", s)
+	}
+	d.failWith(0, "")
+	d.hold(release, discogs.Instance{InstanceID: 723, FolderID: 1, DateAdded: time.Now().Format(time.RFC3339)})
+	code, raw, _ := a.push(id)
+	if _, edits, _ := d.snapshot(); code != http.StatusConflict || len(edits) != 0 {
+		t.Fatalf("retry = %d %s, edits %+v; want 409 and the manual instance untouched", code, raw, edits)
+	}
+}
+
+// S2: an add of unknown outcome blocks every other add of the copy, also
+// after its edition names another release.
+func TestPushUnknownAddBlocksAddOfAnotherRelease(t *testing.T) {
 	d, srv := newDouble(t)
 	a := newAPI(t, srv.URL, discogscollection.DefaultFolder)
 	id := a.album(obj{"status": "owned"})
@@ -708,12 +770,86 @@ func TestPushDoesNotAdoptOlderInstance(t *testing.T) {
 	if code, _, _ := a.push(id); code != http.StatusBadGateway {
 		t.Fatalf("push = %d, want 502", code)
 	}
-	d.age(release, time.Hour)
-	if code, raw, _ := a.push(id); code != http.StatusConflict {
-		t.Fatalf("retry = %d %s, want 409 for an instance older than the add", code, raw)
+	d.mu.Lock()
+	d.cutList = 0
+	d.mu.Unlock()
+	a.relink(id, 77)
+	code, raw, _ := a.push(id)
+	if adds, _, _ := d.snapshot(); code != http.StatusConflict || len(adds) != 1 {
+		t.Fatalf("push of release 77 = %d %s, adds %+v; want 409 and no second instance", code, raw, adds)
 	}
-	if inst, _ := a.stored(id); inst != nil {
-		t.Fatalf("stored instance %d", *inst)
+}
+
+// S3: an add answered 5xx may still be made later; an empty collection
+// right after does not settle it.
+func TestPushLateAddMakesNoDuplicate(t *testing.T) {
+	d, srv := newDouble(t)
+	a := newAPI(t, srv.URL, discogscollection.DefaultFolder)
+	id := a.album(obj{"status": "owned"})
+	d.mu.Lock()
+	d.lateAdds = 1
+	d.mu.Unlock()
+	if code, _, _ := a.push(id); code != http.StatusBadGateway {
+		t.Fatalf("push = %d, want 502", code)
+	}
+	code, raw, _ := a.push(id)
+	if code != http.StatusConflict || !strings.Contains(raw, "nie rozstrzygnęło") {
+		t.Fatalf("retry = %d %s, want 409 while the add is unsettled", code, raw)
+	}
+	d.commitLate()
+	if code, raw, _ := a.push(id); code != http.StatusConflict || !strings.Contains(raw, "potwierdź") {
+		t.Fatalf("push after the late add = %d %s, want 409 asking the owner", code, raw)
+	}
+	if adds, _, _ := d.snapshot(); len(adds) != 1 {
+		t.Fatalf("adds = %+v, want one", adds)
+	}
+}
+
+func TestPushSettlesOldUnknownAddWithEmptyCollection(t *testing.T) {
+	d, srv := newDouble(t)
+	a := newAPI(t, srv.URL, discogscollection.DefaultFolder)
+	id := a.album(obj{"status": "owned"})
+	d.mu.Lock()
+	d.lateAdds = 1
+	d.mu.Unlock()
+	if code, _, _ := a.push(id); code != http.StatusBadGateway {
+		t.Fatalf("push = %d, want 502", code)
+	}
+	if _, err := a.pool.Exec(context.Background(),
+		`UPDATE discogs_add SET sent_at = now() - interval '11 minutes' WHERE copy_id = $1`, id); err != nil {
+		t.Fatal(err)
+	}
+	code, raw, s := a.push(id)
+	adds, _, _ := d.snapshot()
+	if code != http.StatusOK || len(adds) != 1 || s.InstanceID == nil || *s.InstanceID != adds[0].instance {
+		t.Fatalf("push = %d %s, adds %+v; want one new instance", code, raw, adds)
+	}
+}
+
+// S4: the add is recorded before it is sent, outside the push's
+// transaction, so a lost database connection does not lose it.
+func TestPushLostConnectionKeepsAdd(t *testing.T) {
+	d, srv := newDouble(t)
+	a := newAPI(t, srv.URL, discogscollection.DefaultFolder)
+	id := a.album(obj{"status": "owned", "media_grade": "mint"})
+	var once sync.Once
+	d.mu.Lock()
+	d.onAdd = func() {
+		once.Do(func() {
+			if _, err := a.pool.Exec(context.Background(), `SELECT pg_terminate_backend(pid) FROM pg_locks
+				WHERE relation = 'copy'::regclass AND mode = 'RowShareLock' AND pid <> pg_backend_pid()`); err != nil {
+				t.Errorf("terminate: %v", err)
+			}
+		})
+	}
+	d.mu.Unlock()
+	if code, raw, _ := a.push(id); code != http.StatusInternalServerError {
+		t.Fatalf("push = %d %s, want 500 after the lost connection", code, raw)
+	}
+	code, raw, s := a.push(id)
+	adds, _, _ := d.snapshot()
+	if code != http.StatusOK || len(adds) != 1 || s.InstanceID == nil || *s.InstanceID != adds[0].instance {
+		t.Fatalf("retry = %d %s, adds %+v; want the made instance linked", code, raw, adds)
 	}
 }
 

@@ -77,6 +77,32 @@ test('a release already in the Discogs collection is not added again', async ({
 	await expect(discogs.getByRole('link', { name: 'W kolekcji Discogs' })).toHaveCount(0);
 });
 
+test('an add whose answer was cut off waits for the owner to confirm it', async ({
+	page,
+	request
+}) => {
+	const copy = await seedCopy(
+		request,
+		'music',
+		{ format: 'vinyl', discogs_release_id: 2000003 },
+		{ media_grade: 'mint' }
+	);
+	await page.goto(`/copies/${copy}`);
+	const discogs = page.getByRole('region', { name: 'Discogs' });
+	await discogs.getByRole('button', { name: 'Dodaj do kolekcji Discogs' }).tap();
+	await expect(
+		discogs.getByText('Nie wiadomo, czy Discogs dodał wydanie', { exact: false })
+	).toBeVisible();
+	await expect(discogs.getByRole('button', { name: 'Dodaj do kolekcji Discogs' })).toHaveCount(0);
+	await discogs.getByRole('button', { name: 'Potwierdź, że dodała je Ohara' }).tap();
+	await expect(discogs.getByRole('link', { name: 'W kolekcji Discogs' })).toHaveAttribute(
+		'href',
+		'https://www.discogs.com/release/2000003'
+	);
+	await expect(discogs.getByRole('button', { name: 'Porzuć to dodanie' })).toHaveCount(0);
+	expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+});
+
 /** Opens copy's page and checks that it has no Discogs part. */
 async function expectNoDiscogs(page: Page, copy: number) {
 	await page.goto(`/copies/${copy}`);

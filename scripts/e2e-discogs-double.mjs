@@ -3,7 +3,8 @@ import { createServer } from 'node:http';
 /**
  * A Discogs API double for the smoke suite (e2e/compose.yaml): the collection endpoints the push to
  * the Discogs collection calls, kept in memory. Release 2000002 is in the collection already, in an
- * instance no Ohara copy made. Any other request answers 404.
+ * instance no Ohara copy made. An add of release 2000003 makes its instance but answers with a body
+ * cut short, so Ohara cannot know it succeeded. Any other request answers 404.
  */
 const token = 'Discogs token=e2e-discogs-token';
 const owner = 'e2e-owner';
@@ -69,6 +70,10 @@ createServer((req, res) => {
 	if (req.method === 'POST' && (m = path.match(addPath))) {
 		const instance = { instance_id: ++nextInstance, folder_id: Number(m[1]) };
 		held.set(Number(m[2]), [...(held.get(Number(m[2])) ?? []), instance]);
+		if (Number(m[2]) === 2000003) {
+			res.writeHead(201, { 'content-type': 'application/json', 'content-length': '100' });
+			return res.end('{"instance_id": 1');
+		}
 		return send(res, 201, { instance_id: instance.instance_id, resource_url: '' });
 	}
 	if (req.method === 'POST' && fieldPath.test(path) && url.searchParams.has('value')) {

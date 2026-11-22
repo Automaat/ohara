@@ -31,7 +31,7 @@
 		type Loan
 	} from '#lib/collection.js';
 	import CopyFormFields from '#lib/components/CopyFormFields.svelte';
-	import { discogsShelf, type CopyDiscogs } from '#lib/discogs-collection.js';
+	import { addUnknownNotice, discogsShelf, type CopyDiscogs } from '#lib/discogs-collection.js';
 	import { LatestLoad } from '#lib/scan.js';
 	import { TitleMarkets } from '#lib/title-market.svelte.js';
 
@@ -134,16 +134,22 @@
 		}
 	}
 
-	/** "Dodaj do kolekcji Discogs": adds the copy, or updates the grades of the instance it made. */
-	async function pushDiscogs(d: CopyDetail) {
+	/**
+	 * "Dodaj do kolekcji Discogs" adds the copy or updates the grades of the instance it made; with an
+	 * add awaiting the owner, "Potwierdź" adopts it and "Porzuć" discards it. A refusal rereads the
+	 * state, since it can say an add now awaits the owner.
+	 */
+	async function discogsCall(d: CopyDetail, method: 'POST' | 'DELETE', path: string) {
 		if (pushing) return;
 		pushing = true;
 		discogsError = null;
 		try {
-			const next = await request<CopyDiscogs>(fetch, 'POST', `/api/copies/${d.id}/discogs`);
+			const next = await request<CopyDiscogs>(fetch, method, `/api/copies/${d.id}/discogs${path}`);
 			if (d.id === requested) discogs = next;
 		} catch (err) {
-			if (d.id === requested) discogsError = errorMessage(err);
+			if (d.id !== requested) return;
+			discogsError = errorMessage(err);
+			await loadDiscogs(d.id);
 		} finally {
 			pushing = false;
 		}
@@ -329,8 +335,25 @@
 					</p>
 				{/if}
 				<FormError message={discogsError} />
+				{#if shelf.addUnknown}
+					<p>{addUnknownNotice}</p>
+					<div class="discogs-actions">
+						<Button loading={pushing} onclick={() => discogsCall(d, 'POST', '/adopt')}>
+							Potwierdź, że dodała je Ohara
+						</Button>
+						<Button
+							tone="stop-quiet"
+							disabled={pushing}
+							onclick={() => discogsCall(d, 'DELETE', '/add')}
+						>
+							Porzuć to dodanie
+						</Button>
+					</div>
+				{/if}
 				{#if shelf.action}
-					<Button loading={pushing} onclick={() => pushDiscogs(d)}>{shelf.action}</Button>
+					<Button loading={pushing} onclick={() => discogsCall(d, 'POST', '')}>
+						{shelf.action}
+					</Button>
 				{/if}
 			</section>
 		{/if}
@@ -418,6 +441,12 @@
 
 	.discogs p {
 		margin: 0;
+	}
+
+	.discogs-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem;
 	}
 
 	/* A borrower is free text up to 500 bytes, often without a space to break at. */

@@ -36,6 +36,6 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   127.0.0.1:8101: the same image with its own database (`ohara_discogs`,
   from `e2e/postgres-init.sql`), a Discogs token and `OHARA_DISCOGS_URL`
   pointing at `scripts/e2e-discogs-double.mjs`, an in-memory Discogs
-  double that already holds release 2000002. The camera starts only on "Włącz
+  double that already holds release 2000002 and cuts off its answer to an add of 2000003. The camera starts only on "Włącz
   aparat" or a remembered choice, so a fresh browser gets no camera prompt.
   Needs `npx playwright install chromium` once.

@@ -140,9 +140,12 @@
 		startCopy();
 	}
 
-	/** Opened only once a pending save and its reload have landed, so the form holds what they saved. */
+	/**
+	 * Opened only once a pending save and every load have landed: a newer load drops the save's own
+	 * reload, so only the newest answer holds what the save stored.
+	 */
 	function startEdit(d: EditionDetail) {
-		if (pendingSaves.has(d.id)) return;
+		if (pendingSaves.has(d.id) || busy) return;
 		editionForm = editionToForm(d);
 		editionIssue = null;
 		editionEdits++;
@@ -347,7 +350,7 @@
 
 		<Section title="Zarządzanie wydaniem">
 			<div class="actions">
-				<Button tone="ghost" disabled={savingEdition} onclick={() => startEdit(d)}>
+				<Button tone="ghost" disabled={savingEdition || busy} onclick={() => startEdit(d)}>
 					Edytuj wydanie
 				</Button>
 				<Button tone="stop-quiet" onclick={() => ((deleteError = null), (confirmDelete = true))}>

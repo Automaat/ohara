@@ -135,7 +135,7 @@ func run() int {
 	shares := wishshare.NewHandler(wishshare.NewStore(pool), logger)
 	deps.Share = shares.Public()
 	deps.API = []server.Mounter{
-		collection.NewHandler(collection.NewStore(pool), logger).WithCatalogCovers(searchers, lookupService),
+		newCollectionHandler(pool, searchers, lookupService, logger),
 		lookup.NewHandler(lookupService, logger),
 		&lookup.SearchHandler{Searchers: searchers, Logger: logger},
 		scanqueue.NewHandler(queue, logger),
@@ -308,6 +308,19 @@ func newMovieProvider(allegro *movie.Allegro, logger *slog.Logger) *movie.Provid
 	metrics.InitSource("tmdb")
 	logger.Info("movie lookup sources", "sources", strings.Join(names, ","))
 	return p
+}
+
+// newCollectionHandler serves the collection API, filling a new title's
+// cover from the title searchers and, with a TMDB key, a new film's series
+// from its TMDB collection.
+func newCollectionHandler(pool *pgxpool.Pool, searchers map[string]lookup.TextSearcher,
+	service *lookup.Service, logger *slog.Logger,
+) *collection.Handler {
+	h := collection.NewHandler(collection.NewStore(pool), logger).WithCatalogCovers(searchers, service)
+	if key := os.Getenv("OHARA_TMDB_API_KEY"); key != "" {
+		h.WithFilmSeries(movie.TMDB{Client: sourceClient, Key: key})
+	}
+	return h
 }
 
 // titleSearchers back the search by title for a barcode no source knows:

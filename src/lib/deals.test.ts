@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+	confirmedListings,
 	dealPrice,
 	dealsSummary,
 	dismissalPath,
@@ -336,6 +337,24 @@ describe('withoutUnconfirmed', () => {
 	it('hands back the same list when it holds no Discogs listing', () => {
 		const listings = [{ id: 1, source: 'olx' as const }];
 		expect(withoutUnconfirmed(listings)).toBe(listings);
+	});
+});
+
+describe('confirmedListings', () => {
+	const listings = [
+		{ id: 1, source: 'olx' as const },
+		{ id: 2, source: 'discogs_inventory' as const }
+	];
+	const answeredAt = Date.parse('2026-11-22T10:00:00Z');
+
+	it('keeps every listing within 14 minutes of its answer', () => {
+		expect(confirmedListings(listings, answeredAt, answeredAt + 14 * 60_000 - 1)).toBe(listings);
+	});
+
+	it('leaves out the Discogs listings from 14 minutes on', () => {
+		expect(
+			confirmedListings(listings, answeredAt, answeredAt + 14 * 60_000).map((o) => o.id)
+		).toEqual([1]);
 	});
 });
 

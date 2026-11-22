@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Observation } from './deals';
 
 type Badge = typeof import('./deal-badge.svelte');
@@ -136,50 +136,39 @@ describe('loadUnderLimit', () => {
 	});
 });
 
-describe('a failed request', () => {
+describe('Discogs listings', () => {
 	const discogs = { ...listing(3900, 4000), source: 'discogs_inventory' as const };
-	const failing = () => vi.fn(async () => new Response('{}', { status: 500 }));
 
-	it('takes the Discogs listings out of the badge and keeps the rest', async () => {
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it('leave the badge 14 minutes after their answer, the rest stays', async () => {
+		vi.useFakeTimers();
 		await badge.loadUnderLimit(deals([listing(3500, 4000), discogs]));
-		await badge.refreshDealBadge(failing());
+		vi.advanceTimersByTime(14 * 60_000 - 1);
+		expect(badge.dealBadge.count).toBe(2);
+		vi.advanceTimersByTime(1);
 		expect(badge.dealBadge.count).toBe(1);
 		expect(badge.dealBadge.listings?.map((l) => l.id)).toEqual([3500]);
 	});
 
-	it('lets the next answer bring them back', async () => {
+	it('stay while newer answers keep confirming them, also after a failed request', async () => {
+		vi.useFakeTimers();
 		await badge.loadUnderLimit(deals([discogs]));
-		await badge.refreshDealBadge(failing());
-		expect(badge.dealBadge.count).toBe(0);
-		await badge.refreshDealBadge(deals([discogs]));
+		vi.advanceTimersByTime(10 * 60_000);
+		await badge.refreshDealBadge(vi.fn(async () => new Response('{}', { status: 500 })));
+		await badge.loadUnderLimit(deals([discogs]));
+		vi.advanceTimersByTime(10 * 60_000);
 		expect(badge.dealBadge.count).toBe(1);
-	});
-
-	it('keeps an answer sent before it from bringing them back', async () => {
-		await badge.loadUnderLimit(deals([listing(3500, 4000)]));
-		const older = Promise.withResolvers<Response>();
-		const stale = badge.refreshDealBadge(vi.fn(() => older.promise));
-		await badge.refreshDealBadge(failing());
-		older.resolve(dealsResponse([discogs]));
-		await stale;
-		expect(badge.dealBadge.listings?.map((l) => l.id)).toEqual([3500]);
-	});
-
-	it('leaves an answer to a later request alone', async () => {
-		await badge.loadUnderLimit(deals([listing(3500, 4000)]));
-		const slow = Promise.withResolvers<Response>();
-		const failed = badge.refreshDealBadge(vi.fn(() => slow.promise));
-		await badge.refreshDealBadge(deals([discogs]));
-		slow.resolve(new Response('{}', { status: 500 }));
-		await failed;
-		expect(badge.dealBadge.count).toBe(1);
-		expect(badge.dealBadge.listings?.map((l) => l.id)).toEqual([3900]);
-	});
-
-	it('does nothing before the first answer', async () => {
-		await badge.refreshDealBadge(failing());
-		expect(badge.dealBadge.listings).toBeNull();
+		vi.advanceTimersByTime(4 * 60_000);
 		expect(badge.dealBadge.count).toBe(0);
+	});
+
+	it('record when their answer arrived', async () => {
+		vi.useFakeTimers({ now: new Date('2026-11-22T10:00:00Z') });
+		await badge.loadUnderLimit(deals([discogs]));
+		expect(badge.dealBadge.answeredAt).toBe(Date.parse('2026-11-22T10:00:00Z'));
 	});
 });
 

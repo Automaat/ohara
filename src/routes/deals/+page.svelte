@@ -39,8 +39,8 @@
 		sentPath,
 		wantlistPath,
 		wantlistSummary,
+		confirmedListings,
 		withoutDismissed,
-		withoutUnconfirmed,
 		type DealSegment,
 		type DealsView,
 		type HunterStatus,
@@ -59,6 +59,8 @@
 		searchedWishes: number;
 		all: Observation[];
 		sent: Observation[];
+		/** When the answer arrived, in milliseconds (confirmedListings). */
+		answeredAt: number;
 	};
 
 	let deals = $state<Deals | null>(null);
@@ -79,6 +81,7 @@
 
 	let poll: ReturnType<typeof setTimeout> | undefined;
 	let issued = 0;
+	let destroyed = false;
 
 	/**
 	 * "Pod limitem" lists the listings the Okazje badge last counted, so a refresh from this page,
@@ -86,10 +89,11 @@
 	 * when the tab becomes visible, so the other segments follow. An answer that arrives after a
 	 * later request's answer is dropped. The search counts as running while any answer says so.
 	 * The wishes' market prices load beside them without holding them back. A failed request keeps
-	 * the lists but drops their Discogs listings, which only an answer may show (withoutUnconfirmed);
-	 * the badge and "Pod limitem" do the same when their own request fails (loadUnderLimit).
+	 * the lists; their Discogs listings leave them unconfirmedAfterMs after the answer that held
+	 * them (confirmedListings). A page left while a request is on its way asks nothing more.
 	 */
 	async function load() {
+		if (destroyed) return;
 		const ticket = ++issued;
 		loading = true;
 		try {
@@ -99,27 +103,20 @@
 				request<DealsView>(fetch, 'GET', matchedPath),
 				request<DealsView>(fetch, 'GET', sentPath)
 			]);
-			if (ticket !== issued) return;
+			if (ticket !== issued || destroyed) return;
 			now = new Date();
 			deals = {
 				status: [under, all, sent].find((v) => v.status.running)?.status ?? all.status,
 				wishes: all.wishes,
 				searchedWishes: all.searched_wishes,
 				all: all.observations,
-				sent: sent.observations
+				sent: sent.observations,
+				answeredAt: now.getTime()
 			};
 			failure = null;
 		} catch (err) {
-			if (ticket !== issued) return;
+			if (ticket !== issued || destroyed) return;
 			failure = errorMessage(err);
-			// A Discogs card no answer confirms may be past the API terms' six hours: drop it until
-			// a later answer brings it back.
-			if (deals)
-				deals = {
-					...deals,
-					all: withoutUnconfirmed(deals.all),
-					sent: withoutUnconfirmed(deals.sent)
-				};
 		}
 		loading = false;
 		clearTimeout(poll);
@@ -177,8 +174,7 @@
 
 	/**
 	 * A visible page asks for its lists again every 10 minutes, so a listing a scheduled run found
-	 * gone leaves the page, and a Discogs card never stays longer than the API terms' six hours: the
-	 * server shows one only while its seller offered it within 5 h 45 min (deals.discogsShown).
+	 * gone leaves the page and its Discogs cards stay confirmed (confirmedListings).
 	 */
 	const reloadEvery = 10 * 60_000;
 
@@ -197,7 +193,9 @@
 			if (document.visibilityState === 'visible') void load();
 		}, reloadEvery);
 		const onvisibility = () => {
-			if (document.visibilityState === 'visible') void load();
+			if (document.visibilityState !== 'visible') return;
+			now = new Date();
+			void load();
 		};
 		document.addEventListener('visibilitychange', onvisibility);
 		return () => {
@@ -206,6 +204,7 @@
 			wantlist.destroy();
 			clearInterval(clock);
 			clearInterval(reload);
+			destroyed = true;
 			document.removeEventListener('visibilitychange', onvisibility);
 		};
 	});
@@ -256,9 +255,18 @@
 
 	const status = $derived(deals?.status);
 	const lists = $derived<Record<DealSegment, Observation[]>>({
-		under: withoutDismissed(deals ? (dealBadge.listings ?? []) : [], dismissals.hidden),
-		all: withoutDismissed(deals?.all ?? [], dismissals.hidden),
-		sent: withoutDismissed(deals?.sent ?? [], dismissals.hidden)
+		under: withoutDismissed(
+			deals ? confirmedListings(dealBadge.listings ?? [], dealBadge.answeredAt, now.getTime()) : [],
+			dismissals.hidden
+		),
+		all: withoutDismissed(
+			deals ? confirmedListings(deals.all, deals.answeredAt, now.getTime()) : [],
+			dismissals.hidden
+		),
+		sent: withoutDismissed(
+			deals ? confirmedListings(deals.sent, deals.answeredAt, now.getTime()) : [],
+			dismissals.hidden
+		)
 	});
 	const segments = $derived(
 		(['under', 'all', 'sent'] as const).map((value) => ({

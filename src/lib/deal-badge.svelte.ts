@@ -1,6 +1,8 @@
 import { request } from '#lib/api.js';
 import {
+	expiringSources,
 	underLimitCount,
+	unconfirmedAfterMs,
 	withoutUnconfirmed,
 	type DealsView,
 	type Observation
@@ -8,13 +10,18 @@ import {
 
 /**
  * The listings at or under their wish's price limit from the newest answer, null before the
- * first one, and how many there are, for the Okazje tab's badge. The deals page lists these same
- * listings under "Pod limitem", so a refresh from any page moves the badge and the segment
- * together.
+ * first one, how many there are, for the Okazje tab's badge, and when that answer arrived
+ * (milliseconds, 0 before the first). The deals page lists these same listings under "Pod
+ * limitem", so a refresh from any page moves the badge and the segment together.
  */
-export const dealBadge = $state<{ count: number; listings: Observation[] | null }>({
+export const dealBadge = $state<{
+	count: number;
+	listings: Observation[] | null;
+	answeredAt: number;
+}>({
 	count: 0,
-	listings: null
+	listings: null,
+	answeredAt: 0
 });
 
 /**
@@ -25,43 +32,34 @@ export const badgePath = '/api/deals?under_limit=true&limit=500';
 
 let issued = 0;
 let applied = 0;
-/** The number of the request whose answer the badge shows. */
-let confirmed = 0;
+let expiry: ReturnType<typeof setTimeout> | undefined;
 
 /**
  * Asks the server for the listings under the limit and counts them in the badge, so a page that
  * lists the same answer, such as the deals page's "Pod limitem", never disagrees with the badge.
  * Each request is numbered as it starts, and an answer that arrives after a later request's
- * answer still reaches its caller but leaves the badge alone. A failed request drops the
- * listings of expiring sources (forgetUnconfirmed) and rejects.
+ * answer still reaches its caller but leaves the badge alone. The listings of expiring sources
+ * leave the badge unconfirmedAfterMs after the answer that holds them, unless a newer one
+ * arrives first.
  */
 export async function loadUnderLimit(fetchFn: typeof fetch): Promise<DealsView> {
 	const ticket = ++issued;
-	let view: DealsView;
-	try {
-		view = await request<DealsView>(fetchFn, 'GET', badgePath);
-	} catch (err) {
-		forgetUnconfirmed(ticket);
-		throw err;
-	}
+	const view = await request<DealsView>(fetchFn, 'GET', badgePath);
 	if (ticket >= applied) {
 		applied = ticket;
-		confirmed = ticket;
 		dealBadge.listings = view.observations;
 		dealBadge.count = underLimitCount(view.observations);
+		dealBadge.answeredAt = Date.now();
+		clearTimeout(expiry);
+		if (view.observations.some((o) => expiringSources.has(o.source))) {
+			expiry = setTimeout(expireUnconfirmed, unconfirmedAfterMs);
+		}
 	}
 	return view;
 }
 
-/**
- * Takes the listings of expiring sources out of the badge and "Pod limitem" after request ticket
- * failed, since no answer confirms they are still offered (withoutUnconfirmed), unless an answer
- * to a later request already shows. Answers to requests sent before the failed one no longer
- * move the badge; a later answer brings the listings back.
- */
-function forgetUnconfirmed(ticket: number): void {
-	if (ticket < confirmed) return;
-	applied = Math.max(applied, ticket + 1);
+/** Takes the listings of expiring sources out of the badge and "Pod limitem". */
+function expireUnconfirmed(): void {
 	if (!dealBadge.listings) return;
 	dealBadge.listings = withoutUnconfirmed(dealBadge.listings);
 	dealBadge.count = underLimitCount(dealBadge.listings);
@@ -70,8 +68,7 @@ function forgetUnconfirmed(ticket: number): void {
 /**
  * Asks the server for the listings. Every page navigation asks again, so a wish limit changed on
  * another page shows at once; a shallow one, such as the scanner's sheet, stays on its page and
- * does not. The badge is only a hint, so a failed request keeps the last count but for the
- * listings of expiring sources.
+ * does not. The badge is only a hint, so a failed request keeps the last count.
  */
 export function refreshDealBadge(fetchFn: typeof fetch): Promise<void> {
 	return loadUnderLimit(fetchFn).then(

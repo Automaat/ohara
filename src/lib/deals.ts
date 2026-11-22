@@ -227,14 +227,30 @@ export const sourceLabels: Record<DealSource, string> = {
 export const expiringSources: ReadonlySet<DealSource> = new Set<DealSource>(['discogs_inventory']);
 
 /**
- * The listings a page may keep drawing when it cannot ask the server again: those of an expiring
- * source are left out, since no answer confirms they are still offered and fresh. The next answer
- * brings them back. Hands back the same list when it holds none.
+ * How long after its answer arrived a page may draw a listing of an expiring source. The server
+ * answers with one only while its seller offered it within 5 h 45 min (deals.discogsShown), so
+ * with this a drawn card is never older than six hours, whatever answers fail, overlap or hang.
  */
+export const unconfirmedAfterMs = 14 * 60_000;
+
+/** The listings without those of expiring sources; the same list when it holds none. */
 export function withoutUnconfirmed<T extends Pick<Observation, 'source'>>(listings: T[]): T[] {
 	return listings.some((o) => expiringSources.has(o.source))
 		? listings.filter((o) => !expiringSources.has(o.source))
 		: listings;
+}
+
+/**
+ * The listings of an answer that arrived at answeredAt (milliseconds) that a page may draw at
+ * now: all of them within unconfirmedAfterMs of the answer, then only those of sources that do
+ * not expire.
+ */
+export function confirmedListings<T extends Pick<Observation, 'source'>>(
+	listings: T[],
+	answeredAt: number,
+	now: number
+): T[] {
+	return now - answeredAt < unconfirmedAfterMs ? listings : withoutUnconfirmed(listings);
 }
 
 /** The attribution a source's terms require next to its listing, linked to the listing. */

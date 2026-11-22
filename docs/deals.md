@@ -207,13 +207,12 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   read. Every Telegram alert for one ends with "Data provided by
   Discogs." under its link, and its card in Okazje carries the same
   notice as a followable link to the listing. A visible Okazje page asks
-  for its lists again every 10 minutes, so with the 5 h 45 min window no
-  card it keeps drawing is more than 6 hours old, and one a run found gone
-  leaves within 10 minutes. When a reload fails, the page drops its
-  Discogs listings, and when the badge's own request fails, on any page,
-  the badge and "Pod limitem" drop theirs, unless an answer to a later
-  request already shows; the next answer brings them back
-  (`withoutUnconfirmed`, `loadUnderLimit`). The purchase happens on discogs.com.
+  for its lists again every 10 minutes, and every list, the badge's
+  included, draws a Discogs listing only within 14 minutes of the answer
+  that held it (`confirmedListings`, `unconfirmedAfterMs`), so with the
+  5 h 45 min window no card is ever more than 6 hours old, whatever
+  requests fail, overlap or hang, and one a run found gone leaves within
+  10 minutes. The purchase happens on discogs.com.
 - The valuation never reads `discogs_inventory`, and wants are not
   matched by Discogs release ID.
 

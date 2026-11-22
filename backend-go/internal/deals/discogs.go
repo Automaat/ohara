@@ -24,10 +24,10 @@ const DiscogsSource = "discogs_inventory"
 // offered for discogsShown leaves the deals view and its alert is not
 // sent; one none has offered for discogsKeep is deleted. Keeping it that
 // long keeps its dismissal and sent alert while its seller's inventory
-// cannot be read. discogsShown is discogsFresh less the deals page's
-// reload interval (10 minutes, src/routes/deals/+page.svelte) and a
-// margin, so a card an idle page keeps drawing is never older than
-// discogsFresh.
+// cannot be read. discogsShown is discogsFresh less the 14 minutes a
+// page draws an answer's Discogs listings (unconfirmedAfterMs in
+// src/lib/deals.ts) and a margin for the page clock's 30-second tick, so
+// a drawn card is never older than discogsFresh.
 const (
 	discogsFresh = 6 * time.Hour
 	discogsShown = discogsFresh - 15*time.Minute

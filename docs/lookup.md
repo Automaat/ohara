@@ -122,7 +122,8 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   failure, partial candidates included, without a request, and a success
   clears the count. The count lives in memory, so a restart clears it.
 - Requests still in flight count, and a failure the source answered
-  counts even when the client gave up on the lookup. A lookup given up
+  counts even when the client gave up on the lookup, also when it comes
+  with another source's cancellation. A lookup given up
   on before it starts asks nothing; one given up on before its source
   answered (for example while it waits behind Discogs' pacing) counts,
   but such requests alone never refuse another, as they prove nothing
@@ -131,7 +132,8 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   (`lookup.PausedError`, the movie chain's UPCitemdb after a 429) lets
   one more request past the limit once the provider reports the pause
   over, so the first lookup after the reset asks again, even when later
-  failures without a pause came in meanwhile. A pause already over when
+  failures without a pause came in meanwhile. That first request uses
+  the retry even when it fits within the limit. A pause already over when
   the request failed lets nothing past.
 - A music barcode no source knows falls back to a Discogs text search for
   Allegro's product name.

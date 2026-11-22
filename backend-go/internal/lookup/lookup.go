@@ -309,6 +309,20 @@ func (s *Service) pauseState(provider string, err error) (bool, bool) {
 	return true, perr == nil && resumed
 }
 
+// onlyCause reports whether every error err wraps or joins is cause, so a
+// failure a source answered next to the cancellation of another is not
+// taken for the cancellation.
+func onlyCause(err, cause error) bool {
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		errs := joined.Unwrap()
+		return len(errs) > 0 && !slices.ContainsFunc(errs, func(e error) bool { return !onlyCause(e, cause) })
+	}
+	if next := errors.Unwrap(err); next != nil {
+		return onlyCause(next, cause)
+	}
+	return errors.Is(err, cause)
+}
+
 // errNoRequest answers a lookup past FailureRequests whose counted requests
 // are still in flight, so no failure is known yet.
 var errNoRequest = errors.New("not asked: earlier requests for this code are still pending")
@@ -354,7 +368,9 @@ func (f *failures) limited() bool {
 // claim counts a request for provider and code at now and returns it. It
 // reports false, with the last failure known (nil when none ended yet),
 // when the counted requests of the last FailureWindow refuse another and
-// no pause a failure named has resumed, as resumed reports.
+// no pause a failure named has resumed, as resumed reports. The first
+// request after a pause resumes uses its retry, within the limit or past
+// it.
 func (l *failureLog) claim(provider, code string, now time.Time, resumed func(error) bool) (*request, *outcome, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -373,11 +389,12 @@ func (l *failureLog) claim(provider, code string, now time.Time, resumed func(er
 		f = &failures{}
 		l.at[key] = f
 	}
-	if f.limited() {
-		if f.pause == nil || !resumed(f.pause) {
-			return nil, f.last, false
-		}
+	retry := f.pause != nil && resumed(f.pause)
+	if retry {
 		f.pause = nil
+	}
+	if !retry && f.limited() {
+		return nil, f.last, false
 	}
 	r := &request{at: now}
 	f.requests = append(f.requests, r)
@@ -584,7 +601,7 @@ func (s *Service) limitedRequest(ctx context.Context, e entry, code string, dead
 		s.failures.succeeded(name, code)
 		return cands, nil
 	}
-	canceled := ctx.Err() != nil && errors.Is(err, ctx.Err())
+	canceled := ctx.Err() != nil && onlyCause(err, ctx.Err())
 	paused, ended := s.pauseState(name, err)
 	s.failures.failed(name, code, r, outcome{candidates: cands, err: err}, canceled, paused && !ended)
 	return cands, err

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -239,10 +240,13 @@ func TestCanceledLookupsBlockNothingOnTheirOwn(t *testing.T) {
 
 // failingCanceledProvider answers 503 to a lookup that its client then
 // gave up on, or, while canceledOnly is set, fails with the cancellation.
+// With joined set the 503 comes with another source's cancellation, as a
+// chain asking its next source when the client leaves.
 type failingCanceledProvider struct {
 	fakeProvider
 	cancel       context.CancelFunc
 	canceledOnly bool
+	joined       bool
 }
 
 func (p *failingCanceledProvider) Fetch(ctx context.Context, code string) (json.RawMessage, error) {
@@ -250,8 +254,11 @@ func (p *failingCanceledProvider) Fetch(ctx context.Context, code string) (json.
 		return nil, err
 	}
 	p.cancel()
-	if p.canceledOnly {
+	switch {
+	case p.canceledOnly:
 		return nil, ctx.Err()
+	case p.joined:
+		return nil, errors.Join(errUnavailable, fmt.Errorf("musicbrainz: %w", ctx.Err()))
 	}
 	return nil, errUnavailable
 }
@@ -260,13 +267,15 @@ func TestFailureAnsweredToCanceledLookupsCounts(t *testing.T) {
 	tests := []struct {
 		name     string
 		canceled int
+		joined   bool
 	}{
 		{name: "every failure answered after the client gave up", canceled: 0},
 		{name: "two canceled requests, then a failure", canceled: 2},
+		{name: "a failure joined with another source's cancellation", joined: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			p := &failingCanceledProvider{fakeProvider: fakeProvider{name: "upc"}}
+			p := &failingCanceledProvider{fakeProvider: fakeProvider{name: "upc"}, joined: tt.joined}
 			svc, _ := serviceWith(t, p)
 			for i := range lookup.FailureRequests {
 				ctx, cancel := context.WithCancel(context.Background())
@@ -391,6 +400,34 @@ func TestPauseEndedWhenItFailedLetsNothingPastTheLimit(t *testing.T) {
 	svc, _ := serviceWith(t, p)
 	for range lookup.FailureRequests + 3 {
 		svc.Lookup(context.Background(), recheckCode)
+	}
+	if got := p.fetchCount(); got != lookup.FailureRequests {
+		t.Fatalf("fetches = %d, want %d", got, lookup.FailureRequests)
+	}
+}
+
+// TestPauseRetryIsUsedByTheFirstRequestAfterTheReset makes the first
+// request after the reset fit within the limit: it uses the pause's
+// retry, so the limit refuses the request after it.
+func TestPauseRetryIsUsedByTheFirstRequestAfterTheReset(t *testing.T) {
+	const reset = time.Minute
+	var cache *clockCache
+	pause := func() error {
+		until := cache.clock().Add(reset)
+		return &lookup.PausedError{
+			Err:     errors.New("upcitemdb: rate limit exceeded"),
+			Resumed: func() bool { return !cache.clock().Before(until) },
+		}
+	}
+	outage := func() error { return errUnavailable }
+	p := &answerProvider{fakeProvider: fakeProvider{name: "movie"}, errs: []func() error{pause, outage}}
+	var svc *lookup.Service
+	svc, cache = serviceWith(t, p)
+	ctx := context.Background()
+	svc.Lookup(ctx, recheckCode)
+	cache.advance(reset)
+	for range lookup.FailureRequests {
+		svc.Lookup(ctx, recheckCode)
 	}
 	if got := p.fetchCount(); got != lookup.FailureRequests {
 		t.Fatalf("fetches = %d, want %d", got, lookup.FailureRequests)

@@ -466,8 +466,7 @@ func TestDeletingANumberedTitleWaitsForACreateJoiningItsSeries(t *testing.T) {
 }
 
 func pgCodeOf(err error) (string, bool) {
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) {
+	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
 		return pgErr.Code, true
 	}
 	return "", false

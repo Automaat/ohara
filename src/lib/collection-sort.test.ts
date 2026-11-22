@@ -33,10 +33,10 @@ describe('sortCopies', () => {
 	const dated = [
 		// Bought in 2023 but entered last, from an old receipt.
 		{ copy_id: 5, created_at_us: 5000, status: 'owned', purchased_on: '2023-03-01', year: 1999 },
+		{ copy_id: 3, created_at_us: 3000, status: 'owned', purchased_on: '2024-06-15', year: 2020 },
 		{ copy_id: 2, created_at_us: 2000, status: 'owned', purchased_on: '2024-06-15', year: null },
 		{ copy_id: 6, created_at_us: 6000, status: 'wishlist', purchased_on: '2025-01-01', year: 2010 },
 		{ copy_id: 4, created_at_us: 4000, status: 'owned', purchased_on: null, year: 1999 },
-		{ copy_id: 3, created_at_us: 3000, status: 'owned', purchased_on: '2024-06-15', year: 2020 },
 		{ copy_id: 1, created_at_us: 1000, status: 'wishlist', purchased_on: null, year: null }
 	].map((copy) => ({
 		...copy,
@@ -53,7 +53,7 @@ describe('sortCopies', () => {
 		['yearAsc', [4, 5, 6, 3, 1, 2]]
 	])('sorts by %s with missing values last', (sort, expected) => {
 		expect(sortCopies(dated, sort).map((copy) => copy.copy_id)).toEqual(expected);
-		expect(dated.map((copy) => copy.copy_id)).toEqual([5, 2, 6, 4, 3, 1]);
+		expect(dated.map((copy) => copy.copy_id)).toEqual([5, 3, 2, 6, 4, 1]);
 	});
 
 	it('orders copies of one year by title, then edition', () => {
@@ -101,5 +101,14 @@ describe('sortTitles', () => {
 	])('sorts by %s with titles without a year last', (sort, expected) => {
 		expect(sortTitles(dated, sort).map((t) => t.id)).toEqual(expected);
 		expect(dated.map((t) => t.id)).toEqual([1, 2, 3, 4, 5]);
+	});
+
+	it('treats a missing and a null year alike, whatever the input order', () => {
+		const zebra = { id: 2, name: 'Zebra' };
+		const arka = { id: 1, name: 'Arka', year: null };
+		for (const sort of ['yearDesc', 'yearAsc'] as const) {
+			expect(sortTitles([zebra, arka], sort).map((t) => t.id)).toEqual([1, 2]);
+			expect(sortTitles([arka, zebra], sort).map((t) => t.id)).toEqual([1, 2]);
+		}
 	});
 });

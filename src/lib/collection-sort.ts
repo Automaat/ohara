@@ -27,9 +27,9 @@ function compareMissingLast<V extends number | string>(
 	b: V | null | undefined,
 	descending: boolean
 ): number {
-	if (a === b) return 0;
-	if (a == null) return 1;
+	if (a == null) return b == null ? 0 : 1;
 	if (b == null) return -1;
+	if (a === b) return 0;
 	if (a < b) return descending ? 1 : -1;
 	return descending ? -1 : 1;
 }

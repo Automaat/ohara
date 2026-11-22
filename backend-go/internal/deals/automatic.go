@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -35,35 +36,39 @@ type askingPriceGroup struct {
 }
 
 func automaticDeals(ctx context.Context, tx pgx.Tx, observations []Observation) ([]AutomaticDeal, error) {
-	results := make([]AutomaticDeal, 0)
-	positions := make(map[int64]int)
 	var candidates []int64
 	for i := range observations {
 		o := &observations[i]
-		if o.MaxPriceCents != nil || o.MaxMarketPercent != nil {
-			continue
-		}
-		positions[o.ID] = len(results)
-		results = append(results, AutomaticDeal{ObservationID: o.ID})
-		if o.AcquiredAs != nil {
+		if o.MaxPriceCents == nil && o.MaxMarketPercent == nil {
 			candidates = append(candidates, o.ID)
 		}
 	}
+	return compareAskingPrices(ctx, tx, candidates)
+}
+
+func compareAskingPrices(ctx context.Context, q querier, candidates []int64) ([]AutomaticDeal, error) {
+	results := make([]AutomaticDeal, len(candidates))
 	if len(candidates) == 0 {
 		return results, nil
 	}
+	positions := make(map[int64]int, len(candidates))
+	for i, id := range candidates {
+		positions[id] = i
+		results[i].ObservationID = id
+	}
 
-	rows, err := tx.Query(ctx, `WITH targets AS (
+	rows, err := q.Query(ctx, `WITH targets AS (
 			SELECT coalesce(o.wishlist_copy_id, a.copy_id) AS wish_id, array_agg(o.id) AS candidate_ids
 			FROM price_observation o LEFT JOIN deal_alert a ON a.observation_id = o.id
-			WHERE o.id = ANY ($1)
+			WHERE o.id = ANY ($1) AND o.acquired_as IS NOT NULL
 			GROUP BY 1
 		)
 		SELECT w.id, e.barcode, w.exact_edition, e.packaging, e.pl_voiceover, e.pl_subtitles, e.binding,
 			o.id, o.price_cents, o.acquired_as, o.last_seen_at >= now() - interval '90 days',
 			o.id = ANY (x.candidate_ids), o.edition_details, `+storedAlbumFields+`
 		FROM targets x
-		JOIN copy w ON w.id = x.wish_id
+		JOIN copy w ON w.id = x.wish_id AND w.status = 'wishlist'
+			AND w.max_price_cents IS NULL AND w.max_market_percent IS NULL
 		JOIN edition e ON e.id = w.edition_id
 		JOIN title t ON t.id = e.title_id
 		JOIN edition pe ON pe.title_id = t.id
@@ -104,6 +109,117 @@ func automaticDeals(ctx context.Context, tx pgx.Tx, observations []Observation) 
 		applyAskingPrices(prices, positions, results)
 	}
 	return results, nil
+}
+
+func qualifyingAskingPrices(ctx context.Context, q querier, candidates []int64) (map[int64]bool, error) {
+	comparisons, err := compareAskingPrices(ctx, q, candidates)
+	if err != nil {
+		return nil, err
+	}
+	qualified := make(map[int64]bool)
+	for _, deal := range comparisons {
+		if deal.Qualifies {
+			qualified[deal.ObservationID] = true
+		}
+	}
+	return qualified, nil
+}
+
+type matchedOffer struct {
+	source, externalID string
+	copyID             int64
+}
+
+func (s *Store) queueAutomaticAlerts(ctx context.Context, refreshed map[string]matchedOffer, asOf time.Time) (int, error) {
+	if len(refreshed) == 0 {
+		return 0, nil
+	}
+	sourceNames := make([]string, 0, len(refreshed))
+	externalIDs := make([]string, 0, len(refreshed))
+	copyIDs := make([]int64, 0, len(refreshed))
+	for _, offer := range refreshed {
+		sourceNames = append(sourceNames, offer.source)
+		externalIDs = append(externalIDs, offer.externalID)
+		copyIDs = append(copyIDs, offer.copyID)
+	}
+
+	candidates, err := automaticAlertCandidates(ctx, s.pool, sourceNames, externalIDs, copyIDs, asOf)
+	if err != nil {
+		return 0, err
+	}
+	ids := make([]int64, 0, len(candidates))
+	for _, candidate := range candidates {
+		ids = append(ids, candidate.id)
+	}
+	qualified, err := qualifyingAskingPrices(ctx, s.pool, ids)
+	if err != nil {
+		return 0, err
+	}
+	queued := 0
+	for _, candidate := range candidates {
+		if !qualified[candidate.id] {
+			continue
+		}
+		added, err := s.queueAutomaticAlert(ctx, candidate)
+		if err != nil {
+			return queued, err
+		}
+		if added {
+			queued++
+		}
+	}
+	return queued, nil
+}
+
+func automaticAlertCandidates(ctx context.Context, q querier, sourceNames, externalIDs []string, copyIDs []int64,
+	asOf time.Time,
+) ([]alertCandidate, error) {
+	rows, err := q.Query(ctx, `SELECT o.id, w.id, o.price_cents
+		FROM unnest($1::text[], $2::text[], $3::bigint[]) AS seen(source, external_id, copy_id)
+		JOIN price_observation o USING (source, external_id)
+		JOIN copy w ON w.id = seen.copy_id AND w.id = o.wishlist_copy_id
+		WHERE w.status = 'wishlist' AND w.max_price_cents IS NULL AND w.max_market_percent IS NULL
+			AND o.last_seen_at >= $4 AND o.dismissed_at IS NULL AND o.gone_at IS NULL
+			AND o.acquired_as IS NOT NULL AND `+freshListing+` AND `+wishOfListingTitle("w")+`
+			AND `+huntedWish("w")+` AND `+wishNamedBy("w")+` AND `+mediumFits("w")+`
+		ORDER BY o.id`, sourceNames, externalIDs, copyIDs, asOf)
+	if err != nil {
+		return nil, fmt.Errorf("automatic alert candidates: %w", err)
+	}
+	candidates, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (alertCandidate, error) {
+		var candidate alertCandidate
+		err := row.Scan(&candidate.id, &candidate.copyID, &candidate.priceCents)
+		return candidate, err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("read automatic alert candidates: %w", err)
+	}
+	return candidates, nil
+}
+
+func (s *Store) queueAutomaticAlert(ctx context.Context, candidate alertCandidate) (bool, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return false, fmt.Errorf("automatic alert: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	locked, err := tx.Exec(ctx, `SELECT 1 FROM price_observation
+		WHERE id = $1 AND wishlist_copy_id = $2 AND price_cents = $3
+			AND dismissed_at IS NULL AND gone_at IS NULL FOR UPDATE`, candidate.id, candidate.copyID, candidate.priceCents)
+	if err != nil {
+		return false, fmt.Errorf("automatic alert: lock listing: %w", err)
+	}
+	if locked.RowsAffected() == 0 {
+		return false, nil
+	}
+	queued, err := queueAlert(ctx, tx, candidate, true)
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, fmt.Errorf("automatic alert: commit: %w", err)
+	}
+	return queued, nil
 }
 
 func verifiedMedium(evidence *storedAlbum, details []string) string {

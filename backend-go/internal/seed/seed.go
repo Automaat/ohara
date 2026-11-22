@@ -298,7 +298,8 @@ func Run(ctx context.Context, pool *pgxpool.Pool, versions []string) (Counts, er
 			return Counts{}, fmt.Errorf("seed: lock barcode %s: %w", code, err)
 		}
 	}
-	_, err = tx.Exec(ctx, `LOCK TABLE title, price_observation, valuation_history, scan_queue, deal_run
+	_, err = tx.Exec(ctx, `LOCK TABLE title, price_observation, valuation_history, scan_queue, deal_run,
+		deal_keyword, lookup_cache
 		IN EXCLUSIVE MODE`)
 	if err != nil {
 		return Counts{}, fmt.Errorf("seed: lock: %w", err)

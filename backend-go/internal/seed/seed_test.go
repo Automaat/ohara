@@ -222,6 +222,7 @@ func TestRunRefusesExistingData(t *testing.T) {
 		name, insert string
 	}{
 		{"title", `INSERT INTO title (kind, name) VALUES ('book', 'Katedra')`},
+		{"price observation", `INSERT INTO price_observation (source, price_cents) VALUES ('olx', 1000)`},
 		{"scan queue", `INSERT INTO scan_queue (barcode, reason) VALUES ('9788308073209', 'not_found')`},
 		{"valuation history", `INSERT INTO valuation_history (day, copies, spent_cents, floor_cents, floor_copies,
 			mid_cents, mid_copies, ceiling_cents, ceiling_copies, low_confidence)
@@ -281,6 +282,48 @@ func TestRunIgnoresCachesAndLogins(t *testing.T) {
 	}
 	if n := scalar(t, pool, `SELECT count(*) FROM oauth_token`); n != 1 {
 		t.Errorf("oauth_token rows = %d, want 1", n)
+	}
+}
+
+// TestRunWaitsForGuardedWrites checks that seed waits for in-flight writes
+// to commit before deciding whether the database is empty.
+func TestRunWaitsForGuardedWrites(t *testing.T) {
+	for _, tc := range []struct {
+		name, insert string
+	}{
+		{"deal keyword", `INSERT INTO deal_keyword (kind, phrase) VALUES ('reject', 'zestaw')`},
+		{"lookup selection", `INSERT INTO lookup_cache (provider, barcode, response)
+			VALUES ('selection', '9788308073209', '{}')`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pool := dbtest.Migrated(t)
+			ctx := t.Context()
+			writer, err := pool.Begin(ctx)
+			if err != nil {
+				t.Fatalf("begin: %v", err)
+			}
+			defer func() { _ = writer.Rollback(context.WithoutCancel(ctx)) }()
+			if _, err := writer.Exec(ctx, tc.insert); err != nil {
+				t.Fatalf("insert: %v", err)
+			}
+
+			migrations := versions(t)
+			done := make(chan error, 1)
+			go func() {
+				_, err := Run(ctx, pool, migrations)
+				done <- err
+			}()
+			waitForLock(t, pool, "relation", done)
+			if err := writer.Commit(ctx); err != nil {
+				t.Fatalf("commit: %v", err)
+			}
+			if err := <-done; !errors.Is(err, ErrNotEmpty) {
+				t.Fatalf("Run = %v, want ErrNotEmpty", err)
+			}
+			if n := scalar(t, pool, `SELECT count(*) FROM title`); n != 0 {
+				t.Errorf("titles = %d, want 0", n)
+			}
+		})
 	}
 }
 

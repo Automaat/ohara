@@ -225,8 +225,12 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   letter with a diacritic to its base letter ("Bjork" for "Björk") in
   names, listing titles and phrases; search queries keep the want's
   spelling. A run matches listing titles to wishlist copies (all title
-  words, the edition's format for movies, the author's surname in any case
-  for books ("Andrzeja Sapkowskiego", "Lalka Prusa"), the artist's words
+  words; a name of words of at most two letters ("M", "Up", "It") only
+  where it stands as the title: at the start, after a separator, a media
+  word or the author, and before the end, a separator, a media word, a
+  release year or the author, or anything right after the author, and a
+  lone letter before a space ("M Fritz Lang"); the edition's format for
+  movies, the author's surname in any case for books ("Andrzeja Sapkowskiego", "Lalka Prusa"), the artist's words
   and a fitting medium for
   albums, where a listing naming no medium counts as a CD, minus the
   editable reject phrases a want's own name or artist does not contain),

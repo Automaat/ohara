@@ -1526,10 +1526,10 @@ describe('collector marks', () => {
 		expect(copyToForm(null)).toMatchObject({ signed: false, copy_number: '' });
 	});
 
-	it.each(['0', '-1', '1,5', 'nr 5', '1000001'])('refuses copy number %s', (input) => {
+	it.each(['0', '-1', '1,5', 'nr 5', '2147483648'])('refuses copy number %s', (input) => {
 		expect(copyPayload({ ...owned, copy_number: input }, 3)).toEqual({
 			ok: false,
-			issue: { field: 'copy_number', message: 'Numer egzemplarza to liczba od 1 do 1 000 000.' }
+			issue: { field: 'copy_number', message: 'Numer egzemplarza to liczba całkowita od 1.' }
 		});
 	});
 

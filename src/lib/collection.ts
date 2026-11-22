@@ -801,6 +801,8 @@ export function parseSeason(kind: Kind, raw: string): Parsed<number | null> {
 /** The most discs and the largest limited run an edition takes, as the API checks them. */
 const maxDiscCount = 99;
 const maxLimitedTo = 1_000_000;
+/** The largest copy number the API stores; only the edition's run, when known, bounds it lower. */
+const maxCopyNumber = 2_147_483_647;
 
 /** An optional whole number from 1 to max; anything else is the message on field. */
 function parseCount(
@@ -1042,8 +1044,8 @@ export function copyPayload(f: CopyForm, editionID: number): Parsed<CopyPayload>
 		? parseCount(
 				f.copy_number,
 				'copy_number',
-				maxLimitedTo,
-				'Numer egzemplarza to liczba od 1 do 1 000 000.'
+				maxCopyNumber,
+				'Numer egzemplarza to liczba całkowita od 1.'
 			)
 		: ({ ok: true, value: null } as const);
 	if (!copyNumber.ok) return copyNumber;

@@ -1,9 +1,13 @@
 package collection_test
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/Automaat/ohara/backend-go/internal/collection"
 )
@@ -21,7 +25,7 @@ func TestCopyMarks(t *testing.T) {
 	}{
 		{"zero", obj{"edition_id": open, "status": "owned", "copy_number": 0}, "copy_number"},
 		{"negative", obj{"edition_id": open, "status": "owned", "copy_number": -3}, "copy_number"},
-		{"past any run", obj{"edition_id": open, "status": "owned", "copy_number": 1_000_001}, "copy_number"},
+		{"past the column", obj{"edition_id": open, "status": "owned", "copy_number": 2_147_483_648}, "copy_number"},
 		{"fraction", obj{"edition_id": open, "status": "owned", "copy_number": 1.5}, "copy_number"},
 		{"text number", obj{"edition_id": open, "status": "owned", "copy_number": "12"}, "copy_number"},
 		{"text signed", obj{"edition_id": open, "status": "owned", "signed": "yes"}, "signed"},
@@ -97,7 +101,10 @@ func TestCopyMarks(t *testing.T) {
 	a.fails(http.MethodPut, fmt.Sprintf("/api/copies/%d", plain.ID),
 		obj{"edition_id": limited, "status": "owned", "copy_number": 123}, http.StatusConflict, "copy_number")
 	a.copyOf(obj{"edition_id": open, "status": "sold", "sold_on": "2026-01-02", "copy_number": 123, "signed": true})
-	a.copyOf(obj{"edition_id": open, "status": "ordered", "copy_number": 1_000_000})
+	a.copyOf(obj{"edition_id": open, "status": "ordered", "copy_number": 1_000_001})
+	a.copyOf(obj{"edition_id": open, "status": "owned", "copy_number": 2_147_483_647})
+	a.fails(http.MethodPut, "/api/copies/999999", obj{"edition_id": 999999, "status": "owned", "copy_number": 1},
+		http.StatusNotFound, "")
 
 	small := a.edition(obj{"title_id": book, "limited_to": 100})
 	a.fails(http.MethodPut, fmt.Sprintf("/api/copies/%d", c.ID),
@@ -115,4 +122,40 @@ func TestCopyMarks(t *testing.T) {
 		t.Fatalf("cleared marks = %v, %v", cleared.Signed, cleared.CopyNumber)
 	}
 	a.copyOf(obj{"edition_id": limited, "status": "owned", "copy_number": 123})
+}
+
+func TestNumberedSaleWaitsForAnEditionDelete(t *testing.T) {
+	a, pool := newAPIWithPool(t)
+	ctx := context.Background()
+	book := a.title("book", "Lalka")
+	edition := a.edition(obj{"title_id": book, "limited_to": 500})
+	copyID := a.copyOf(obj{"edition_id": edition, "status": "owned", "copy_number": 7})
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM edition WHERE id = $1 FOR UPDATE`, edition); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan int, 1)
+	go func() {
+		done <- a.do(http.MethodPut, fmt.Sprintf("/api/copies/%d", copyID), obj{
+			"edition_id": edition, "status": "sold", "sold_on": "2026-01-02", "copy_number": 7, "signed": true,
+		}, nil)
+	}()
+	waitForLockWait(t, pool)
+	_, err = tx.Exec(ctx, `DELETE FROM edition WHERE id = $1`, edition)
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23001" {
+		t.Fatalf("edition delete under a waiting sale = %v, want the foreign key to restrict it", err)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if status := <-done; status != http.StatusOK {
+		t.Fatalf("numbered sale after the delete = %d, want 200", status)
+	}
 }

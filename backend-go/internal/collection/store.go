@@ -986,6 +986,20 @@ func checkCopyRun(ctx context.Context, tx pgx.Tx, in *CopyInput) error {
 	return nil
 }
 
+// checkCopyExists answers ErrNotFound for a copy that does not exist, so a
+// missing path resource stays a 404 ahead of checks on the body's edition.
+// It takes no lock: a copy deleted after it still fails the update.
+func checkCopyExists(ctx context.Context, tx pgx.Tx, id int64) error {
+	var exists bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM copy WHERE id = $1)`, id).Scan(&exists); err != nil {
+		return fmt.Errorf("copy exists: %w", err)
+	}
+	if !exists {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // checkRunCovers refuses an edition run below the highest number one of
 // its copies carries. It runs after the edition's update, whose row lock
 // makes a copy save that read the old run finish first.
@@ -1010,15 +1024,22 @@ func checkRunCovers(ctx context.Context, tx pgx.Tx, editionID int64, run *int) e
 func (s *Store) UpdateCopy(ctx context.Context, id int64, in *CopyInput) (Copy, error) {
 	var c Copy
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
+		// The edition's lock comes before the copy's, the order an edition
+		// delete takes them in, so the two wait instead of deadlocking.
+		if in.CopyNumber != nil {
+			if err := checkCopyExists(ctx, tx, id); err != nil {
+				return err
+			}
+		}
+		if err := checkCopyRun(ctx, tx, in); err != nil {
+			return err
+		}
 		if in.Status != StatusOwned {
 			if err := checkNotLent(ctx, tx, id); err != nil {
 				return err
 			}
 		}
 		if err := checkGradeKind(ctx, tx, in); err != nil {
-			return err
-		}
-		if err := checkCopyRun(ctx, tx, in); err != nil {
 			return err
 		}
 		var err error

@@ -5,6 +5,6 @@
 -- keeps both marks off wishlist copies. Every copy stored before it is
 -- unsigned and unnumbered.
 ALTER TABLE copy ADD COLUMN signed boolean NOT NULL DEFAULT false;
-ALTER TABLE copy ADD COLUMN copy_number integer CHECK (copy_number BETWEEN 1 AND 1000000);
+ALTER TABLE copy ADD COLUMN copy_number integer CHECK (copy_number >= 1);
 CREATE UNIQUE INDEX copy_number_key ON copy (edition_id, copy_number)
     WHERE copy_number IS NOT NULL;

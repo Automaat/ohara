@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"reflect"
 	"slices"
@@ -58,6 +59,9 @@ const (
 	MaxDiscCount = 99
 	// MaxLimitedTo bounds the size of a limited edition's run.
 	MaxLimitedTo = 1_000_000
+	// MaxCopyNumber is the largest copy number the integer column holds;
+	// only the edition's run, when known, bounds it below that.
+	MaxCopyNumber = math.MaxInt32
 
 	// MaxSeriesNumber bounds a title's number in its series and a series'
 	// total of volumes.
@@ -944,8 +948,8 @@ func (in *CopyInput) CheckGradeKind(kind string) *httpx.FieldError {
 // wishlist copies: they describe a copy in hand, and the deal hunter does
 // not look for them. The edition's run is checked by the store.
 func (in *CopyInput) checkMarks() *httpx.FieldError {
-	if n := in.CopyNumber; n != nil && (*n < 1 || *n > MaxLimitedTo) {
-		return fieldErr("copy_number", "must be a whole number from 1 to 1000000")
+	if n := in.CopyNumber; n != nil && (*n < 1 || *n > MaxCopyNumber) {
+		return fieldErr("copy_number", "must be a whole number from 1")
 	}
 	if in.Status != StatusWishlist {
 		return nil

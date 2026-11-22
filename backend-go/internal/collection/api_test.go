@@ -592,6 +592,104 @@ func TestEditionKindRules(t *testing.T) {
 	}
 }
 
+func TestEditionDetailRules(t *testing.T) {
+	a := newAPI(t)
+	movie := a.title("movie", "Miś")
+	book := a.title("book", "Lalka")
+	album := a.title("music", "Kind of Blue")
+	var show collection.Title
+	a.mustDo(http.MethodPost, "/api/titles", obj{"kind": "tv", "name": "Twin Peaks", "season": 1}, &show, http.StatusCreated)
+
+	refused := []struct {
+		name  string
+		body  obj
+		field string
+	}{
+		{"discs on a book", obj{"title_id": book, "disc_count": 2}, "disc_count"},
+		{"no discs", obj{"title_id": movie, "format": "dvd", "disc_count": 0}, "disc_count"},
+		{"too many discs", obj{"title_id": album, "format": "cd", "disc_count": 100}, "disc_count"},
+		{"half a disc", obj{"title_id": album, "format": "cd", "disc_count": 1.5}, "disc_count"},
+		{"discs past int", obj{"title_id": album, "format": "cd", "disc_count": 1e30}, "disc_count"},
+		{"run of none", obj{"title_id": book, "limited_to": 0}, "limited_to"},
+		{"run too large", obj{"title_id": movie, "format": "dvd", "limited_to": 1_000_001}, "limited_to"},
+		{"run as text", obj{"title_id": movie, "format": "dvd", "limited_to": "500"}, "limited_to"},
+		{"color on a CD", obj{"title_id": album, "format": "cd", "color": "czerwony"}, "color"},
+		{"color on a film", obj{"title_id": movie, "format": "bluray", "color": "czerwony"}, "color"},
+		{"color on a book", obj{"title_id": book, "color": "czerwony"}, "color"},
+		{"color too long", obj{"title_id": album, "format": "vinyl", "color": strings.Repeat("x", 501)}, "color"},
+		{"color on two lines", obj{"title_id": album, "format": "vinyl", "color": "czerwony\nbiały"}, "color"},
+		{"color as number", obj{"title_id": album, "format": "vinyl", "color": 5}, "color"},
+	}
+	for _, tc := range refused {
+		t.Log(tc.name)
+		a.fails(http.MethodPost, "/api/editions", tc.body, http.StatusUnprocessableEntity, tc.field)
+	}
+
+	var vinyl collection.Edition
+	a.mustDo(http.MethodPost, "/api/editions", obj{
+		"title_id": album, "format": "vinyl", "disc_count": 2, "limited_to": 500, "color": "  czerwony ",
+	}, &vinyl, http.StatusCreated)
+	if vinyl.DiscCount == nil || *vinyl.DiscCount != 2 || vinyl.LimitedTo == nil || *vinyl.LimitedTo != 500 ||
+		vinyl.Color == nil || *vinyl.Color != "czerwony" {
+		t.Fatalf("vinyl edition = %+v", vinyl)
+	}
+	a.copyOf(obj{"edition_id": vinyl.ID, "status": "owned"})
+	a.edition(obj{"title_id": book, "limited_to": 1_000_000})
+	var audiobook collection.Edition
+	a.mustDo(http.MethodPost, "/api/editions", obj{"title_id": book, "format": "audiobook", "limited_to": 300}, &audiobook, http.StatusCreated)
+	if deref(audiobook.Format) != "audiobook" || audiobook.LimitedTo == nil || *audiobook.LimitedTo != 300 {
+		t.Fatalf("limited audiobook edition = %+v", audiobook)
+	}
+	a.fails(http.MethodPost, "/api/editions", obj{"title_id": book, "format": "audiobook", "disc_count": 2}, http.StatusUnprocessableEntity, "disc_count")
+	a.fails(http.MethodPost, "/api/editions", obj{"title_id": book, "format": "audiobook", "color": "czerwony"}, http.StatusUnprocessableEntity, "color")
+	a.edition(obj{"title_id": movie, "format": "uhd", "disc_count": 99, "packaging": []string{"steelbook"}})
+	a.edition(obj{"title_id": show.ID, "format": "bluray", "disc_count": 3})
+	a.edition(obj{"title_id": album, "format": "cd", "color": "  "})
+
+	var got collection.EditionDetail
+	a.mustDo(http.MethodGet, fmt.Sprintf("/api/editions/%d", vinyl.ID), nil, &got, http.StatusOK)
+	if got.DiscCount == nil || *got.DiscCount != 2 || got.LimitedTo == nil || *got.LimitedTo != 500 ||
+		got.Color == nil || *got.Color != "czerwony" {
+		t.Fatalf("GET edition = %+v", got.Edition)
+	}
+	var detail collection.TitleDetail
+	a.mustDo(http.MethodGet, fmt.Sprintf("/api/titles/%d", album), nil, &detail, http.StatusOK)
+	if len(detail.Editions) != 2 {
+		t.Fatalf("album editions = %+v", detail.Editions)
+	}
+	for _, e := range detail.Editions {
+		switch e.ID {
+		case vinyl.ID:
+			if e.DiscCount == nil || *e.DiscCount != 2 || e.LimitedTo == nil || *e.LimitedTo != 500 ||
+				e.Color == nil || *e.Color != "czerwony" {
+				t.Fatalf("title's vinyl edition = %+v", e.Edition)
+			}
+		default:
+			if e.DiscCount != nil || e.LimitedTo != nil || e.Color != nil {
+				t.Fatalf("title's CD edition = %+v", e.Edition)
+			}
+		}
+	}
+	var view collection.CollectionView
+	a.mustDo(http.MethodGet, "/api/collection?kind=music", nil, &view, http.StatusOK)
+	if len(view.Items) != 1 {
+		t.Fatalf("music view = %+v", view.Items)
+	}
+	if it := view.Items[0]; it.DiscCount == nil || *it.DiscCount != 2 || it.LimitedTo == nil ||
+		*it.LimitedTo != 500 || it.Color == nil || *it.Color != "czerwony" {
+		t.Fatalf("collection item = %+v", it)
+	}
+
+	a.fails(http.MethodPut, fmt.Sprintf("/api/editions/%d", vinyl.ID), obj{
+		"title_id": album, "format": "cd", "color": "czerwony",
+	}, http.StatusUnprocessableEntity, "color")
+	var cleared collection.Edition
+	a.mustDo(http.MethodPut, fmt.Sprintf("/api/editions/%d", vinyl.ID), obj{"title_id": album, "format": "cd"}, &cleared, http.StatusOK)
+	if cleared.DiscCount != nil || cleared.LimitedTo != nil || cleared.Color != nil {
+		t.Fatalf("edition after a PUT without details = %+v", cleared)
+	}
+}
+
 func TestBookAudiobookFormat(t *testing.T) {
 	a := newAPI(t)
 	book := a.title("book", "Ostatnie życzenie")

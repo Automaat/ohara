@@ -62,6 +62,9 @@
 		'pl_voiceover',
 		'packaging',
 		'discogs_release_id',
+		'disc_count',
+		'limited_to',
+		'color',
 		'cover_url',
 		'contents',
 		'notes'
@@ -112,6 +115,15 @@
 	}
 </script>
 
+{#snippet discs()}
+	<Field
+		label="Liczba płyt"
+		inputmode="numeric"
+		bind:value={form.disc_count}
+		error={errorFor('disc_count')}
+	/>
+{/snippet}
+
 <form
 	class="form"
 	novalidate
@@ -156,6 +168,7 @@
 			error={errorFor('packaging')}
 			onchange={(v: string[]) => (form.packaging = v as Packaging[])}
 		/>
+		{@render discs()}
 	{:else if kind === 'music'}
 		<Field label="Nośnik" required requiredLabel="Wymagane" error={errorFor('format')}>
 			{#snippet control(c)}
@@ -167,6 +180,15 @@
 				/>
 			{/snippet}
 		</Field>
+		{@render discs()}
+		{#if form.format === 'vinyl'}
+			<Field
+				label="Kolor winylu"
+				hint="Np. czerwony; puste dla czarnego."
+				bind:value={form.color}
+				error={errorFor('color')}
+			/>
+		{/if}
 		<Field
 			label="Wydanie na Discogs"
 			hint="Numer wydania z adresu discogs.com/release/…; wycena czyta jego ceny."
@@ -204,6 +226,13 @@
 		hint="Np. edycja kolekcjonerska."
 		bind:value={form.label}
 		error={errorFor('label')}
+	/>
+	<Field
+		label="Nakład"
+		hint="Liczba egzemplarzy edycji limitowanej."
+		inputmode="numeric"
+		bind:value={form.limited_to}
+		error={errorFor('limited_to')}
 	/>
 	<Field
 		label="Adres okładki wydania"

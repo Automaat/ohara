@@ -887,6 +887,23 @@ func TestTelegramBought(t *testing.T) {
 		t.Fatalf("refused press served again bought copy %+v", c)
 	}
 
+	// The collector corrected the purchase: the wish is back and its listing
+	// undismissed. A new press of the button that bought it changes nothing.
+	if err := store.Undismiss(ctx, ids["bought"]); err != nil {
+		t.Fatal(err)
+	}
+	double, srv = newBotDouble(t)
+	double.press(15, 42, boughtPress(ids["bought"], wish))
+	stop = runPoller(&TelegramPoller{Bot: bot(srv), Store: store, Logger: slog.New(slog.DiscardHandler)})
+	waitUntil(t, "the press answered", func() bool { return len(double.snapshot().answers) == 1 })
+	stop()
+	if calls := double.snapshot(); calls.answers[0]["text"] != "Ten zakup był już zapisany" || len(calls.texts) != 0 {
+		t.Fatalf("answers %v, text edits %v, want a notice and no edit", calls.answers, calls.texts)
+	}
+	if c := readCopy(t, pool, wish); c.Status != "wishlist" || c.PriceCents != nil || isDismissed(t, pool, ids["bought"]) {
+		t.Fatalf("a second press of a used button bought copy %+v again", c)
+	}
+
 	// A listing that says nothing of its state keeps the wish's own.
 	if err := store.BuyPress(ctx, "q20", ids["second"], wish); err != nil {
 		t.Fatal(err)

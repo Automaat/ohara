@@ -31,6 +31,11 @@ var ErrNotWished = errors.New("copy no longer on the wishlist")
 // records is in place.
 var ErrAlreadyBought = errors.New("copy already bought")
 
+// ErrBoughtBefore reports a press of a "Kupione" button that already
+// recorded its purchase, for a copy the collector has since changed back:
+// the button buys once, so the press changes nothing.
+var ErrBoughtBefore = errors.New("purchase already recorded")
+
 // MaxAttempts bounds Telegram deliveries per alert; after that the alert is
 // reported as failed and no longer retried.
 const MaxAttempts = 5
@@ -673,12 +678,15 @@ func (s *Store) DismissPress(ctx context.Context, callbackQueryID string, id int
 // cleared; it keeps its id, edition, condition and notes, and the listing
 // is dismissed.
 //
-// Only a press's first delivery can buy. Every press is recorded, refused
-// ones too, so one Telegram sends again only reports the state: a copy
-// owned with the listing dismissed is ErrAlreadyBought, anything else
-// ErrNotWished, as for a fresh press of a copy no longer on the wishlist.
-// ErrNotFound when no alerted deal listing has the id. Neither error
-// changes the copy or the listing.
+// A button buys once, and only on a press's first delivery. Every press
+// is recorded, refused ones too, and every purchase in telegram_purchase,
+// so a press Telegram sends again, or a later press of the same button,
+// only reports the state: a copy owned with the listing dismissed is
+// ErrAlreadyBought, a copy the button bought and the collector changed
+// back is ErrBoughtBefore, anything else ErrNotWished, as for a fresh
+// press of a copy no longer on the wishlist. ErrNotFound when no alerted
+// deal listing has the id. None of these errors changes the copy or the
+// listing.
 func (s *Store) BuyPress(ctx context.Context, callbackQueryID string, id, copyID int64) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -687,7 +695,7 @@ func (s *Store) BuyPress(ctx context.Context, callbackQueryID string, id, copyID
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	outcome := buyInTx(ctx, tx, callbackQueryID, id, copyID)
 	if outcome != nil && !errors.Is(outcome, ErrNotFound) && !errors.Is(outcome, ErrNotWished) &&
-		!errors.Is(outcome, ErrAlreadyBought) {
+		!errors.Is(outcome, ErrAlreadyBought) && !errors.Is(outcome, ErrBoughtBefore) {
 		return outcome
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -728,9 +736,17 @@ func buyInTx(ctx context.Context, tx pgx.Tx, callbackQueryID string, id, copyID 
 	if err != nil {
 		return fmt.Errorf("buy press: copy: %w", err)
 	}
-	if !fresh || status != "wishlist" {
-		if status == "owned" && dismissed {
+	var boughtBefore bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM telegram_purchase
+		WHERE observation_id = $1 AND copy_id = $2)`, id, copyID).Scan(&boughtBefore); err != nil {
+		return fmt.Errorf("buy press: purchase: %w", err)
+	}
+	if !fresh || boughtBefore || status != "wishlist" {
+		switch {
+		case status == "owned" && dismissed:
 			return ErrAlreadyBought
+		case boughtBefore:
+			return ErrBoughtBefore
 		}
 		return ErrNotWished
 	}
@@ -743,6 +759,10 @@ func buyInTx(ctx context.Context, tx pgx.Tx, callbackQueryID string, id, copyID 
 			acquired_as = coalesce($4, acquired_as), max_price_cents = NULL, updated_at = now()
 		WHERE id = $1`, copyID, priceCents, shop, acquiredAs); err != nil {
 		return fmt.Errorf("buy press: copy: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO telegram_purchase (observation_id, copy_id) VALUES ($1, $2)`,
+		id, copyID); err != nil {
+		return fmt.Errorf("buy press: record purchase: %w", err)
 	}
 	return setDismissed(ctx, tx, id, true)
 }

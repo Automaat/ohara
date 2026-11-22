@@ -287,7 +287,8 @@ func (p *TelegramPoller) apply(ctx context.Context, q *callbackQuery) pressOutco
 // copyID names. The message then says so and loses its buttons, also when
 // the press finds the purchase already recorded, so a message whose edit
 // failed is fixed by the next press. A press for a wish no longer on the
-// wishlist that it did not buy changes nothing and keeps the message.
+// wishlist that it did not buy, or one whose purchase the collector
+// changed back, changes nothing and keeps the message.
 func (p *TelegramPoller) buy(ctx context.Context, q *callbackQuery, id, copyID int64) pressOutcome {
 	out := pressOutcome{answer: "Zapisano jako kupione", edit: q.Message, editText: withBoughtNote(q.Message.Text)}
 	switch err := p.Store.BuyPress(ctx, q.ID, id, copyID); {
@@ -298,6 +299,8 @@ func (p *TelegramPoller) buy(ctx context.Context, q *callbackQuery, id, copyID i
 		return pressOutcome{answer: "Nie ma już tego ogłoszenia"}
 	case errors.Is(err, ErrNotWished):
 		return pressOutcome{answer: "Tej pozycji nie ma już na liście życzeń"}
+	case errors.Is(err, ErrBoughtBefore):
+		return pressOutcome{answer: "Ten zakup był już zapisany"}
 	default:
 		p.logger().Warn("telegram: record purchase, trying again", "observation", id, "err", err)
 		return pressOutcome{retry: true}

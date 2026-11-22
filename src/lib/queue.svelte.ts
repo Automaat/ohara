@@ -6,20 +6,21 @@ import type { QueueEntry } from './scan.js';
 
 /**
  * The queue page's entries. They load when the page opens, and again each time codes kept on
- * the device leave it (`waiting` goes down), as a code sent in the background may reach the
- * queue after the page's first read. An answer older than the last one applied is dropped, and
- * so is an entry a removal took out after its load went out. A failed load replaces only a list
- * not shown yet.
+ * the device leave it (`PendingScans.departures` goes up), as a code sent in the background may
+ * reach the queue after the page's first read. An answer older than the last one applied is
+ * dropped, and so is an entry a removal took out after its load went out. A failed load keeps
+ * the entries shown and reports its failure until a load asked after it answers.
  */
 export class QueueList {
 	/** The entries; null until the first answer. */
 	entries = $state<QueueEntry[] | null>(null);
-	/** Why the list could not load; null once an answer came. */
+	/** Why the last load failed; null once a load asked after it answers. */
 	failure = $state<string | null>(null);
 	readonly #fetch: typeof fetch;
 	#issued = 0;
 	#applied = 0;
-	#waiting = 0;
+	#failed = 0;
+	#departures: number | null = null;
 	/** Entries removals took out, by the last load issued when each went. */
 	readonly #gone = new Map<number, number>();
 
@@ -37,18 +38,22 @@ export class QueueList {
 			this.#applied = ticket;
 			for (const [id, last] of this.#gone) if (last < ticket) this.#gone.delete(id);
 			this.entries = entries.filter((e) => !this.#gone.has(e.id));
-			this.failure = null;
+			if (ticket > this.#failed) this.failure = null;
 		} catch (err) {
-			if (ticket < this.#applied || this.entries !== null) return;
+			if (ticket < this.#applied) return;
+			this.#failed = Math.max(this.#failed, ticket);
 			this.failure = errorMessage(err);
 		}
 	}
 
-	/** The count of codes kept on the device; the queue loads again each time it goes down. */
-	waiting(count: number): void {
-		const fewer = count < this.#waiting;
-		this.#waiting = count;
-		if (fewer) void this.load();
+	/**
+	 * How often codes left the device, as `PendingScans.departures` counts; the queue loads again
+	 * each time it goes up from the value first seen.
+	 */
+	departed(departures: number): void {
+		const more = this.#departures !== null && departures > this.#departures;
+		this.#departures = departures;
+		if (more) void this.load();
 	}
 
 	/** The server no longer holds the entry: it leaves the list, and loads already out. */

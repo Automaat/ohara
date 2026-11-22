@@ -281,18 +281,17 @@ describe('QueueList', () => {
 		expect(list.failure).toBeNull();
 	});
 
-	it('loads again when codes leave the device, not when the device keeps more', async () => {
+	it('loads again each time codes leave the device, from the count first seen', async () => {
 		const r = reads();
 		const list = new QueueList(r.fetchFn);
-		list.waiting(0);
-		list.waiting(2);
-		list.waiting(3);
+		list.departed(3);
+		list.departed(3);
 		expect(r.asked).toHaveLength(0);
-		list.waiting(1);
+		list.departed(4);
 		await r.waitAsked(1);
-		list.waiting(0);
+		list.departed(6);
 		await r.waitAsked(2);
-		list.waiting(0);
+		list.departed(6);
 		r.answer(0, 1);
 		r.answer(1, 1, 2);
 		await vi.waitFor(() => expect(ids(list)).toEqual([1, 2]));
@@ -302,10 +301,10 @@ describe('QueueList', () => {
 	it('keeps the newer answer when the first read answers last', async () => {
 		const r = reads();
 		const list = new QueueList(r.fetchFn);
+		list.departed(0);
 		const first = list.load();
 		await r.waitAsked(1);
-		list.waiting(1);
-		list.waiting(0);
+		list.departed(1);
 		await r.waitAsked(2);
 		r.answer(1, 1, 2);
 		await vi.waitFor(() => expect(ids(list)).toEqual([1, 2]));
@@ -352,22 +351,28 @@ describe('QueueList', () => {
 		expect(ids(list)).toEqual([3]);
 	});
 
-	it('keeps the list shown when a later read fails', async () => {
+	it('keeps the list shown and reports a later read that fails until one answers', async () => {
 		const r = reads();
 		const list = new QueueList(r.fetchFn);
+		list.departed(0);
 		const first = list.load();
 		await r.waitAsked(1);
-		r.answer(0, 1);
+		r.answer(0);
 		await first;
-		const again = list.load();
+		list.departed(1);
 		await r.waitAsked(2);
 		r.fail(1);
-		await again;
+		await vi.waitFor(() => expect(list.failure).toBe('Serwer zwrócił błąd 500.'));
+		expect(ids(list)).toEqual([]);
+		const retry = list.load();
+		await r.waitAsked(3);
+		r.answer(2, 7);
+		await retry;
 		expect(list.failure).toBeNull();
-		expect(ids(list)).toEqual([1]);
+		expect(ids(list)).toEqual([7]);
 	});
 
-	it('shows the first read when a later one failed before it answered', async () => {
+	it('shows an older answer but keeps the failure of a newer read', async () => {
 		const r = reads();
 		const list = new QueueList(r.fetchFn);
 		const first = list.load();
@@ -378,7 +383,22 @@ describe('QueueList', () => {
 		await again;
 		r.answer(0, 4);
 		await first;
-		expect(list.failure).toBeNull();
 		expect(ids(list)).toEqual([4]);
+		expect(list.failure).toBe('Serwer zwrócił błąd 500.');
+	});
+
+	it('drops the failure of an older read once a newer one answered', async () => {
+		const r = reads();
+		const list = new QueueList(r.fetchFn);
+		const first = list.load();
+		await r.waitAsked(1);
+		const again = list.load();
+		await r.waitAsked(2);
+		r.answer(1, 5);
+		await again;
+		r.fail(0);
+		await first;
+		expect(list.failure).toBeNull();
+		expect(ids(list)).toEqual([5]);
 	});
 });

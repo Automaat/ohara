@@ -2,6 +2,7 @@
 	import {
 		BackLink,
 		Button,
+		Callout,
 		EmptyState,
 		ErrorState,
 		PageHeader,
@@ -32,8 +33,8 @@
 	const shown = $derived(list.entries?.filter((e) => !removals.hidden.has(e.id)) ?? null);
 
 	$effect(() => {
-		const waiting = pendingScans.count;
-		untrack(() => list.waiting(waiting));
+		const departures = pendingScans.departures;
+		untrack(() => list.departed(departures));
 	});
 
 	/**
@@ -87,7 +88,17 @@
 </PageHeader>
 
 <div class="content">
-	{#if list.failure}
+	{#if list.failure && list.entries !== null}
+		<div class="refresh-failed">
+			<Callout tone="warning" title="Nie udało się odświeżyć kolejki" live>
+				{list.failure} Lista może nie zawierać ostatnio wysłanych kodów.
+				{#snippet actions()}
+					<Button onclick={() => list.load()}>Spróbuj ponownie</Button>
+				{/snippet}
+			</Callout>
+		</div>
+	{/if}
+	{#if list.failure && list.entries === null}
 		<ErrorState
 			title="Nie udało się wczytać kolejki"
 			description={list.failure}
@@ -132,6 +143,10 @@
 		font-family: var(--sui-sans);
 		color: var(--sui-text-primary);
 		max-width: 48rem;
+	}
+
+	.refresh-failed {
+		margin-block-end: 1rem;
 	}
 
 	.queue {

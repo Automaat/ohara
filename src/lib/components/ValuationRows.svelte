@@ -1,5 +1,6 @@
 <script lang="ts">
 	import {
+		copyGain,
 		copyMeta,
 		copyNote,
 		discogsRelease,
@@ -29,6 +30,7 @@
 				</span>
 				<span class="value">
 					{c.mid ? wholeZl(c.mid.cents) : '—'}
+					<small><span class="visually-hidden">Względem zakupu: </span>{copyGain(c)}</small>
 					<small>{copyNote(c)}</small>
 					{#if missingCeiling(c)}
 						<small>{missingCeiling(c)}</small>
@@ -123,6 +125,15 @@
 		font-weight: 800;
 		font-variant-numeric: tabular-nums;
 		text-align: end;
+		white-space: nowrap;
+	}
+
+	.visually-hidden {
+		position: absolute;
+		inline-size: 1px;
+		block-size: 1px;
+		overflow: hidden;
+		clip-path: inset(50%);
 		white-space: nowrap;
 	}
 

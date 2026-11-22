@@ -5,6 +5,7 @@ import {
 	displayName,
 	editionSummary,
 	formatPLN,
+	gradeLine,
 	kindLabels,
 	statusLabels,
 	type Copy,
@@ -287,9 +288,11 @@ export type CopyFact = { label: string; value: string };
 
 /**
  * A copy's facts for its card: what was paid, when and where, the sale or the expected delivery,
- * its state and where it is kept.
+ * its state, an album's grades and where it is kept.
  */
 export function copyFacts(c: Copy): CopyFact[] {
+	const grades = gradeLine(c);
+	const graded = grades ? [{ label: 'Gradacja', value: grades }] : [];
 	const state =
 		[
 			c.acquired_as ? acquiredLabels[c.acquired_as] : null,
@@ -308,7 +311,8 @@ export function copyFacts(c: Copy): CopyFact[] {
 			...percent,
 			...exact,
 			{ label: 'Gdzie szukać', value: c.shop || '—' },
-			{ label: 'Stan', value: state }
+			{ label: 'Stan', value: state },
+			...graded
 		];
 	}
 	const sale =
@@ -329,6 +333,7 @@ export function copyFacts(c: Copy): CopyFact[] {
 		...sale,
 		...delivery,
 		{ label: 'Stan', value: state },
+		...graded,
 		...(c.location ? [{ label: 'Miejsce', value: c.location }] : [])
 	];
 }

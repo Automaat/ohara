@@ -426,6 +426,32 @@ describe('copyFacts', () => {
 	});
 });
 
+describe('copyFacts of an album copy', () => {
+	it('shows the Goldmine grades in short after the state', () => {
+		const facts = copyFacts(
+			copy({ condition: 'good', media_grade: 'very_good_plus', sleeve_grade: 'near_mint' })
+		);
+		expect(facts.map((f) => [f.label, f.value]).slice(-2)).toEqual([
+			['Stan', 'Nowy · Dobry'],
+			['Gradacja', 'Nośnik VG+ · Okładka NM']
+		]);
+	});
+
+	it('names a lone grade and a sleeve-only one', () => {
+		const grade = (c: Partial<Copy>) => copyFacts(copy(c)).find((f) => f.label === 'Gradacja');
+		expect(grade({ media_grade: 'good_plus' })?.value).toBe('Nośnik G+');
+		expect(grade({ sleeve_grade: 'no_cover' })?.value).toBe('Okładka No Cover');
+		expect(
+			grade({ status: 'wishlist', price_cents: null, media_grade: 'mint', sleeve_grade: 'generic' })
+				?.value
+		).toBe('Nośnik M · Okładka Generic');
+	});
+
+	it('leaves the grades out of an ungraded copy', () => {
+		expect(copyFacts(copy({ media_grade: null })).map((f) => f.label)).not.toContain('Gradacja');
+	});
+});
+
 describe('copyFacts with a location', () => {
 	it('shows where an owned copy is kept, last', () => {
 		const facts = copyFacts(copy({ location: 'Regał 2' }));

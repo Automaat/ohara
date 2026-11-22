@@ -66,7 +66,17 @@ export type {
 	VolumeState
 } from './api.gen';
 
-export const kindLabels: Record<Kind, string> = { movie: 'Film', book: 'Książka', music: 'Muzyka' };
+export const kindLabels: Record<Kind, string> = {
+	movie: 'Film',
+	book: 'Książka',
+	music: 'Muzyka',
+	tv: 'Serial'
+};
+
+/** Whether titles of kind are watched on a disc: films and TV series share the movie fields. */
+export function screenKind(kind: Kind): boolean {
+	return kind === 'movie' || kind === 'tv';
+}
 export const movieFormatLabels: Record<MovieFormat, string> = {
 	dvd: 'DVD',
 	bluray: 'Blu-ray',
@@ -81,7 +91,7 @@ export const formatLabels: Record<Format, string> = { ...movieFormatLabels, ...m
 
 /** The formats a title of kind comes in, as select options; books have none. */
 export function formatOptions(kind: Kind): { value: Format; label: string }[] {
-	if (kind === 'movie') return options(movieFormatLabels);
+	if (screenKind(kind)) return options(movieFormatLabels);
 	if (kind === 'music') return options(musicFormatLabels);
 	return [];
 }
@@ -139,10 +149,15 @@ export const maxPriceCents = 100_000_000;
 const pln = new Intl.NumberFormat('pl-PL', { style: 'currency', currency: 'PLN' });
 const count = new Intl.NumberFormat('pl-PL');
 
-/** How many copies of each kind a list holds. */
-export function kindCounts(items: readonly Pick<CollectionItem, 'kind'>[]): Record<Kind, number> {
-	const counts: Record<Kind, number> = { movie: 0, book: 0, music: 0 };
-	for (const { kind } of items) counts[kind] += 1;
+/**
+ * How many copies of each kind a list holds: films, books and music always, TV series once the
+ * list holds one.
+ */
+export function kindCounts(
+	items: readonly Pick<CollectionItem, 'kind'>[]
+): Partial<Record<Kind, number>> {
+	const counts: Partial<Record<Kind, number>> = { movie: 0, book: 0, music: 0 };
+	for (const { kind } of items) counts[kind] = (counts[kind] ?? 0) + 1;
 	return counts;
 }
 
@@ -212,9 +227,16 @@ export function displayName(t: {
 	name: string;
 	polish_title: string | null;
 	original_title: string | null;
+	season?: number | null;
 }): string {
 	const other = [t.polish_title, t.original_title].find((n) => n && n !== t.name);
-	return other ? `${t.name} (${other})` : t.name;
+	const name = other ? `${t.name} (${other})` : t.name;
+	return seasonName(name, t.season);
+}
+
+/** A TV season's name with its number, such as "Dark · sezon 2"; any other name as it is. */
+export function seasonName(name: string, season: number | null | undefined): string {
+	return season == null ? name : `${name} · sezon ${season}`;
 }
 
 /** A one-line description of an edition, such as "Blu-ray · Steelbook · 5901234123457". */
@@ -503,6 +525,8 @@ export type TitleForm = {
 	polish_title: string;
 	year: string;
 	tmdb_id: string;
+	/** A TV title's season, 0 for specials. */
+	season: string;
 	authors: string;
 	bn_id: string;
 	openlibrary_id: string;
@@ -530,6 +554,7 @@ export function titleToForm(t: TitlePayload | null, kind: Kind = 'movie'): Title
 		polish_title: t?.polish_title ?? '',
 		year: t?.year?.toString() ?? '',
 		tmdb_id: t?.tmdb_id?.toString() ?? '',
+		season: t?.season?.toString() ?? '',
 		authors: t?.authors.join('\n') ?? '',
 		bn_id: t?.bn_id ?? '',
 		openlibrary_id: t?.openlibrary_id ?? '',
@@ -551,12 +576,14 @@ export function titlePayload(f: TitleForm): Parsed<TitlePayload> {
 	if (!f.name.trim()) return { ok: false, issue: { field: 'name', message: 'Podaj tytuł.' } };
 	const year = parseOptInt(f.year, 'year', 'Rok to liczba, np. 1984.');
 	if (!year.ok) return year;
-	const movie = f.kind === 'movie';
+	const movie = screenKind(f.kind);
 	const book = f.kind === 'book';
 	const tmdb = movie
 		? parseOptInt(f.tmdb_id, 'tmdb_id', 'Identyfikator TMDB to liczba.')
 		: ({ ok: true, value: null } as const);
 	if (!tmdb.ok) return tmdb;
+	const season = parseSeason(f.kind, f.season);
+	if (!season.ok) return season;
 	const series = seriesPayload(f);
 	if (!series.ok) return series;
 	return {
@@ -568,6 +595,7 @@ export function titlePayload(f: TitleForm): Parsed<TitlePayload> {
 			polish_title: optText(f.polish_title),
 			year: year.value,
 			tmdb_id: tmdb.value,
+			season: season.value,
 			authors: movie
 				? []
 				: f.authors
@@ -655,6 +683,23 @@ export function seriesTotalPayload(input: string): Parsed<SeriesTotalPayload> {
 	return { ok: true, value: { total_volumes: total.value } };
 }
 
+/** The highest season number the API takes. */
+const maxSeason = 9999;
+
+/** A TV title's season from the form, required there; none for any other kind. */
+export function parseSeason(kind: Kind, raw: string): Parsed<number | null> {
+	if (kind !== 'tv') return { ok: true, value: null };
+	const season = parseOptInt(raw, 'season', 'Sezon to liczba, 0 dla odcinków specjalnych.');
+	if (!season.ok) return season;
+	if (season.value === null) {
+		return { ok: false, issue: { field: 'season', message: 'Podaj numer sezonu.' } };
+	}
+	if (season.value > maxSeason) {
+		return { ok: false, issue: { field: 'season', message: 'Sezon to liczba do 9999.' } };
+	}
+	return season;
+}
+
 export type EditionForm = {
 	barcode: string;
 	label: string;
@@ -714,7 +759,7 @@ export function editionPayload(
 ): Parsed<EditionPayload> {
 	const year = parseOptInt(f.year, 'year', 'Rok to liczba, np. 2019.');
 	if (!year.ok) return year;
-	const movie = kind === 'movie';
+	const movie = screenKind(kind);
 	const music = kind === 'music';
 	if ((movie || music) && !formatFits(kind, f.format)) {
 		return { ok: false, issue: { field: 'format', message: 'Wybierz nośnik.' } };

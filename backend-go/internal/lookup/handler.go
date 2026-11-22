@@ -73,8 +73,8 @@ func (h *Handler) selectCandidate(w http.ResponseWriter, r *http.Request) {
 func validateSelection(code string, c *Candidate) *httpx.FieldError {
 	c.Title.Name = strings.TrimSpace(c.Title.Name)
 	switch {
-	case c.Type != "movie" && c.Type != "book" && c.Type != "music":
-		return &httpx.FieldError{Field: "type", Msg: "must be movie, book or music"}
+	case c.Type != "movie" && c.Type != "book" && c.Type != "music" && c.Type != "tv":
+		return &httpx.FieldError{Field: "type", Msg: "must be movie, book, music or tv"}
 	case c.Title.Name == "":
 		return &httpx.FieldError{Field: "title.name", Msg: "is required"}
 	case c.Edition.Barcode != "":

@@ -1531,3 +1531,40 @@ describe('canonicalBarcode', () => {
 		expect(canonicalBarcode(code)).toBe(stored);
 	});
 });
+
+describe('a picked TV season', () => {
+	const dark: Candidate = {
+		type: 'tv',
+		title: { name: 'Dark', original_title: 'Dark', year: 2017, tmdb_id: 70523, season: 1 },
+		edition: { barcode: '' },
+		cover_url: 'https://image.tmdb.org/t/p/w342/s1.jpg',
+		provider: 'tmdb',
+		sources: ['tmdb'],
+		confidence: 0.6
+	};
+	const tv = (season: string) => form({ kind: 'tv', name: 'Dark', season, format: 'bluray' });
+
+	it('carries its season, year and poster', () => {
+		const title = scanTitlePayload(tv('1'), dark);
+		expect(title.ok && title.value).toMatchObject({ season: 1, year: 2017, tmdb_id: 70523 });
+		const edition = scanEditionPayload(tv('1'), dark, '', 9);
+		expect(edition.ok && edition.value.cover_url).toBe('https://image.tmdb.org/t/p/w342/s1.jpg');
+	});
+
+	it('keeps the show but not the picked season’s year and poster once the season changes', () => {
+		const title = scanTitlePayload(tv('2'), dark);
+		expect(title.ok && title.value).toMatchObject({
+			season: 2,
+			year: null,
+			tmdb_id: 70523,
+			original_title: 'Dark'
+		});
+		const edition = scanEditionPayload(tv('2'), dark, '', 9);
+		expect(edition.ok && edition.value.cover_url).toBeUndefined();
+	});
+
+	it('refuses a season left empty', () => {
+		const title = scanTitlePayload(tv(' '), dark);
+		expect(!title.ok && title.issue.field).toBe('season');
+	});
+});

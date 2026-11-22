@@ -18,7 +18,7 @@ type SortableCopy = Pick<
 	CollectionItem,
 	'copy_id' | 'created_at_us' | 'name' | 'price_cents' | 'title_id' | 'edition_id'
 > &
-	Partial<Pick<CollectionItem, 'status' | 'purchased_on' | 'year' | 'rating'>>;
+	Partial<Pick<CollectionItem, 'status' | 'purchased_on' | 'year' | 'rating' | 'season'>>;
 
 const titleOrder = new Intl.Collator('pl-PL', { sensitivity: 'base' });
 
@@ -40,9 +40,13 @@ function purchaseDate(copy: SortableCopy): string | null {
 	return copy.status === 'wishlist' ? null : (copy.purchased_on ?? null);
 }
 
+/** A–Z by name, the seasons of a show in order, then by title and edition. */
 function compareTitles(a: SortableCopy, b: SortableCopy): number {
 	return (
-		titleOrder.compare(a.name, b.name) || a.title_id - b.title_id || a.edition_id - b.edition_id
+		titleOrder.compare(a.name, b.name) ||
+		(a.season ?? -1) - (b.season ?? -1) ||
+		a.title_id - b.title_id ||
+		a.edition_id - b.edition_id
 	);
 }
 
@@ -78,7 +82,7 @@ export function sortCopies<T extends SortableCopy>(items: readonly T[], sort: Co
  * to A–Z.
  */
 export function sortTitles<
-	T extends Pick<Title, 'id' | 'name'> & Partial<Pick<Title, 'year' | 'rating'>>
+	T extends Pick<Title, 'id' | 'name'> & Partial<Pick<Title, 'year' | 'rating' | 'season'>>
 >(items: readonly T[], sort: CollectionSort): T[] {
 	return [...items].sort((a, b) => {
 		if (sort === 'newest') return b.id - a.id;
@@ -88,6 +92,11 @@ export function sortTitles<
 		} else if (sort === 'ratingDesc') {
 			first = compareMissingLast(a.rating ?? null, b.rating ?? null, true);
 		}
-		return first || titleOrder.compare(a.name, b.name) || a.id - b.id;
+		return (
+			first ||
+			titleOrder.compare(a.name, b.name) ||
+			(a.season ?? -1) - (b.season ?? -1) ||
+			a.id - b.id
+		);
 	});
 }

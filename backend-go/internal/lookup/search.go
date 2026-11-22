@@ -23,16 +23,19 @@ type TextSearcher interface {
 }
 
 // maxQuery bounds the search text, in characters; maxSearchResults the
-// candidates one search answers.
+// candidates one search answers, and maxSeasonResults those of a TV search,
+// which lists every season of the few shows it finds, so even a long-running
+// show's last seasons and specials stay among them.
 const (
 	maxQuery         = 200
 	maxSearchResults = 10
+	maxSeasonResults = 500
 )
 
 // SearchHandler serves GET /api/search?kind=&q=&barcode=&format=. The
 // candidates carry the barcode being added, so picking one fills the new
 // edition as a lookup candidate would. Searchers are keyed by kind
-// ("movie", "book", "music"); a kind without one is switched off, for
+// ("movie", "book", "music", "tv"); a kind without one is switched off, for
 // lack of an API key, and answers 503.
 type SearchHandler struct {
 	Searchers map[string]TextSearcher
@@ -56,8 +59,8 @@ func (h *SearchHandler) search(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query()
 	kind := q.Get("kind")
-	if kind != "movie" && kind != "book" && kind != "music" {
-		httpx.WriteFieldError(w, logger, &httpx.FieldError{Field: "kind", Msg: "Typ to film, książka albo muzyka."})
+	if kind != "movie" && kind != "book" && kind != "music" && kind != "tv" {
+		httpx.WriteFieldError(w, logger, &httpx.FieldError{Field: "kind", Msg: "Typ to film, książka, muzyka albo serial."})
 		return
 	}
 	text := strings.Join(strings.Fields(q.Get("q")), " ")
@@ -85,7 +88,11 @@ func (h *SearchHandler) search(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, logger, http.StatusBadGateway, "Źródło nie odpowiada, spróbuj za chwilę.")
 		return
 	}
-	cands = cands[:min(len(cands), maxSearchResults)]
+	limit := maxSearchResults
+	if kind == "tv" {
+		limit = maxSeasonResults
+	}
+	cands = cands[:min(len(cands), limit)]
 	for i := range cands {
 		cands[i].Type = kind
 		cands[i].Edition.Barcode = code

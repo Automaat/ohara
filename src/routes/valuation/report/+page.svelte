@@ -2,7 +2,7 @@
 	import { BackLink, Button, EmptyState, ErrorState, PageHeader } from '@smykla-skalski/sui';
 	import { onMount, tick } from 'svelte';
 	import { errorMessage, request } from '#lib/api.js';
-	import { isoDate } from '#lib/collection.js';
+	import { isoDate, seasonName } from '#lib/collection.js';
 	import CollectionCover from '#lib/components/CollectionCover.svelte';
 	import DiscogsCredit from '#lib/components/DiscogsCredit.svelte';
 	import {
@@ -230,7 +230,7 @@
 					<ol>
 						{#each appendix as row (row.copy.copy_id)}
 							<li>
-								<strong>{row.copy.title_name}</strong>
+								<strong>{seasonName(row.copy.title_name, row.copy.season)}</strong>
 								{#if row.fullCreators !== null}
 									<span class="full-creators">Twórcy: {row.fullCreators}</span>
 								{/if}

@@ -21,11 +21,13 @@ import (
 // TitleFields mirrors the title body of POST /api/titles, so a client can
 // send a picked candidate's title as is.
 type TitleFields struct {
-	Name          string   `json:"name"`
-	OriginalTitle *string  `json:"original_title,omitempty" ts:",null"`
-	PolishTitle   *string  `json:"polish_title,omitempty" ts:",null"`
-	Year          *int     `json:"year,omitempty" ts:",null"`
-	TMDBID        *int64   `json:"tmdb_id,omitempty" ts:",null"`
+	Name          string  `json:"name"`
+	OriginalTitle *string `json:"original_title,omitempty" ts:",null"`
+	PolishTitle   *string `json:"polish_title,omitempty" ts:",null"`
+	Year          *int    `json:"year,omitempty" ts:",null"`
+	TMDBID        *int64  `json:"tmdb_id,omitempty" ts:",null"`
+	// Season is a TV candidate's season of the show TMDBID names.
+	Season        *int     `json:"season,omitempty" ts:",null"`
 	Authors       []string `json:"authors,omitempty"`
 	BNID          *string  `json:"bn_id,omitempty" ts:",null"`
 	OpenLibraryID *string  `json:"openlibrary_id,omitempty" ts:",null"`
@@ -51,8 +53,8 @@ type EditionFields struct {
 	DiscogsReleaseID *int64 `json:"discogs_release_id,omitempty" ts:",null"`
 }
 
-// Candidate is one possible match for a barcode. Type is "movie", "book" or
-// "music"; Confidence is in [0, 1]. Provider is the main source and Sources
+// Candidate is one possible match for a barcode. Type is "movie", "book",
+// "music" or, from a title search, "tv"; Confidence is in [0, 1]. Provider is the main source and Sources
 // lists every provider whose fields went into the candidate. CoverURL and
 // Description are for display only; they are not stored.
 type Candidate struct {

@@ -64,6 +64,9 @@
 			{#if kind === 'movie'}
 				<rect x="3.5" y="4" width="17" height="16" rx="2" />
 				<path d="M3.5 9h17M3.5 15h17M8 4v16M16 4v16" />
+			{:else if kind === 'tv'}
+				<rect x="2.5" y="4.5" width="19" height="12.5" rx="2" />
+				<path d="M8 20.5h8M12 17v3.5" />
 			{:else if kind === 'book'}
 				<path d="M4 19.5V5.5A2.5 2.5 0 0 1 6.5 3H20v18H6.5A2.5 2.5 0 0 1 4 19.5Z" />
 				<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />

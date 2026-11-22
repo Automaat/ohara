@@ -207,8 +207,12 @@ type run struct {
 	holdings []Holding
 	rules    deals.Rules
 	titles   deals.Titles
-	res      RunResult
-	first    bool
+	// asOf is when the run read holdings and titles, for RecordAsOf, on
+	// the database clock, which writes last_seen_at; it is also the cutoff
+	// for gone listings.
+	asOf  time.Time
+	res   RunResult
+	first bool
 }
 
 // Run asks every source about every owned edition, every buy-back shop
@@ -217,6 +221,10 @@ type run struct {
 // Source failures are collected in the result; a database failure or
 // cancellation stops the run.
 func (r *Runner) Run(ctx context.Context) (RunResult, error) {
+	asOf, err := r.store.Now(ctx)
+	if err != nil {
+		return RunResult{}, err
+	}
 	holdings, err := r.store.Holdings(ctx)
 	if err != nil {
 		return RunResult{}, err
@@ -232,7 +240,7 @@ func (r *Runner) Run(ctx context.Context) (RunResult, error) {
 	for i := range holdings {
 		holdings[i].Want.Prepare()
 	}
-	x := &run{r: r, holdings: holdings, rules: rules, titles: titles, first: true}
+	x := &run{r: r, holdings: holdings, rules: rules, titles: titles, asOf: asOf, first: true}
 	x.res.Editions = len(holdings)
 	x.res.Errors = []string{}
 	queries := searchQueries(holdings)
@@ -303,12 +311,17 @@ func (x *run) report(site string, f *deals.Refused, unit string) {
 	}
 }
 
+// search asks src every query and records the listings that match a
+// holding. For a deals.Pager it then updates which stored listings are
+// gone (gone).
 func (x *run) search(ctx context.Context, src deals.Source, queries []string) error {
 	if !src.PerQuery() {
 		queries = []string{""}
 	}
 	var f deals.Refused
 	defer x.report(src.Name(), &f, "queries")
+	pager, paged := src.(deals.Pager)
+	var complete, seen []string
 	for _, q := range queries {
 		if f.Skip() {
 			continue
@@ -316,7 +329,13 @@ func (x *run) search(ctx context.Context, src deals.Source, queries []string) er
 		if err := x.pause(ctx); err != nil {
 			return err
 		}
-		listings, err := src.Search(ctx, q)
+		var page deals.Page
+		var err error
+		if paged {
+			page, err = pager.SearchPage(ctx, q)
+		} else {
+			page.Listings, err = src.Search(ctx, q)
+		}
 		if err != nil && ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -329,7 +348,12 @@ func (x *run) search(ctx context.Context, src deals.Source, queries []string) er
 			x.fail(src.Name(), err)
 			continue
 		}
+		listings := page.Listings
+		if paged && page.Complete {
+			complete = append(complete, deals.QueryKey(q))
+		}
 		x.res.Listings += len(listings)
+		seen = append(seen, page.Seen...)
 		for i := range listings {
 			l := &listings[i]
 			h := match(x.holdings, l, x.rules, x.titles)
@@ -337,7 +361,7 @@ func (x *run) search(ctx context.Context, src deals.Source, queries []string) er
 				continue
 			}
 			x.res.Matched++
-			isNew, err := x.r.store.Record(ctx, l, h)
+			isNew, err := x.r.store.RecordAsOf(ctx, l, h, x.asOf)
 			if err != nil {
 				return err
 			}
@@ -345,6 +369,26 @@ func (x *run) search(ctx context.Context, src deals.Source, queries []string) er
 				x.res.New++
 			}
 		}
+	}
+	if !paged {
+		return nil
+	}
+	return x.gone(ctx, src.Name(), complete, seen)
+}
+
+// gone clears the gone mark of every stored listing of source an answer
+// of this run held, matching or not, and marks gone those last found by
+// one of the complete queries that no answer held. Only an answer that is
+// every offer the site has for its query tells a listing is gone: one
+// missing from a first page, or from a query that failed or was skipped,
+// may still be offered.
+func (x *run) gone(ctx context.Context, source string, complete, seen []string) error {
+	n, err := x.r.store.UpdateGone(ctx, source, complete, seen, x.asOf)
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		x.r.logger.Info("valuation found listings gone", "source", source, "listings", n)
 	}
 	return nil
 }
@@ -408,7 +452,7 @@ func (x *run) quote(ctx context.Context, b BuyBack) error {
 		l := deals.Listing{
 			Source: b.Name(), ExternalID: isbn, Title: q.Title, URL: q.URL, PriceCents: q.Cents, Raw: raw,
 		}
-		if _, err := x.r.store.Record(ctx, &l, h); err != nil {
+		if _, err := x.r.store.RecordAsOf(ctx, &l, h, x.asOf); err != nil {
 			return err
 		}
 		x.res.Quotes++
@@ -479,7 +523,7 @@ func (x *run) recordRelease(ctx context.Context, h *Holding, id int64, p Release
 		l := deals.Listing{
 			Source: pr.source, ExternalID: key, Title: h.Want.Name, URL: pr.url, PriceCents: *pr.cents, Raw: raw,
 		}
-		if _, err := x.r.store.Record(ctx, &l, h); err != nil {
+		if _, err := x.r.store.RecordAsOf(ctx, &l, h, x.asOf); err != nil {
 			return false, err
 		}
 		recorded = true

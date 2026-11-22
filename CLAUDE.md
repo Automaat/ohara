@@ -231,6 +231,19 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   queues one `deal_alert` per listing at or below the copy's
   `max_price_cents`; a listing seen again keeps its row, takes the new
   price and `last_seen_at`, and alerts if it has no alert yet. Alerts are retried up to 5 times within a week.
+  A hunt or valuation that matches a stored listing to another title (its
+  edition's) moves it to that title and the matched edition and sets
+  `moved_at`; a valuation match drops the wish it was recorded for. Its
+  unsent alert for a wish of another title moves to the new wish, or to
+  none (the deals view then shows no alert), so the old wish never gets
+  it; a sent alert stays, and the deals view no longer shows the listing
+  under the old title's wish. Each run reads the database time with its
+  wishlist or holdings and titles; a listing keeps in `assigned_as_of` the
+  newest such time of a run that matched it to its current title. A run
+  that read its data before that does not move the listing (it matched
+  from older data) and queues no alert for a wish of another title than
+  the listing's. Another edition of the same title keeps the
+  stored one.
   A sent alert stores the price it named (`deal_alert.alerted_price_cents`);
   a later price under it, within the limit, queues the same row again and
   its message names the earlier price ("było …"). An alert still waiting
@@ -314,8 +327,20 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   mid = median of OLX prices not marked new, outliers beyond 1.5 IQR
   dropped, pooled over every edition of the same title and format, owned,
   wished or without copies; an unowned edition's prices count only when
-  first seen after its last change. A mid from fewer than 3 prices is low
-  confidence. Only a Discogs release has a ceiling. An owned album edition
+  first seen, or moved to it from another title (`moved_at`), after its
+  last change. A mid from fewer than 3 prices is low
+  confidence. Only a Discogs release has a ceiling. A stored OLX listing
+  keeps the price it was first seen at (`first_price_cents`, null for rows
+  stored before migration 0021) and the query that last found it
+  (`raw.query`, `deals.QueryKey`). After a valuation run asks OLX every
+  query, a listing last found by a query whose answer held fewer offers
+  than the 50 asked for, each with a readable ID (`deals.Pager`, a
+  complete answer), that no answer of the run held (priced or not) and
+  last seen before the run started on the database clock gets `gone_at`; `last_seen_at` keeps its last
+  sighting. A first page, a failed or skipped query tells nothing, and a
+  gone listing any answer holds again, matching or not, is no longer gone.
+  Gone listings stay stored and price as before; no request is sent per
+  listing. An owned album edition
   with a `discogs_release_id` is
   priced on Discogs (marketplace stats in EUR, price suggestions in the
   seller-settings currency, converted to PLN at the NBP table A rate): its

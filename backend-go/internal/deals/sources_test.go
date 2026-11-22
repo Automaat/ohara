@@ -2,9 +2,11 @@ package deals
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -20,8 +22,8 @@ func fixture(t *testing.T, name string) []byte {
 
 func byID(listings []Listing) map[string]Listing {
 	out := map[string]Listing{}
-	for _, l := range listings {
-		out[l.ExternalID] = l
+	for i := range listings {
+		out[listings[i].ExternalID] = listings[i]
 	}
 	return out
 }
@@ -114,5 +116,54 @@ func TestSourcesSearchOverHTTP(t *testing.T) {
 	if _, err := (OLX{Client: client, BaseURL: srv.URL + "/blocked"}).Search(ctx, "x"); err == nil ||
 		!strings.Contains(err.Error(), "status 403") {
 		t.Fatalf("blocked olx err = %v", err)
+	}
+}
+
+// olxOffers is an OLX answer of n offers without a price, which the parser
+// leaves out but a page still counts.
+func olxOffers(n int) string {
+	offers := make([]string, n)
+	for i := range offers {
+		offers[i] = fmt.Sprintf(`{"id": %d, "title": "Oddam za darmo", "params": []}`, i+1)
+	}
+	return `{"data": [` + strings.Join(offers, ",") + `]}`
+}
+
+func TestOLXPageIsCompleteBelowItsLimit(t *testing.T) {
+	var answer string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(answer))
+	}))
+	t.Cleanup(srv.Close)
+	olx := OLX{Client: srv.Client(), BaseURL: srv.URL + "/"}
+	ctx := context.Background()
+
+	answer = string(fixture(t, "olx.json"))
+	page, err := olx.SearchPage(ctx, "Blade Runner blu-ray")
+	if err != nil || !page.Complete || len(page.Listings) != 8 || len(page.Seen) != 10 {
+		t.Fatalf("fixture page = %d listings, %d seen, complete %v, %v; want 8 of 10 offers of a complete answer",
+			len(page.Listings), len(page.Seen), page.Complete, err)
+	}
+	for i := range page.Listings {
+		if l := &page.Listings[i]; l.Query != "Blade Runner blu-ray" {
+			t.Fatalf("listing %s query %q, want the query that found it", l.ExternalID, l.Query)
+		}
+	}
+	answer = `{"data": [{"id": "207", "title": "Blade Runner", "params": []}, {"id": 208, "title": "x", "params": "?"}]}`
+	page, err = olx.SearchPage(ctx, "x")
+	if err != nil || page.Complete || !slices.Equal(page.Seen, []string{"208"}) {
+		t.Fatalf("offer with an unreadable ID: seen %v, complete %v, %v; want 208 seen of an incomplete answer",
+			page.Seen, page.Complete, err)
+	}
+	for _, tc := range []struct {
+		offers   int
+		complete bool
+	}{{49, true}, {50, false}} {
+		answer = olxOffers(tc.offers)
+		page, err := olx.SearchPage(ctx, "x")
+		if err != nil || page.Complete != tc.complete || len(page.Listings) != 0 || len(page.Seen) != tc.offers {
+			t.Fatalf("%d unpriced offers: %d listings, %d seen, complete %v, %v; want complete %v, all seen",
+				tc.offers, len(page.Listings), len(page.Seen), page.Complete, err, tc.complete)
+		}
 	}
 }

@@ -42,6 +42,11 @@ const fieldMessages: Record<string, Record<number, string>> = {
 	tmdb_id: { 409: 'Tytuł z tym identyfikatorem TMDB już istnieje.' },
 	kind: { 409: 'Nie można zmienić typu tytułu, który ma wydania.' },
 	series_number: { 409: 'Inny tytuł tej serii ma już ten numer tomu.' },
+	copy_number: {
+		409: 'Inny egzemplarz tego wydania ma już ten numer.',
+		422: 'Numer egzemplarza nie może przekraczać nakładu wydania.'
+	},
+	limited_to: { 422: 'Nakład nie może być mniejszy niż numer egzemplarza tego wydania.' },
 	title_id: { 422: 'Wybrany tytuł nie istnieje.' },
 	edition_id: { 422: 'Wybrane wydanie nie istnieje.' },
 	phrase: { 409: 'Ta fraza już jest na liście.' },

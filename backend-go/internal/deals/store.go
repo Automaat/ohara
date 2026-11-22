@@ -46,7 +46,7 @@ const MaxAttempts = 5
 const alertWindow = `interval '7 days'`
 
 // sources are the price_observation sources this package writes.
-var sources = []string{"olx", "bluedvd", "swiatksiazki", "pepper", "tezeusz", DiscogsSource}
+var sources = []string{"olx", "bluedvd", "winylownia", "swiatksiazki", "pepper", "tezeusz", DiscogsSource}
 
 // expiringSources are the sources whose stored listings only a fresh
 // answer lets the deals view show (freshListing) and which are deleted

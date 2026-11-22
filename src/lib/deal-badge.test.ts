@@ -136,27 +136,50 @@ describe('loadUnderLimit', () => {
 	});
 });
 
-describe('forgetUnconfirmedListings', () => {
-	it('takes the Discogs listings out of the badge and its listings', async () => {
-		const discogs = { ...listing(3900, 4000), source: 'discogs_inventory' as const };
+describe('a failed request', () => {
+	const discogs = { ...listing(3900, 4000), source: 'discogs_inventory' as const };
+	const failing = () => vi.fn(async () => new Response('{}', { status: 500 }));
+
+	it('takes the Discogs listings out of the badge and keeps the rest', async () => {
 		await badge.loadUnderLimit(deals([listing(3500, 4000), discogs]));
-		badge.forgetUnconfirmedListings();
+		await badge.refreshDealBadge(failing());
 		expect(badge.dealBadge.count).toBe(1);
 		expect(badge.dealBadge.listings?.map((l) => l.id)).toEqual([3500]);
 	});
 
 	it('lets the next answer bring them back', async () => {
-		const discogs = { ...listing(3900, 4000), source: 'discogs_inventory' as const };
 		await badge.loadUnderLimit(deals([discogs]));
-		badge.forgetUnconfirmedListings();
+		await badge.refreshDealBadge(failing());
 		expect(badge.dealBadge.count).toBe(0);
-		await badge.loadUnderLimit(deals([discogs]));
+		await badge.refreshDealBadge(deals([discogs]));
 		expect(badge.dealBadge.count).toBe(1);
 	});
 
-	it('does nothing before the first answer', () => {
-		badge.forgetUnconfirmedListings();
+	it('keeps an answer sent before it from bringing them back', async () => {
+		await badge.loadUnderLimit(deals([listing(3500, 4000)]));
+		const older = Promise.withResolvers<Response>();
+		const stale = badge.refreshDealBadge(vi.fn(() => older.promise));
+		await badge.refreshDealBadge(failing());
+		older.resolve(dealsResponse([discogs]));
+		await stale;
+		expect(badge.dealBadge.listings?.map((l) => l.id)).toEqual([3500]);
+	});
+
+	it('leaves an answer to a later request alone', async () => {
+		await badge.loadUnderLimit(deals([listing(3500, 4000)]));
+		const slow = Promise.withResolvers<Response>();
+		const failed = badge.refreshDealBadge(vi.fn(() => slow.promise));
+		await badge.refreshDealBadge(deals([discogs]));
+		slow.resolve(new Response('{}', { status: 500 }));
+		await failed;
+		expect(badge.dealBadge.count).toBe(1);
+		expect(badge.dealBadge.listings?.map((l) => l.id)).toEqual([3900]);
+	});
+
+	it('does nothing before the first answer', async () => {
+		await badge.refreshDealBadge(failing());
 		expect(badge.dealBadge.listings).toBeNull();
+		expect(badge.dealBadge.count).toBe(0);
 	});
 });
 

@@ -25,18 +25,28 @@ export const badgePath = '/api/deals?under_limit=true&limit=500';
 
 let issued = 0;
 let applied = 0;
+/** The number of the request whose answer the badge shows. */
+let confirmed = 0;
 
 /**
  * Asks the server for the listings under the limit and counts them in the badge, so a page that
  * lists the same answer, such as the deals page's "Pod limitem", never disagrees with the badge.
  * Each request is numbered as it starts, and an answer that arrives after a later request's
- * answer still reaches its caller but leaves the badge alone.
+ * answer still reaches its caller but leaves the badge alone. A failed request drops the
+ * listings of expiring sources (forgetUnconfirmed) and rejects.
  */
 export async function loadUnderLimit(fetchFn: typeof fetch): Promise<DealsView> {
 	const ticket = ++issued;
-	const view = await request<DealsView>(fetchFn, 'GET', badgePath);
+	let view: DealsView;
+	try {
+		view = await request<DealsView>(fetchFn, 'GET', badgePath);
+	} catch (err) {
+		forgetUnconfirmed(ticket);
+		throw err;
+	}
 	if (ticket >= applied) {
 		applied = ticket;
+		confirmed = ticket;
 		dealBadge.listings = view.observations;
 		dealBadge.count = underLimitCount(view.observations);
 	}
@@ -44,26 +54,30 @@ export async function loadUnderLimit(fetchFn: typeof fetch): Promise<DealsView> 
 }
 
 /**
+ * Takes the listings of expiring sources out of the badge and "Pod limitem" after request ticket
+ * failed, since no answer confirms they are still offered (withoutUnconfirmed), unless an answer
+ * to a later request already shows. Answers to requests sent before the failed one no longer
+ * move the badge; a later answer brings the listings back.
+ */
+function forgetUnconfirmed(ticket: number): void {
+	if (ticket < confirmed) return;
+	applied = Math.max(applied, ticket + 1);
+	if (!dealBadge.listings) return;
+	dealBadge.listings = withoutUnconfirmed(dealBadge.listings);
+	dealBadge.count = underLimitCount(dealBadge.listings);
+}
+
+/**
  * Asks the server for the listings. Every page navigation asks again, so a wish limit changed on
  * another page shows at once; a shallow one, such as the scanner's sheet, stays on its page and
- * does not. The badge is only a hint, so a failed request keeps the last count.
+ * does not. The badge is only a hint, so a failed request keeps the last count but for the
+ * listings of expiring sources.
  */
 export function refreshDealBadge(fetchFn: typeof fetch): Promise<void> {
 	return loadUnderLimit(fetchFn).then(
 		() => undefined,
 		() => undefined
 	);
-}
-
-/**
- * Takes the listings of expiring sources out of the badge and "Pod limitem" when a request for
- * them failed, since no answer confirms they are still offered (withoutUnconfirmed). A later
- * answer brings them back.
- */
-export function forgetUnconfirmedListings(): void {
-	if (!dealBadge.listings) return;
-	dealBadge.listings = withoutUnconfirmed(dealBadge.listings);
-	dealBadge.count = underLimitCount(dealBadge.listings);
 }
 
 /**

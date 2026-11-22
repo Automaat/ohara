@@ -17,12 +17,7 @@
 	} from '@smykla-skalski/sui';
 	import { onMount, tick } from 'svelte';
 	import { ApiError, errorMessage, request } from '#lib/api.js';
-	import {
-		dealBadge,
-		forgetDealListing,
-		forgetUnconfirmedListings,
-		loadUnderLimit
-	} from '#lib/deal-badge.svelte.js';
+	import { dealBadge, forgetDealListing, loadUnderLimit } from '#lib/deal-badge.svelte.js';
 	import { options, type FormIssue } from '#lib/collection.js';
 	import DealCard from '#lib/components/DealCard.svelte';
 	import { WantlistSync } from '#lib/wantlist-sync.svelte.js';
@@ -91,7 +86,8 @@
 	 * when the tab becomes visible, so the other segments follow. An answer that arrives after a
 	 * later request's answer is dropped. The search counts as running while any answer says so.
 	 * The wishes' market prices load beside them without holding them back. A failed request keeps
-	 * the lists but drops their Discogs listings, which only an answer may show (withoutUnconfirmed).
+	 * the lists but drops their Discogs listings, which only an answer may show (withoutUnconfirmed);
+	 * the badge and "Pod limitem" do the same when their own request fails (loadUnderLimit).
 	 */
 	async function load() {
 		const ticket = ++issued;
@@ -124,7 +120,6 @@
 					all: withoutUnconfirmed(deals.all),
 					sent: withoutUnconfirmed(deals.sent)
 				};
-			forgetUnconfirmedListings();
 		}
 		loading = false;
 		clearTimeout(poll);

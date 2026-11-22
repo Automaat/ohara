@@ -209,9 +209,11 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   notice as a followable link to the listing. A visible Okazje page asks
   for its lists again every 10 minutes, so with the 5 h 45 min window no
   card it keeps drawing is more than 6 hours old, and one a run found gone
-  leaves within 10 minutes. When a reload fails, the page and the Okazje
-  badge drop their Discogs listings until an answer shows them again
-  (`withoutUnconfirmed`). The purchase happens on discogs.com.
+  leaves within 10 minutes. When a reload fails, the page drops its
+  Discogs listings, and when the badge's own request fails, on any page,
+  the badge and "Pod limitem" drop theirs, unless an answer to a later
+  request already shows; the next answer brings them back
+  (`withoutUnconfirmed`, `loadUnderLimit`). The purchase happens on discogs.com.
 - The valuation never reads `discogs_inventory`, and wants are not
   matched by Discogs release ID.
 

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Automaat/ohara/backend-go/internal/recovery"
 )
@@ -37,14 +38,23 @@ const telegramEditRetryWait = time.Second
 // well under telegramUpdatesCap; a reply over it halves the batch.
 const telegramBatch = 20
 
-// PressStore applies a press of an alert's "Ignoruj" button: Okazje's
-// dismissal, once per press (ErrPressReplayed); *Store is one.
+// boughtNote ends an alert's text once its "Kupione" press recorded the
+// purchase.
+const boughtNote = "\n\n✅ Kupione: zapisano w kolekcji"
+
+// telegramTextLimit is the most characters a message's text may hold.
+const telegramTextLimit = 4096
+
+// PressStore applies a press of an alert's buttons, once per press
+// (ErrPressReplayed): "Ignoruj" is Okazje's dismissal, "Kupione" records
+// the purchase of the alert's wish; *Store is one.
 type PressStore interface {
 	DismissPress(ctx context.Context, callbackQueryID string, id int64) error
+	BuyPress(ctx context.Context, callbackQueryID string, id int64) error
 }
 
 // TelegramPoller long-polls the bot's updates and acts on presses of an
-// alert's "Ignoruj" button. Ohara sits behind Authelia on the LAN, so
+// alert's "Ignoruj" and "Kupione" buttons. Ohara sits behind Authelia on the LAN, so
 // Telegram cannot call a webhook; the app fetches the presses instead.
 // Bot's Client must allow a request to run longer than Timeout
 // (NewTelegramPollClient). Timeout is how long one getUpdates waits for an
@@ -79,6 +89,7 @@ type callbackQuery struct {
 type telegramMessage struct {
 	MessageID int64        `json:"message_id"`
 	Chat      telegramChat `json:"chat"`
+	Text      string       `json:"text"`
 }
 
 type telegramChat struct {
@@ -176,11 +187,13 @@ func (p *TelegramPoller) stepContext(ctx context.Context) (context.Context, cont
 }
 
 // pressOutcome is what a press did: the answer to show and the message
-// whose button to take off, or a failure worth trying again.
+// whose buttons to take off, with the text to replace its own when set, or
+// a failure worth trying again.
 type pressOutcome struct {
-	answer string
-	edit   *telegramMessage
-	retry  bool
+	answer   string
+	edit     *telegramMessage
+	editText string
+	retry    bool
 }
 
 // press handles one button press and reports false when it should be
@@ -196,7 +209,7 @@ func (p *TelegramPoller) press(ctx context.Context, q *callbackQuery) bool {
 	})
 	cancel()
 	if err != nil {
-		out = pressOutcome{answer: "Nie udało się zignorować, spróbuj ponownie"}
+		out = pressOutcome{answer: "Nie udało się, spróbuj ponownie"}
 	}
 	if out.retry {
 		return false
@@ -208,40 +221,50 @@ func (p *TelegramPoller) press(ctx context.Context, q *callbackQuery) bool {
 		logger.Warn("telegram: answer press", "err", err)
 	}
 	if out.edit != nil {
-		p.removeKeyboard(ctx, out.edit)
+		p.editMessage(ctx, out.edit, out.editText)
 	}
 	return true
 }
 
-// removeKeyboard takes the button off m, trying again after a failure
-// worth retrying (telegramEditAttempts in all) unless ctx ends. A button
-// left behind still works: a press answers again and retries the edit.
-func (p *TelegramPoller) removeKeyboard(ctx context.Context, m *telegramMessage) {
+// editMessage takes the buttons off m, replacing its text with text unless
+// that is empty, trying again after a failure worth retrying
+// (telegramEditAttempts in all) unless ctx ends. A button left behind still
+// works: a press answers again and retries the edit.
+func (p *TelegramPoller) editMessage(ctx context.Context, m *telegramMessage, text string) {
 	wait := p.editRetryWait
 	if wait <= 0 {
 		wait = telegramEditRetryWait
 	}
 	for attempt := 1; ; attempt++ {
 		editCtx, cancel := p.stepContext(ctx)
-		err := p.Bot.removeKeyboard(editCtx, m)
+		var err error
+		if text != "" {
+			err = p.Bot.editText(editCtx, m, text)
+		} else {
+			err = p.Bot.removeKeyboard(editCtx, m)
+		}
 		cancel()
 		if err == nil {
 			return
 		}
 		if !errors.Is(err, errTelegramUnavailable) || attempt == telegramEditAttempts ||
 			sleepCtx(ctx, time.Duration(attempt)*wait) != nil {
-			p.logger().Warn("telegram: remove button", "attempts", attempt, "err", err)
+			p.logger().Warn("telegram: edit alert", "attempts", attempt, "err", err)
 			return
 		}
 	}
 }
 
-// apply dismisses the listing a press in the bot's chat names.
+// apply acts on a press in the bot's chat: "Ignoruj" dismisses the
+// listing it names, "Kupione" records the purchase.
 func (p *TelegramPoller) apply(ctx context.Context, q *callbackQuery) pressOutcome {
 	logger := p.logger()
 	if q.Message == nil || !p.Bot.isChat(q.Message.Chat) {
 		logger.Warn("telegram: press from another chat ignored")
 		return pressOutcome{answer: "Ten czat nie obsługuje tego przycisku"}
+	}
+	if id, ok := boughtListing(q.Data); ok {
+		return p.buy(ctx, q, id)
 	}
 	id, ok := ignoredListing(q.Data)
 	if !ok {
@@ -259,9 +282,44 @@ func (p *TelegramPoller) apply(ctx context.Context, q *callbackQuery) pressOutco
 	return pressOutcome{answer: "Zignorowano", edit: q.Message}
 }
 
+// buy records the purchase a "Kupione" press for listing id names. The
+// message then says so and loses its buttons; a press for a wish already
+// bought or deleted changes nothing and keeps the message.
+func (p *TelegramPoller) buy(ctx context.Context, q *callbackQuery, id int64) pressOutcome {
+	logger := p.logger()
+	switch err := p.Store.BuyPress(ctx, q.ID, id); {
+	case errors.Is(err, ErrPressReplayed):
+		logger.Info("telegram: press already applied", "observation", id)
+	case errors.Is(err, ErrNotFound):
+		return pressOutcome{answer: "Nie ma już tego ogłoszenia"}
+	case errors.Is(err, ErrNotWished):
+		return pressOutcome{answer: "Tej pozycji nie ma już na liście życzeń"}
+	case err != nil:
+		logger.Warn("telegram: record purchase, trying again", "observation", id, "err", err)
+		return pressOutcome{retry: true}
+	}
+	out := pressOutcome{answer: "Zapisano jako kupione", edit: q.Message}
+	// A message Telegram no longer shows the bot has no text; one at the
+	// length limit has no room for the note. Both only lose their buttons.
+	if text := q.Message.Text; text != "" &&
+		utf8.RuneCountInString(text)+utf8.RuneCountInString(boughtNote) <= telegramTextLimit {
+		out.editText = text + boughtNote
+	}
+	return out
+}
+
 // ignoredListing reads the observation id from an "Ignoruj" button's data.
 func ignoredListing(data string) (int64, bool) {
-	rest, ok := strings.CutPrefix(data, ignoreData)
+	return buttonListing(data, ignoreData)
+}
+
+// boughtListing reads the observation id from a "Kupione" button's data.
+func boughtListing(data string) (int64, bool) {
+	return buttonListing(data, boughtData)
+}
+
+func buttonListing(data, prefix string) (int64, bool) {
+	rest, ok := strings.CutPrefix(data, prefix)
 	if !ok {
 		return 0, false
 	}
@@ -302,10 +360,25 @@ func (t *Telegram) answerCallback(ctx context.Context, queryID, text string) err
 		map[string][]string{"callback_query_id": {queryID}, "text": {text}}, nil, telegramReplyCap)
 }
 
-// removeKeyboard takes the "Ignoruj" button off message m.
+// removeKeyboard takes the buttons off message m.
 func (t *Telegram) removeKeyboard(ctx context.Context, m *telegramMessage) error {
 	return t.call(ctx, "editMessageReplyMarkup", map[string][]string{
 		"chat_id":    {strconv.FormatInt(m.Chat.ID, 10)},
 		"message_id": {strconv.FormatInt(m.MessageID, 10)},
 	}, nil, telegramReplyCap)
+}
+
+// editText replaces message m's text with text and, sending no keyboard,
+// takes its buttons off. A message that already reads text, as after a
+// replayed press, counts as edited.
+func (t *Telegram) editText(ctx context.Context, m *telegramMessage, text string) error {
+	err := t.call(ctx, "editMessageText", map[string][]string{
+		"chat_id":    {strconv.FormatInt(m.Chat.ID, 10)},
+		"message_id": {strconv.FormatInt(m.MessageID, 10)},
+		"text":       {text},
+	}, nil, telegramReplyCap)
+	if err != nil && strings.Contains(err.Error(), "message is not modified") {
+		return nil
+	}
+	return err
 }

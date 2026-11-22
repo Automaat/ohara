@@ -15,10 +15,13 @@ import (
 // TelegramURL is the Bot API base.
 const TelegramURL = "https://api.telegram.org"
 
-// ignoreData starts the callback data of an alert's "Ignoruj" button; the
-// listing's observation id follows, which keeps it far under Telegram's 64
-// bytes.
-const ignoreData = "ignore:"
+// ignoreData and boughtData start the callback data of an alert's
+// "Ignoruj" and "Kupione" buttons; the listing's observation id follows,
+// which keeps it far under Telegram's 64 bytes.
+const (
+	ignoreData = "ignore:"
+	boughtData = "bought:"
+)
 
 // telegramReplyCap bounds a Bot API answer; getUpdates gets more, since
 // each update carries the whole alert message.
@@ -47,9 +50,9 @@ type Notifier interface {
 	Send(ctx context.Context, text string) error
 }
 
-// AlertNotifier is a Notifier that also puts an "Ignoruj" button for the
-// listing observationID under the message. The hunter uses it when the
-// notifier has it.
+// AlertNotifier is a Notifier that also puts "Ignoruj" and "Kupione"
+// buttons for the listing observationID under the message. The hunter uses
+// it when the notifier has it.
 type AlertNotifier interface {
 	Notifier
 	SendAlert(ctx context.Context, text string, observationID int64) error
@@ -84,11 +87,14 @@ func (t *Telegram) Send(ctx context.Context, text string) error {
 	return t.call(ctx, "sendMessage", url.Values{"chat_id": {t.ChatID}, "text": {text}}, nil, telegramReplyCap)
 }
 
-// SendAlert implements AlertNotifier: Send with an inline "Ignoruj"
-// button whose press TelegramPoller turns into a dismissal of the listing.
+// SendAlert implements AlertNotifier: Send with inline "Ignoruj" and
+// "Kupione" buttons, whose presses TelegramPoller turns into a dismissal of
+// the listing or the purchase of its wish.
 func (t *Telegram) SendAlert(ctx context.Context, text string, observationID int64) error {
+	id := strconv.FormatInt(observationID, 10)
 	markup, err := json.Marshal(inlineKeyboard{InlineKeyboard: [][]inlineButton{{
-		{Text: "Ignoruj", CallbackData: ignoreData + strconv.FormatInt(observationID, 10)},
+		{Text: "Ignoruj", CallbackData: ignoreData + id},
+		{Text: "Kupione", CallbackData: boughtData + id},
 	}}})
 	if err != nil {
 		return fmt.Errorf("telegram: keyboard: %w", err)

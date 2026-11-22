@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -39,6 +40,7 @@ type botDouble struct {
 	sent          []formValues
 	answers       []formValues
 	edits         []formValues
+	texts         []formValues
 	methods       []string
 	forget        bool
 	oversizeAbove int
@@ -104,6 +106,8 @@ func (d *botDouble) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	case "sendMessage":
 		d.sent = append(d.sent, form)
+	case "editMessageText":
+		d.texts = append(d.texts, form)
 	case "answerCallbackQuery":
 		d.answers = append(d.answers, form)
 		if d.onAnswer != nil {
@@ -153,9 +157,9 @@ func (d *botDouble) press(id, chat int64, data string) {
 
 // botCalls is what the double has seen so far.
 type botCalls struct {
-	polls, sent, answers, edits []formValues
-	methods                     []string
-	queued                      int
+	polls, sent, answers, edits, texts []formValues
+	methods                            []string
+	queued                             int
 }
 
 func (d *botDouble) snapshot() botCalls {
@@ -164,6 +168,7 @@ func (d *botDouble) snapshot() botCalls {
 	return botCalls{
 		polls: append([]formValues(nil), d.polls...), sent: append([]formValues(nil), d.sent...),
 		answers: append([]formValues(nil), d.answers...), edits: append([]formValues(nil), d.edits...),
+		texts:   append([]formValues(nil), d.texts...),
 		methods: append([]string(nil), d.methods...), queued: len(d.queue),
 	}
 }
@@ -253,19 +258,29 @@ func TestTelegramAlertButtons(t *testing.T) {
 	if err := json.Unmarshal([]byte(msg["reply_markup"]), &markup); err != nil {
 		t.Fatalf("reply_markup %q: %v", msg["reply_markup"], err)
 	}
-	if len(markup.InlineKeyboard) != 1 || len(markup.InlineKeyboard[0]) != 1 {
-		t.Fatalf("keyboard = %+v, want one button", markup)
-	}
-	button := markup.InlineKeyboard[0][0]
-	if button.Text != "Ignoruj" || button.CallbackData == "" || len(button.CallbackData) > 64 {
-		t.Fatalf("button = %+v, want Ignoruj with 1-64 bytes of data", button)
+	if len(markup.InlineKeyboard) != 1 || len(markup.InlineKeyboard[0]) != 2 {
+		t.Fatalf("keyboard = %+v, want one row of two buttons", markup)
 	}
 	want := observationIDs(t, pool)["cheap"]
-	if id, ok := ignoredListing(button.CallbackData); !ok || id != want {
-		t.Fatalf("callback data %q names %d, want listing %d", button.CallbackData, id, want)
+	for i, b := range []struct {
+		text  string
+		parse func(string) (int64, bool)
+	}{{"Ignoruj", ignoredListing}, {"Kupione", boughtListing}} {
+		button := markup.InlineKeyboard[0][i]
+		if button.Text != b.text || button.CallbackData == "" || len(button.CallbackData) > 64 {
+			t.Fatalf("button %d = %+v, want %s with 1-64 bytes of data", i, button, b.text)
+		}
+		if id, ok := b.parse(button.CallbackData); !ok || id != want {
+			t.Fatalf("%s callback data %q names %d, want listing %d", b.text, button.CallbackData, id, want)
+		}
 	}
-	if longest := ignoreData + strconv.FormatInt(1<<63-1, 10); len(longest) > 64 {
-		t.Fatalf("callback data for the largest id is %d bytes", len(longest))
+	if _, ok := ignoredListing(boughtData + "1"); ok {
+		t.Fatal("Kupione data read as Ignoruj")
+	}
+	for _, prefix := range []string{ignoreData, boughtData} {
+		if longest := prefix + strconv.FormatInt(1<<63-1, 10); len(longest) > 64 {
+			t.Fatalf("callback data for the largest id is %d bytes", len(longest))
+		}
 	}
 
 	if err := bot(srv).Send(context.Background(), "x"); err != nil {
@@ -683,4 +698,182 @@ func TestTelegramRetriesFailedEdit(t *testing.T) {
 	if !isDismissed(t, pool, ids["a"]) || !isDismissed(t, pool, ids["b"]) {
 		t.Fatal("presses did not dismiss both listings")
 	}
+}
+
+// ownedCopy is a copy's state as TestTelegramBought checks it.
+type ownedCopy struct {
+	EditionID     int64
+	Status        string
+	PriceCents    *int64
+	PurchasedOn   *string
+	Shop          string
+	AcquiredAs    *string
+	Condition     *string
+	Notes         string
+	MaxPriceCents *int64
+}
+
+func readCopy(t *testing.T, pool *pgxpool.Pool, id int64) ownedCopy {
+	t.Helper()
+	var c ownedCopy
+	if err := pool.QueryRow(context.Background(), `SELECT edition_id, status, price_cents,
+			to_char(purchased_on, 'YYYY-MM-DD'), shop, acquired_as, condition, notes, max_price_cents
+		FROM copy WHERE id = $1`, id).Scan(&c.EditionID, &c.Status, &c.PriceCents, &c.PurchasedOn,
+		&c.Shop, &c.AcquiredAs, &c.Condition, &c.Notes, &c.MaxPriceCents); err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func boughtPress(id int64) string { return boughtData + strconv.FormatInt(id, 10) }
+
+func TestTelegramBought(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	ctx := context.Background()
+	store := NewStore(pool)
+	wish := wishlist(t, pool, wantBluray(new(int64(5000))))
+	if _, err := pool.Exec(ctx, `UPDATE copy SET condition = 'very_good', notes = 'z obwolutą', acquired_as = 'new'
+		WHERE id = $1`, wish); err != nil {
+		t.Fatal(err)
+	}
+	gone := wishlist(t, pool, &Want{Kind: "movie", Name: "Heat", Format: new("bluray"), MaxPriceCents: new(int64(5000))})
+	used, silent := "used", (*string)(nil)
+	src := &fakeSource{name: "olx", listings: []Listing{
+		{
+			Source: "olx", ExternalID: "bought", Title: "Blade Runner Blu-ray", URL: "https://www.olx.pl/d/oferta/bought",
+			PriceCents: 4250, AcquiredAs: &used,
+		},
+		{
+			Source: "olx", ExternalID: "second", Title: "Blade Runner Blu-ray", URL: "https://www.olx.pl/d/oferta/second",
+			PriceCents: 3900, AcquiredAs: silent,
+		},
+		{Source: "olx", ExternalID: "heat", Title: "Heat Blu-ray", URL: "https://www.olx.pl/d/oferta/heat", PriceCents: 3000},
+	}}
+	if res := mustRun(t, newTestHunter(pool, &fakeNotifier{}, src)); res.Alerts != 3 {
+		t.Fatalf("run = %+v, want 3 alerts", res)
+	}
+	ids := observationIDs(t, pool)
+	before := readCopy(t, pool, wish)
+	if _, err := pool.Exec(ctx, `DELETE FROM copy WHERE id = $1`, gone); err != nil {
+		t.Fatal(err)
+	}
+	var today string
+	if err := pool.QueryRow(ctx, `SELECT to_char(now() AT TIME ZONE 'Europe/Warsaw', 'YYYY-MM-DD')`).Scan(&today); err != nil {
+		t.Fatal(err)
+	}
+
+	double, srv := newBotDouble(t)
+	double.forget = true
+	double.press(10, 42, boughtPress(ids["bought"]))
+	stop := runPoller(&TelegramPoller{Bot: bot(srv), Store: store, Logger: slog.New(slog.DiscardHandler)})
+	waitUntil(t, "the press served again", func() bool { return len(double.snapshot().answers) >= 2 })
+	stop()
+
+	got := readCopy(t, pool, wish)
+	want := ownedCopy{
+		EditionID: before.EditionID, Status: "owned", PriceCents: new(int64(4250)), PurchasedOn: &today,
+		Shop: "OLX", AcquiredAs: &used, Condition: before.Condition, Notes: "z obwolutą",
+	}
+	if diff := cmpCopy(got, want); diff != "" {
+		t.Fatalf("copy after Kupione: %s", diff)
+	}
+	if !isDismissed(t, pool, ids["bought"]) {
+		t.Fatal("bought listing not dismissed")
+	}
+	calls := double.snapshot()
+	for _, a := range calls.answers {
+		if a["callback_query_id"] != "q10" || a["text"] != "Zapisano jako kupione" {
+			t.Fatalf("answers = %v, want q10 answered as bought, also when served again", calls.answers)
+		}
+	}
+	if len(calls.texts) < 1 {
+		t.Fatal("message not edited after Kupione")
+	}
+	for _, e := range calls.texts {
+		if e["chat_id"] != "42" || e["message_id"] != "110" || e["text"] != "🎯 Okazja"+boughtNote || e["reply_markup"] != "" {
+			t.Fatalf("edit = %v, want message 110 marked bought with no buttons", e)
+		}
+	}
+	if len(calls.edits) != 0 {
+		t.Fatalf("keyboard edits = %v, want the text edit alone", calls.edits)
+	}
+
+	// A second press, on the same alert or another of the bought wish, and a
+	// press for a deleted wish change nothing and leave their messages.
+	double, srv = newBotDouble(t)
+	double.press(11, 42, boughtPress(ids["bought"]))
+	double.press(12, 42, boughtPress(ids["second"]))
+	double.press(13, 42, boughtPress(ids["heat"]))
+	stop = runPoller(&TelegramPoller{Bot: bot(srv), Store: store, Logger: slog.New(slog.DiscardHandler)})
+	waitUntil(t, "the presses answered", func() bool { return len(double.snapshot().answers) == 3 })
+	stop()
+	calls = double.snapshot()
+	for _, a := range calls.answers {
+		if a["text"] != "Tej pozycji nie ma już na liście życzeń" {
+			t.Fatalf("answers = %v, want each press told its wish is gone", calls.answers)
+		}
+	}
+	if len(calls.texts) != 0 || len(calls.edits) != 0 {
+		t.Fatalf("texts %v, edits %v, want no message changed", calls.texts, calls.edits)
+	}
+	if diff := cmpCopy(readCopy(t, pool, wish), want); diff != "" {
+		t.Fatalf("copy after a second press: %s", diff)
+	}
+	if isDismissed(t, pool, ids["second"]) || isDismissed(t, pool, ids["heat"]) {
+		t.Fatal("press for a wish no longer wished dismissed its listing")
+	}
+	var presses int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM telegram_press`).Scan(&presses); err != nil {
+		t.Fatal(err)
+	}
+	if presses != 1 {
+		t.Fatalf("%d presses recorded, want only the applied one", presses)
+	}
+
+	// A listing that says nothing of its state keeps the wish's own.
+	wish2 := wishlist(t, pool, wantBluray(new(int64(5000))))
+	if _, err := pool.Exec(ctx, `UPDATE copy SET acquired_as = 'new' WHERE id = $1`, wish2); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE deal_alert SET copy_id = $1 WHERE observation_id = $2`, wish2, ids["second"]); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BuyPress(ctx, "q20", ids["second"]); err != nil {
+		t.Fatal(err)
+	}
+	if c := readCopy(t, pool, wish2); c.Status != "owned" || c.AcquiredAs == nil || *c.AcquiredAs != "new" ||
+		c.PriceCents == nil || *c.PriceCents != 3900 || c.MaxPriceCents != nil {
+		t.Fatalf("copy = %+v, want owned at 39 zł, still new, no limit", c)
+	}
+	if err := store.BuyPress(ctx, "q21", 1<<40); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("press for an unknown listing = %v, want ErrNotFound", err)
+	}
+}
+
+// cmpCopy describes how got differs from want, or returns "".
+func cmpCopy(got, want ownedCopy) string {
+	str := func(p *string) string {
+		if p == nil {
+			return "<nil>"
+		}
+		return *p
+	}
+	num := func(p *int64) string {
+		if p == nil {
+			return "<nil>"
+		}
+		return strconv.FormatInt(*p, 10)
+	}
+	g := []string{
+		strconv.FormatInt(got.EditionID, 10), got.Status, num(got.PriceCents), str(got.PurchasedOn),
+		got.Shop, str(got.AcquiredAs), str(got.Condition), got.Notes, num(got.MaxPriceCents),
+	}
+	w := []string{
+		strconv.FormatInt(want.EditionID, 10), want.Status, num(want.PriceCents), str(want.PurchasedOn),
+		want.Shop, str(want.AcquiredAs), str(want.Condition), want.Notes, num(want.MaxPriceCents),
+	}
+	if slices.Equal(g, w) {
+		return ""
+	}
+	return "got " + strings.Join(g, "|") + ", want " + strings.Join(w, "|")
 }

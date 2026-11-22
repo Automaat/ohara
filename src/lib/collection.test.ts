@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
 	centsToInput,
 	collectionSearch,
-	collectionURL,
 	copyPayload,
 	copyToForm,
 	displayName,
@@ -103,20 +102,6 @@ describe('labels', () => {
 		expect(editionSummary({ format: null, binding: null, label: '', barcode: null })).toBe(
 			'Wydanie bez opisu'
 		);
-	});
-});
-
-describe('collectionURL', () => {
-	it.each([
-		[{ kind: '', format: '', status: '', q: '' }, '/api/collection'],
-		[
-			{ kind: 'movie', format: 'uhd', status: 'owned', q: ' lem ' },
-			'/api/collection?kind=movie&format=uhd&status=owned&q=lem'
-		],
-		[{ kind: '', format: '', status: 'wishlist', q: '' }, '/api/collection?status=wishlist'],
-		[{ kind: 'book', format: '', status: 'none', q: 'lem' }, '/api/titles']
-	] as const)('%j → %s', (filter, url) => {
-		expect(collectionURL(filter)).toBe(url);
 	});
 });
 

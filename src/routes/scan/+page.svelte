@@ -24,7 +24,7 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { AddToasts } from '#lib/add-toast.js';
-	import { request, sessionExpiredMessage } from '#lib/api.js';
+	import { sessionExpiredMessage } from '#lib/api.js';
 	import { formatPLN } from '#lib/collection.js';
 	import BarcodeCamera from '#lib/components/BarcodeCamera.svelte';
 	import CollectionCover from '#lib/components/CollectionCover.svelte';
@@ -32,7 +32,7 @@
 	import SessionTray from '#lib/components/SessionTray.svelte';
 	import { phoneLayout, shortScreen } from '#lib/nav.js';
 	import { pendingScans } from '#lib/pending-scans.svelte.js';
-	import { queueDeletesSettled } from '#lib/queue-deletes.js';
+	import { queueTally } from '#lib/queue-tally.svelte.js';
 	import { outcomeLabels, outcomeTones, recentScans } from '#lib/recent.svelte.js';
 	import { ScanFlow, type Added } from '#lib/scan-flow.svelte.js';
 	import { addLine, session, sessionSpent, undoAdd, type SessionAdd } from '#lib/session.svelte.js';
@@ -41,8 +41,7 @@
 		barcodeInputError,
 		browserStore,
 		cleanBarcode,
-		looksLikeBarcode,
-		type QueueEntry
+		looksLikeBarcode
 	} from '#lib/scan.js';
 
 	type Sheet = NonNullable<App.PageState['scanSheet']>;
@@ -72,7 +71,6 @@
 	let typing = $state(false);
 	let notice = $state<string | null>(null);
 	let codeError = $state<string>();
-	let queued = $state<number | null>(null);
 	let band = $state<HTMLElement>();
 	let sheetDialog = $state<HTMLDialogElement | null>(null);
 	let sheetTop = $state<number | null>(null);
@@ -139,15 +137,6 @@
 		}
 		if (p.status === 'owned') return 'Masz już to wydanie';
 		return p.status === 'missing' ? 'Dodaj ręcznie' : 'Znaleziono';
-	}
-
-	async function countQueue() {
-		try {
-			await queueDeletesSettled();
-			queued = (await request<QueueEntry[]>(fetch, 'GET', '/api/scan-queue')).length;
-		} catch {
-			queued = null;
-		}
 	}
 
 	/** Stands the phone sheet's top just below the top of the scan band, so the band stays in view. */
@@ -280,7 +269,6 @@
 		addedOnClose = null;
 		if (add) void toastAfterClose(add);
 		if (next) void goto(next);
-		else void countQueue();
 	}
 
 	$effect(() => {
@@ -292,13 +280,9 @@
 	});
 
 	$effect(() => {
-		if (flow.phase.kind === 'queued') untrack(() => void countQueue());
-	});
-
-	$effect(() => {
 		const waiting = pendingScans.count;
 		untrack(() => {
-			if (waiting < waitingBefore) void countQueue();
+			if (waiting < waitingBefore) void queueTally.load(fetch);
 			waitingBefore = waiting;
 		});
 	});
@@ -383,7 +367,7 @@
 	});
 
 	onMount(() => {
-		void countQueue();
+		void queueTally.load(fetch);
 		// Links from before the add page existed: /scan?barcode=…[&manual=1].
 		const preset = cleanBarcode(page.url.searchParams.get('barcode') ?? '');
 		if (preset) {
@@ -486,7 +470,7 @@
 	>
 		{#snippet actions()}
 			<Button href="/scan/queue">
-				Do uzupełnienia{queued ? ` (${queued})` : ''}
+				Do uzupełnienia{queueTally.count ? ` (${queueTally.count})` : ''}
 			</Button>
 		{/snippet}
 	</PageHeader>
@@ -497,7 +481,7 @@
 		full={phone.current}
 		paused={!!sheet || leaving || listOpen || (phone.current && typing)}
 		ondetect={fromCamera}
-		{queued}
+		queued={queueTally.count}
 		ontype={() => (typing = true)}
 		bind:band
 	>

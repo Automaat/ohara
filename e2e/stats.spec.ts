@@ -1,7 +1,10 @@
 import type { APIRequestContext, Page } from '@playwright/test';
 import { expect, expectNoSourceRequests, test } from './fixtures.js';
 
-/** Statystyki: spending per month, collection growth and new against used (#246). */
+/**
+ * Statystyki: spending per month, collection growth and new against used (#246), and the value
+ * by kind and by format (#247).
+ */
 
 type Owned = {
 	status: string;
@@ -120,7 +123,8 @@ test('Statystyki draws spending, growth and the new and used split', async ({ pa
 		await expect(page.locator('.content').getByRole('heading', { level: 2 })).toHaveText([
 			'Wydatki w miesiącach',
 			'Przyrost kolekcji',
-			'Nowe czy używane'
+			'Nowe czy używane',
+			'Wartość kolekcji'
 		]);
 		await expect(page.getByText(/^Bez daty: /)).toContainText(pln.format(undatedCents / 100));
 		await expect(page.getByRole('img', { name: /^Nowe \d+%, Używane \d+%/ }).first()).toBeVisible();
@@ -160,4 +164,127 @@ test('Statystyki tells 0 zł purchases and later dates from missing ones', async
 	).toBeVisible();
 	await expect(page.getByText('Posiadane egzemplarze kosztowały razem 0 zł.')).toBeVisible();
 	await expectNoSideScroll(page);
+});
+
+type Estimate = { cents: number; source: string; count: number; trimmed: number };
+
+/** A `GET /api/valuation` copy for a routed answer: an owned DVD without values. */
+function valued(id: number, over: Record<string, unknown>) {
+	return {
+		copy_id: id,
+		edition_id: id,
+		title_id: id,
+		title_name: `Film ${id}`,
+		kind: 'movie',
+		format: 'dvd',
+		barcode: null,
+		price_cents: null,
+		floor: null,
+		mid: null,
+		ceiling: null,
+		low_confidence: true,
+		likely_sold: null,
+		condition: null,
+		authors: [],
+		binding: null,
+		...over
+	};
+}
+
+const olx = (cents: number, count = 4): Estimate => ({ cents, source: 'olx', count, trimmed: 0 });
+
+/** The owned copies the value sections read, one of each kind on their shelf. */
+const shelf = {
+	items: [
+		item(1, {}),
+		item(2, { kind: 'book', format: null }),
+		item(3, { kind: 'music', format: 'vinyl' })
+	],
+	totals: { copies: 3, owned: 3, wishlist: 0, priced: 0, spent_cents: 0 }
+};
+
+/** Answers `GET /api/valuation` with the server's view, given copies and a valuation day. */
+async function routeValuation(page: Page, over: Record<string, unknown>) {
+	await page.route('**/api/valuation', async (route) => {
+		const res = await route.fetch();
+		const view = (await res.json()) as Record<string, unknown>;
+		await route.fulfill({ response: res, json: { ...view, ...over } });
+	});
+}
+
+/** Whether an element is wider inside than it is on the page. */
+async function expectNoInnerScroll(region: ReturnType<Page['getByRole']>) {
+	const [scroll, client] = await region.evaluate((el) => [el.scrollWidth, el.clientWidth]);
+	expect(scroll).toBeLessThanOrEqual(client);
+}
+
+test('Statystyki says there is no valuation yet and leads to Wartość', async ({
+	page,
+	request
+}) => {
+	const res = await request.get('/api/valuation');
+	expect(res.ok()).toBe(true);
+	expect(((await res.json()) as { last_valuation: string | null }).last_valuation).toBeNull();
+
+	await page.route('**/api/collection', (route) => route.fulfill({ json: shelf }));
+	await page.goto('/stats');
+	const value = page.getByRole('region', { name: 'Wartość kolekcji' });
+	await expect(value.getByText(/^Nie ma jeszcze wyceny\./)).toBeVisible();
+	await expect(page.getByRole('heading', { name: 'Wartość według rodzaju' })).toHaveCount(0);
+	await expect(page.getByRole('heading', { name: 'Wartość według nośnika' })).toHaveCount(0);
+	await expectNoSideScroll(page);
+	await value.getByRole('link', { name: 'Wartość', exact: true }).tap();
+	await expect(page).toHaveURL(/\/valuation$/);
+	await expectNoSourceRequests(request);
+});
+
+test('Statystyki shows the value by kind and by format', async ({ page, request }) => {
+	await page.route('**/api/collection', (route) => route.fulfill({ json: shelf }));
+	await routeValuation(page, {
+		last_valuation: pastDay(),
+		min_observations: 3,
+		copies: [
+			valued(1, { price_cents: 2_000_000, mid: olx(12_345_678), low_confidence: false }),
+			valued(2, { format: 'bluray', price_cents: 4999, mid: olx(1500, 1) }),
+			valued(3, { format: 'uhd', price_cents: null }),
+			valued(4, { kind: 'book', format: null, price_cents: 3000, mid: olx(2500) }),
+			valued(5, {
+				kind: 'music',
+				format: 'vinyl',
+				price_cents: 8000,
+				mid: { cents: 12000, source: 'discogs', count: 1, trimmed: 0 },
+				low_confidence: false
+			}),
+			valued(6, { kind: 'music', format: 'cassette', price_cents: 1000 })
+		]
+	});
+	await page.goto('/stats');
+
+	const kinds = page.getByRole('region', { name: 'Wartość według rodzaju' });
+	await expect(kinds.getByRole('listitem')).toHaveCount(3);
+	const films = kinds.getByRole('listitem').first();
+	await expect(films).toContainText('Filmy');
+	await expect(films).toContainText(pln.format(123_471.78));
+	await expect(films).toContainText(
+		`3 egzemplarze · zapłacono ${pln.format(20_049.99)} (bez ceny: 1)`
+	);
+	await expect(films).toContainText('bez wyceny: 1 · mało danych: 1');
+
+	const formats = page.getByRole('region', { name: 'Wartość według nośnika' });
+	await expect(formats.getByRole('listitem')).toHaveCount(6);
+	await expect(formats.getByRole('listitem').first()).toContainText('DVD');
+	await expect(formats.getByRole('listitem').filter({ hasText: 'Książki' })).toContainText(
+		pln.format(25)
+	);
+	await expect(formats.getByRole('listitem').filter({ hasText: '4K UHD' })).toContainText(
+		'brak wyceny'
+	);
+	await expect(formats.getByRole('listitem').filter({ hasText: 'Blu-ray' })).toContainText(
+		'mało danych: 1'
+	);
+
+	await expectNoSideScroll(page);
+	await expectNoInnerScroll(kinds);
+	await expectNoInnerScroll(formats);
+	await expectNoSourceRequests(request);
 });

@@ -5,7 +5,9 @@
 	import type { CollectionView } from '#lib/collection.js';
 	import StatsAcquired from '#lib/components/StatsAcquired.svelte';
 	import StatsGrowth from '#lib/components/StatsGrowth.svelte';
+	import StatsCard from '#lib/components/StatsCard.svelte';
 	import StatsSpending from '#lib/components/StatsSpending.svelte';
+	import StatsValue from '#lib/components/StatsValue.svelte';
 	import { copyCount } from '#lib/polish.js';
 	import { StatsMonth } from '#lib/stats-month.svelte.js';
 	import {
@@ -16,10 +18,15 @@
 		ownedCopies,
 		type StatsItem
 	} from '#lib/stats.js';
+	import { valueByFormat, valueByKind } from '#lib/stats-value.js';
+	import type { ValuationView } from '#lib/valuation.js';
 
 	let items = $state<StatsItem[] | null>(null);
 	let failure = $state<string | null>(null);
 	let loading = $state(true);
+	let valuation = $state<ValuationView | null>(null);
+	let valuationFailure = $state<string | null>(null);
+	let valuationLoading = $state(true);
 	const month = new StatsMonth();
 
 	async function load() {
@@ -35,8 +42,21 @@
 		}
 	}
 
+	async function loadValuation() {
+		valuationLoading = true;
+		try {
+			valuation = await request<ValuationView>(fetch, 'GET', '/api/valuation');
+			valuationFailure = null;
+		} catch (err) {
+			valuationFailure = errorMessage(err);
+		} finally {
+			valuationLoading = false;
+		}
+	}
+
 	onMount(() => {
 		void load();
+		void loadValuation();
 		return month.start();
 	});
 
@@ -45,6 +65,8 @@
 	const growth = $derived(collectionGrowth(owned, month.now));
 	const later = $derived(datedLater(owned, month.now));
 	const shares = $derived(acquiredShare(owned));
+	const byKind = $derived(valuation ? valueByKind(valuation.copies) : []);
+	const byFormat = $derived(valuation ? valueByFormat(valuation.copies) : []);
 	const description = $derived(
 		items && owned.length > 0 ? `${copyCount(owned.length)} na półce` : undefined
 	);
@@ -86,7 +108,43 @@
 			<StatsSpending {spending} />
 			<StatsGrowth {growth} {later} />
 			<StatsAcquired {shares} />
+			{#if valuation?.last_valuation}
+				<StatsValue
+					id="stats-value-kind-title"
+					title="Wartość według rodzaju"
+					groups={byKind}
+					day={valuation.last_valuation}
+					minObservations={valuation.min_observations}
+				/>
+				<StatsValue
+					id="stats-value-format-title"
+					title="Wartość według nośnika"
+					groups={byFormat}
+					day={valuation.last_valuation}
+					minObservations={valuation.min_observations}
+				/>
+			{:else if valuation}
+				<StatsCard id="stats-value-title" title="Wartość kolekcji">
+					<p class="note">
+						Nie ma jeszcze wyceny. Wartość według rodzaju i nośnika pojawi się po pierwszej wycenie.
+					</p>
+					<div>
+						<Button href="/valuation">Wartość</Button>
+					</div>
+				</StatsCard>
+			{/if}
 		</div>
+		{#if valuationFailure}
+			<ErrorState
+				title="Nie udało się wczytać wyceny"
+				description={valuationFailure}
+				onretry={loadValuation}
+				busy={valuationLoading}
+				overContent={!!valuation}
+				retryLabel="Spróbuj ponownie"
+				retryingLabel="Ponawianie…"
+			/>
+		{/if}
 	{/if}
 </div>
 

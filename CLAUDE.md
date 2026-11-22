@@ -728,8 +728,15 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   in whole percents adding up to 100 (a 0 zł price is a price). The months
   move on once the month in Poland has changed (`src/lib/stats-month.svelte.ts`:
   checked every minute and when the page is shown again). Charts are plain
-  SVG and CSS, each with its data under "Pokaż dane"; no value figures.
-  Without an owned copy the page offers "Skanuj".
+  SVG and CSS, each with its data under "Pokaż dane". It also reads
+  `GET /api/valuation` and groups its copies (`src/lib/stats-value.ts`):
+  "Wartość według rodzaju" and "Wartość według nośnika" (books, which have
+  no format, as one group) give each group's summed used value, price paid
+  (with its unpriced copies), copy count and how many copies have no used
+  value or a low-confidence one, the most valuable group first; no history,
+  gains or movers. Before the first valuation (`last_valuation` null) one
+  "Wartość kolekcji" card says so and links to Wartość; a failed read shows
+  its own retry. Without an owned copy the page offers "Skanuj".
 - Discogs data carries `DiscogsCredit`: "Data provided by Discogs." linked
   to its release page, never `nofollow`, under a quick confirm candidate
   with a `discogs_release_id` and a copy priced from Discogs on Wartość.
@@ -753,7 +760,8 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   read, the queue count following a queued scan, its add and undo,
   Kolekcja's filters, which also run at 1440 × 900, and its sort orders
   under active filters, tags from the title form to Kolekcja's filter,
-  cover photo uploads, the collection export, and the insurance report
+  cover photo uploads, the collection export, Statystyki with its value
+  sections, and the insurance report
   with its A4 printout. `scripts/e2e.sh` builds
   the image (or takes one as its first argument), starts it from
   `e2e/compose.yaml`

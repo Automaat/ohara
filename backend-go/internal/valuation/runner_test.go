@@ -1510,12 +1510,13 @@ func TestRunKeepsTheRefusalBeyondTheErrorCap(t *testing.T) {
 	}
 }
 
-// requestLog keeps when each site was asked and how many requests a fake
-// site received.
+// requestLog keeps when each site was asked, how many requests a fake
+// site received and the OLX queries it received.
 type requestLog struct {
-	mu       sync.Mutex
-	times    map[string][]time.Time
-	received map[string]int
+	mu         sync.Mutex
+	times      map[string][]time.Time
+	received   map[string]int
+	olxQueries []string
 }
 
 func (l *requestLog) add(site string) {
@@ -1534,6 +1535,19 @@ func (l *requestLog) receive(site string) {
 		l.received = map[string]int{}
 	}
 	l.received[site]++
+}
+
+func (l *requestLog) receiveOLXQuery(query string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.olxQueries = append(l.olxQueries, query)
+}
+
+// queriesSince is the OLX queries received after the first n, sorted.
+func (l *requestLog) queriesSince(n int) []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Sorted(slices.Values(l.olxQueries[n:]))
 }
 
 func (l *requestLog) count(site string) int {
@@ -1566,6 +1580,7 @@ func olxSite(t *testing.T, log *requestLog, heldQuery string) (string, <-chan st
 	held := make(chan struct{}, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		log.receive(SourceOLX)
+		log.receiveOLXQuery(r.URL.Query().Get("query"))
 		if heldQuery != "" && strings.Contains(strings.ToLower(r.URL.Query().Get("query")), heldQuery) {
 			select {
 			case held <- struct{}{}:
@@ -1693,23 +1708,34 @@ func TestRunsDoNotWaitForEachOther(t *testing.T) {
 	}
 }
 
+// TestBackToBackRunsKeepTheirPacing runs two valuations in a row without
+// their own pauses, through a pacer lane whose gap is an hour, and checks
+// that each run asked OLX every query its owned editions need: a lane never
+// waits for its own requests. Each request, its wait in the lane included,
+// has the client's 5 s, so a lane that waited for itself would make the run
+// miss queries. The runs themselves have no deadline, so slower database
+// work between requests cannot fail the test.
 func TestBackToBackRunsKeepTheirPacing(t *testing.T) {
 	pool := dbtest.Migrated(t)
 	seed(t, pool)
 	log := &requestLog{}
 	olxURL, _ := olxSite(t, log, "")
-	_, runner := pacedRuns(pool, olxURL, log)
+	client := deals.NewHTTPClient()
+	client.Timeout = 5 * time.Second
+	client.Transport = deals.NewPacer(time.Hour).Lane().Transport(nil)
+	runner := NewRunner(NewStore(pool), []deals.Source{deals.OLX{Client: client, BaseURL: olxURL}},
+		[]BuyBack{&timedBuyBack{log: log}}, nil, Config{Delay: runDelay, Window: 90 * 24 * time.Hour},
+		slog.New(slog.DiscardHandler))
 	runner.sleep = func(ctx context.Context, _ time.Duration) error { return ctx.Err() }
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	start := time.Now()
+	want := []string{"Diuna blu-ray", "Dune blu-ray", "Katedra dukaj"}
 	for i := range 2 {
-		if _, err := runner.Run(ctx); err != nil {
+		before := len(log.queriesSince(0))
+		if _, err := runner.Run(t.Context()); err != nil {
 			t.Fatalf("run %d: %v", i, err)
 		}
-	}
-	if d := time.Since(start); d >= runDelay/2 {
-		t.Fatalf("two valuations without their own pauses took %v, want them not to wait for each other's requests", d)
+		if got := log.queriesSince(before); !slices.Equal(got, want) {
+			t.Fatalf("run %d asked OLX %q, want the owned book's and Blu-ray's %q", i, got, want)
+		}
 	}
 }
 

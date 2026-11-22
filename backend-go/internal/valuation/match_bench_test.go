@@ -43,3 +43,18 @@ func BenchmarkMatch1000(b *testing.B) {
 		_ = match(hs, l, rules, titles)
 	}
 }
+
+// BenchmarkMatch1000OtherFormat matches a DVD listing whose number fits
+// an int against 1,000 Blu-ray holdings of the same film.
+func BenchmarkMatch1000OtherFormat(b *testing.B) {
+	hs := make([]Holding, 1000)
+	for i := range hs {
+		hs[i].Want = deals.Want{EditionID: int64(i + 1), TitleID: 1, Kind: "movie", Name: "Alien", Format: new("bluray")}
+		hs[i].Want.Prepare()
+	}
+	l := &deals.Listing{Title: "Alien 9223372036854775807 DVD", PriceCents: 2000}
+	b.ReportAllocs()
+	for b.Loop() {
+		_ = match(hs, l, deals.Rules{}, deals.Titles{})
+	}
+}

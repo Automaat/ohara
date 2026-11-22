@@ -219,6 +219,9 @@ type ListingText struct {
 	// stop words and single letters, for Outranks.
 	plain       []string
 	significant []string
+	// lastYear is the latest release year a number after a name can be:
+	// next year, read once for the listing.
+	lastYear int
 }
 
 // NewListingText readies a listing title for matching under rules.
@@ -231,6 +234,7 @@ func NewListingText(title string, rules Rules) *ListingText {
 		rejects:     rules.rejects(text),
 		plain:       plain,
 		significant: significant(plain),
+		lastYear:    time.Now().Year() + 1,
 	}
 }
 
@@ -440,8 +444,8 @@ var partWords = map[string]bool{"part": true, "czesc": true, "cz": true, "chapte
 // nameWords: right after its last word, past a "Part" or "Część", comes a
 // number or numeral the name lacks and that is no release year, as in
 // "Blade Runner 2049", "Rocky II" or "Dune: Part Two" for "Dune". "Part 1"
-// is the first film.
-func sequelAfter(text, nameWords []string) bool {
+// is the first film. Release years run from 1900 to lastYear.
+func sequelAfter(text, nameWords []string, lastYear int) bool {
 	if len(nameWords) == 0 {
 		return false
 	}
@@ -464,7 +468,7 @@ func sequelAfter(text, nameWords []string) bool {
 		if romanParts[next] || (part && ordinalParts[next]) {
 			return true
 		}
-		if n, ok := number(next); ok && (!part || n != 1) && (n < 1900 || n > time.Now().Year()+1) {
+		if n, ok := number(next); ok && (!part || n != 1) && (n < 1900 || n > lastYear) {
 			return true
 		}
 	}
@@ -480,10 +484,9 @@ func (w *Want) Matches(title string) bool {
 	return NewListingText(title, Rules{}).matches(w, w.text())
 }
 
-// matches is Matches for the want of p. It checks the names before the
-// album medium, the one check that builds a slice.
+// matches is Matches for the want of p.
 func (l *ListingText) matches(w *Want, p *wantText) bool {
-	return p.carries(w.Kind, l.words) && qualifies(w, p, l)
+	return qualifies(w, p, l) && p.carries(w.Kind, l)
 }
 
 // qualifies reports whether a listing fits w apart from its names: the
@@ -508,17 +511,17 @@ func qualifies(w *Want, p *wantText, l *ListingText) bool {
 	return true
 }
 
-// carriedBy reports whether listing text carries n: it holds every
-// required word of n and, for a movie, names no sequel of n.
-func (n *nameText) carriedBy(kind string, text []string) bool {
-	return len(n.req) > 0 && containsAll(text, n.req) &&
-		(kind != "movie" || !sequelAfter(text, n.words))
+// carriedBy reports whether a listing carries n: its words hold every
+// required word of n and, for a movie, name no sequel of n.
+func (n *nameText) carriedBy(kind string, l *ListingText) bool {
+	return len(n.req) > 0 && containsAll(l.words, n.req) &&
+		(kind != "movie" || !sequelAfter(l.words, n.words, l.lastYear))
 }
 
-// carries reports whether listing text carries one of the want's names.
-func (p *wantText) carries(kind string, text []string) bool {
+// carries reports whether a listing carries one of the want's names.
+func (p *wantText) carries(kind string, l *ListingText) bool {
 	for i := range p.names {
-		if p.names[i].carriedBy(kind, text) {
+		if p.names[i].carriedBy(kind, l) {
 			return true
 		}
 	}
@@ -548,10 +551,10 @@ func number(word string) (int, bool) {
 const maxNames = 3
 
 // carried appends to out the required words of each of the want's names
-// that listing text carries.
-func (p *wantText) carried(kind string, text []string, out [][]string) [][]string {
+// that a listing carries.
+func (p *wantText) carried(kind string, l *ListingText, out [][]string) [][]string {
 	for i := range p.names {
-		if n := &p.names[i]; n.carriedBy(kind, text) {
+		if n := &p.names[i]; n.carriedBy(kind, l) {
 			out = append(out, n.req)
 		}
 	}
@@ -608,7 +611,7 @@ func (t Titles) outranks(w *Want, p *wantText, l *ListingText) bool {
 		return false
 	}
 	var buf [maxNames][]string
-	mine := p.carried(w.Kind, l.words, buf[:0])
+	mine := p.carried(w.Kind, l, buf[:0])
 	if len(mine) == 0 {
 		return false
 	}
@@ -620,7 +623,7 @@ func (t Titles) outranks(w *Want, p *wantText, l *ListingText) bool {
 		for j := range k.names {
 			n := &k.names[j]
 			if extendsAny(n.req, mine) && carriesPhrase(l.significant, n.req) &&
-				(k.title.Kind != "movie" || !sequelAfter(l.plain, n.words)) &&
+				(k.title.Kind != "movie" || !sequelAfter(l.plain, n.words, l.lastYear)) &&
 				qualifies(&k.title, k.title.text(), l) {
 				return true
 			}

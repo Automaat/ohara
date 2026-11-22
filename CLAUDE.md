@@ -263,13 +263,22 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   is never low confidence. Each run upserts today's `valuation_history` row and
   sets the `ohara_collection_*` gauges. Skupksiazek.pl (cart behind an
   app flow) and Rivendo (manual form with photos) have no automatic
-  quote, so movie discs have no floor.
+  quote, so movie discs have no floor. A title page reads
+  `GET /api/valuation/copies?title_id=`: that title's owned copies valued
+  as `GET /api/valuation` values them, from that title's prices only,
+  with no summary or history.
 - A barcode no provider resolves goes to `scan_queue`; a trigger on `edition`
   removes it once an edition carries that barcode. `ohara_scan_queue_size`
   counts it on each scrape. The trigger keeps the entry it removes in
   `scan_queue_resolved`; `DELETE /api/editions/{id}?requeue=1` puts it back
   with its scans and times in the same transaction, as the scanner does when
   it undoes an add that created the edition.
+- An edition's own cover photo is served at the `cover_override_url` the API
+  hands out, `/api/editions/{id}/cover?v=` plus the edition's `updated_at`,
+  which a new photo or any edit changes. A request whose query parses and
+  holds one `v`, the current one, answers
+  `Cache-Control: private, max-age=31536000, immutable`; any other `v`, a
+  second one, none or an error answers `no-store`.
 
 ### Frontend
 
@@ -287,6 +296,14 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   result line and the item's name once from a polite `status`
   (`ScanFlow.announcement`); the other results speak through their live
   `Callout`. Only a typed code moves focus to the next step.
+- The scan sheet's history entries are shallow navigations, which skip the
+  Okazje badge refresh. The camera's queue count
+  (`src/lib/queue-tally.svelte.ts`) is read once when the scanner opens,
+  then moved where the requests answer: a queue POST (also for a sheet
+  already replaced), an edition POST for a queued code (even when its copy
+  then fails) and that add's undo. Only undoing an add made before the
+  first read answered, or one kept from before a reload, reads the queue
+  again.
 - A code whose check gets no answer is kept in IndexedDB
   (`src/lib/pending-scans.svelte.ts`, barcode only, once in the server's
   normalized form) and posted to `/api/scan-queue` as `lookup_failed` on app
@@ -294,6 +311,14 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   time (Web Locks), each POST within 15 s. `request` does not follow
   redirects, so a 401 or Authelia's cross-origin redirect is an expired
   session ("Odśwież"), not a lost connection; the code is kept either way.
+- The scanner's visit ("Ta sesja" adds, "Ostatnie skany" and the purchase
+  date carried to the next add) is kept in `localStorage`
+  (`ohara.scan.visit`, `src/lib/visit.ts`) and restored on load until 12
+  hours after its last add or scan. Each change starts from what storage
+  holds, so tabs keep each other's adds, and an add writes its date, scan
+  and tray entry at once. A waiting scan turns queued once the queue takes
+  its code. Undo toasts are not restored; without storage the visit lasts
+  until the next load.
 - Kolekcja's "Dodaj tytuł" (`/titles/new`) is the scanner's quick confirm
   without a barcode (`ScanFlow.start`): search by title or fill in by hand;
   the save creates the title, a barcode-less edition and the copy. Such
@@ -331,7 +356,14 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   or an inline script's hash.
 - The smoke suite (`e2e/`, `npm run test:e2e`) drives the production image
   in Chromium at 390 × 844 with touch: a wedge scan, quick confirm and
+<<<<<<< HEAD
   "Cofnij", "Dodaj tytuł" by hand, and cover photo uploads. `scripts/e2e.sh` builds the image
+||||||| 82f9a1b
+  "Cofnij", and "Dodaj tytuł" by hand. `scripts/e2e.sh` builds the image
+=======
+  "Cofnij", "Dodaj tytuł" by hand, the scan sheet sending no deals or queue
+  read, and the queue count following a queued scan, its add and undo. `scripts/e2e.sh` builds the image
+>>>>>>> origin/main
   (or takes one as its first argument), starts it from `e2e/compose.yaml`
   with Postgres, `OHARA_LOOKUP_STUB=true`, `OHARA_MUSICBRAINZ=false` and no
   provider keys, and removes it afterwards. App and Postgres sit on an

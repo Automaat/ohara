@@ -33,6 +33,7 @@ Same layout and tooling as `../baratie`. `package.json` and
     /fetch/            # fetch.Do: one request to an outside source, capped body, query-free errors
     /metrics/          # Prometheus collectors on a private registry (ohara_*)
     /recovery/         # recovery.Call: a panic outside a request handler becomes a logged error
+    /seed/             # `api seed`: demo data for an empty local database
     /reqlog/           # slog handler adding a request's request_id, method and path to *Context log lines
 /src/                  # SvelteKit SPA (adapter-static, ssr off)
   /routes/             # pages; /scan is the scanner, /scan/queue the unresolved barcodes
@@ -192,6 +193,17 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   run. A panic there is logged at error level with its stack and counts as
   that provider's, source's or run's failure.
 - DB tests call `dbtest.Migrated(t)`; each gets its own schema.
+- `api seed` (`internal/seed`) fills an empty database with demo rows for
+  every page in one transaction and sends no request; it refuses (exit 1,
+  nothing changed) a database holding titles, listings, value history,
+  scan queue entries or a deal run, and one missing a migration of this
+  build: it never migrates, since a migration commits on its own and a
+  refusal could not undo it. It takes the scan queue's barcode locks,
+  then locks those tables, before the check, the order a queued scan
+  takes them in, so a write from a running app waits for it.
+  It seeds no deal run (a running hunter reads that only at startup) and
+  never a pending deal alert. Its DB test asserts what each page needs,
+  so a schema change that breaks the seed fails CI.
 - Deal sources implement `deals.Source`. A run matches listing titles to
   wishlist copies (all title words, the edition's format for movies, the
   author's surname for books, the artist's words and a fitting medium for
@@ -365,6 +377,7 @@ mise run dev                         # Postgres + app from source (docker compos
 mise run db                          # Postgres only, in the background
 mise run backend                     # API only; the `mise run db` Postgres unless DATABASE_URL or PGHOST is set
 mise run frontend                    # Vite dev server, proxies /api to :8000
+mise run seed                        # demo data into the empty `mise run dev` database
 mise run test-backend                # go test ./... with DB tests in ohara_test; args go to go test
 
 npm run lint && npm run check        # oxlint + prettier, svelte-check

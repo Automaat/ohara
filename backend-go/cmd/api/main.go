@@ -30,6 +30,7 @@ import (
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
 	"github.com/Automaat/ohara/backend-go/internal/reqlog"
 	"github.com/Automaat/ohara/backend-go/internal/scanqueue"
+	"github.com/Automaat/ohara/backend-go/internal/seed"
 	"github.com/Automaat/ohara/backend-go/internal/server"
 	"github.com/Automaat/ohara/backend-go/internal/valuation"
 	"github.com/Automaat/ohara/backend-go/internal/web"
@@ -44,6 +45,9 @@ func main() {
 	}
 	if len(os.Args) >= 2 && os.Args[1] == "allegro-login" {
 		os.Exit(allegroLogin())
+	}
+	if len(os.Args) >= 2 && os.Args[1] == "seed" {
+		os.Exit(seedDemo())
 	}
 	os.Exit(run())
 }
@@ -395,6 +399,45 @@ func allegroLogin() int {
 		return 1
 	}
 	return 0
+}
+
+// seedDemo fills an empty, migrated database with demo data for local
+// work. It exits 1 without a change when the database holds data or lacks
+// a migration; it never migrates, so start the app once first.
+func seedDemo() int {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" && os.Getenv("PGHOST") == "" {
+		fmt.Fprintln(os.Stderr, "seed: set DATABASE_URL or the PG* variables")
+		return 2
+	}
+	n, err := seedDB(ctx, dsn)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "seed:", err)
+		return 1
+	}
+	fmt.Printf("seed: added %d titles, %d editions, %d copies, %d listings, %d deal alerts, "+
+		"%d days of value history and %d scan queue entries\n",
+		n.Titles, n.Editions, n.Copies, n.Observations, n.Alerts, n.HistoryDays, n.ScanQueue)
+	return 0
+}
+
+func seedDB(ctx context.Context, dsn string) (seed.Counts, error) {
+	pool, err := db.New(ctx, dsn)
+	if err != nil {
+		return seed.Counts{}, fmt.Errorf("database: %w", err)
+	}
+	defer pool.Close()
+	migrations, err := db.EmbeddedMigrations()
+	if err != nil {
+		return seed.Counts{}, err
+	}
+	versions := make([]string, len(migrations))
+	for i, m := range migrations {
+		versions[i] = m.Version
+	}
+	return seed.Run(ctx, pool, versions)
 }
 
 // newRuns configures the deal hunter and the valuation. One pacer spaces

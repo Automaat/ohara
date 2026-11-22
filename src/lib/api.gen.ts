@@ -76,6 +76,7 @@ export type Title = {
 	tags: string[];
 	edition_count: number;
 	copy_count: number;
+	in_owned_box_set?: boolean;
 	created_at: string;
 	updated_at: string;
 };
@@ -98,7 +99,17 @@ export type EditionPayload = {
 	discogs_release_id: number | null;
 	notes: string;
 	cover_url?: string;
+	contents?: number[];
 	request_key?: string;
+};
+
+export type ContentTitle = {
+	id: number;
+	kind: Kind;
+	name: string;
+	original_title: string | null;
+	polish_title: string | null;
+	year: number | null;
 };
 
 export type Edition = {
@@ -117,6 +128,7 @@ export type Edition = {
 	notes: string;
 	cover_url?: string;
 	request_key?: string;
+	contents?: ContentTitle[];
 	copy_count: number;
 	created_at: string;
 	updated_at: string;
@@ -178,11 +190,19 @@ export type EditionWithCopies = {
 	notes: string;
 	cover_url?: string;
 	request_key?: string;
+	contents?: ContentTitle[];
 	copy_count: number;
 	created_at: string;
 	updated_at: string;
 	cover_override_url?: string;
 	copies: Copy[];
+};
+
+export type BoxSet = {
+	edition_id: number;
+	title_id: number;
+	name: string;
+	owned: boolean;
 };
 
 export type TitleDetail = {
@@ -205,9 +225,11 @@ export type TitleDetail = {
 	tags: string[];
 	edition_count: number;
 	copy_count: number;
+	in_owned_box_set?: boolean;
 	created_at: string;
 	updated_at: string;
 	editions: EditionWithCopies[];
+	box_sets?: BoxSet[];
 };
 
 export type EditionDetail = {
@@ -226,6 +248,7 @@ export type EditionDetail = {
 	notes: string;
 	cover_url?: string;
 	request_key?: string;
+	contents?: ContentTitle[];
 	copy_count: number;
 	created_at: string;
 	updated_at: string;
@@ -317,6 +340,7 @@ export type CollectionItem = {
 	finished: boolean;
 	finished_on?: string;
 	tags?: string[];
+	contents?: ContentTitle[];
 };
 
 export type Totals = {

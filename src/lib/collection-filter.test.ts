@@ -423,6 +423,30 @@ describe('the tag filter', () => {
 	});
 });
 
+describe('box set contents', () => {
+	const towers = {
+		id: 7,
+		kind: 'movie' as const,
+		name: 'Dwie wieże',
+		original_title: 'The Two Towers',
+		polish_title: null,
+		year: 2002
+	};
+	const boxed = [
+		item({ copy_id: 1, name: 'Władca Pierścieni: Trylogia', contents: [towers] }),
+		item({ copy_id: 2, name: 'Seksmisja' })
+	];
+	const search = (q: string) => filterCollection(boxed, { ...none, q }).map((it) => it.copy_id);
+
+	it.each(['dwie WIEŻE', 'two towers', 'trylogia'])('finds the box set by %s', (q) => {
+		expect(search(q)).toEqual([1]);
+	});
+
+	it('finds no box set by a title it does not hold', () => {
+		expect(search('powrót króla')).toEqual([]);
+	});
+});
+
 describe('searchBarcode', () => {
 	it.each([
 		['9788374690997', '9788374690997'],

@@ -41,9 +41,20 @@ export function foldLocation(text: string): string {
 }
 
 /**
- * The text a search looks in: title, original and Polish title, authors, label, shop and
- * location, one space apart, as `concat_ws` joins them; a missing field is left out, an empty
- * one is not.
+ * What a search reads of the titles a box set holds: each one's name, original and Polish title,
+ * in their order, as the store's `contentsText` joins them; null when it holds none.
+ */
+function contentsText(item: CollectionItem): string | null {
+	if (!item.contents?.length) return null;
+	return item.contents
+		.map((c) => [c.name, c.original_title, c.polish_title].filter((n) => n != null).join(' '))
+		.join(' ');
+}
+
+/**
+ * The text a search looks in: title, original and Polish title, authors, label, shop, location
+ * and the titles a box set holds, one space apart, as `concat_ws` joins them; a missing field is
+ * left out, an empty one is not.
  */
 function searchedText(item: CollectionItem): string {
 	return lowerCase(
@@ -54,7 +65,8 @@ function searchedText(item: CollectionItem): string {
 			(item.authors ?? []).join(' '),
 			item.label,
 			item.shop,
-			item.location
+			item.location,
+			contentsText(item)
 		]
 			.filter((field) => field != null)
 			.join(' ')

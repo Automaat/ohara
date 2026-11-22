@@ -8,6 +8,8 @@ import type {
 	Condition,
 	CopyPayload,
 	CopyStatus,
+	ContentTitle,
+	Edition,
 	EditionPayload,
 	Format,
 	Kind,
@@ -25,9 +27,11 @@ import type {
 export type {
 	AcquiredAs,
 	Binding,
+	BoxSet,
 	CollectionItem,
 	CollectionView,
 	Condition,
+	ContentTitle,
 	Copy,
 	CopyDetail,
 	CopyPayload,
@@ -410,9 +414,9 @@ export function tagHref(tag: string): string {
 	return `/${collectionSearch({ kind: '', format: '', status: '', q: '', tag })}`;
 }
 
-/** The titles that have no copy yet. */
+/** The titles that have no copy yet and no owned box set holds. */
 export function withoutCopies(titles: readonly Title[]): Title[] {
-	return titles.filter((t) => t.copy_count === 0);
+	return titles.filter((t) => t.copy_count === 0 && !t.in_owned_box_set);
 }
 
 /**
@@ -567,11 +571,17 @@ export type EditionForm = {
 	discogs_release_id: string;
 	cover_url: string;
 	notes: string;
+	/**
+	 * The titles a box set holds, in their order. Left out while the edition lists none and the
+	 * reader added none, so a save keeps what another save listed meanwhile.
+	 */
+	contents?: ContentTitle[];
 };
 
 /** The editable form of an edition, or an empty one. */
-export function editionToForm(e: EditionPayload | null): EditionForm {
+export function editionToForm(e: Edition | null): EditionForm {
 	return {
+		...(e?.contents?.length ? { contents: [...e.contents] } : {}),
 		barcode: e?.barcode ?? '',
 		label: e?.label ?? '',
 		publisher: e?.publisher ?? '',
@@ -619,7 +629,8 @@ export function editionPayload(
 			binding: kind === 'book' && f.binding ? f.binding : null,
 			discogs_release_id: discogs.value,
 			cover_url: f.cover_url.trim(),
-			notes: f.notes.trim()
+			notes: f.notes.trim(),
+			...(f.contents ? { contents: f.contents.map((c) => c.id) } : {})
 		}
 	};
 }

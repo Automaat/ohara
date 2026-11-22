@@ -440,6 +440,17 @@ describe('titles without copies', () => {
 		expect(ids(uncopiedTitles(catalog, filter))).toEqual(want);
 	});
 
+	it('leaves out titles an owned box set holds', () => {
+		const boxed: Title[] = [
+			...catalog,
+			{ ...title, id: 5, kind: 'movie', name: 'Dwie wieże', authors: [], in_owned_box_set: true },
+			{ ...title, id: 6, kind: 'movie', name: 'Powrót króla', authors: [], in_owned_box_set: false }
+		];
+		expect(ids(withoutCopies(boxed))).toEqual([1, 3, 4, 6]);
+		expect(ids(uncopiedTitles(boxed, { kind: 'movie', q: '' }))).toEqual([3, 6]);
+		expect(ids(uncopiedTitles(boxed, { kind: '', q: 'wieże' }))).toEqual([]);
+	});
+
 	it.each([
 		[
 			{ kind: 'book', authors: ['Stanisław Lem', 'Ktoś'], edition_count: 0 },
@@ -629,6 +640,26 @@ describe('edition form', () => {
 			'music'
 		);
 		expect(!badID.ok && badID.issue.field).toBe('discogs_release_id');
+	});
+
+	it("sends a box set's contents only once it lists some", () => {
+		const towers = {
+			id: 7,
+			kind: 'movie' as const,
+			name: 'Dwie wieże',
+			original_title: null,
+			polish_title: null,
+			year: 2002
+		};
+		const hobbit = { ...towers, id: 8, kind: 'book' as const, name: 'Hobbit', year: 1937 };
+		const plain = editionPayload(editionToForm(edition), 1, 'movie');
+		expect(plain.ok && 'contents' in plain.value).toBe(false);
+		const form = editionToForm({ ...edition, contents: [towers, hobbit] });
+		expect(form.contents).toEqual([towers, hobbit]);
+		const listed = editionPayload(form, 1, 'movie');
+		expect(listed.ok && listed.value.contents).toEqual([7, 8]);
+		const emptied = editionPayload({ ...form, contents: [] }, 1, 'movie');
+		expect(emptied.ok && emptied.value.contents).toEqual([]);
 	});
 
 	it('starts empty', () => {

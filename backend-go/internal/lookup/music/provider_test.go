@@ -335,10 +335,10 @@ func TestFetchErrorPolicy(t *testing.T) {
 	}
 }
 
-func TestAcceptsNoISBN(t *testing.T) {
+func TestFallsBackForISBNsOnly(t *testing.T) {
 	p := &music.Provider{}
-	if p.Accepts("9788375780635") || !p.Accepts(twoPressings) {
-		t.Fatal("music provider must skip ISBNs only")
+	if !p.Fallback("9788375780635") || p.Fallback(twoPressings) {
+		t.Fatal("music provider must wait for the book providers on ISBNs only")
 	}
 }
 

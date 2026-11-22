@@ -592,6 +592,9 @@ const copy = (patch: Partial<CopyValue>): CopyValue => ({
 	ceiling: null,
 	low_confidence: false,
 	likely_sold: null,
+	condition: null,
+	authors: [],
+	binding: null,
 	...patch
 });
 

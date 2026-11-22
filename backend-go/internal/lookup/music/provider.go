@@ -73,8 +73,10 @@ type Raw struct {
 // Name is "music".
 func (*Provider) Name() string { return "music" }
 
-// Accepts every barcode except ISBNs.
-func (*Provider) Accepts(code string) bool { return !barcode.IsBook(code) }
+// Fallback reports ISBN-range codes: book providers answer those first,
+// and the chain is asked only when none of them found the code (an
+// audiobook or an album from a book publisher).
+func (*Provider) Fallback(code string) bool { return barcode.IsBook(code) }
 
 // Fetch asks Discogs, then MusicBrainz when Discogs found nothing, then
 // searches Discogs for the shop catalog's product name. With no

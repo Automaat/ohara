@@ -222,7 +222,13 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   `Parse` turns raw JSON into candidates) and register in `cmd/api` with a
   cache TTL. Candidate `title`/`edition` fields match the POST bodies of
   `/api/titles` and `/api/editions`. A provider that only knows some
-  barcodes implements `lookup.Scoped`. Book candidates for the scanned ISBN
+  barcodes implements `lookup.Scoped`. The movie and music providers are a
+  `lookup.Fallback` for an ISBN-range code: they are asked in a second
+  round, only when no book provider returned a candidate (a failed one
+  counts as no answer and keeps its error). Both rounds together end within
+  17 s, under the client's 20 s request deadline: a second round after a
+  first that hit the 10 s provider timeout gets what is left. The stub
+  provider waits in that round too for an ISBN. Book candidates for the scanned ISBN
   from several providers merge into one; registration order is the field
   priority. Every provider gets `ohara_lookup_provider_requests_total`,
   `ohara_lookup_provider_errors_total` and `ohara_lookup_cache_hits_total`.
@@ -725,6 +731,39 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   browser cannot decode, sends nothing, and a photo still shrinking when
   its sheet is gone is never sent. The server's 8 MiB and 16 megapixel
   limits stay as a backstop.
+- Wartość's "Raport dla ubezpieczyciela" (`/valuation/report`, linked
+  before the first valuation too) lists every owned copy for an insurer:
+  cover (the supplied URL, no thumbnail), title, creators, format or
+  binding, barcode, condition, price paid and the used and new values,
+  "brak wyceny" for a missing one, the Discogs grade beside a Discogs used
+  value and `DiscogsCredit` beside a Discogs-priced copy, then totals that
+  each name the copies they cover (`src/lib/insurance-report.ts`), the
+  last valuation's day and the day the amounts stand for. It reads only
+  `GET /api/valuation`, whose copies carry `condition`, `authors` and
+  `binding` from the snapshot that priced them. A title or creators past
+  160 characters are cut in the row and listed whole in a footnote
+  appendix, so a row never outgrows a page or the screen.
+  The browser's Print to PDF makes the document: an `@media print` rule
+  puts the report on its own A4 page type (`@page insurance-report`, so
+  other pages keep the printer's paper), hides the navigation, tab bar and
+  buttons, fixes the column widths to the page, repeats the table header
+  on each page and keeps every row whole. "Drukuj" waits until every
+  cover has loaded or failed. Before the first valuation the page says
+  none exists and links to Wartość.
+- Statystyki (`/stats`, in the side navigation and the phone's settings
+  sheet, never a tab) reads `GET /api/collection` once and computes in
+  the browser (`src/lib/stats.ts`), over owned copies only: "Wydatki w
+  miesiącach" sums the prices paid in each of the last 12 calendar months
+  in Poland by purchase date (an unpriced copy counts, adds nothing) with
+  one "Bez daty" figure for undated copies; "Przyrost kolekcji" counts
+  owned copies at each month's end by purchase date, else the day the copy
+  was added, and names apart those dated after this month; "Nowe czy
+  używane" splits them new, used and not recorded by count and by money,
+  in whole percents adding up to 100 (a 0 zł price is a price). The months
+  move on once the month in Poland has changed (`src/lib/stats-month.svelte.ts`:
+  checked every minute and when the page is shown again). Charts are plain
+  SVG and CSS, each with its data under "Pokaż dane"; no value figures.
+  Without an owned copy the page offers "Skanuj".
 - Discogs data carries `DiscogsCredit`: "Data provided by Discogs." linked
   to its release page, never `nofollow`, under a quick confirm candidate
   with a `discogs_release_id` and a copy priced from Discogs on Wartość.
@@ -749,7 +788,8 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   Kolekcja's filters, which also run at 1440 × 900, and its sort orders
   under active filters, tags from the title form to Kolekcja's filter,
   series from the title form and Kolekcja to the series page,
-  cover photo uploads and the collection export. `scripts/e2e.sh` builds
+  cover photo uploads, the collection export, and the insurance report
+  with its A4 printout. `scripts/e2e.sh` builds
   the image (or takes one as its first argument), starts it from
   `e2e/compose.yaml`
   with Postgres, `OHARA_LOOKUP_STUB=true`, `OHARA_MUSICBRAINZ=false` and no

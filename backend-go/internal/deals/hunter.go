@@ -702,7 +702,8 @@ var (
 		"cd": "CD", "vinyl": "Winyl", "cassette": "Kaseta", FormatAudiobook: "Audiobook",
 	}
 	sourceLabels = map[string]string{
-		"olx": "OLX", "bluedvd": "BlueDVD", "pepper": "Pepper", "tezeusz": "Tezeusz", DiscogsSource: "Discogs",
+		"olx": "OLX", "bluedvd": "BlueDVD", "swiatksiazki": "Świat Książki", "pepper": "Pepper", "tezeusz": "Tezeusz",
+		DiscogsSource: "Discogs",
 	}
 	stateLabels = map[string]string{"new": "nowy", "used": "używany"}
 )

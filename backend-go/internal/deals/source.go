@@ -1,5 +1,5 @@
 // Package deals hunts for listings of wishlist copies on OLX, BlueDVD,
-// Pepper.pl and Tezeusz. A run asks every source, keeps the listings that
+// Świat Książki, Pepper.pl and Tezeusz. A run asks every source, keeps the listings that
 // match a wishlist copy, stores each once as a price_observation and sends
 // one Telegram message per new listing at or below the copy's maximum price.
 package deals
@@ -25,9 +25,12 @@ import (
 // when the source does not say. Raw is the source's own record of the
 // listing, kept for later valuation work. Query is the search a Pager
 // found it with, empty for other sources; an Expiring source's listings
-// carry its Scope. Medium is the album medium a source names apart from
-// the title ("vinyl", "cd", "cassette" or "other"), which makes the
-// listing an album's; empty leaves the medium to the title.
+// carry its Scope. Kinds are the title kinds the listing can be when its
+// source's catalog says ("book", or "movie" and "tv" for a film disc), nil
+// when it does not; a listing with Kinds belongs to no want of another
+// kind. Medium is the album medium a source names apart from the title
+// ("vinyl", "cd", "cassette" or "other"), which makes the listing an
+// album's; empty leaves the medium to the title.
 type Listing struct {
 	Source     string
 	ExternalID string
@@ -39,6 +42,7 @@ type Listing struct {
 	Raw        json.RawMessage
 	Query      string
 	Medium     string
+	Kinds      []string
 }
 
 func imageURL(value string) string {

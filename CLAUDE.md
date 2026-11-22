@@ -227,10 +227,11 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   spelling. A run matches listing titles to wishlist copies (all title
   words; a name of words of at most two letters ("M", "Up", "It") only
   where it stands as the title: at the start, after a separator, a media
-  word or the author, and before the end, a separator, a media word, a
-  release year or the author, or anything right after the author, and a
-  lone letter before a space ("M Fritz Lang"); the edition's format for
-  movies, the author's surname in any case for books ("Andrzeja Sapkowskiego", "Lalka Prusa"), the artist's words
+  word or the author (in any case), and before the end, a separator, a
+  media word, a release year or the author, or anything right after the
+  author, and a lone letter before a space ("M Fritz Lang"); the
+  edition's format for movies, the author's surname in any case for
+  books ("Andrzeja Sapkowskiego", "Lalka Prusa"), the artist's words
   and a fitting medium for
   albums, where a listing naming no medium counts as a CD, minus the
   editable reject phrases a want's own name or artist does not contain),
@@ -243,7 +244,8 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   skips a want for a listing that names another title of its kind
   (wished, owned or neither) more specifically: one phrase, past media
   words and disc counts, holding every word of a want's name it carries
-  and more ("Alien: Covenant" for an "Alien" want), stores
+  and more ("Alien: Covenant" for an "Alien" want; a short name counts
+  its single letters, "X-Men" for an "X" want), stores
   each listing once in `price_observation` (`source`, `external_id`) and
   queues one `deal_alert` per listing at or below the copy's
   `max_price_cents` or its `max_market_percent` (1 to 100) of the

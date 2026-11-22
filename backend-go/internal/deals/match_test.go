@@ -494,6 +494,7 @@ func TestShortTitles(t *testing.T) {
 	it := Want{Kind: "movie", Name: "To", OriginalTitle: new("It"), Format: new("bluray")}
 	x := Want{Kind: "movie", Name: "X", Format: new("dvd")}
 	et := Want{Kind: "movie", Name: "E.T.", Format: new("dvd")}
+	mAlias := Want{Kind: "movie", Name: "M le maudit", OriginalTitle: new("M"), Format: new("bluray")}
 	tests := []struct {
 		name  string
 		want  Want
@@ -526,6 +527,9 @@ func TestShortTitles(t *testing.T) {
 		{"book before its author", book("To", "Stephen King"), "To Stephen King wydanie kieszonkowe", true},
 		{"book after its author", book("To", "Stephen King"), "Stephen King To", true},
 		{"book starting another title", book("To", "Stephen King"), "To co zostało Stephen King", false},
+		{"book before its declined author", book("To", "Stephen King"), "To Stephena Kinga, wydanie kieszonkowe", true},
+		{"short title before a numbered medium", up, "Up DVD9 Pixar", true},
+		{"short alias after a lot word", mAlias, "M:I Blu-ray - pakiet: M le maudit / Metropolis Blu-ray", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -533,6 +537,17 @@ func TestShortTitles(t *testing.T) {
 				t.Fatalf("Matches(%q) = %v, want %v", tt.title, got, tt.match)
 			}
 		})
+	}
+}
+
+func TestShortTitleOutranked(t *testing.T) {
+	x := Want{CopyID: 18, TitleID: 1800, Kind: "movie", Name: "X", Format: new("dvd")}
+	xMen := Want{TitleID: 1801, Kind: "movie", Name: "X-Men"}
+	titles := NewTitles([]Want{x, xMen})
+	for title, want := range map[string]bool{"X Men DVD": false, "X DVD Ti West": true, "X (2022) DVD": true} {
+		if got := NewListingText(title, Rules{}).Belongs(&x, titles); got != want {
+			t.Errorf("Belongs(%q) = %v, want %v", title, got, want)
+		}
 	}
 }
 

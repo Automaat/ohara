@@ -652,14 +652,8 @@ func (l *ListingText) lotFor(kind string, p *wantText) bool {
 func (p *wantText) nameStart(kind string, l *ListingText) int {
 	start := -1
 	for i := range p.names {
-		n := &p.names[i]
-		if !n.carriedBy(kind, l, p.byline) {
-			continue
-		}
-		for _, w := range n.req {
-			if j := slices.Index(l.words, w); j >= 0 && (start < 0 || j < start) {
-				start = j
-			}
+		if j := p.names[i].carriedAt(kind, l, p.byline); j >= 0 && (start < 0 || j < start) {
+			start = j
 		}
 	}
 	return start
@@ -747,42 +741,55 @@ func qualifies(w *Want, p *wantText, l *ListingText) bool {
 	return true
 }
 
-// carriedBy reports whether a listing carries n: its words hold every
-// required word of n, a short n stands as the title (standsAt), and, for
-// a movie, it names no sequel of n. byline is the want's author words.
+// carriedBy reports whether a listing carries n (carriedAt).
 func (n *nameText) carriedBy(kind string, l *ListingText, byline []string) bool {
-	if n.short {
-		if !n.standsAt(l, byline) {
-			return false
-		}
-	} else if len(n.req) == 0 || !containsAll(l.words, n.req) {
-		return false
-	}
-	return kind != "movie" || !sequelAfter(l.words, n.words, l.lastYear)
+	return n.carriedAt(kind, l, byline) >= 0
 }
 
-// standsAt reports whether the listing holds the words of short name n in
-// a row where they stand as the title, since short words are common and
+// carriedAt is where the listing carries n, or -1 when it does not: its
+// words hold every required word of n, a short n stands as the title
+// (standsAt), and, for a movie, it names no sequel of n. A name stands
+// where its first required word does, a short one where it stands as the
+// title. byline is the want's author words.
+func (n *nameText) carriedAt(kind string, l *ListingText, byline []string) int {
+	at := -1
+	if n.short {
+		at = n.standsAt(l, byline)
+	} else if len(n.req) > 0 && containsAll(l.words, n.req) {
+		for _, w := range n.req {
+			if j := slices.Index(l.words, w); at < 0 || j < at {
+				at = j
+			}
+		}
+	}
+	if at < 0 || kind == "movie" && sequelAfter(l.words, n.words, l.lastYear) {
+		return -1
+	}
+	return at
+}
+
+// standsAt is where the listing holds the words of short name n in a row
+// where they stand as the title, or -1, since short words are common and
 // start many other titles ("It Follows", "Step Up"). The name starts the
 // listing or follows a separator, a media word or its author's or artist's
 // name (byline), and ends the listing or comes before a separator, a media
 // word, a release year or the byline. A name right after its byline needs
 // no end ("Adele 21 Deluxe"), and a one-letter name none but a space ("M
 // Fritz Lang"): a lone letter starts few other titles.
-func (n *nameText) standsAt(l *ListingText, byline []string) bool {
+func (n *nameText) standsAt(l *ListingText, byline []string) int {
 	k := len(n.words)
 	lone := k == 1 && utf8.RuneCountInString(n.words[0]) == 1
 	for i := 0; i+k <= len(l.words); i++ {
 		if !slices.Equal(l.words[i:i+k], n.words) {
 			continue
 		}
-		afterByline := i > 0 && slices.Contains(byline, l.words[i-1])
-		starts := i == 0 || afterByline || l.gaps[i] == gapApart || mediaWords[l.words[i-1]]
+		afterByline := i > 0 && inByline(byline, l.words[i-1])
+		starts := i == 0 || afterByline || l.gaps[i] == gapApart || isMediaWord(l.words[i-1])
 		if starts && (afterByline || l.endsTitle(i+k, byline) || lone && l.gaps[i+k] == gapSpace) {
-			return true
+			return i
 		}
 	}
-	return false
+	return -1
 }
 
 // endsTitle reports whether a title can end before word j: j is past the
@@ -793,7 +800,26 @@ func (l *ListingText) endsTitle(j int, byline []string) bool {
 		return true
 	}
 	next := l.words[j]
-	return mediaWords[next] || l.releaseYear(next) || slices.Contains(byline, next)
+	return isMediaWord(next) || l.releaseYear(next) || inByline(byline, next)
+}
+
+// isMediaWord reports whether word names a medium: a media word or a word
+// holding a disc format, as "dvd9" or "5xdvd" does.
+func isMediaWord(word string) bool {
+	return mediaWords[word] || strings.Contains(word, "dvd") || strings.Contains(word, "bluray") ||
+		strings.Contains(word, "uhd")
+}
+
+// inByline reports whether word is a word of byline in some case: the
+// listing "To Stephena Kinga" names Stephen King.
+func inByline(byline []string, word string) bool {
+	text := []string{word}
+	for _, b := range byline {
+		if namesSurname(text, b) {
+			return true
+		}
+	}
+	return false
 }
 
 // firstYear is the earliest year a number in a listing is read as a
@@ -839,15 +865,19 @@ func number(word string) (int, bool) {
 // the name it was entered with.
 const maxNames = 3
 
-// carried appends to out the required words of each of the want's names
-// that a listing carries.
-func (p *wantText) carried(kind string, l *ListingText, out [][]string) [][]string {
+// carried appends to long the required words of each of the want's names
+// that a listing carries, and to short the words of each short one.
+func (p *wantText) carried(kind string, l *ListingText, long, short [][]string) ([][]string, [][]string) {
 	for i := range p.names {
-		if n := &p.names[i]; n.carriedBy(kind, l, p.byline) {
-			out = append(out, n.req)
+		switch n := &p.names[i]; {
+		case !n.carriedBy(kind, l, p.byline):
+		case n.short:
+			short = append(short, n.words)
+		default:
+			long = append(long, n.req)
 		}
 	}
-	return out
+	return long, short
 }
 
 // Titles are the collection's titles, wished, owned or neither, that a
@@ -887,7 +917,9 @@ func NewTitles(titles []Want) Titles {
 // Covenant"), and a disc count ("2 płyty") is no part of a title. So
 // "Alien: Covenant DVD" leaves an "Alien" want when "Alien: Covenant" is
 // known, while "Gladiator DVD 2 płyty" stays with "Gladiator" when
-// "Gladiator 2" is.
+// "Gladiator 2" is. A short name compares by all its words, single letters
+// and stop words too, so "X Men DVD" leaves an "X" want when "X-Men" is
+// known.
 func (t Titles) Outranks(w *Want, title string) bool {
 	if len(t.byKind[w.Kind]) == 0 {
 		return false
@@ -900,9 +932,9 @@ func (t Titles) outranks(w *Want, p *wantText, l *ListingText) bool {
 	if len(known) == 0 {
 		return false
 	}
-	var buf [maxNames][]string
-	mine := p.carried(w.Kind, l, buf[:0])
-	if len(mine) == 0 {
+	var buf, shortBuf [maxNames][]string
+	mine, short := p.carried(w.Kind, l, buf[:0], shortBuf[:0])
+	if len(mine) == 0 && len(short) == 0 {
 		return false
 	}
 	for i := range known {
@@ -912,7 +944,8 @@ func (t Titles) outranks(w *Want, p *wantText, l *ListingText) bool {
 		}
 		for j := range k.names {
 			n := &k.names[j]
-			if extendsAny(n.req, mine) && carriesPhrase(l.significant, n.req) &&
+			if (extendsAny(n.req, mine) && carriesPhrase(l.significant, n.req) ||
+				extendsAny(n.words, short) && carriesPhrase(l.plain, n.words)) &&
 				(k.title.Kind != "movie" || !sequelAfter(l.plain, n.words, l.lastYear)) &&
 				qualifies(&k.title, k.title.text(), l) {
 				return true

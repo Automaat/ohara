@@ -546,9 +546,20 @@ describe('series', () => {
 		expect(parsed.ok && parsed.value).toMatchObject({ series_name: 'Wiedźmin', series_number: 4 });
 	});
 
-	it('sends no series for blank fields, so a save takes the title out of one', () => {
-		const parsed = titlePayload(titleToForm(title));
-		expect(parsed.ok && parsed.value).toMatchObject({ series_name: null, series_number: null });
+	it('sends the series only when the form changed it, so a stale form keeps it', () => {
+		const unchanged = titlePayload({ ...titleToForm(title), notes: 'Nowe' });
+		expect(unchanged.ok && 'series_name' in unchanged.value).toBe(false);
+		expect(unchanged.ok && 'series_number' in unchanged.value).toBe(false);
+		const kept = titleToForm({ ...title, series_name: 'Diuna', series_number: 2 });
+		const same = titlePayload({ ...kept, series_name: ' Diuna ', series_number: '2' });
+		expect(same.ok && 'series_name' in same.value).toBe(false);
+		const left = titlePayload({ ...kept, series_name: '', series_number: '' });
+		expect(left.ok && left.value).toMatchObject({ series_name: null, series_number: null });
+		const renumbered = titlePayload({ ...kept, series_number: '3' });
+		expect(renumbered.ok && renumbered.value).toMatchObject({
+			series_name: 'Diuna',
+			series_number: 3
+		});
 		const unnumbered = titlePayload({ ...titleToForm(title), series_name: 'Diuna' });
 		expect(unnumbered.ok && unnumbered.value).toMatchObject({
 			series_name: 'Diuna',
@@ -577,7 +588,7 @@ describe('series', () => {
 	});
 
 	it.each([
-		[{ title_count: 1, missing_count: 0 }, '1 tytuł · komplet'],
+		[{ title_count: 1, missing_count: 0 }, '1 tytuł'],
 		[{ title_count: 4, missing_count: 2 }, '4 tytuły · brakuje 2'],
 		[{ title_count: 12, missing_count: 1 }, '12 tytułów · brakuje 1']
 	])('sums up %j as %s', (s, want) => {

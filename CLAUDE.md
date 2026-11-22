@@ -176,7 +176,15 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   and missing counts. The `title_series_drop_empty` trigger deletes a series
   once its last title leaves it or is deleted, after locking its row, which
   a save joining a title holds; a title moving between two series locks
-  both in key order. Kolekcja's header links to `/series`, the list; a
+  both in key order, and a title deleted locks its series first
+  (`title_series_lock_for_delete`), so a create taking its number answers
+  409 instead of a deadlock. A series page reads the series and its titles
+  in one snapshot. Lookup candidates' `title` carries the same optional
+  `series_name` and `series_number` (no provider fills them yet), which the
+  scanner's add forwards when the API would take them; the title form sends
+  the two fields only when the reader changed them, so a form opened
+  before another save gave the title its series keeps it. Kolekcja's
+  header links to `/series`, the list; a
   series page (`/series/{id}`) shows the volumes, "Brakujące tomy" and the
   "Liczba tomów" field; the title form has "Seria" (suggesting the series
   of the title's kind) and "Tom"; the title page shows "<series> · tom <n>"

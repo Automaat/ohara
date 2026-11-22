@@ -284,12 +284,19 @@ func checkFinishedOn(ctx context.Context, tx pgx.Tx, day *Date) error {
 func (s *Store) UpdateTitle(ctx context.Context, id int64, in *TitleInput) (Title, error) {
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
 		var kind string
-		var stored storedSeries
-		err := tx.QueryRow(ctx, `SELECT t.kind, t.series_id, s.name, t.series_number
-			FROM title t LEFT JOIN series s ON s.id = t.series_id WHERE t.id = $1 FOR UPDATE OF t`, id).
-			Scan(&kind, &stored.id, &stored.name, &stored.number)
+		err := tx.QueryRow(ctx, `SELECT kind FROM title WHERE id = $1 FOR UPDATE`, id).Scan(&kind)
 		if err != nil {
 			return mapErr(err, ErrTitleNotFound, "lock title")
+		}
+		// The series is read after the lock in a statement of its own: a
+		// join in the locking statement keeps the snapshot from before the
+		// wait and misses a series a save committed meanwhile.
+		var stored storedSeries
+		err = tx.QueryRow(ctx, `SELECT t.series_id, s.name, t.series_number
+			FROM title t LEFT JOIN series s ON s.id = t.series_id WHERE t.id = $1`, id).
+			Scan(&stored.id, &stored.name, &stored.number)
+		if err != nil {
+			return fmt.Errorf("read title series: %w", err)
 		}
 		if kind != in.Kind {
 			if err := checkNoEditions(ctx, tx, id); err != nil {

@@ -509,6 +509,12 @@ export type TitleForm = {
 	tag: string;
 	series_name: string;
 	series_number: string;
+	/**
+	 * The series fields as the title was loaded. A save that leaves both as they were sends
+	 * neither, so the server keeps the series as stored: one another save gave the title since the
+	 * form opened stays, with its total.
+	 */
+	loaded_series: { name: string; number: string };
 };
 
 /** The editable form of a title, or an empty one of kind. */
@@ -528,7 +534,11 @@ export function titleToForm(t: TitlePayload | null, kind: Kind = 'movie'): Title
 		tags: [...(t?.tags ?? [])],
 		tag: '',
 		series_name: t?.series_name ?? '',
-		series_number: t?.series_number?.toString() ?? ''
+		series_number: t?.series_number?.toString() ?? '',
+		loaded_series: {
+			name: t?.series_name ?? '',
+			number: t?.series_number?.toString() ?? ''
+		}
 	};
 }
 
@@ -543,18 +553,8 @@ export function titlePayload(f: TitleForm): Parsed<TitlePayload> {
 		? parseOptInt(f.tmdb_id, 'tmdb_id', 'Identyfikator TMDB to liczba.')
 		: ({ ok: true, value: null } as const);
 	if (!tmdb.ok) return tmdb;
-	const seriesName = optText(f.series_name);
-	const seriesNumber = parseOptInt(f.series_number, 'series_number', volumeMessage);
-	if (!seriesNumber.ok) return seriesNumber;
-	if (seriesNumber.value !== null && (seriesNumber.value < 1 || seriesNumber.value > maxVolume)) {
-		return { ok: false, issue: { field: 'series_number', message: volumeMessage } };
-	}
-	if (seriesNumber.value !== null && seriesName === null) {
-		return {
-			ok: false,
-			issue: { field: 'series_name', message: 'Podaj serię, do której należy tom.' }
-		};
-	}
+	const series = seriesPayload(f);
+	if (!series.ok) return series;
 	return {
 		ok: true,
 		value: {
@@ -575,10 +575,32 @@ export function titlePayload(f: TitleForm): Parsed<TitlePayload> {
 			cover_url: f.cover_url.trim(),
 			notes: f.notes.trim(),
 			tags: addTag(f.tags, f.tag),
-			series_name: seriesName,
-			series_number: seriesNumber.value
+			...series.value
 		}
 	};
+}
+
+/** The series fields of a title body: none when the form left both as loaded. */
+function seriesPayload(f: TitleForm): Parsed<Pick<TitlePayload, 'series_name' | 'series_number'>> {
+	if (
+		f.series_name.trim() === f.loaded_series.name.trim() &&
+		f.series_number.trim() === f.loaded_series.number.trim()
+	) {
+		return { ok: true, value: {} };
+	}
+	const seriesName = optText(f.series_name);
+	const seriesNumber = parseOptInt(f.series_number, 'series_number', volumeMessage);
+	if (!seriesNumber.ok) return seriesNumber;
+	if (seriesNumber.value !== null && (seriesNumber.value < 1 || seriesNumber.value > maxVolume)) {
+		return { ok: false, issue: { field: 'series_number', message: volumeMessage } };
+	}
+	if (seriesNumber.value !== null && seriesName === null) {
+		return {
+			ok: false,
+			issue: { field: 'series_name', message: 'Podaj serię, do której należy tom.' }
+		};
+	}
+	return { ok: true, value: { series_name: seriesName, series_number: seriesNumber.value } };
 }
 
 /** The highest volume number and series total the server takes. */
@@ -599,10 +621,13 @@ export const volumeStateLabels: Record<VolumeState, string> = {
 	none: 'Bez egzemplarza'
 };
 
-/** A series' size in the list: its titles and, when any, the volumes it lacks. */
+/**
+ * A series' size in the list: its titles and, when any, the volumes it lacks. None missing is no
+ * claim of a full set: without a total or numbers nothing can be missing.
+ */
 export function seriesSummary(s: Pick<Series, 'title_count' | 'missing_count'>): string {
 	const titles = titleCount(s.title_count);
-	return s.missing_count === 0 ? `${titles} · komplet` : `${titles} · brakuje ${s.missing_count}`;
+	return s.missing_count === 0 ? titles : `${titles} · brakuje ${s.missing_count}`;
 }
 
 /** The series names of kind, for the title form's suggestions. */

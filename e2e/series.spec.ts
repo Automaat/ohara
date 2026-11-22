@@ -122,7 +122,7 @@ test('the title form joins a series it suggests and the title page links to it',
 	await expect(
 		page.getByRole('list', { name: 'Tomy', exact: true }).getByRole('listitem')
 	).toHaveCount(2);
-	await expect(page.getByText('Wszystkie tomy są na półce.')).toBeVisible();
+	await expect(page.getByText('Wszystkie tomy od 1 do 2 są na półce.')).toBeVisible();
 
 	await expectNoSourceRequests(request);
 });

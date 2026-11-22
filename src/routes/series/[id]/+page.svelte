@@ -31,21 +31,29 @@
 	let totalIssue = $state<FormIssue | null>(null);
 	let savingTotal = $state(false);
 
-	/** The series the page last asked for, so a late answer for another one is dropped. */
-	let requested: number | undefined;
+	/**
+	 * Counts the page's reads and saves; an answer shows only while no later one has started, so a
+	 * read of this series begun before another one, or before a save, never overwrites it.
+	 */
+	let ticket = 0;
 
 	async function load(seriesID: number) {
-		requested = seriesID;
+		const mine = ++ticket;
+		if (!Number.isSafeInteger(seriesID) || seriesID <= 0) {
+			failure = 'Nie ma takiej serii.';
+			busy = false;
+			return;
+		}
 		busy = true;
 		try {
 			const loaded = await request<SeriesDetail>(fetch, 'GET', `/api/series/${seriesID}`);
-			if (requested !== seriesID) return;
+			if (mine !== ticket) return;
 			show(loaded);
 			failure = null;
 		} catch (err) {
-			if (requested === seriesID) failure = errorMessage(err);
+			if (mine === ticket) failure = errorMessage(err);
 		} finally {
-			if (requested === seriesID) busy = false;
+			if (mine === ticket) busy = false;
 		}
 	}
 
@@ -67,21 +75,27 @@
 			totalIssue = parsed.issue;
 			return;
 		}
-		const seriesID = id;
+		const mine = ++ticket;
+		busy = false;
 		savingTotal = true;
 		try {
-			const saved = await request<SeriesDetail>(
-				fetch,
-				'PUT',
-				`/api/series/${seriesID}`,
-				parsed.value
-			);
-			if (requested === seriesID) show(saved);
+			const saved = await request<SeriesDetail>(fetch, 'PUT', `/api/series/${id}`, parsed.value);
+			if (mine === ticket) show(saved);
 		} catch (err) {
-			if (requested === seriesID) totalIssue = issueFrom(err);
+			if (mine === ticket) totalIssue = issueFrom(err);
 		} finally {
 			savingTotal = false;
 		}
+	}
+
+	/**
+	 * The last number the missing ones are counted to, the larger of the total and the highest
+	 * number held; null when neither is known.
+	 */
+	function lastNumber(d: SeriesDetail): number | null {
+		const numbers = d.volumes.flatMap((v) => (v.number == null ? [] : [v.number]));
+		if (d.total_volumes == null && numbers.length === 0) return null;
+		return Math.max(d.total_volumes ?? 0, ...numbers);
 	}
 
 	/** How a missing number reads: the title that has it, when one does, and what it lacks. */
@@ -138,8 +152,11 @@
 		</Section>
 
 		<Section title="Brakujące tomy">
-			{#if d.missing.length === 0}
-				<p class="muted">Wszystkie tomy są na półce.</p>
+			{@const last = lastNumber(d)}
+			{#if last === null}
+				<p class="muted">Podaj numery tomów lub liczbę tomów, aby zobaczyć braki.</p>
+			{:else if d.missing.length === 0}
+				<p class="muted">Wszystkie tomy od 1 do {last} są na półce.</p>
 			{:else}
 				<ul class="missing" aria-label="Brakujące tomy">
 					{#each d.missing as m (m.number)}

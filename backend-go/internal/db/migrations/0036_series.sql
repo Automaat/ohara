@@ -55,3 +55,23 @@ $$;
 CREATE TRIGGER title_series_drop_empty
     AFTER UPDATE OF series_id OR DELETE ON title
     FOR EACH ROW EXECUTE FUNCTION series_drop_empty();
+
+-- Locks the series of a title about to be deleted before the title's row
+-- goes. A create joining the series holds its row and then inserts its
+-- title; were the title deleted first, that insert would wait on the
+-- deleted title's number while the delete's AFTER trigger waited on the
+-- series row. Locked first, the delete waits for the create instead, whose
+-- insert sees the number still taken and answers 409.
+CREATE FUNCTION series_lock_for_delete() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF OLD.series_id IS NOT NULL THEN
+        PERFORM 1 FROM series WHERE id = OLD.series_id FOR UPDATE;
+    END IF;
+    RETURN OLD;
+END;
+$$;
+
+CREATE TRIGGER title_series_lock_for_delete
+    BEFORE DELETE ON title
+    FOR EACH ROW EXECUTE FUNCTION series_lock_for_delete();

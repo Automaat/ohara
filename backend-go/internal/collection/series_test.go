@@ -2,11 +2,14 @@ package collection_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/Automaat/ohara/backend-go/internal/collection"
 )
@@ -389,4 +392,83 @@ func TestConcurrentMovesBetweenSeriesAllSucceed(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestKindChangeKeepsASeriesJoinedWhileItWaited(t *testing.T) {
+	a, pool := newAPIWithPool(t)
+	ctx := context.Background()
+	book := a.title("book", "Wiedźmin")
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var seriesID int64
+	if err := tx.QueryRow(ctx, `INSERT INTO series (kind, name, key) VALUES ('book', 'Saga', 'saga') RETURNING id`).
+		Scan(&seriesID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE title SET series_id = $2, series_number = 3 WHERE id = $1`, book, seriesID); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan int, 1)
+	go func() {
+		done <- a.do(http.MethodPut, fmt.Sprintf("/api/titles/%d", book), obj{"kind": "movie", "name": "Wiedźmin"}, nil)
+	}()
+	waitForLockWait(t, pool)
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if status := <-done; status != http.StatusOK {
+		t.Fatalf("kind change after a series was joined = %d, want 200", status)
+	}
+	got := a.titleOf(book)
+	if got.Kind != "movie" || got.SeriesName == nil || *got.SeriesName != "Saga" || *got.SeriesNumber != 3 {
+		t.Fatalf("title after the kind change = %s %s, want a movie in Saga #3", got.Kind, seriesLine(got.Title))
+	}
+}
+
+func TestDeletingANumberedTitleWaitsForACreateJoiningItsSeries(t *testing.T) {
+	a, pool := newAPIWithPool(t)
+	ctx := context.Background()
+	first := a.seriesTitle("book", "Ostatnie życzenie", "Wiedźmin", 1)
+	seriesID := *first.SeriesID
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM series WHERE id = $1 FOR UPDATE`, seriesID); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan int, 1)
+	go func() {
+		done <- a.do(http.MethodDelete, fmt.Sprintf("/api/titles/%d", first.ID), nil, nil)
+	}()
+	waitForLockWait(t, pool)
+	_, err = tx.Exec(ctx, `INSERT INTO title (kind, name, series_id, series_number) VALUES ('book', 'Kopia', $1, 1)`, seriesID)
+	if code, _ := pgCodeOf(err); code != "23505" {
+		t.Fatalf("a create of the number the delete waits on = %v, want a unique violation at once", err)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if status := <-done; status != http.StatusNoContent {
+		t.Fatalf("delete while a create held the series = %d, want 204", status)
+	}
+	if list := a.seriesList(); len(list) != 0 {
+		t.Fatalf("series after its last title went = %+v", list)
+	}
+}
+
+func pgCodeOf(err error) (string, bool) {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code, true
+	}
+	return "", false
 }

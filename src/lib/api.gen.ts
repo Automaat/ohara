@@ -401,6 +401,8 @@ export type CandidateTitle = {
 	authors?: string[];
 	bn_id?: string | null;
 	openlibrary_id?: string | null;
+	series_name?: string | null;
+	series_number?: number | null;
 };
 
 export type CandidateEdition = {

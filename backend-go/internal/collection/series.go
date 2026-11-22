@@ -208,27 +208,32 @@ func (s *Store) ListSeries(ctx context.Context) ([]Series, error) {
 }
 
 // GetSeries returns a series with its volumes and missing numbers, or
-// ErrSeriesNotFound.
+// ErrSeriesNotFound. Both reads share one snapshot, so the answer never
+// pairs a series with the titles of a later moment, such as none once its
+// last title left and the series went with it.
 func (s *Store) GetSeries(ctx context.Context, id int64) (SeriesDetail, error) {
 	var d SeriesDetail
-	err := s.pool.QueryRow(ctx, `SELECT id, kind, name, total_volumes FROM series WHERE id = $1`, id).
-		Scan(&d.ID, &d.Kind, &d.Name, &d.TotalVolumes)
-	if err != nil {
-		return SeriesDetail{}, mapErr(err, ErrSeriesNotFound, "get series")
-	}
-	rows, err := s.pool.Query(ctx, `SELECT t.id, t.name, t.polish_title, t.year, t.authors, `+volumeCover+`,
-		t.series_number, `+volumeState+`
-		FROM title t WHERE t.series_id = $1
-		ORDER BY t.series_number NULLS LAST, lower(t.name), t.id`, id)
-	if err != nil {
-		return SeriesDetail{}, fmt.Errorf("series volumes: %w", err)
-	}
-	d.Volumes, err = collect(rows, func(row pgx.Row) (SeriesVolume, error) {
-		var v SeriesVolume
-		err := row.Scan(&v.TitleID, &v.Name, &v.PolishTitle, &v.Year, &v.Authors, &v.CoverURL,
-			&v.Number, &v.State)
-		return v, err
-	}, "series volumes")
+	err := s.readSnapshot(ctx, func(tx pgx.Tx) error {
+		err := tx.QueryRow(ctx, `SELECT id, kind, name, total_volumes FROM series WHERE id = $1`, id).
+			Scan(&d.ID, &d.Kind, &d.Name, &d.TotalVolumes)
+		if err != nil {
+			return mapErr(err, ErrSeriesNotFound, "get series")
+		}
+		rows, err := tx.Query(ctx, `SELECT t.id, t.name, t.polish_title, t.year, t.authors, `+volumeCover+`,
+			t.series_number, `+volumeState+`
+			FROM title t WHERE t.series_id = $1
+			ORDER BY t.series_number NULLS LAST, lower(t.name), t.id`, id)
+		if err != nil {
+			return fmt.Errorf("series volumes: %w", err)
+		}
+		d.Volumes, err = collect(rows, func(row pgx.Row) (SeriesVolume, error) {
+			var v SeriesVolume
+			err := row.Scan(&v.TitleID, &v.Name, &v.PolishTitle, &v.Year, &v.Authors, &v.CoverURL,
+				&v.Number, &v.State)
+			return v, err
+		}, "series volumes")
+		return err
+	})
 	if err != nil {
 		return SeriesDetail{}, err
 	}
@@ -240,6 +245,23 @@ func (s *Store) GetSeries(ctx context.Context, id int64) (SeriesDetail, error) {
 	d.Missing = missingVolumes(d.TotalVolumes, slots)
 	d.MissingCount = len(d.Missing)
 	return d, nil
+}
+
+// readSnapshot runs fn in a read-only transaction whose statements all see
+// one snapshot.
+func (s *Store) readSnapshot(ctx context.Context, fn func(pgx.Tx) error) error {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	if err := fn(tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
 }
 
 // SetSeriesTotal sets a series' total of volumes, nil when unknown.

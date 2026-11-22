@@ -207,11 +207,12 @@ type run struct {
 	holdings []Holding
 	rules    deals.Rules
 	titles   deals.Titles
-	res      RunResult
-	first    bool
-	// started is the run's start on the database clock, which writes
-	// last_seen_at.
-	started time.Time
+	// asOf is when the run read holdings and titles, for RecordAsOf, on
+	// the database clock, which writes last_seen_at; it is also the cutoff
+	// for gone listings.
+	asOf  time.Time
+	res   RunResult
+	first bool
 }
 
 // Run asks every source about every owned edition, every buy-back shop
@@ -220,6 +221,10 @@ type run struct {
 // Source failures are collected in the result; a database failure or
 // cancellation stops the run.
 func (r *Runner) Run(ctx context.Context) (RunResult, error) {
+	asOf, err := r.store.Now(ctx)
+	if err != nil {
+		return RunResult{}, err
+	}
 	holdings, err := r.store.Holdings(ctx)
 	if err != nil {
 		return RunResult{}, err
@@ -235,11 +240,7 @@ func (r *Runner) Run(ctx context.Context) (RunResult, error) {
 	for i := range holdings {
 		holdings[i].Want.Prepare()
 	}
-	started, err := r.store.Now(ctx)
-	if err != nil {
-		return RunResult{}, err
-	}
-	x := &run{r: r, holdings: holdings, rules: rules, titles: titles, first: true, started: started}
+	x := &run{r: r, holdings: holdings, rules: rules, titles: titles, asOf: asOf, first: true}
 	x.res.Editions = len(holdings)
 	x.res.Errors = []string{}
 	queries := searchQueries(holdings)
@@ -360,7 +361,7 @@ func (x *run) search(ctx context.Context, src deals.Source, queries []string) er
 				continue
 			}
 			x.res.Matched++
-			isNew, err := x.r.store.Record(ctx, l, h)
+			isNew, err := x.r.store.RecordAsOf(ctx, l, h, x.asOf)
 			if err != nil {
 				return err
 			}
@@ -382,7 +383,7 @@ func (x *run) search(ctx context.Context, src deals.Source, queries []string) er
 // missing from a first page, or from a query that failed or was skipped,
 // may still be offered.
 func (x *run) gone(ctx context.Context, source string, complete, seen []string) error {
-	n, err := x.r.store.UpdateGone(ctx, source, complete, seen, x.started)
+	n, err := x.r.store.UpdateGone(ctx, source, complete, seen, x.asOf)
 	if err != nil {
 		return err
 	}
@@ -451,7 +452,7 @@ func (x *run) quote(ctx context.Context, b BuyBack) error {
 		l := deals.Listing{
 			Source: b.Name(), ExternalID: isbn, Title: q.Title, URL: q.URL, PriceCents: q.Cents, Raw: raw,
 		}
-		if _, err := x.r.store.Record(ctx, &l, h); err != nil {
+		if _, err := x.r.store.RecordAsOf(ctx, &l, h, x.asOf); err != nil {
 			return err
 		}
 		x.res.Quotes++
@@ -522,7 +523,7 @@ func (x *run) recordRelease(ctx context.Context, h *Holding, id int64, p Release
 		l := deals.Listing{
 			Source: pr.source, ExternalID: key, Title: h.Want.Name, URL: pr.url, PriceCents: *pr.cents, Raw: raw,
 		}
-		if _, err := x.r.store.Record(ctx, &l, h); err != nil {
+		if _, err := x.r.store.RecordAsOf(ctx, &l, h, x.asOf); err != nil {
 			return false, err
 		}
 		recorded = true

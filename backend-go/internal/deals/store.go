@@ -154,14 +154,54 @@ type observationRaw struct {
 // price and are marked gone once no longer offered.
 var listingSources = map[string]bool{"olx": true}
 
+// listingTitle is the title a stored listing belongs to: its edition's,
+// else the one it was stored with.
+const listingTitle = `coalesce((SELECT e.title_id FROM edition e WHERE e.id = price_observation.edition_id),
+	price_observation.title_id)`
+
+// otherTitle holds in Record's upsert when the run matched the stored
+// listing to another title than the one it belongs to.
+const otherTitle = listingTitle + ` <> EXCLUDED.title_id`
+
+// matchedAsOf is when the recording run read the wishlist and titles it
+// matched with: $9, or now for Record.
+const matchedAsOf = `coalesce($9::timestamptz, now())`
+
+// assignedFromNewer holds in Record's upsert when a run that read its data
+// after the recording run gave the listing its current title; never for a
+// listing stored before assigned_as_of.
+const assignedFromNewer = `price_observation.assigned_as_of > ` + matchedAsOf
+
+// movedTitle holds in Record's upsert when the listing moves to the
+// matched title: another title, matched from data at least as new as the
+// data its current title was matched from.
+const movedTitle = `(` + otherTitle + ` AND NOT coalesce(` + assignedFromNewer + `, false))`
+
+// Now returns the database's current time, the time a run reads its
+// wishlist and titles at for RecordAsOf.
+func (s *Store) Now(ctx context.Context) (time.Time, error) {
+	var now time.Time
+	if err := s.pool.QueryRow(ctx, `SELECT now()`).Scan(&now); err != nil {
+		return time.Time{}, fmt.Errorf("now: %w", err)
+	}
+	return now, nil
+}
+
 // Record stores l as an observation of w and, with alert, queues its
 // Telegram alert in the same transaction. A listing a source already
 // reported keeps its row and first observation time; its price and
 // last_seen_at move to now. An OLX listing keeps the price it was first
 // stored at (unknown for rows stored before that was kept) and the query
 // key that last found it, and a gone one seen again is no longer gone.
-// The alert is queued when the listing has none
-// yet, so a listing the valuation run stored first, or one whose price
+// It keeps its edition too, unless w belongs to
+// another title: then it moves to w's title and edition, its moved_at
+// becomes now, and a valuation match, which names no wish, drops the wish
+// the hunter recorded it for. An unsent alert for a wish of another title
+// than the listing's moves to w, or to no wish when w is not one, so it is
+// never sent for the old wish; an alert already sent stays recorded. A
+// listing that still belongs to another title than w's, as RecordAsOf
+// allows, queues and moves no alert. The alert is queued when the listing
+// has none yet, so a listing the valuation run stored first, or one whose price
 // dropped under the limit, still alerts. A listing whose alert was sent
 // alerts again when its price is under the one that alert named, unless
 // an alert for it is still waiting to be sent: that one goes out at the
@@ -172,6 +212,21 @@ var listingSources = map[string]bool{"olx": true}
 // alert. It reports whether the listing was new and whether an alert was
 // queued.
 func (s *Store) Record(ctx context.Context, l *Listing, w *Want, alert bool) (bool, bool, error) {
+	return s.record(ctx, l, w, alert, nil)
+}
+
+// RecordAsOf is Record for a run that matched l to w from the wishlist and
+// titles it read at asOf; Record counts as a match from data read now. The
+// listing keeps, in assigned_as_of, the newest such time of a match to its
+// current title. A listing whose current title was matched from data read
+// after asOf keeps its title and edition when w belongs to another title,
+// since that match is newer; it is then not recorded for w, and no alert
+// is queued for w.
+func (s *Store) RecordAsOf(ctx context.Context, l *Listing, w *Want, alert bool, asOf time.Time) (bool, bool, error) {
+	return s.record(ctx, l, w, alert, &asOf)
+}
+
+func (s *Store) record(ctx context.Context, l *Listing, w *Want, alert bool, asOf *time.Time) (bool, bool, error) {
 	raw, err := json.Marshal(observationRaw{
 		Title: l.Title, Data: l.Raw, PhotoURL: l.PhotoURL, WishlistCopyID: w.CopyID, Query: QueryKey(l.Query),
 	})
@@ -189,23 +244,45 @@ func (s *Store) Record(ctx context.Context, l *Listing, w *Want, alert bool) (bo
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	var id int64
 	var isNew, dismissed, alerted bool
+	var titleID *int64
 	err = tx.QueryRow(ctx, `INSERT INTO price_observation
-			(source, external_id, price_cents, acquired_as, url, edition_id, title_id, raw, first_price_cents)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			(source, external_id, price_cents, acquired_as, url, edition_id, title_id, raw, assigned_as_of,
+				first_price_cents)
+		VALUES ($1, $2, $3, $4, $5, nullif($6::bigint, 0), nullif($7::bigint, 0), $8, `+matchedAsOf+`, $10)
 		ON CONFLICT (source, external_id) WHERE external_id IS NOT NULL DO UPDATE SET
 			price_cents = EXCLUDED.price_cents,
 			last_seen_at = now(),
 			gone_at = NULL,
 			url = EXCLUDED.url,
-			raw = coalesce(price_observation.raw, '{}'::jsonb) || EXCLUDED.raw,
+			raw = CASE WHEN `+movedTitle+` THEN coalesce(price_observation.raw, '{}'::jsonb) - 'wishlist_copy_id' || EXCLUDED.raw
+				WHEN `+otherTitle+` THEN coalesce(price_observation.raw, '{}'::jsonb) || (EXCLUDED.raw - 'wishlist_copy_id')
+				ELSE coalesce(price_observation.raw, '{}'::jsonb) || EXCLUDED.raw END,
 			acquired_as = coalesce(EXCLUDED.acquired_as, price_observation.acquired_as),
-			edition_id = coalesce(price_observation.edition_id, EXCLUDED.edition_id),
-			title_id = coalesce(price_observation.title_id, EXCLUDED.title_id)
-		RETURNING id, xmax = 0, dismissed_at IS NOT NULL`,
-		l.Source, l.ExternalID, l.PriceCents, l.AcquiredAs, l.URL, w.EditionID, w.TitleID, raw, firstPrice).
-		Scan(&id, &isNew, &dismissed)
+			edition_id = CASE WHEN `+movedTitle+` THEN EXCLUDED.edition_id
+				ELSE coalesce(price_observation.edition_id, EXCLUDED.edition_id) END,
+			title_id = CASE WHEN `+movedTitle+` THEN EXCLUDED.title_id
+				ELSE coalesce(price_observation.title_id, EXCLUDED.title_id) END,
+			moved_at = CASE WHEN `+movedTitle+` THEN now() ELSE price_observation.moved_at END,
+			assigned_as_of = CASE WHEN `+movedTitle+` THEN `+matchedAsOf+`
+				WHEN `+otherTitle+` THEN price_observation.assigned_as_of
+				ELSE greatest(price_observation.assigned_as_of, `+matchedAsOf+`) END
+		RETURNING id, xmax = 0, dismissed_at IS NOT NULL, `+listingTitle,
+		l.Source, l.ExternalID, l.PriceCents, l.AcquiredAs, l.URL, w.EditionID, w.TitleID, raw, asOf,
+		firstPrice).Scan(&id, &isNew, &dismissed, &titleID)
 	if err != nil {
 		return false, false, fmt.Errorf("record observation: %w", err)
+	}
+	if titleID == nil || *titleID != w.TitleID {
+		if err := tx.Commit(ctx); err != nil {
+			return false, false, fmt.Errorf("record: commit: %w", err)
+		}
+		return isNew, false, nil
+	}
+	if _, err := tx.Exec(ctx, `UPDATE deal_alert a SET copy_id = nullif($3::bigint, 0)
+		FROM copy c JOIN edition e ON e.id = c.edition_id
+		WHERE a.observation_id = $1 AND a.sent_at IS NULL AND c.id = a.copy_id AND e.title_id <> $2`,
+		id, w.TitleID, w.CopyID); err != nil {
+		return false, false, fmt.Errorf("record alert: move to title: %w", err)
 	}
 	if alert && !dismissed {
 		if alerted, err = queueAlert(ctx, tx, id, w.CopyID, l.PriceCents); err != nil {
@@ -216,15 +293,6 @@ func (s *Store) Record(ctx context.Context, l *Listing, w *Want, alert bool) (bo
 		return false, false, fmt.Errorf("record: commit: %w", err)
 	}
 	return isNew, alerted, nil
-}
-
-// Now is the database's clock, the one last_seen_at is written with.
-func (s *Store) Now(ctx context.Context) (time.Time, error) {
-	var now time.Time
-	if err := s.pool.QueryRow(ctx, `SELECT now()`).Scan(&now); err != nil {
-		return time.Time{}, fmt.Errorf("now: %w", err)
-	}
-	return now, nil
 }
 
 // UpdateGone brings the gone marks of source's stored listings up to a
@@ -448,9 +516,15 @@ type RecentFilter struct {
 	Sent       bool
 }
 
+// wishOfListingTitle holds when wish w is for listing o's title, its edition's or else the one
+// it was stored with. A listing moved to another title keeps its sent alert for the old title's
+// wish, which no longer matches it.
+const wishOfListingTitle = `EXISTS (SELECT FROM edition we WHERE we.id = w.edition_id
+	AND we.title_id = coalesce((SELECT le.title_id FROM edition le WHERE le.id = o.edition_id), o.title_id))`
+
 // Listing rows Recent pages through: each listing with its alert's sent time and the wishlist copy
-// that matches it, the one the hunter recorded it for, else its alert's copy, while that copy is
-// still on the wishlist. allListings is every stored listing; wishedListings only those with a
+// that matches it, the one the hunter recorded it for, else its alert's copy when that copy is for
+// the listing's title, while that copy is still on the wishlist. allListings is every stored listing; wishedListings only those with a
 // matching copy, the only ones a filter keeps, found from the wishlist through
 // price_observation_wish_idx and deal_alert without reading the rest.
 const (
@@ -458,6 +532,7 @@ const (
 		FROM price_observation o
 		LEFT JOIN deal_alert a ON a.observation_id = o.id
 		LEFT JOIN copy w ON w.status = 'wishlist' AND w.id = coalesce(o.wishlist_copy_id, a.copy_id)
+			AND (o.wishlist_copy_id IS NOT NULL OR ` + wishOfListingTitle + `)
 		WHERE o.dismissed_at IS NULL`
 	wishedListings = `SELECT o.id, o.observed_at, o.price_cents, o.source, a.sent_at, w.id AS wish_id, w.max_price_cents
 		FROM copy w
@@ -470,7 +545,7 @@ const (
 		JOIN deal_alert a ON a.copy_id = w.id
 		JOIN price_observation o ON o.id = a.observation_id AND o.wishlist_copy_id IS NULL
 			AND o.dismissed_at IS NULL
-		WHERE w.status = 'wishlist'`
+		WHERE w.status = 'wishlist' AND ` + wishOfListingTitle
 )
 
 // Recent returns the newest deal observations that pass f. It picks the page from the listing
@@ -486,7 +561,7 @@ func (s *Store) Recent(ctx context.Context, f RecentFilter) ([]Observation, erro
             coalesce(CASE WHEN e.cover_photo IS NOT NULL
                 THEN '/api/editions/' || e.id || '/cover?v=' || extract(epoch FROM e.updated_at) END,
                 nullif(e.cover_url, ''), t.cover_url), w.max_price_cents,
-			CASE WHEN a.observation_id IS NULL THEN 'none'
+			CASE WHEN a.observation_id IS NULL OR a.sent_at IS NULL AND a.copy_id IS NULL THEN 'none'
 			     WHEN a.sent_at IS NOT NULL THEN 'sent'
 			     WHEN a.attempts >= $2 THEN 'failed'
 			     ELSE 'pending' END,

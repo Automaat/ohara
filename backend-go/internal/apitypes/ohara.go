@@ -82,6 +82,7 @@ func Ohara() API {
 			Of[valuation.HistoryPoint]("HistoryPoint"),
 			Of[valuation.RunResult]("ValuationRunResult"),
 			Of[valuation.Status]("RunnerStatus"),
+			Of[valuation.Move]("CopyValueMove"),
 			Of[valuation.View]("ValuationView"),
 			Of[valuation.CopyDay]("CopyValueDay"),
 			Of[valuation.TitleCopies]("TitleValues"),

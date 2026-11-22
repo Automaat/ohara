@@ -419,7 +419,14 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   a title's copy days of the last 90 days, and the title page's "Wartość
   dziś" draws the copy's used value as a trend once two days have one, a
   day without one or without a stored row leaving a gap; the card stays
-  with its trend when the copy's prices left the window. The summary's `gain` sums the used value
+  with its trend when the copy's prices left the window. `GET /api/valuation`'s
+  `moves` pair each copy's stored used value on the last valuation day with
+  its newest stored day 30 to 37 days before (`mover_days` 30, so a skipped
+  run still counts), and Wartość's "Największe zmiany" lists the 5 owned
+  copies that rose and the 5 that fell most in grosze
+  (`movers` in `src/lib/valuation.ts`), as "+20 zł · +50%"; a copy without a
+  used value at either end, or whose change rounds to 0 zł, is in neither,
+  and without any the section is hidden. The summary's `gain` sums the used value
   and the price paid over the copies that have both; the Wartość hero's
   difference reads only that, and names its coverage when it counts
   fewer copies than the collection. History keeps no gain.

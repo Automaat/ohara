@@ -233,3 +233,57 @@ func TestCopyHistoryAPI(t *testing.T) {
 		}
 	}
 }
+
+// TestViewMoves compares each copy's used value on the last valuation day
+// with its newest stored day 30 to 37 days before: a day inside the
+// period is not the start, a start past the slack leaves the copy out, a
+// day without a used value stays null, and no valuation means no moves.
+func TestViewMoves(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	seed(t, pool)
+	exec(t, pool, `INSERT INTO copy (edition_id, status) VALUES (20, 'owned')`)
+	logger := slog.New(slog.DiscardHandler)
+	store := NewStore(pool)
+	runner := NewRunner(store, nil, nil, nil, Config{Window: 90 * 24 * time.Hour}, logger)
+	srv := httptest.NewServer(server.New(server.Config{}, logger, server.Deps{
+		DB: pool, API: []server.Mounter{NewHandler(store, runner, logger)},
+	}))
+	t.Cleanup(srv.Close)
+	ctx := context.Background()
+	save := func(ago int, values ...CopyValue) {
+		t.Helper()
+		if err := store.saveCopyDays(ctx, dbDay(t, pool, ago), values); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mid := func(id, cents int64) CopyValue { return CopyValue{CopyID: id, Mid: &Estimate{Cents: cents}} }
+	save(0, mid(1, 6000), mid(2, 4500), CopyValue{CopyID: 3}, mid(5, 5000))
+	save(29, mid(1, 4100), mid(2, 4400))
+	save(30, mid(1, 4000), mid(3, 3000))
+	save(33, mid(2, 5000))
+	save(38, mid(2, 9999), mid(5, 100))
+
+	var before View
+	if code := get(t, srv.URL+"/api/valuation", &before); code != http.StatusOK {
+		t.Fatalf("GET = %d", code)
+	}
+	if before.MoverDays != 30 || before.Moves == nil || len(before.Moves) != 0 {
+		t.Fatalf("before a valuation = %d days, %+v, want 30 days and no moves", before.MoverDays, before.Moves)
+	}
+
+	exec(t, pool, `INSERT INTO valuation_history (day, copies, spent_cents, floor_cents,
+		floor_copies, mid_cents, mid_copies, ceiling_cents, ceiling_copies, low_confidence)
+		VALUES (current_date, 0, 0, 0, 0, 0, 0, 0, 0, 0)`)
+	var got View
+	if code := get(t, srv.URL+"/api/valuation", &got); code != http.StatusOK {
+		t.Fatalf("GET = %d", code)
+	}
+	want := []Move{
+		{CopyID: 1, FromDay: dbDay(t, pool, 30), FromCents: grosze(4000), ToCents: grosze(6000)},
+		{CopyID: 2, FromDay: dbDay(t, pool, 33), FromCents: grosze(5000), ToCents: grosze(4500)},
+		{CopyID: 3, FromDay: dbDay(t, pool, 30), FromCents: grosze(3000)},
+	}
+	if got.MoverDays != 30 || !reflect.DeepEqual(got.Moves, want) {
+		t.Fatalf("moves = %d days, %+v, want 30 days, %+v", got.MoverDays, got.Moves, want)
+	}
+}

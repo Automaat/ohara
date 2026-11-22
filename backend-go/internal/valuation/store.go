@@ -411,6 +411,38 @@ func (s *Store) CopyHistory(ctx context.Context, titleID int64, n int) ([]CopyDa
 	return pgx.CollectRows(rows, pgx.RowToStructByPos[CopyDay])
 }
 
+// Move is a copy's stored used value on the day the movers end (ToCents)
+// and on the newest stored day of the period's start (FromDay, FromCents),
+// in grosze, null for a day the copy had no used value.
+type Move struct {
+	CopyID    int64  `json:"copy_id"`
+	FromDay   string `json:"from_day"`
+	FromCents *int64 `json:"from_cents"`
+	ToCents   *int64 `json:"to_cents"`
+}
+
+// Moves returns, by copy, the used value of every copy stored on end
+// (YYYY-MM-DD) and on its newest stored day from days to days+slack days
+// before end, so a valuation that skipped the day exactly days before
+// still counts. A copy without a row on end or in that span is left out.
+func (s *Store) Moves(ctx context.Context, end string, days, slack int) ([]Move, error) {
+	rows, err := s.pool.Query(ctx, `SELECT e.copy_id, to_char(f.day, 'YYYY-MM-DD'),
+			f.mid_cents, e.mid_cents
+		FROM copy_value_history e
+			CROSS JOIN LATERAL (
+				SELECT h.day, h.mid_cents FROM copy_value_history h
+				WHERE h.copy_id = e.copy_id
+					AND h.day BETWEEN $1::date - ($2::int + $3::int) AND $1::date - $2::int
+				ORDER BY h.day DESC LIMIT 1
+			) f
+		WHERE e.day = $1::date
+		ORDER BY e.copy_id`, end, days, slack)
+	if err != nil {
+		return nil, fmt.Errorf("moves: %w", err)
+	}
+	return pgx.CollectRows(rows, pgx.RowToStructByPos[Move])
+}
+
 // History returns the value of each of the last n days, oldest first.
 func (s *Store) History(ctx context.Context, n int) ([]HistoryPoint, error) {
 	rows, err := s.pool.Query(ctx, `SELECT `+historyColumns+` FROM valuation_history

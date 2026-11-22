@@ -1,7 +1,8 @@
 import type { APIRequestContext, Page, Request } from '@playwright/test';
 import { expect, expectNoSourceRequests, test } from './fixtures.js';
 
-/** The edition each test changes the cover of, made through the API. */
+/** The title and edition each test changes the cover of, made through the API. */
+let titleID: number;
 let editionID: number;
 
 test.beforeEach(async ({ request }) => {
@@ -9,8 +10,9 @@ test.beforeEach(async ({ request }) => {
 		data: { kind: 'movie', name: `Okładka ${Date.now()}` }
 	});
 	expect(title.ok()).toBe(true);
+	titleID = ((await title.json()) as { id: number }).id;
 	const edition = await request.post('/api/editions', {
-		data: { title_id: ((await title.json()) as { id: number }).id, format: 'bluray' }
+		data: { title_id: titleID, format: 'bluray' }
 	});
 	expect(edition.ok()).toBe(true);
 	editionID = ((await edition.json()) as { id: number }).id;
@@ -46,6 +48,41 @@ async function photo(page: Page, width: number, height: number): Promise<Uint8Ar
 				ctx.arc(x, y, (w / 40) * (1 + (i % 5)), 0, 2 * Math.PI);
 				ctx.fill();
 			}
+			const blob = await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.92 });
+			const data = new Uint8Array(await blob.arrayBuffer());
+			let binary = '';
+			for (let i = 0; i < data.length; i += 0x8000) {
+				binary += String.fromCharCode(...data.subarray(i, i + 0x8000));
+			}
+			return btoa(binary);
+		},
+		[width, height] as const
+	);
+	return Uint8Array.from(atob(bytes), (c) => c.charCodeAt(0));
+}
+
+/**
+ * A JPEG of seeded 4 × 4 px blocks of random colour at width × height: as much detail as a photo
+ * can hold, so it stays large however it is compressed.
+ */
+async function detailedPhoto(page: Page, width: number, height: number): Promise<Uint8Array> {
+	const bytes = await page.evaluate(
+		async ([w, h]) => {
+			const canvas = new OffscreenCanvas(w, h);
+			const ctx = canvas.getContext('2d');
+			if (!ctx) throw new Error('no 2d context');
+			const image = ctx.createImageData(w, h);
+			let seed = 7;
+			const next = () => (seed = (Math.imul(seed, 1_103_515_245) + 12_345) >>> 0) >>> 24;
+			for (let by = 0; by < h; by += 4) {
+				for (let bx = 0; bx < w; bx += 4) {
+					const colour = [next(), next(), next(), 255];
+					for (let y = by; y < Math.min(by + 4, h); y++) {
+						for (let x = bx; x < Math.min(bx + 4, w); x++) image.data.set(colour, (y * w + x) * 4);
+					}
+				}
+			}
+			ctx.putImageData(image, 0, 0);
 			const blob = await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.92 });
 			const data = new Uint8Array(await blob.arrayBuffer());
 			let binary = '';
@@ -139,14 +176,19 @@ const isCoverPut = (req: Request) =>
 	req.method() === 'PUT' && new URL(req.url()).pathname === `/api/editions/${editionID}/cover`;
 
 /** Picks the file from "Wybierz z biblioteki" in the edition's "Zmień okładkę" sheet. */
-async function pick(page: Page, name: string, bytes: Uint8Array) {
+async function pick(page: Page, name: string, bytes: Uint8Array, mimeType = 'image/jpeg') {
 	await page.goto(`/editions/${editionID}`);
+	return pickHere(page, name, bytes, mimeType);
+}
+
+/** Picks the file in the "Zmień okładkę" sheet of the edition page already shown. */
+async function pickHere(page: Page, name: string, bytes: Uint8Array, mimeType = 'image/jpeg') {
 	await page.getByRole('button', { name: 'Zmień okładkę' }).click();
 	const sheet = page.getByRole('dialog', { name: 'Zmień okładkę' });
 	await expect(sheet).toContainText('JPEG lub PNG. Duże zdjęcia zostaną zmniejszone.');
 	await sheet
 		.locator('input[type="file"]:not([capture])')
-		.setInputFiles({ name, mimeType: 'image/jpeg', buffer: Buffer.from(bytes) });
+		.setInputFiles({ name, mimeType, buffer: Buffer.from(bytes) });
 	return sheet;
 }
 
@@ -231,4 +273,82 @@ test('a file the browser cannot read sends nothing', async ({ page }) => {
 	);
 	await expect(sheet).toBeVisible();
 	expect(puts).toEqual([]);
+});
+
+test('a detailed 4032 × 3024 photo is lowered in quality to stay under 1 MB', async ({
+	page,
+	request
+}) => {
+	const file = await detailedPhoto(page, 4032, 3024);
+	const { body, decoded } = await upload(page, request, file);
+	expect(body.length).toBeLessThan(1_000_000);
+	expect(decoded).toEqual({ width: 1600, height: 1200 });
+});
+
+test('a GIF sends nothing', async ({ page }) => {
+	const puts: string[] = [];
+	page.on('request', (req) => {
+		if (isCoverPut(req)) puts.push(req.url());
+	});
+	const gif = Uint8Array.from(
+		atob('R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw=='),
+		(c) => c.charCodeAt(0)
+	);
+	const sheet = await pick(page, 'photo.gif', gif, 'image/gif');
+	await expect(sheet).toContainText(
+		'Wybierz prawidłowe zdjęcie JPEG lub PNG o rozdzielczości do 16 megapikseli.'
+	);
+	expect(puts).toEqual([]);
+});
+
+test('a photo still shrinking when the edition is left is never sent', async ({
+	page,
+	request
+}) => {
+	await page.addInitScript(() => {
+		const decode = window.createImageBitmap.bind(window);
+		let held: Promise<void> | undefined = new Promise((resolve) => {
+			Object.assign(window, { releaseFirstDecode: resolve });
+		});
+		Object.assign(window, {
+			createImageBitmap: async (...args: Parameters<typeof createImageBitmap>) => {
+				const wait = held;
+				held = undefined;
+				if (wait) await wait;
+				return decode(...args);
+			}
+		});
+	});
+	const puts: string[] = [];
+	page.on('request', (req) => {
+		if (isCoverPut(req)) puts.push(req.url());
+	});
+	const older = await photo(page, 1200, 900);
+	const newer = await photo(page, 800, 600);
+
+	await page.goto(`/titles/${titleID}`);
+	await page.locator(`a[href="/editions/${editionID}"]`).first().click();
+	await expect(page).toHaveURL(new RegExp(`/editions/${editionID}$`));
+	await pickHere(page, 'older.jpg', older);
+	await page.goBack();
+	await expect(page).toHaveURL(new RegExp(`/titles/${titleID}$`));
+	await page.goForward();
+	await expect(page).toHaveURL(new RegExp(`/editions/${editionID}$`));
+
+	const answered = page.waitForResponse((res) => isCoverPut(res.request()));
+	await pickHere(page, 'newer.jpg', newer);
+	expect((await answered).status()).toBe(204);
+	await page.evaluate(() =>
+		(window as unknown as { releaseFirstDecode: () => void }).releaseFirstDecode()
+	);
+	await expect
+		.poll(async () => {
+			const stored = await request.get(`/api/editions/${editionID}/cover`);
+			return jpegSize(new Uint8Array(await stored.body()));
+		})
+		.toEqual({ width: 800, height: 600 });
+	await page.waitForTimeout(1000);
+	expect(puts).toHaveLength(1);
+	const stored = await request.get(`/api/editions/${editionID}/cover`);
+	expect(jpegSize(new Uint8Array(await stored.body()))).toEqual({ width: 800, height: 600 });
 });

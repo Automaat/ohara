@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { Button, Modal } from '@smykla-skalski/sui';
+	import { onDestroy } from 'svelte';
 	import { errorMessage, request } from '#lib/api.js';
 	import {
 		browserCodec,
@@ -29,6 +30,12 @@
 	let library = $state<HTMLInputElement>();
 	let pending = $state<Action | null>(null);
 	let failure = $state<string>();
+	/** Set once the sheet is gone, such as after leaving the edition while a photo was still being
+	 * shrunk: that photo is then never sent, since a sheet opened since may have saved a newer one. */
+	let destroyed = false;
+	onDestroy(() => {
+		destroyed = true;
+	});
 
 	/** Sends one change at a time: a second one started while the first is unanswered could land
 	 * first and be overwritten by it. A photo is shrunk first; one the browser cannot read sends
@@ -39,6 +46,7 @@
 		failure = undefined;
 		try {
 			const body = photo ? await shrinkPhoto(photo, browserCodec) : undefined;
+			if (destroyed) return;
 			await request(
 				fetch,
 				body ? 'PUT' : 'DELETE',

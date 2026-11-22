@@ -291,9 +291,11 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
 - "Zmień okładkę" shrinks the chosen photo in the browser before upload
   (`shrinkPhoto` in `src/lib/edition-cover.ts`): `createImageBitmap` turns
   it upright from its EXIF orientation, a canvas at most 1600 px on the
-  long edge draws it on white and sends it as JPEG. A file the browser
-  cannot decode sends nothing. The server's 8 MiB and 16 megapixel limits
-  stay as a backstop.
+  long edge draws it on white and sends it as JPEG, lowering the quality
+  until it fits under 1 MB. A file that is no JPEG or PNG, or one the
+  browser cannot decode, sends nothing, and a photo still shrinking when
+  its sheet is gone is never sent. The server's 8 MiB and 16 megapixel
+  limits stay as a backstop.
 - Discogs data carries `DiscogsCredit`: "Data provided by Discogs." linked
   to its release page, never `nofollow`, under a quick confirm candidate
   with a `discogs_release_id` and a copy priced from Discogs on Wartość.

@@ -89,7 +89,7 @@ func (h *Handler) writeErr(w http.ResponseWriter, r *http.Request, op string, er
 	case errors.Is(err, ErrLentCopyStays):
 		httpx.WriteJSON(w, h.logger, http.StatusConflict, httpx.Error{Error: err.Error(), Field: "status"})
 	case errors.Is(err, ErrHasEditions), errors.Is(err, ErrHasCopies), errors.Is(err, ErrNotOwned),
-		errors.Is(err, ErrAlreadyLent), errors.Is(err, ErrReturned):
+		errors.Is(err, ErrAlreadyLent), errors.Is(err, ErrReturned), errors.Is(err, ErrInBoxSet):
 		httpx.WriteError(w, h.logger, http.StatusConflict, err.Error())
 	default:
 		httpx.WriteInternal(w, r, h.logger, op, err)
@@ -249,10 +249,12 @@ type EditionWithCopies struct {
 	Copies []Copy `json:"copies"`
 }
 
-// TitleDetail is the GET /api/titles/{id} body.
+// TitleDetail is the GET /api/titles/{id} body. BoxSets are the box set
+// editions that hold the title, absent when none does.
 type TitleDetail struct {
 	Title
 	Editions []EditionWithCopies `json:"editions"`
+	BoxSets  []BoxSet            `json:"box_sets,omitempty"`
 }
 
 func (h *Handler) titleDetail(ctx context.Context, id int64) (TitleDetail, error) {
@@ -264,7 +266,11 @@ func (h *Handler) titleDetail(ctx context.Context, id int64) (TitleDetail, error
 	if err != nil {
 		return TitleDetail{}, err
 	}
-	out := TitleDetail{Title: t, Editions: make([]EditionWithCopies, 0, len(editions))}
+	boxSets, err := h.store.BoxSets(ctx, id)
+	if err != nil {
+		return TitleDetail{}, err
+	}
+	out := TitleDetail{Title: t, Editions: make([]EditionWithCopies, 0, len(editions)), BoxSets: boxSets}
 	for i := range editions {
 		copies, err := h.store.ListCopies(ctx, editions[i].ID)
 		if err != nil {

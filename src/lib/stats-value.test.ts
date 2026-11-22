@@ -108,6 +108,22 @@ describe('valueByKind', () => {
 		expect(groups.map((g) => g.key)).toEqual(['movie', 'book', 'music']);
 	});
 
+	it('keeps TV series apart from films by kind and with them by format', () => {
+		const items = [
+			copy({ format: 'dvd', mid: olx(1000) }),
+			copy({ kind: 'tv', format: 'dvd', mid: olx(3000) }),
+			copy({ kind: 'tv', format: 'bluray', mid: null })
+		];
+		expect(valueByKind(items).map((g) => [g.label, g.midCents, g.copies, g.unvalued])).toEqual([
+			['Seriale', 3000, 2, 1],
+			['Filmy', 1000, 1, 0]
+		]);
+		expect(valueByFormat(items).map((g) => [g.label, g.midCents, g.copies])).toEqual([
+			['DVD', 4000, 2],
+			['Blu-ray', 0, 1]
+		]);
+	});
+
 	it('is empty without copies', () => {
 		expect(valueByKind([])).toEqual([]);
 	});

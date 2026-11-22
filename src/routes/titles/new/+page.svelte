@@ -12,7 +12,9 @@
 	const fromDeals = page.url.searchParams.get('from') === 'deals';
 	const back = fromDeals ? { href: '/deals', label: 'Okazje' } : { href: '/', label: 'Kolekcja' };
 	const flow = new ScanFlow(fetch, browserStore());
-	flow.start(requested === 'book' || requested === 'music' ? requested : 'movie');
+	flow.start(
+		requested === 'book' || requested === 'music' || requested === 'tv' ? requested : 'movie'
+	);
 	if (fromDeals) flow.wish(true);
 	let alive = true;
 

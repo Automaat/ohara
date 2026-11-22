@@ -298,8 +298,8 @@ func newMovieProvider(allegro *movie.Allegro, logger *slog.Logger) *movie.Provid
 }
 
 // titleSearchers back the search by title for a barcode no source knows:
-// TMDB for films and Discogs for albums when their keys are set, Google
-// Books for books with a key and Open Library without one.
+// TMDB for films and TV series and Discogs for albums when their keys are
+// set, Google Books for books with a key and Open Library without one.
 func titleSearchers() map[string]lookup.TextSearcher {
 	s := map[string]lookup.TextSearcher{"book": books.OpenLibrary{Client: sourceClient}}
 	if key := os.Getenv("OHARA_GOOGLE_BOOKS_API_KEY"); key != "" {
@@ -307,6 +307,7 @@ func titleSearchers() map[string]lookup.TextSearcher {
 	}
 	if key := os.Getenv("OHARA_TMDB_API_KEY"); key != "" {
 		s["movie"] = movie.TextSearch{TMDB: movie.TMDB{Client: sourceClient, Key: key}}
+		s["tv"] = movie.TVSearch{TMDB: movie.TMDB{Client: sourceClient, Key: key}}
 	}
 	if d := newDiscogs(); d != nil {
 		s["music"] = music.TextSearch{Discogs: d}

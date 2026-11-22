@@ -199,7 +199,8 @@
 		{ value: '', label: 'Wszystko' },
 		{ value: 'movie', label: 'Filmy' },
 		{ value: 'book', label: 'Książki' },
-		{ value: 'music', label: 'Muzyka' }
+		{ value: 'music', label: 'Muzyka' },
+		{ value: 'tv', label: 'Seriale' }
 	];
 
 	/** A chip's count: copies of its kind, or titles without copies while those are listed. */
@@ -209,7 +210,7 @@
 			return kind ? uncopied.filter((t) => t.kind === kind).length : uncopied.length;
 		}
 		if (!overview) return undefined;
-		return kind ? overview.kinds[kind] : shelvedCount(overview.totals);
+		return kind ? (overview.kinds[kind] ?? 0) : shelvedCount(overview.totals);
 	}
 
 	function setStatus(status: CollectionFilter['status']) {

@@ -26,6 +26,8 @@
 		editionSummary,
 		editionToForm,
 		formatPLN,
+		kindLabels,
+		screenKind,
 		statusLabels,
 		triStateLabels,
 		type Copy,
@@ -315,11 +317,30 @@
 			{/if}
 		</Section>
 
+		{#if d.contents?.length}
+			<Section
+				title="Zawartość zestawu"
+				count={d.contents.length}
+				countedName={(title: string, n: string) => `${title} (${n})`}
+			>
+				<ul class="contents" aria-label="Tytuły w zestawie">
+					{#each d.contents as content (content.id)}
+						<li>
+							<a href={`/titles/${content.id}`}>{displayName(content)}</a>
+							<span class="muted">
+								{[kindLabels[content.kind], content.year].filter(Boolean).join(' · ')}
+							</span>
+						</li>
+					{/each}
+				</ul>
+			</Section>
+		{/if}
+
 		{#if d.notes}
 			<p class="notes">{d.notes}</p>
 		{/if}
 
-		{#if d.barcode || d.discogs_release_id || d.title.kind === 'movie'}
+		{#if d.barcode || d.discogs_release_id || screenKind(d.title.kind)}
 			<Section title="Szczegóły wydania">
 				{#if d.barcode}
 					<div class="barcode">
@@ -337,7 +358,7 @@
 						{/key}
 					</div>
 				{/if}
-				{#if d.title.kind === 'movie'}
+				{#if screenKind(d.title.kind)}
 					<FactList
 						layout="inline"
 						facts={[
@@ -369,6 +390,7 @@
 					<EditionFormFields
 						bind:form={editionForm}
 						kind={d.title.kind}
+						titleID={d.title_id}
 						issue={editionIssue}
 						saving={savingEdition}
 						submitLabel="Zapisz zmiany"
@@ -443,5 +465,23 @@
 	.muted {
 		margin: 0;
 		color: var(--sui-text-muted);
+	}
+	.contents {
+		display: grid;
+		gap: 0.5rem;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+	.contents li {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		gap: 0.5rem;
+		min-inline-size: 0;
+		overflow-wrap: anywhere;
+	}
+	.contents a {
+		min-inline-size: 0;
 	}
 </style>

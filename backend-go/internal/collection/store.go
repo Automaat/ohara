@@ -60,7 +60,7 @@ func mapErr(err, notFound error, op string) error {
 	switch code, constraint := pgCode(err); {
 	case code == pgUniqueViolation && constraint == "edition_barcode_key":
 		return ErrDuplicateBarcode
-	case code == pgUniqueViolation && constraint == "title_tmdb_id_key":
+	case code == pgUniqueViolation && (constraint == "title_tmdb_id_key" || constraint == "title_tv_season_key"):
 		return ErrDuplicateTMDB
 	case code == pgUniqueViolation && constraint == "discarded_request_key":
 		return ErrRequestDiscarded
@@ -81,18 +81,20 @@ func hasTag(param string) string {
 }
 
 const titleColumns = `t.id, t.kind, t.name, t.original_title, t.polish_title, t.year,
-	t.tmdb_id, t.authors, t.bn_id, t.openlibrary_id, t.notes, t.cover_url, t.rating, ` + titleTags + `, t.finished, t.finished_on,
+	t.tmdb_id, t.season, t.authors, t.bn_id, t.openlibrary_id, t.notes, t.cover_url, t.rating, ` + titleTags + `, t.finished, t.finished_on,
 	t.created_at, t.updated_at,
 	(SELECT count(*) FROM edition e WHERE e.title_id = t.id),
-	(SELECT count(*) FROM copy c JOIN edition e ON e.id = c.edition_id WHERE e.title_id = t.id)`
+	(SELECT count(*) FROM copy c JOIN edition e ON e.id = c.edition_id WHERE e.title_id = t.id),
+	EXISTS (SELECT 1 FROM edition_content ec JOIN copy c ON c.edition_id = ec.edition_id
+		WHERE ec.title_id = t.id AND c.status = 'owned')`
 
 func scanTitle(row pgx.Row) (Title, error) {
 	var t Title
 	var finished bool
 	var finishedOn *time.Time
 	err := row.Scan(&t.ID, &t.Kind, &t.Name, &t.OriginalTitle, &t.PolishTitle, &t.Year,
-		&t.TMDBID, &t.Authors, &t.BNID, &t.OpenLibraryID, &t.Notes, &t.CoverURL, &t.Rating, &t.Tags, &finished, &finishedOn,
-		&t.CreatedAt, &t.UpdatedAt, &t.EditionCount, &t.CopyCount)
+		&t.TMDBID, &t.Season, &t.Authors, &t.BNID, &t.OpenLibraryID, &t.Notes, &t.CoverURL, &t.Rating, &t.Tags, &finished, &finishedOn,
+		&t.CreatedAt, &t.UpdatedAt, &t.EditionCount, &t.CopyCount, &t.InOwnedBoxSet)
 	if t.Tags == nil {
 		t.Tags = []string{}
 	}
@@ -108,15 +110,33 @@ const editionCoverOverrideURL = `CASE WHEN e.cover_photo IS NOT NULL
 // edition's own photo, then the edition's cover, then the title's.
 const CoverURL = `COALESCE(` + editionCoverOverrideURL + `, e.cover_url, t.cover_url)`
 
+// editionContents selects the titles box set edition e holds, in their
+// order, as a JSON array.
+const editionContents = `COALESCE((SELECT json_agg(json_build_object('id', ct.id, 'kind', ct.kind,
+	'name', ct.name, 'original_title', ct.original_title, 'polish_title', ct.polish_title, 'year', ct.year,
+	'season', ct.season)
+	ORDER BY ec.position) FROM edition_content ec JOIN title ct ON ct.id = ec.title_id
+	WHERE ec.edition_id = e.id), '[]'::json)`
+
+// contentsText is what a search reads of the titles edition e holds: each
+// one's name, original and Polish title, in their order; null when none.
+// A search matches it as typed, since a contained title named like a code
+// ("2001-09-11") is no barcode of the box set.
+const contentsText = `(SELECT string_agg(concat_ws(' ', ct.name, ct.original_title, ct.polish_title), ' '
+	ORDER BY ec.position) FROM edition_content ec JOIN title ct ON ct.id = ec.title_id
+	WHERE ec.edition_id = e.id)`
+
 const editionColumns = `e.id, e.title_id, e.barcode, e.label, e.publisher, e.year, e.format,
 	e.pl_subtitles, e.pl_voiceover, e.packaging, e.binding, e.discogs_release_id, e.notes, e.cover_url,
-	e.created_at, e.updated_at, (SELECT count(*) FROM copy c WHERE c.edition_id = e.id), ` + editionCoverOverrideURL
+	e.created_at, e.updated_at, (SELECT count(*) FROM copy c WHERE c.edition_id = e.id), ` +
+	editionCoverOverrideURL + `, ` + editionContents
 
 func scanEdition(row pgx.Row) (Edition, error) {
 	var e Edition
 	err := row.Scan(&e.ID, &e.TitleID, &e.Barcode, &e.Label, &e.Publisher, &e.Year, &e.Format,
 		&e.PLSubtitles, &e.PLVoiceover, &e.Packaging, &e.Binding, &e.DiscogsReleaseID, &e.Notes, &e.CoverURL,
-		&e.CreatedAt, &e.UpdatedAt, &e.CopyCount, &e.CoverOverrideURL)
+		&e.CreatedAt, &e.UpdatedAt, &e.CopyCount, &e.CoverOverrideURL, &e.Contents)
+	e.EditionInput.Contents = nil
 	return e, err
 }
 
@@ -171,7 +191,7 @@ func (s *Store) ListTitles(ctx context.Context, f TitleFilter) ([]Title, error) 
 		       array_to_string(t.authors, ' '))), lower($2)) > 0)
 		  AND ($3 = 0 OR t.tmdb_id = $3)
 		  AND `+hasTag("$4")+`
-		ORDER BY lower(t.name), t.id`, f.Kind, strings.TrimSpace(f.Query), f.TMDBID, foldCase(strings.TrimSpace(f.Tag)))
+		ORDER BY lower(t.name), t.season, t.id`, f.Kind, strings.TrimSpace(f.Query), f.TMDBID, foldCase(strings.TrimSpace(f.Tag)))
 	if err != nil {
 		return nil, fmt.Errorf("list titles: %w", err)
 	}
@@ -208,12 +228,12 @@ func (s *Store) CreateTitle(ctx context.Context, in *TitleInput) (Title, bool, e
 		var id int64
 		err := tx.QueryRow(ctx, `INSERT INTO title
 			(kind, name, original_title, polish_title, year, tmdb_id, authors, bn_id, openlibrary_id, notes,
-			cover_url, request_key, rating, finished, finished_on)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, ''), $12, $13, COALESCE($14, false), $15)
+			cover_url, request_key, rating, finished, finished_on, season)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, ''), $12, $13, COALESCE($14, false), $15, $16)
 			ON CONFLICT (request_key) DO NOTHING RETURNING id`,
 			in.Kind, in.Name, in.OriginalTitle, in.PolishTitle, in.Year, in.TMDBID, in.Authors,
 			in.BNID, in.OpenLibraryID, in.Notes, in.CoverURL, in.RequestKey, in.Rating,
-			in.Finished, timeOf(in.FinishedOn)).Scan(&id)
+			in.Finished, timeOf(in.FinishedOn), in.Season).Scan(&id)
 		if errors.Is(err, pgx.ErrNoRows) && in.RequestKey != nil {
 			created = false
 			err = tx.QueryRow(ctx, `SELECT id FROM title WHERE request_key = $1`, *in.RequestKey).Scan(&id)
@@ -275,9 +295,11 @@ func (s *Store) UpdateTitle(ctx context.Context, id int64, in *TitleInput) (Titl
 			rating = CASE WHEN $13 THEN rating ELSE $14 END,
 			finished = COALESCE($15, finished),
 			finished_on = CASE WHEN $15::boolean IS NULL THEN finished_on ELSE $16::date END,
+			season = $17,
 			updated_at = now(), edited_at = now() WHERE id = $1`,
 			id, in.Kind, in.Name, in.OriginalTitle, in.PolishTitle, in.Year, in.TMDBID, in.Authors,
-			in.BNID, in.OpenLibraryID, in.Notes, in.CoverURL, in.KeepRating, in.Rating, in.Finished, timeOf(in.FinishedOn))
+			in.BNID, in.OpenLibraryID, in.Notes, in.CoverURL, in.KeepRating, in.Rating, in.Finished, timeOf(in.FinishedOn),
+			in.Season)
 		if err != nil {
 			return mapErr(err, ErrTitleNotFound, "update title")
 		}
@@ -424,6 +446,9 @@ func (s *Store) DeleteTitle(ctx context.Context, id int64) error {
 		if isFKViolation(err, "edition_title_id_fkey") {
 			return ErrHasEditions
 		}
+		if isFKViolation(err, "edition_content_title_id_fkey") {
+			return ErrInBoxSet
+		}
 		return mapErr(err, ErrTitleNotFound, "delete title")
 	}
 	if tag.RowsAffected() == 0 {
@@ -502,6 +527,8 @@ func (s *Store) CreateEdition(ctx context.Context, in *EditionInput) (Edition, b
 			}
 		} else if err != nil {
 			return mapErr(err, ErrEditionNotFound, "create edition")
+		} else if err := setContents(ctx, tx, id, in.Contents); err != nil {
+			return err
 		}
 		e, err = getEdition(ctx, tx, id)
 		return err
@@ -542,12 +569,108 @@ func (s *Store) UpdateEdition(ctx context.Context, id int64, in *EditionInput) (
 		if tag.RowsAffected() == 0 {
 			return ErrEditionNotFound
 		}
-		return nil
+		if in.Contents == nil {
+			return checkNotContained(ctx, tx, id, in.TitleID)
+		}
+		if err := lockContents(ctx, tx, in.Contents); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM edition_content WHERE edition_id = $1`, id); err != nil {
+			return fmt.Errorf("clear edition contents: %w", err)
+		}
+		return setContents(ctx, tx, id, in.Contents)
 	})
 	if err != nil {
 		return Edition{}, err
 	}
 	return s.GetEdition(ctx, id)
+}
+
+// lockContents key-share-locks the titles an edition is about to list, in
+// ID order, before UpdateEdition drops the stored list. A DELETE of a listed
+// title that locked it first then fails its foreign-key check on the stored
+// list (ErrInBoxSet) before the update touches it; locking after the drop
+// would leave each waiting on the other's lock. A title that does not exist
+// is a *httpx.FieldError on contents.
+func lockContents(ctx context.Context, tx pgx.Tx, titles []int64) error {
+	if len(titles) == 0 {
+		return nil
+	}
+	rows, err := tx.Query(ctx, `SELECT id FROM title WHERE id = ANY($1) ORDER BY id FOR KEY SHARE`, titles)
+	if err != nil {
+		return fmt.Errorf("lock edition contents: %w", err)
+	}
+	found, err := collect(rows, func(row pgx.Row) (int64, error) {
+		var id int64
+		err := row.Scan(&id)
+		return id, err
+	}, "lock edition contents")
+	if err != nil {
+		return err
+	}
+	if len(found) != len(titles) {
+		return fieldErr("contents", "does not exist")
+	}
+	return nil
+}
+
+// setContents lists the titles a box set edition holds, in their order, on
+// top of none. A title that does not exist, or was deleted since the body
+// was read, is a *httpx.FieldError on contents: the foreign key refuses it.
+func setContents(ctx context.Context, tx pgx.Tx, editionID int64, titles []int64) error {
+	if len(titles) == 0 {
+		return nil
+	}
+	_, err := tx.Exec(ctx, `INSERT INTO edition_content (edition_id, title_id, position)
+		SELECT $1, id, ord FROM unnest($2::bigint[]) WITH ORDINALITY AS c (id, ord)`, editionID, titles)
+	if code, constraint := pgCode(err); code == pgForeignKeyViolation && constraint == "edition_content_title_id_fkey" {
+		return fieldErr("contents", "does not exist")
+	}
+	if err != nil {
+		return fmt.Errorf("set edition contents: %w", err)
+	}
+	return nil
+}
+
+// checkNotContained refuses to move an edition to a title its stored
+// contents list, for an update that keeps them.
+func checkNotContained(ctx context.Context, tx pgx.Tx, editionID, titleID int64) error {
+	var contained bool
+	err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM edition_content
+		WHERE edition_id = $1 AND title_id = $2)`, editionID, titleID).Scan(&contained)
+	if err != nil {
+		return fmt.Errorf("check edition contents: %w", err)
+	}
+	if contained {
+		return fieldErr("contents", "cannot hold the edition's own title")
+	}
+	return nil
+}
+
+// BoxSet is a box set edition that holds a title, with its own title's name.
+// Owned says the box set has an owned copy, so the title is on the shelf.
+type BoxSet struct {
+	EditionID int64  `json:"edition_id"`
+	TitleID   int64  `json:"title_id"`
+	Name      string `json:"name"`
+	Owned     bool   `json:"owned"`
+}
+
+// BoxSets returns the box set editions that hold title id, by their title's
+// name.
+func (s *Store) BoxSets(ctx context.Context, id int64) ([]BoxSet, error) {
+	rows, err := s.pool.Query(ctx, `SELECT e.id, t.id, t.name,
+		EXISTS (SELECT 1 FROM copy c WHERE c.edition_id = e.id AND c.status = 'owned')
+		FROM edition_content ec JOIN edition e ON e.id = ec.edition_id JOIN title t ON t.id = e.title_id
+		WHERE ec.title_id = $1 ORDER BY lower(t.name), t.id, e.id`, id)
+	if err != nil {
+		return nil, fmt.Errorf("box sets: %w", err)
+	}
+	return collect(rows, func(row pgx.Row) (BoxSet, error) {
+		var b BoxSet
+		err := row.Scan(&b.EditionID, &b.TitleID, &b.Name, &b.Owned)
+		return b, err
+	}, "box sets")
 }
 
 func (s *Store) fillEditionCover(ctx context.Context, edition *Edition, url string) error {
@@ -966,7 +1089,8 @@ func (s *Store) DiscardRequest(ctx context.Context, key string) error {
 		}
 		err = discardUnused(ctx, tx, key,
 			`SELECT id FROM title WHERE request_key = $1 AND edited_at IS NULL FOR UPDATE`,
-			`SELECT EXISTS (SELECT 1 FROM edition WHERE title_id = $1)`,
+			`SELECT EXISTS (SELECT 1 FROM edition WHERE title_id = $1)
+				OR EXISTS (SELECT 1 FROM edition_content WHERE title_id = $1)`,
 			`DELETE FROM title WHERE id = $1`)
 		if err != nil {
 			return fmt.Errorf("discard title: %w", err)
@@ -1038,7 +1162,8 @@ func discardUnused(ctx context.Context, tx pgx.Tx, key, lock, used, remove strin
 // Filter narrows the collection view; empty fields match everything.
 // Location matches a copy's whole location, case aside. Query is the search
 // as barcode.Normalize leaves it, Typed as the reader typed it: a location
-// holding a code is found by the code as typed.
+// or a box set's contained title holding a code is found by the code as
+// typed.
 type Filter struct {
 	Kind     string
 	Format   string
@@ -1080,23 +1205,25 @@ type Item struct {
 	Condition     *string `json:"condition" ts:"Condition"`
 	// SoldOn and SalePriceCents are a sold copy's sale, ExpectedOn the day an
 	// ordered copy should arrive.
-	SoldOn         *Date    `json:"sold_on,omitempty" ts:",null"`
-	SalePriceCents *int64   `json:"sale_price_cents,omitempty" ts:",null"`
-	ExpectedOn     *Date    `json:"expected_on,omitempty" ts:",null"`
-	Location       *string  `json:"location,omitempty" ts:",null"`
-	EditionID      int64    `json:"edition_id"`
-	Barcode        *string  `json:"barcode"`
-	Label          string   `json:"label"`
-	Format         *string  `json:"format" ts:"Format"`
-	Binding        *string  `json:"binding" ts:"Binding"`
-	TitleID        int64    `json:"title_id"`
-	Kind           string   `json:"kind" ts:"Kind"`
-	Name           string   `json:"name"`
-	OriginalTitle  *string  `json:"original_title"`
-	PolishTitle    *string  `json:"polish_title"`
-	Year           *int     `json:"year"`
-	CoverURL       *string  `json:"cover_url,omitempty"`
-	Authors        []string `json:"authors,omitempty"`
+	SoldOn         *Date   `json:"sold_on,omitempty" ts:",null"`
+	SalePriceCents *int64  `json:"sale_price_cents,omitempty" ts:",null"`
+	ExpectedOn     *Date   `json:"expected_on,omitempty" ts:",null"`
+	Location       *string `json:"location,omitempty" ts:",null"`
+	EditionID      int64   `json:"edition_id"`
+	Barcode        *string `json:"barcode"`
+	Label          string  `json:"label"`
+	Format         *string `json:"format" ts:"Format"`
+	Binding        *string `json:"binding" ts:"Binding"`
+	TitleID        int64   `json:"title_id"`
+	Kind           string  `json:"kind" ts:"Kind"`
+	Name           string  `json:"name"`
+	OriginalTitle  *string `json:"original_title"`
+	PolishTitle    *string `json:"polish_title"`
+	Year           *int    `json:"year"`
+	// Season is a TV title's season, absent for other kinds.
+	Season   *int     `json:"season,omitempty"`
+	CoverURL *string  `json:"cover_url,omitempty"`
+	Authors  []string `json:"authors,omitempty"`
 	// Rating is the title's rating, absent while it has none.
 	Rating *int `json:"rating,omitempty"`
 	// LoanBorrower and LoanDueOn come from the copy's open loan, if any.
@@ -1108,6 +1235,9 @@ type Item struct {
 	FinishedOn *Date `json:"finished_on,omitempty"`
 	// Tags are the title's, so the browser can filter the loaded collection.
 	Tags []string `json:"tags,omitempty"`
+	// Contents are the titles a box set edition holds, so a search for one
+	// of them finds the box set's copy.
+	Contents []ContentTitle `json:"contents,omitempty"`
 }
 
 func scanItem(row pgx.Row) (Item, error) {
@@ -1116,9 +1246,9 @@ func scanItem(row pgx.Row) (Item, error) {
 	var purchased, sold, due, expected, finishedOn *time.Time
 	err := row.Scan(&it.CopyID, &createdAt, &it.Status, &it.PriceCents, &it.MaxPriceCents, &purchased, &it.Shop,
 		&it.AcquiredAs, &it.Condition, &sold, &it.SalePriceCents, &expected, &it.Location, &it.EditionID, &it.Barcode, &it.Label, &it.Format, &it.Binding,
-		&it.TitleID, &it.Kind, &it.Name, &it.OriginalTitle, &it.PolishTitle, &it.Year, &it.CoverURL, &it.Authors,
+		&it.TitleID, &it.Kind, &it.Name, &it.OriginalTitle, &it.PolishTitle, &it.Year, &it.Season, &it.CoverURL, &it.Authors,
 		&it.Rating, &it.LoanBorrower, &due,
-		&it.Tags, &it.Finished, &finishedOn)
+		&it.Tags, &it.Finished, &finishedOn, &it.Contents)
 	it.FinishedOn = dateOf(finishedOn)
 	it.CreatedAtUS = createdAt.UnixMicro()
 	it.PurchasedOn = dateOf(purchased)
@@ -1135,18 +1265,20 @@ func (s *Store) Collection(ctx context.Context, f Filter) ([]Item, error) {
 	rows, err := s.pool.Query(ctx, `SELECT c.id, c.created_at, c.status, c.price_cents, c.max_price_cents,
 			c.purchased_on, c.shop, c.acquired_as, c.condition, c.sold_on, c.sale_price_cents, c.expected_on,
 			c.location, e.id, e.barcode, e.label, e.format, e.binding,
-			t.id, t.kind, t.name, t.original_title, t.polish_title, t.year,
-			`+CoverURL+`, t.authors, t.rating, l.borrower, l.due_on, `+titleTags+`, t.finished, t.finished_on
+			t.id, t.kind, t.name, t.original_title, t.polish_title, t.year, t.season,
+			`+CoverURL+`, t.authors, t.rating, l.borrower, l.due_on, `+titleTags+`, t.finished, t.finished_on,
+			`+editionContents+`
 		FROM copy c JOIN edition e ON e.id = c.edition_id JOIN title t ON t.id = e.title_id
 		LEFT JOIN loan l ON l.copy_id = c.id AND l.returned_on IS NULL
 		WHERE ($1 = '' OR t.kind = $1) AND ($2 = '' OR e.format = $2) AND ($3 = '' OR c.status = $3)
 		  AND ($4 = '' OR e.barcode = $4 OR strpos(lower(concat_ws(' ', t.name, t.original_title,
 		       t.polish_title, array_to_string(t.authors, ' '), e.label, c.shop, c.location)), lower($4)) > 0
-		       OR strpos(lower(c.location), lower($5)) > 0)
+		       OR strpos(lower(c.location), lower($5)) > 0
+		       OR strpos(lower(`+contentsText+`), lower($5)) > 0)
 		  AND (NOT $6 OR l.id IS NOT NULL)
 		  AND `+hasTag("$7")+`
 		  AND (NOT $8 OR (c.status = 'owned' AND NOT t.finished))
-		ORDER BY lower(t.name), t.id, e.id, c.id`,
+		ORDER BY lower(t.name), t.season, t.id, e.id, c.id`,
 		f.Kind, f.Format, f.Status, strings.TrimSpace(f.Query), strings.TrimSpace(f.Typed), f.Loaned,
 		foldCase(strings.TrimSpace(f.Tag)), f.Unfinished)
 	if err != nil {

@@ -15,6 +15,7 @@ import {
 	formatOptions,
 	formatPLN,
 	kindCounts,
+	kindLabels,
 	isoDate,
 	listsOwned,
 	loanPayload,
@@ -26,6 +27,7 @@ import {
 	parsePLN,
 	readCollectionFilter,
 	saleLine,
+	seasonName,
 	shelfLine,
 	shelfSummary,
 	tagHref,
@@ -440,6 +442,17 @@ describe('titles without copies', () => {
 		expect(ids(uncopiedTitles(catalog, filter))).toEqual(want);
 	});
 
+	it('leaves out titles an owned box set holds', () => {
+		const boxed: Title[] = [
+			...catalog,
+			{ ...title, id: 5, kind: 'movie', name: 'Dwie wieże', authors: [], in_owned_box_set: true },
+			{ ...title, id: 6, kind: 'movie', name: 'Powrót króla', authors: [], in_owned_box_set: false }
+		];
+		expect(ids(withoutCopies(boxed))).toEqual([1, 3, 4, 6]);
+		expect(ids(uncopiedTitles(boxed, { kind: 'movie', q: '' }))).toEqual([3, 6]);
+		expect(ids(uncopiedTitles(boxed, { kind: '', q: 'wieże' }))).toEqual([]);
+	});
+
 	it.each([
 		[
 			{ kind: 'book', authors: ['Stanisław Lem', 'Ktoś'], edition_count: 0 },
@@ -629,6 +642,30 @@ describe('edition form', () => {
 			'music'
 		);
 		expect(!badID.ok && badID.issue.field).toBe('discogs_release_id');
+	});
+
+	it("sends a box set's contents only once the reader changed them", () => {
+		const towers = {
+			id: 7,
+			kind: 'movie' as const,
+			name: 'Dwie wieże',
+			original_title: null,
+			polish_title: null,
+			year: 2002
+		};
+		const hobbit = { ...towers, id: 8, kind: 'book' as const, name: 'Hobbit', year: 1937 };
+		const plain = editionPayload(editionToForm(edition), 1, 'movie');
+		expect(plain.ok && 'contents' in plain.value).toBe(false);
+		const added = editionPayload({ ...editionToForm(edition), contents: [towers] }, 1, 'movie');
+		expect(added.ok && added.value.contents).toEqual([7]);
+		const form = editionToForm({ ...edition, contents: [towers, hobbit] });
+		expect(form.contents).toEqual([towers, hobbit]);
+		const untouched = editionPayload({ ...form, notes: 'Steelbook' }, 1, 'movie');
+		expect(untouched.ok && 'contents' in untouched.value).toBe(false);
+		const reordered = editionPayload({ ...form, contents: [hobbit, towers] }, 1, 'movie');
+		expect(reordered.ok && reordered.value.contents).toEqual([8, 7]);
+		const emptied = editionPayload({ ...form, contents: [] }, 1, 'movie');
+		expect(emptied.ok && emptied.value.contents).toEqual([]);
 	});
 
 	it('starts empty', () => {
@@ -1128,5 +1165,100 @@ describe('return day', () => {
 		{ lent: '2026-05-11', today: '2026-05-10', want: '2026-05-11' }
 	])('returns a loan from $lent on $today on $want', ({ lent, today, want }) => {
 		expect(returnDay(lent, today)).toBe(want);
+	});
+});
+
+describe('TV seasons', () => {
+	it('labels the kind and offers it the film media', () => {
+		expect(kindLabels.tv).toBe('Serial');
+		expect(options(kindLabels).map((o) => o.label)).toEqual([
+			'Film',
+			'Książka',
+			'Muzyka',
+			'Serial'
+		]);
+		expect(formatOptions('tv')).toEqual([
+			{ value: 'dvd', label: 'DVD' },
+			{ value: 'bluray', label: 'Blu-ray' },
+			{ value: 'uhd', label: '4K UHD' }
+		]);
+		expect(formatFits('tv', 'uhd')).toBe(true);
+		expect(formatFits('tv', 'cd')).toBe(false);
+	});
+
+	it('names a season after its show', () => {
+		expect(
+			displayName({ name: 'Dark', polish_title: 'Dark', original_title: 'Dark', season: 2 })
+		).toBe('Dark · sezon 2');
+		expect(
+			displayName({
+				name: 'Rodzina Soprano',
+				polish_title: null,
+				original_title: 'The Sopranos',
+				season: 0
+			})
+		).toBe('Rodzina Soprano (The Sopranos) · sezon 0');
+		expect(seasonName('Seksmisja', undefined)).toBe('Seksmisja');
+	});
+
+	it('counts TV copies apart', () => {
+		expect(kindCounts([{ kind: 'tv' }, { kind: 'movie' }, { kind: 'tv' }])).toEqual({
+			movie: 1,
+			book: 0,
+			music: 0,
+			tv: 2
+		});
+	});
+
+	it('round-trips a season with the show and the film fields', () => {
+		const form = {
+			...titleToForm(null, 'tv'),
+			name: 'Dark',
+			season: '2',
+			tmdb_id: '70523',
+			authors: 'Ktoś',
+			bn_id: 'b1'
+		};
+		const parsed = titlePayload(form);
+		expect(parsed.ok && parsed.value).toMatchObject({
+			kind: 'tv',
+			season: 2,
+			tmdb_id: 70523,
+			authors: [],
+			bn_id: null
+		});
+		if (parsed.ok) expect(titleToForm(parsed.value).season).toBe('2');
+	});
+
+	it.each([
+		['', 'Podaj numer sezonu.'],
+		['dwa', 'Sezon to liczba, 0 dla odcinków specjalnych.'],
+		['10000', 'Sezon to liczba do 9999.']
+	])('refuses season %j', (season, message) => {
+		const parsed = titlePayload({ ...titleToForm(null, 'tv'), name: 'Dark', season });
+		expect(!parsed.ok && parsed.issue).toEqual({ field: 'season', message });
+	});
+
+	it('takes specials and leaves other kinds without a season', () => {
+		const specials = titlePayload({ ...titleToForm(null, 'tv'), name: 'Dark', season: '0' });
+		expect(specials.ok && specials.value.season).toBe(0);
+		const film = titlePayload({ ...titleToForm(null, 'movie'), name: 'Miś', season: '3' });
+		expect(film.ok && film.value.season).toBeNull();
+	});
+
+	it('keeps the film fields on a TV edition', () => {
+		const parsed = editionPayload(
+			{ ...editionToForm(null), format: 'bluray', pl_subtitles: 'yes', packaging: ['steelbook'] },
+			1,
+			'tv'
+		);
+		expect(parsed.ok && parsed.value).toMatchObject({
+			format: 'bluray',
+			pl_subtitles: 'yes',
+			packaging: ['steelbook'],
+			binding: null
+		});
+		const missing = editionPayload(editionToForm(null), 1, 'tv');
+		expect(!missing.ok && missing.issue.field).toBe('format');
 	});
 });

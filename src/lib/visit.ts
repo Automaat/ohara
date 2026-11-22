@@ -25,7 +25,7 @@ function emptyVisit(): StoredVisit {
 	return { at: 0, adds: [], scans: [], date: '' };
 }
 
-const kinds: readonly Kind[] = ['movie', 'book', 'music'];
+const kinds: readonly Kind[] = ['movie', 'book', 'music', 'tv'];
 const statuses: readonly CopyStatus[] = ['owned', 'wishlist'];
 const outcomes: readonly ScanOutcome[] = ['added', 'queued', 'waiting', 'skipped', 'undone'];
 

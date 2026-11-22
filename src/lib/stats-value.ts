@@ -33,6 +33,7 @@ export type ValueGroup = {
 
 export const kindGroupLabels: Record<Kind, string> = {
 	movie: 'Filmy',
+	tv: 'Seriale',
 	book: 'Książki',
 	music: 'Muzyka'
 };
@@ -48,7 +49,7 @@ export const formatGroupLabels: Record<Format | 'book' | 'none', string> = {
 	none: 'Bez nośnika'
 };
 
-const kindOrder: Kind[] = ['movie', 'book', 'music'];
+const kindOrder: Kind[] = ['movie', 'tv', 'book', 'music'];
 const formatOrder: (Format | 'book' | 'none')[] = [
 	'dvd',
 	'bluray',

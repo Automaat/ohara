@@ -73,11 +73,13 @@ func (h *Handler) Mount(r chi.Router) {
 	r.Delete("/deals/{id}/dismissal", h.undismiss)
 }
 
-// View is the GET /api/deals body. Wishes counts the copies on the wishlist.
+// View is the GET /api/deals body. Wishes counts the copies on the wishlist,
+// SearchedWishes those the hunter looks for (no TV series).
 type View struct {
-	Status       Status        `json:"status"`
-	Wishes       int           `json:"wishes"`
-	Observations []Observation `json:"observations"`
+	Status         Status        `json:"status"`
+	Wishes         int           `json:"wishes"`
+	SearchedWishes int           `json:"searched_wishes"`
+	Observations   []Observation `json:"observations"`
 }
 
 // list reads the hunter status before the listings, so a run that ends mid-request still reads
@@ -99,7 +101,12 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteInternal(w, r, h.logger, "wish count", err)
 		return
 	}
-	httpx.WriteJSON(w, h.logger, http.StatusOK, View{Status: status, Wishes: wishes, Observations: obs})
+	searched, err := h.store.SearchedWishCount(r.Context())
+	if err != nil {
+		httpx.WriteInternal(w, r, h.logger, "searched wish count", err)
+		return
+	}
+	httpx.WriteJSON(w, h.logger, http.StatusOK, View{Status: status, Wishes: wishes, SearchedWishes: searched, Observations: obs})
 }
 
 func recentFilter(r *http.Request) (RecentFilter, *httpx.FieldError) {

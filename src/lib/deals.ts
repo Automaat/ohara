@@ -25,6 +25,7 @@ export type {
 	MarketPrice,
 	MarketView,
 	Observation,
+	ShareLink,
 	WantlistStatus,
 	WantlistSyncResult
 } from '#lib/api.gen.js';
@@ -285,4 +286,12 @@ export function wantlistSummary(result: WantlistSyncResult | null): string | nul
 	return result.failure
 		? `Synchronizacja przerwana: ${result.failure}. Przed przerwaniem ${counts}.`
 		: `Ostatnia synchronizacja: ${counts}.`;
+}
+
+/** The owner's share link of the wishlist: GET shows it, POST makes a new one, DELETE turns it off. */
+export const shareLinkPath = '/api/wishlist/share';
+
+/** The full address of a share link, whose `url` is its path on this site. */
+export function shareURL(link: { url: string }, origin: string): string {
+	return new URL(link.url, origin).href;
 }

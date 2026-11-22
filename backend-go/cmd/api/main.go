@@ -36,6 +36,7 @@ import (
 	"github.com/Automaat/ohara/backend-go/internal/valuation"
 	"github.com/Automaat/ohara/backend-go/internal/wantlist"
 	"github.com/Automaat/ohara/backend-go/internal/web"
+	"github.com/Automaat/ohara/backend-go/internal/wishshare"
 )
 
 // version is set at build time with -ldflags "-X main.version=...".
@@ -131,6 +132,8 @@ func run() int {
 	queue := scanqueue.NewStore(pool)
 	metrics.RegisterScanQueueCollector(queue.Count)
 	searchers := titleSearchers()
+	shares := wishshare.NewHandler(wishshare.NewStore(pool), logger)
+	deps.Share = shares.Public()
 	deps.API = []server.Mounter{
 		collection.NewHandler(collection.NewStore(pool), logger).WithCatalogCovers(searchers, lookupService),
 		lookup.NewHandler(lookupService, logger),
@@ -140,6 +143,7 @@ func run() int {
 		valuation.NewHandler(valueStore, valuer, logger),
 		wantlist.NewHandler(syncer, logger),
 		export.NewHandler(pool, valuer.Window(), logger),
+		shares,
 	}
 	if dir := os.Getenv("OHARA_WEB_DIR"); dir != "" {
 		webFS := os.DirFS(dir)

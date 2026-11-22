@@ -596,6 +596,11 @@ export type KeywordPayload = {
 	phrase: string;
 };
 
+export type ShareLink = {
+	url: string;
+	created_at: string;
+};
+
 export type Estimate = {
 	cents: number;
 	source: ValueSource;

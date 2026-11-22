@@ -31,6 +31,7 @@ Same layout and tooling as `../baratie`. `package.json` and
     /scanqueue/        # /api/scan-queue: barcodes the scanner could not resolve
     /deals/            # wishlist deal hunter: OLX, Pepper sources, matcher, Telegram alerts
     /wantlist/         # album wishes pushed to the Discogs wantlist (manual sync)
+    /wishshare/        # the wishlist's read-only share link: owner API and the public /share/ pages
     /valuation/        # daily value of owned copies: OLX, SkupSzop buy-back, Discogs; value history
     /server/           # router: /health, /metrics, /api/*, SPA fallback
     /web/              # serves the built SPA, index.html for client routes
@@ -161,8 +162,12 @@ router answers 401 (`{"error": "..."}`, never a redirect) to a request
 without a non-empty `Remote-User` header, the one Traefik copies from
 Authelia's answer, so a request that skips the middleware reaches no handler,
 page or file. Only `GET /health` and `GET /metrics` stay open, for the Docker
-healthcheck and Prometheus, with the path matched as chi routes it; a 401
-still counts in `ohara_http_requests_total`. The guard checks only that the
+healthcheck and Prometheus, and `GET /share/…`, the wishlist's read-only
+share link (see [deals](docs/deals.md)), which the owner chose to open to
+anyone who has its unguessable token; each path is matched as chi routes
+it, and a 401 still counts in `ohara_http_requests_total`. Production
+needs an Authelia bypass for `/share/` alone, the one prefix that serves
+anything without a login. The guard checks only that the
 header is there, so it holds only while Traefik sets it from Authelia's
 answer and the container port accepts nothing but Traefik and Prometheus
 (home-nas firewall); anyone else who can reach the port can send the header. The name is never

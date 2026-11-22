@@ -21,6 +21,7 @@
 	import { options, type FormIssue } from '#lib/collection.js';
 	import DealCard from '#lib/components/DealCard.svelte';
 	import { WantlistSync } from '#lib/wantlist-sync.svelte.js';
+	import WishlistShare from '#lib/components/WishlistShare.svelte';
 	import { DealDismissals } from '#lib/deal-dismissals.svelte.js';
 	import {
 		dealsSummary,
@@ -398,6 +399,8 @@
 			retryingLabel="Ponawianie…"
 		/>
 	{/if}
+
+	<WishlistShare />
 
 	<Disclosure summary="Ustawienia wyszukiwania">
 		<Section

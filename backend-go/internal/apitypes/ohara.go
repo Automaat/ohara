@@ -11,6 +11,7 @@ import (
 	"github.com/Automaat/ohara/backend-go/internal/server"
 	"github.com/Automaat/ohara/backend-go/internal/valuation"
 	"github.com/Automaat/ohara/backend-go/internal/wantlist"
+	"github.com/Automaat/ohara/backend-go/internal/wishshare"
 )
 
 // Header opens the generated file.
@@ -91,6 +92,8 @@ func Ohara() API {
 			Of[deals.View]("DealsView"),
 			Of[deals.Keyword]("Keyword"),
 			Of[deals.KeywordInput]("KeywordPayload"),
+
+			Of[wishshare.ShareLink]("ShareLink"),
 
 			Of[valuation.Estimate]("Estimate"),
 			Of[valuation.CopyValue]("CopyValue"),

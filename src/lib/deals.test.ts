@@ -15,6 +15,7 @@ import {
 	marketPath,
 	searchedFor,
 	segmentLabel,
+	shareURL,
 	timeAgo,
 	underLimitCount,
 	underLimitLabel,
@@ -382,6 +383,20 @@ describe('wantlistSummary', () => {
 	it('reports a sync that stopped, with what it did before', () => {
 		expect(wantlistSummary({ ...sync, added: 1, failure: 'discogs: unexpected status 429' })).toBe(
 			'Synchronizacja przerwana: discogs: unexpected status 429. Przed przerwaniem dodano: 1, już na liście: 5.'
+		);
+	});
+});
+
+describe('shareURL', () => {
+	it('puts the link path on the page origin', () => {
+		expect(shareURL({ url: '/share/abc_-1' }, 'https://ohara.example')).toBe(
+			'https://ohara.example/share/abc_-1'
+		);
+	});
+
+	it('keeps the origin port and drops the page path', () => {
+		expect(shareURL({ url: '/share/t' }, 'http://localhost:5173')).toBe(
+			'http://localhost:5173/share/t'
 		);
 	});
 });

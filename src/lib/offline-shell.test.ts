@@ -32,7 +32,9 @@ describe('serverPaths', () => {
 		'health?x=1',
 		'health/',
 		'metrics',
-		'metrics?x=1'
+		'metrics?x=1',
+		'share/abc',
+		'share/abc/wishes'
 	])('keeps %s away from the worker', (path) => {
 		expect(excluded(path)).toBe(true);
 	});
@@ -45,6 +47,7 @@ describe('serverPaths', () => {
 		'apiary',
 		'healthy',
 		'metrics-board',
+		'shared',
 		'deals?q=api'
 	])('leaves the app page %s to the worker', (path) => {
 		expect(excluded(path)).toBe(false);

@@ -152,8 +152,8 @@ func prices(ctx context.Context, q querier, window time.Duration, titleID int64)
 		ownedByTitle = ` AND owned.title_id = $5`
 	}
 	rows, err := q.Query(ctx, `SELECT o.edition_id, e.title_id, e.format, o.source,
-			o.price_cents, o.acquired_as, o.last_seen_at, o.observed_at, o.gone_at
-		FROM price_observation o JOIN edition e ON e.id = o.edition_id
+			o.price_cents, o.acquired_as, o.last_seen_at, o.observed_at, o.gone_at, t.kind, e.barcode
+		FROM price_observation o JOIN edition e ON e.id = o.edition_id JOIN title t ON t.id = e.title_id
 		WHERE o.source = ANY ($1)
 			AND o.last_seen_at > now() - make_interval(secs => $2)
 			AND (o.edition_id IN (`+ownedEditions+`)
@@ -189,8 +189,8 @@ func (s *Store) Markets(ctx context.Context, window time.Duration, titleID int64
 		scope = ` AND e.title_id = $3`
 	}
 	rows, err := s.pool.Query(ctx, `SELECT o.edition_id, e.title_id, e.format, o.source,
-			o.price_cents, o.acquired_as, o.last_seen_at, o.observed_at, o.gone_at
-		FROM price_observation o JOIN edition e ON e.id = o.edition_id
+			o.price_cents, o.acquired_as, o.last_seen_at, o.observed_at, o.gone_at, t.kind, e.barcode
+		FROM price_observation o JOIN edition e ON e.id = o.edition_id JOIN title t ON t.id = e.title_id
 		WHERE o.source = ANY ($1)
 			AND o.last_seen_at > now() - make_interval(secs => $2)
 			AND (o.observed_at > e.updated_at

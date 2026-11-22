@@ -7,6 +7,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/Automaat/ohara/backend-go/internal/barcode"
 )
 
 // Want is a wishlist copy the hunter searches for, with its edition and
@@ -102,14 +104,20 @@ func newNameText(name string) *nameText {
 // polishISBNPrefix starts every ISBN-13 of a book published in Poland.
 const polishISBNPrefix = "97883"
 
-// polishBook reports whether w is a Polish book edition: one whose
-// barcode is a Polish ISBN or that has none. A title without an edition
-// (NewTitles) is none.
-func (w *Want) polishBook() bool {
-	if w.Kind != "book" || w.EditionID == 0 {
+// PolishBookEdition reports whether an edition of kind with barcode is a
+// Polish book edition: a book whose barcode is a Polish ISBN-13 or that
+// has none. A book with another ISBN or a barcode that is no ISBN is not.
+func PolishBookEdition(kind string, code *string) bool {
+	if kind != "book" {
 		return false
 	}
-	return w.Barcode == nil || *w.Barcode == "" || strings.HasPrefix(*w.Barcode, polishISBNPrefix)
+	return code == nil || *code == "" || barcode.IsBook(*code) && strings.HasPrefix(*code, polishISBNPrefix)
+}
+
+// polishBook reports whether w is a Polish book edition. A title without
+// an edition (NewTitles) is none.
+func (w *Want) polishBook() bool {
+	return w.EditionID != 0 && PolishBookEdition(w.Kind, w.Barcode)
 }
 
 // newWantText splits w's names and authors. Its names are the titles a

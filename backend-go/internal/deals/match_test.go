@@ -674,6 +674,9 @@ func TestPolishBookWants(t *testing.T) {
 			"Diuna Frank Herbert Rebis":             true,
 		}, []string{"Dune herbert", "Diuna herbert"}},
 		{"same original and Polish title", solaris, map[string]bool{"Solaris Lem": true}, []string{"Solaris lem"}},
+		{"Polish prefix on a barcode that is no ISBN", diuna(new("97883128")), map[string]bool{
+			"Frank Herbert - Dune (Ace Books 1990)": true,
+		}, []string{"Dune herbert", "Diuna herbert"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

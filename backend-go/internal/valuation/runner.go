@@ -2,15 +2,11 @@ package valuation
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"strconv"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/Automaat/ohara/backend-go/internal/deals"
@@ -79,13 +75,10 @@ type Runner struct {
 	logger   *slog.Logger
 	cfg      Config
 	sleep    func(ctx context.Context, d time.Duration) error
-
-	running atomic.Bool
-	wg      sync.WaitGroup
-	base    context.Context
-
-	mu     sync.Mutex
+	// status holds the settings the status view shows; task holds the
+	// runs.
 	status Status
+	task   *deals.Task[RunResult]
 }
 
 // NewRunner wires the runner. sources are asked for used and new listings
@@ -98,8 +91,9 @@ func NewRunner(store *Store, sources []deals.Source, buybacks []BuyBack, pricer 
 	}
 	r := &Runner{
 		store: store, sources: sources, buybacks: buybacks, pricer: pricer, logger: logger, cfg: cfg,
-		sleep: sleepCtx, base: context.Background(),
+		sleep: deals.Sleep,
 	}
+	r.task = deals.NewTask[RunResult](r.execute)
 	r.status.Scheduled = cfg.Interval > 0
 	r.status.IntervalSeconds = int64(cfg.Interval.Seconds())
 	metrics.InitBackgroundTask(metrics.TaskValuation)
@@ -133,25 +127,6 @@ func (r *Runner) DealMarkets(ctx context.Context) ([]deals.Market, error) {
 // Pricer prices the owned album releases; nil without one.
 func (r *Runner) Pricer() ReleasePricer { return r.pricer }
 
-func sleepCtx(ctx context.Context, d time.Duration) error {
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-t.C:
-		return nil
-	}
-}
-
-// jitter spreads d uniformly over d*(1-spread) to d*(1+spread).
-func jitter(d time.Duration, spread float64) time.Duration {
-	var b [8]byte
-	_, _ = rand.Read(b[:])
-	u := float64(binary.LittleEndian.Uint64(b[:])>>11) / (1 << 53)
-	return time.Duration(float64(d) * (1 - spread + 2*spread*u))
-}
-
 // Start publishes the last stored value and runs the schedule until ctx
 // ends; manual runs also stop with ctx. The first scheduled run comes one
 // interval after the last stored one, and no sooner than five minutes
@@ -159,14 +134,14 @@ func jitter(d time.Duration, spread float64) time.Duration {
 // due one. With a retention, pruning runs five minutes after start and
 // then daily, whether or not the valuation is scheduled.
 func (r *Runner) Start(ctx context.Context) {
-	r.base = ctx
+	r.task.Bind(ctx)
 	if r.cfg.Retention > 0 {
-		r.wg.Go(func() {
-			wait := jitter(firstRunDelay, 0.1)
+		r.task.Go(func() {
+			wait := deals.Jitter(firstRunDelay, 0.1)
 			for r.sleep(ctx, wait) == nil {
-				wait = jitter(pruneInterval, 0.1)
+				wait = deals.Jitter(pruneInterval, 0.1)
 				if !r.prune(ctx) {
-					wait = jitter(pruneRetry, 0.1)
+					wait = deals.Jitter(pruneRetry, 0.1)
 				}
 			}
 		})
@@ -185,49 +160,31 @@ func (r *Runner) Start(ctx context.Context) {
 	if ok {
 		wait = max(time.Until(latest.ComputedAt.Add(r.cfg.Interval)), firstRunDelay)
 	}
-	r.wg.Go(func() {
-		wait = jitter(wait, 0.1)
-		for {
-			if r.sleep(ctx, wait) != nil {
-				return
-			}
-			if r.running.CompareAndSwap(false, true) {
-				r.execute(ctx)
-			}
-			wait = jitter(r.cfg.Interval, 0.1)
-		}
-	})
+	r.task.Schedule(ctx, deals.Jitter(wait, 0.1), r.cfg.Interval, r.sleep)
 }
 
-// Wait blocks until the schedule and any manual run have stopped.
-func (r *Runner) Wait() { r.wg.Wait() }
+// Wait blocks until the schedule, the prune and any manual run have
+// stopped.
+func (r *Runner) Wait() { r.task.Wait() }
 
 // Trigger starts a run in the background and reports false when one is
 // already running.
-func (r *Runner) Trigger() bool {
-	if !r.running.CompareAndSwap(false, true) {
-		return false
-	}
-	r.wg.Go(func() { r.execute(r.base) })
-	return true
-}
+func (r *Runner) Trigger() bool { return r.task.Trigger() }
 
 // Status returns a copy of the current state.
 func (r *Runner) Status() Status {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	last, running := r.task.State()
 	s := r.status
-	s.Running = r.running.Load()
+	s.Running = running
+	s.LastStartedAt, s.LastFinishedAt, s.LastResult = last.StartedAt, last.FinishedAt, last.Result
 	return s
 }
 
-// execute runs once and records the outcome; the caller holds running.
+// execute runs once and records the outcome; r.task calls it holding the
+// one run.
 func (r *Runner) execute(ctx context.Context) {
-	defer r.running.Store(false)
 	started := time.Now()
-	r.mu.Lock()
-	r.status.LastStartedAt = &started
-	r.mu.Unlock()
+	r.task.Started(started)
 
 	res, err := recovery.Call(r.logger, "valuation panicked", func() (RunResult, error) { return r.Run(ctx) })
 	if err != nil {
@@ -240,10 +197,7 @@ func (r *Runner) execute(ctx context.Context) {
 	}
 	finished := time.Now()
 	metrics.ObserveBackgroundRun(metrics.TaskValuation, finished.Sub(started), err)
-	r.mu.Lock()
-	r.status.LastFinishedAt = &finished
-	r.status.LastResult = &res
-	r.mu.Unlock()
+	r.task.Finished(finished, &res)
 }
 
 // prune deletes the stored listings past the retention, logs how many and
@@ -368,7 +322,7 @@ func (x *run) pause(ctx context.Context) error {
 		x.first = false
 		return ctx.Err()
 	}
-	return x.r.sleep(ctx, jitter(x.r.cfg.Delay, 0.5))
+	return x.r.sleep(ctx, deals.Jitter(x.r.cfg.Delay, 0.5))
 }
 
 func (x *run) fail(source string, err error) {

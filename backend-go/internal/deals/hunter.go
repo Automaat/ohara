@@ -2,8 +2,6 @@ package deals
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/binary"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -11,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
@@ -87,13 +84,12 @@ type Hunter struct {
 	sleep    func(ctx context.Context, d time.Duration) error
 	// now reads the clock that paces alert messages.
 	now func() time.Time
-
-	running atomic.Bool
-	wg      sync.WaitGroup
-	base    context.Context
-
-	mu     sync.Mutex
+	// status holds the settings the status view shows; task holds the
+	// runs.
 	status Status
+	task   *Task[RunResult]
+
+	mu sync.Mutex
 	// lastSend is when the notifier last returned, kept across runs so
 	// messages stay telegramPause apart; guarded by mu.
 	lastSend time.Time
@@ -107,8 +103,9 @@ func NewHunter(store *Store, sources []Source, notifier Notifier, cfg Config, lo
 	}
 	h := &Hunter{
 		store: store, sources: sources, notifier: notifier, logger: logger, cfg: cfg,
-		sleep: sleepCtx, now: time.Now, base: context.Background(),
+		sleep: sleepCtx, now: time.Now,
 	}
+	h.task = NewTask[RunResult](h.execute)
 	h.status.Scheduled = cfg.Interval > 0
 	h.status.IntervalSeconds = int64(cfg.Interval.Seconds())
 	h.status.Telegram = notifier != nil
@@ -122,25 +119,6 @@ func NewHunter(store *Store, sources []Source, notifier Notifier, cfg Config, lo
 	return h
 }
 
-func sleepCtx(ctx context.Context, d time.Duration) error {
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-t.C:
-		return nil
-	}
-}
-
-// jitter spreads d uniformly over d*(1-spread) to d*(1+spread).
-func jitter(d time.Duration, spread float64) time.Duration {
-	var b [8]byte
-	_, _ = rand.Read(b[:])
-	u := float64(binary.LittleEndian.Uint64(b[:])>>11) / (1 << 53)
-	return time.Duration(float64(d) * (1 - spread + 2*spread*u))
-}
-
 // PollTelegram makes Start run p, which turns presses of an alert's
 // "Ignoruj" button into dismissals, until Start's context ends.
 func (h *Hunter) PollTelegram(p *TelegramPoller) { h.poller = p }
@@ -151,9 +129,9 @@ func (h *Hunter) PollTelegram(p *TelegramPoller) { h.poller = p }
 // five minutes after start without one, and never sooner than
 // firstRunDelay.
 func (h *Hunter) Start(ctx context.Context) {
-	h.base = ctx
+	h.task.Bind(ctx)
 	if h.poller != nil {
-		h.wg.Go(func() { h.poller.Run(ctx) })
+		h.task.Go(func() { h.poller.Run(ctx) })
 	}
 	last, ok := h.restore(ctx)
 	if h.cfg.Interval <= 0 {
@@ -163,18 +141,7 @@ func (h *Hunter) Start(ctx context.Context) {
 	if ok {
 		due, spread = time.Until(last.Add(h.cfg.Interval)), 0.1
 	}
-	h.wg.Go(func() {
-		wait := max(jitter(due, spread), firstRunDelay)
-		for {
-			if h.sleep(ctx, wait) != nil {
-				return
-			}
-			if h.running.CompareAndSwap(false, true) {
-				h.execute(ctx)
-			}
-			wait = jitter(h.cfg.Interval, 0.1)
-		}
-	})
+	h.task.Schedule(ctx, max(jitter(due, spread), firstRunDelay), h.cfg.Interval, h.sleep)
 }
 
 // restore puts the last stored run into the status and returns its start;
@@ -188,47 +155,32 @@ func (h *Hunter) restore(ctx context.Context) (time.Time, bool) {
 	if !ok {
 		return time.Time{}, false
 	}
-	h.mu.Lock()
-	if h.status.LastStartedAt == nil {
-		h.status.LastStartedAt = &last.StartedAt
-		h.status.LastFinishedAt = last.FinishedAt
-		h.status.LastResult = last.Result
-	}
-	h.mu.Unlock()
+	h.task.Restore(TaskRun[RunResult]{StartedAt: &last.StartedAt, FinishedAt: last.FinishedAt, Result: last.Result})
 	return last.StartedAt, true
 }
 
 // Wait blocks until the schedule and any manual run have stopped.
-func (h *Hunter) Wait() { h.wg.Wait() }
+func (h *Hunter) Wait() { h.task.Wait() }
 
 // Trigger starts a run in the background and reports false when one is
 // already running.
-func (h *Hunter) Trigger() bool {
-	if !h.running.CompareAndSwap(false, true) {
-		return false
-	}
-	h.wg.Go(func() { h.execute(h.base) })
-	return true
-}
+func (h *Hunter) Trigger() bool { return h.task.Trigger() }
 
 // Status returns a copy of the current state.
 func (h *Hunter) Status() Status {
-	h.mu.Lock()
-	defer h.mu.Unlock()
+	last, running := h.task.State()
 	s := h.status
-	s.Running = h.running.Load()
+	s.Running = running
+	s.LastStartedAt, s.LastFinishedAt, s.LastResult = last.StartedAt, last.FinishedAt, last.Result
 	return s
 }
 
 // execute runs once and records the outcome, in the status and the
-// database; the caller holds running. Times keep the database's
-// microseconds, so a restart restores the same status.
+// database; h.task calls it holding the one run. Times keep the
+// database's microseconds, so a restart restores the same status.
 func (h *Hunter) execute(ctx context.Context) {
-	defer h.running.Store(false)
 	started := time.Now().Truncate(time.Microsecond)
-	h.mu.Lock()
-	h.status.LastStartedAt = &started
-	h.mu.Unlock()
+	h.task.Started(started)
 	h.saveRun(ctx, func(ctx context.Context) error { return h.store.RunStarted(ctx, started) })
 
 	res, err := recovery.Call(h.logger, "deal search panicked", func() (RunResult, error) { return h.Run(ctx) })
@@ -241,10 +193,7 @@ func (h *Hunter) execute(ctx context.Context) {
 			"alerts", res.Alerts, "sent", res.Sent, "errors", len(res.Errors))
 	}
 	finished := time.Now().Truncate(time.Microsecond)
-	h.mu.Lock()
-	h.status.LastFinishedAt = &finished
-	h.status.LastResult = &res
-	h.mu.Unlock()
+	h.task.Finished(finished, &res)
 	h.saveRun(ctx, func(ctx context.Context) error { return h.store.RunFinished(ctx, started, finished, &res) })
 	metrics.ObserveBackgroundRun(metrics.TaskDeals, finished.Sub(started), err)
 }

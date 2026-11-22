@@ -26,6 +26,7 @@
 		editionSummary,
 		editionToForm,
 		formatPLN,
+		gradeLine,
 		kindLabels,
 		screenKind,
 		statusLabels,
@@ -306,6 +307,7 @@
 										value: copy.acquired_as && acquiredLabels[copy.acquired_as]
 									},
 									{ label: 'Stan', value: copy.condition && conditionLabels[copy.condition] },
+									{ label: 'Gradacja', value: gradeLine(copy) },
 									{ label: 'Miejsce', value: copy.location }
 								].filter((fact) => fact.value)}
 							/>

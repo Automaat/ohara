@@ -919,6 +919,32 @@ describe('copy form', () => {
 		});
 	});
 
+	it("round-trips an album copy's grades and leaves blank ones out", () => {
+		const form = copyToForm({
+			edition_id: 3,
+			status: 'owned',
+			price_cents: null,
+			purchased_on: null,
+			shop: '',
+			acquired_as: null,
+			condition: 'good',
+			media_grade: 'very_good_plus',
+			sleeve_grade: 'no_cover',
+			notes: '',
+			max_price_cents: null
+		});
+		expect([form.media_grade, form.sleeve_grade]).toEqual(['very_good_plus', 'no_cover']);
+		const graded = copyPayload(form, 3);
+		expect(graded.ok && graded.value).toMatchObject({
+			condition: 'good',
+			media_grade: 'very_good_plus',
+			sleeve_grade: 'no_cover'
+		});
+		const blank = copyPayload({ ...form, media_grade: '', sleeve_grade: '' }, 3);
+		expect(blank.ok && 'media_grade' in blank.value).toBe(false);
+		expect(blank.ok && 'sleeve_grade' in blank.value).toBe(false);
+	});
+
 	it('keeps the maximum price of a wishlist copy only', () => {
 		const form = copyToForm({
 			edition_id: 3,

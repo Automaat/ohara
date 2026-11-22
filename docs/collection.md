@@ -176,6 +176,18 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   holds one `v`, the current one, answers
   `Cache-Control: private, max-age=31536000, immutable`; any other `v`, a
   second one, none or an error answers `no-store`.
+- An album copy (an edition of a `music` title, any format) takes the
+  Goldmine grades Discogs uses, both optional: `media_grade` for the disc or
+  tape (`mint`, `near_mint`, `very_good_plus`, `very_good`, `good_plus`,
+  `good`, `fair`, `poor`) and `sleeve_grade` (the same plus `generic`,
+  `not_graded`, `no_cover`). A grade on a copy of any other kind, or an
+  unknown value, answers 422 on its field; a `PUT` without one clears it.
+  They sit beside the five-step `condition`, which stays as stored and
+  which the valuation's Discogs grade still reads: a `PUT /api/copies/{id}`
+  without `condition` keeps the stored one (null clears it), so a client
+  that only grades loses nothing. Deals and valuation ignore the grades. The album copy form adds "Stan nośnika" and "Stan
+  okładki" with the English names ("Very Good Plus (VG+)"), and the copy's
+  facts show "Gradacja: Nośnik VG+ · Okładka NM".
 
 ## Frontend
 

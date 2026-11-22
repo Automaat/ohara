@@ -42,9 +42,10 @@ const firstRunDelay = 5 * time.Minute
 // answers with none is broken. A Canaried source asks its own query
 // instead. A feed source's one request is its canary.
 type Config struct {
-	Interval    time.Duration
-	Delay       time.Duration
-	CanaryQuery string
+	Interval        time.Duration
+	Delay           time.Duration
+	CanaryQuery     string
+	AutomaticAlerts bool
 }
 
 // RunResult counts what one run did. Errors holds source failures, which do
@@ -228,6 +229,8 @@ type run struct {
 	// missed holds the listings this run stored that met no rule, by
 	// listingKey, to judge again once a later answer moves the market.
 	missed map[string]Listing
+	// automatic keeps current offers for wishes without limits until the run has all comparisons.
+	automatic map[string]matchedOffer
 	// tried holds the observations whose alert this run sent or failed to
 	// send; a failed one waits for the next run.
 	tried map[int64]bool
@@ -285,6 +288,9 @@ func (h *Hunter) Run(ctx context.Context) (RunResult, error) {
 		missed: map[string]Listing{}, feeds: map[string]feedTally{},
 		coverageRows: map[coverageKey]*wishCoverage{}, coverageMatches: map[coverageMatch]struct{}{},
 	}
+	if h.cfg.AutomaticAlerts && h.notifier != nil {
+		r.automatic = make(map[string]matchedOffer)
+	}
 	for i := range wants {
 		wants[i].Prepare()
 		r.percent = r.percent || wants[i].MaxMarketPercent != nil
@@ -301,6 +307,11 @@ func (h *Hunter) Run(ctx context.Context) (RunResult, error) {
 				return r.res, err
 			}
 		}
+	}
+	queued, err := h.store.queueAutomaticAlerts(ctx, r.automatic, asOf)
+	r.res.Alerts += queued
+	if err != nil {
+		return r.res, err
 	}
 	if err := r.deliver(ctx, nil); err != nil {
 		return r.res, err
@@ -598,6 +609,11 @@ func (r *run) record(ctx context.Context, source string, listings []Listing, tar
 			r.res.Alerts++
 		}
 		key := listingKey(l.Source, l.ExternalID)
+		if r.automatic != nil && l.ExternalID != "" && w.MaxPriceCents == nil && w.MaxMarketPercent == nil {
+			r.automatic[key] = matchedOffer{source: l.Source, externalID: l.ExternalID, copyID: w.CopyID}
+		} else {
+			delete(r.automatic, key)
+		}
 		if r.h.notifier != nil && r.percent && !alert {
 			r.missed[key] = *l
 		} else {
@@ -643,6 +659,7 @@ func (r *run) contradict(ctx context.Context, ids map[string][]string, refreshed
 			key := listingKey(source, id)
 			delete(refreshed, key)
 			delete(r.missed, key)
+			delete(r.automatic, key)
 		}
 		if err := r.h.store.Unmatch(ctx, source, ids[source]); err != nil {
 			return err
@@ -687,7 +704,8 @@ func (r *run) deliver(ctx context.Context, only map[string]bool) error {
 	if r.h.notifier == nil {
 		return nil
 	}
-	alerts, err := r.h.store.PendingAlerts(ctx)
+	automatic := r.automatic != nil && only == nil
+	alerts, err := r.h.store.pendingAlerts(ctx, automatic)
 	if err != nil {
 		return err
 	}
@@ -702,7 +720,7 @@ func (r *run) deliver(ctx context.Context, only map[string]bool) error {
 			}
 		}
 		r.tried[a.ObservationID] = true
-		delivered, err := r.h.store.SendAlert(ctx, a.ObservationID, func(due *Alert) error {
+		delivered, err := r.h.store.sendAlert(ctx, a.ObservationID, automatic, func(due *Alert) error {
 			err := r.h.notify(ctx, due)
 			r.h.sent()
 			metrics.ObserveDealAlert(err)

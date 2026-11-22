@@ -684,7 +684,8 @@ func (s *Store) LendCopy(ctx context.Context, copyID int64, in *LoanInput) (Loan
 // ReturnLoan records the day loan id came back. A loan already back keeps
 // its day: the same day again answers it unchanged, another one is
 // ErrReturned, so a stale "Zwrócono" cannot move it. Errors: ErrNotFound,
-// ErrReturned or a *httpx.FieldError for a day before the loan began.
+// ErrReturned or a *httpx.FieldError for a day before the loan began,
+// checked first, whether the loan is out or back.
 func (s *Store) ReturnLoan(ctx context.Context, id int64, returnedOn time.Time) (Loan, error) {
 	var l Loan
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
@@ -695,15 +696,15 @@ func (s *Store) ReturnLoan(ctx context.Context, id int64, returnedOn time.Time) 
 		if err != nil {
 			return mapErr(err, ErrNotFound, "lock loan")
 		}
+		if returnedOn.Before(lentOn) {
+			return fieldErr("returned_on", "cannot be before lent_on")
+		}
 		if returned != nil {
 			if !returned.Equal(returnedOn) {
 				return ErrReturned
 			}
 			l, err = getLoan(ctx, tx, id)
 			return err
-		}
-		if returnedOn.Before(lentOn) {
-			return fieldErr("returned_on", "cannot be before lent_on")
 		}
 		_, err = tx.Exec(ctx, `UPDATE loan SET returned_on = $2, updated_at = now() WHERE id = $1`, id, returnedOn)
 		if err != nil {

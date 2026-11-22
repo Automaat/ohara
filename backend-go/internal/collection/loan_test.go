@@ -70,6 +70,7 @@ func TestLendAndReturnCopy(t *testing.T) {
 		t.Fatalf("repeated return = %+v, want the day kept", returned)
 	}
 	a.fails(http.MethodPut, loan, obj{"returned_on": "2999-02-02"}, http.StatusConflict, "")
+	a.fails(http.MethodPut, loan, obj{"returned_on": "2000-01-01"}, http.StatusUnprocessableEntity, "returned_on")
 	var kept collection.CopyDetail
 	a.mustDo(http.MethodGet, fmt.Sprintf("/api/copies/%d", owned), nil, &kept, http.StatusOK)
 	if len(kept.Loans) != 1 || day(kept.Loans[0].ReturnedOn) != "2999-02-01" {

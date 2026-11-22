@@ -225,8 +225,8 @@ describe('the visit across reloads', () => {
 		expect(flow.form.purchased_on).toBe('2026-11-20');
 
 		const third = await addCopy(after, '10', '2026-11-20');
-		expect(third?.add.id).toBe(Math.max(...adds.map((a) => a.id)) + 1);
-		expect(third?.add.recentID).toBe(Math.max(...scans.map((s) => s.id)) + 1);
+		expect(third?.add.id).toBeGreaterThan(Math.max(...adds.map((a) => a.id)));
+		expect(third?.add.recentID).toBeGreaterThan(Math.max(...scans.map((s) => s.id)));
 		expect(after.session.adds.map((a) => a.copyID)).toEqual([
 			third?.saved.copy.id,
 			...adds.map((a) => a.copyID)
@@ -300,8 +300,8 @@ describe('the visit across reloads', () => {
 		const first = await addCopy(a, '25', '2026-11-20');
 		b.logScan('5901234123458', 'skipped', 'Nie dodano');
 		const second = await addCopy(b, '10', '2026-11-21');
-		expect(second?.add.id).toBe((first?.add.id ?? 0) + 1);
-		expect(second?.add.recentID).toBe(3);
+		expect(second?.add.id).toBeGreaterThan(first?.add.id ?? 0);
+		expect(second?.add.recentID).toBeGreaterThan(first?.add.recentID ?? 0);
 
 		const after = await load(storage);
 		expect(after.session.adds.map((x) => x.priceCents)).toEqual([1000, 2500]);
@@ -486,12 +486,11 @@ describe('the visit across reloads', () => {
 		const undo = a.undoAdd(slow, undone);
 		await vi.waitFor(() => expect(storage.data[key]).not.toContain('"copyID":40'));
 		const kept = b.recordAdd({ ...rejs, copyID: 41, recentID: null });
-		expect(kept.id).toBe(undone.id);
 		cleanup();
 		await undo;
 
 		const after = await load(storage);
-		expect(after.session.adds.map((x) => x.copyID)).toEqual([41]);
+		expect(after.session.adds).toEqual([kept]);
 	});
 });
 
@@ -512,3 +511,58 @@ const editionFails: typeof fetch = async (input) => {
 	if (String(input).startsWith('/api/editions/')) throw new TypeError('Failed to fetch');
 	return new Response(null, { status: 204 });
 };
+
+describe('ids across visits and tabs', () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+		vi.useRealTimers();
+	});
+
+	it('reads the first entry of an id that is stored twice', () => {
+		const scan = { id: 3, barcode: '3', outcome: 'queued', label: 'Brak danych' } as const;
+		const v = readVisit(
+			stored({
+				adds: [diuna, { ...diuna, name: 'Kopia' }, lalka],
+				scans: [scan, { ...scan, label: 'Kopia' }]
+			}),
+			now
+		);
+		expect(v.adds).toEqual([diuna, lalka]);
+		expect(v.scans).toEqual([scan]);
+	});
+
+	it('never gives a new visit in another tab the ids an earlier visit still holds', async () => {
+		vi.useFakeTimers({ now, toFake: ['Date'] });
+		const storage = memory();
+		const a = await load(storage);
+		const b = await load(storage);
+		const old = await addCopy(a, '25', '');
+		vi.setSystemTime(now + visitLifetime);
+		const fresh = await addCopy(b, '10', '');
+		expect(fresh?.add.id).not.toBe(old?.add.id);
+		expect(fresh?.add.recentID).not.toBe(old?.add.recentID);
+	});
+
+	it('leaves the new scan of another tab alone when an undo ends after the visit did', async () => {
+		vi.useFakeTimers({ now, toFake: ['Date'] });
+		const storage = memory();
+		const a = await load(storage);
+		const b = await load(storage);
+		const old = await addCopy(a, '25', '');
+		let release = (): void => undefined;
+		const held: typeof fetch = async () => {
+			await new Promise<void>((resolve) => (release = resolve));
+			return new Response(null, { status: 204 });
+		};
+		if (!old) throw new Error('the add did not go through');
+		const undo = a.undoAdd(held, old.add);
+		vi.setSystemTime(now + visitLifetime);
+		await addCopy(b, '10', '');
+		release();
+		await undo;
+
+		const after = await load(storage);
+		expect(after.recentScans.list.map((r) => r.outcome)).toEqual(['added']);
+		expect(after.session.adds.map((x) => x.priceCents)).toEqual([1000]);
+	});
+});

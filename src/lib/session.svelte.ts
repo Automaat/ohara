@@ -1,7 +1,7 @@
 import { ApiError, request } from './api';
 import type { CopyStatus, Kind } from './collection';
 import { retracted } from './recent.svelte';
-import { bindVisit, changeVisit, type StoredVisit } from './visit';
+import { bindVisit, changeVisit, nextID, type StoredVisit } from './visit';
 
 /** One copy this visit added through the quick confirm, with what undoing it has to remove. */
 export type SessionAdd = {
@@ -44,12 +44,15 @@ let lastID = 0;
 
 /**
  * Records an add at the top of the visit's adds. Its id follows every add the visit holds, those
- * another tab or an earlier load made included.
+ * another tab or an earlier load made included, and no add of a visit that ended before.
  */
 export function recordAdd(add: Omit<SessionAdd, 'id'>): SessionAdd {
 	let recorded: SessionAdd = { ...add, id: 0 };
 	changeVisit((v) => {
-		lastID = Math.max(lastID, ...v.adds.map((a) => a.id)) + 1;
+		lastID = nextID(
+			lastID,
+			v.adds.map((a) => a.id)
+		);
 		recorded = { ...add, id: lastID };
 		return { ...v, adds: [recorded, ...v.adds] };
 	}, true);

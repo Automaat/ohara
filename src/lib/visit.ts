@@ -99,8 +99,26 @@ function toScan(v: unknown): RecentScan | null {
 	};
 }
 
-function entries<T>(v: unknown, item: (v: unknown) => T | null): T[] {
-	return Array.isArray(v) ? v.map(item).filter((x): x is T => x !== null) : [];
+/** The entries that read as items, the first of each id only, as the scanner lists them by id. */
+function entries<T extends { id: number }>(v: unknown, item: (v: unknown) => T | null): T[] {
+	if (!Array.isArray(v)) return [];
+	const seen = new Set<number>();
+	const read: T[] = [];
+	for (const x of v.map(item)) {
+		if (x === null || seen.has(x.id)) continue;
+		seen.add(x.id);
+		read.push(x);
+	}
+	return read;
+}
+
+/**
+ * The next id for an add or a scan: after the last one this page gave and every id taken, and no
+ * earlier than the current time in milliseconds. A visit started after another ended so never
+ * hands out an id that another tab still holds for the old visit's add or scan.
+ */
+export function nextID(last: number, taken: readonly number[]): number {
+	return Math.max(last + 1, ...taken.map((id) => id + 1), Date.now());
 }
 
 /**

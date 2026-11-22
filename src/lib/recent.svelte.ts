@@ -1,5 +1,5 @@
 import { canonicalBarcode } from './scan';
-import { bindVisit, changeVisit, type StoredVisit } from './visit';
+import { bindVisit, changeVisit, nextID, type StoredVisit } from './visit';
 
 /**
  * How a scan ended, for the scanner's list of recent scans; waiting is kept on the device until
@@ -49,8 +49,8 @@ recentScans.list = bindVisit('scans', {
 let lastID = 0;
 
 /** The next scan id, after every scan the visit holds and every add's link to its scan. */
-function nextID(v: StoredVisit): number {
-	lastID = Math.max(lastID, ...v.scans.map((r) => r.id), ...v.adds.map((a) => a.recentID ?? 0)) + 1;
+function scanID(v: StoredVisit): number {
+	lastID = nextID(lastID, [...v.scans.map((r) => r.id), ...v.adds.map((a) => a.recentID ?? 0)]);
 	return lastID;
 }
 
@@ -58,7 +58,7 @@ function nextID(v: StoredVisit): number {
 export function logScan(barcode: string, outcome: ScanOutcome, label: string, href?: string) {
 	let id = 0;
 	changeVisit((v) => {
-		id = nextID(v);
+		id = scanID(v);
 		return { ...v, scans: [{ id, barcode, outcome, label, href }, ...v.scans].slice(0, 20) };
 	}, true);
 	return id;

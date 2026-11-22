@@ -109,6 +109,48 @@ describe('built-page CSP check edge cases', () => {
 	])('fails %s', (_, policy, body?: string, head?: string) => {
 		expect(problems(page(policy, body, head))).not.toEqual([]);
 	});
+
+	it.each([
+		[
+			'a script after a policy that restricts no scripts but before one that does',
+			'script-src {hash}',
+			undefined,
+			'<meta http-equiv="content-security-policy" content="img-src \'none\'"><script>x</script>',
+			"inline script 'sha256-LXEWQrcmsEQBYnyp+6wy9chTD7GQPMTbAiWHF5IaSIE=' runs before any enforced policy restricts scripts"
+		],
+		[
+			'comma-separated policies, which Chromium and WebKit enforce one by one',
+			"default-src {hash}; img-src 'self', script-src 'none'",
+			undefined,
+			undefined,
+			'is not in script-src of policy 2'
+		],
+		[
+			'a script directive behind a non-ASCII space, which browsers skip',
+			'&#160;&#115;cript-src {hash}',
+			undefined,
+			undefined,
+			'runs before any enforced policy restricts scripts'
+		],
+		[
+			'an SVG script with nomodule, which SVG does not have',
+			'script-src {hash}',
+			'<script>boot()</script><svg><script nomodule>x</script></svg>',
+			undefined,
+			'is not in script-src of policy 1'
+		],
+		[
+			'an SVG script with a language, which SVG does not read',
+			'script-src {hash}',
+			'<script>boot()</script><svg><script language="vbscript">x</script></svg>',
+			undefined,
+			'is not in script-src of policy 1'
+		]
+	])('fails %s', (_, policy, body, head, problem) => {
+		expect(problems(page(policy, body, head))).toEqual(
+			expect.arrayContaining([expect.stringContaining(problem)])
+		);
+	});
 });
 
 describe('check-csp CLI', () => {

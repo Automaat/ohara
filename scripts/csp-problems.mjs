@@ -69,14 +69,23 @@ function policyText(/** @type {Element} */ element) {
 	return attribute(element, 'content') || undefined;
 }
 
-/** Parses a serialized policy; a repeated directive is ignored, as browsers ignore it. */
+/** ASCII whitespace, the only whitespace CSP parsing strips or splits on. */
+const asciiSpace = /[\t\n\f\r ]+/;
+
+/**
+ * Parses a serialized policy as CSP Level 3 does: a directive is trimmed of ASCII
+ * whitespace only, one holding a non-ASCII character is skipped and a repeated one is
+ * ignored, as browsers skip and ignore them.
+ */
 function parsePolicy(/** @type {string} */ text) {
 	/** @type {Policy} */
 	const policy = new Map();
-	for (const directive of text.split(';')) {
-		const [name, ...sources] = directive.trim().split(/[\t\n\f\r ]+/);
+	for (const token of text.split(';')) {
+		const directive = token.replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, '');
+		if (directive === '' || /[^\x00-\x7f]/.test(directive)) continue;
+		const [name, ...sources] = directive.split(asciiSpace);
 		const key = name.toLowerCase();
-		if (key && !policy.has(key)) policy.set(key, sources);
+		if (!policy.has(key)) policy.set(key, sources);
 	}
 	return policy;
 }
@@ -106,8 +115,9 @@ function allowsHash(/** @type {string[]} */ sources, /** @type {string} */ text)
 
 /**
  * How a browser treats a script element: `undefined` when it never runs (a data block,
- * an empty inline script, a `nomodule` classic script), otherwise whether it is inline
- * and its text, following the HTML standard's "prepare the script element".
+ * an empty inline script, an HTML `nomodule` classic script), otherwise whether it is
+ * inline and its text, following the HTML standard's "prepare the script element". An
+ * SVG script has no `language` or `nomodule`: without a `type` it is JavaScript.
  */
 function script(/** @type {Element} */ element) {
 	if (element.tagName !== 'script') return undefined;
@@ -120,14 +130,14 @@ function script(/** @type {Element} */ element) {
 	const text = element.childNodes.map((node) => ('value' in node ? node.value : '')).join('');
 	if (!external && text === '') return undefined;
 	const type = attribute(element, 'type');
-	const language = attribute(element, 'language');
+	const language = svg ? undefined : attribute(element, 'language');
 	const kind = (
 		type === '' || (type === undefined && !language)
 			? 'text/javascript'
 			: (type?.replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, '') ?? `text/${language}`)
 	).toLowerCase();
 	if (javascriptTypes.has(kind)) {
-		if (attribute(element, 'nomodule') !== undefined) return undefined;
+		if (!svg && attribute(element, 'nomodule') !== undefined) return undefined;
 	} else if (!otherScriptTypes.has(kind)) return undefined;
 	return { external, url, text };
 }
@@ -152,17 +162,24 @@ export function problems(/** @type {string} */ html) {
 		const text = policyText(element);
 		if (text !== undefined) {
 			const parent = element.parentNode;
-			if (parent && 'tagName' in parent && isHTML(parent, 'head')) policies.push(parsePolicy(text));
-			else found.push('content-security-policy <meta> outside <head> is ignored by browsers');
+			if (!(parent && 'tagName' in parent && isHTML(parent, 'head'))) {
+				found.push('content-security-policy <meta> outside <head> is ignored by browsers');
+				continue;
+			}
+			// HTML takes one policy here, but Chromium and WebKit enforce each comma-separated
+			// one: flag the comma and hold the page to every part.
+			if (text.includes(','))
+				found.push('content-security-policy <meta> holds a comma, which browsers read differently');
+			policies.push(...text.split(',').map(parsePolicy));
 			continue;
 		}
 		const run = script(element);
 		if (!run) continue;
-		if (policies.length === 0) {
+		if (!policies.some((policy) => effective(policy, 'script-src-elem'))) {
 			found.push(
 				run.external
-					? `script ${run.url} runs before any enforced content-security-policy`
-					: `inline script ${hashSource(run.text)} runs before any enforced content-security-policy`
+					? `script ${run.url} runs before any enforced policy restricts scripts`
+					: `inline script ${hashSource(run.text)} runs before any enforced policy restricts scripts`
 			);
 			continue;
 		}

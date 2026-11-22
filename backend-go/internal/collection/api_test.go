@@ -253,6 +253,80 @@ func TestEditionCoverLifecycle(t *testing.T) {
 	assertCovers(provider)
 }
 
+// get sends a GET to path and returns its status and headers.
+func (a *api) get(path string) (int, http.Header) {
+	a.t.Helper()
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, a.url+path, http.NoBody)
+	if err != nil {
+		a.t.Fatalf("request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		a.t.Fatalf("GET %s: %v", path, err)
+	}
+	defer resp.Body.Close()
+	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+		a.t.Fatalf("read: %v", err)
+	}
+	return resp.StatusCode, resp.Header
+}
+
+func TestEditionCoverCaching(t *testing.T) {
+	a := newAPI(t)
+	edition := a.edition(obj{"title_id": a.title("movie", "Seksmisja"), "format": "dvd"})
+	detailPath := fmt.Sprintf("/api/editions/%d", edition)
+	coverPath := detailPath + "/cover"
+	coverURL := func() string {
+		t.Helper()
+		var detail collection.EditionDetail
+		a.mustDo(http.MethodGet, detailPath, nil, &detail, http.StatusOK)
+		if detail.CoverOverrideURL == nil {
+			t.Fatal("missing cover override")
+		}
+		return *detail.CoverOverrideURL
+	}
+	const noStore = "no-store"
+	const immutable = "private, max-age=31536000, immutable"
+
+	a.mustDo(http.MethodPut, coverPath, coverPNG(t, 1), nil, http.StatusNoContent)
+	first := coverURL()
+	a.mustDo(http.MethodPut, coverPath, coverPNG(t, 2), nil, http.StatusNoContent)
+	current := coverURL()
+
+	tests := []struct {
+		name   string
+		path   string
+		status int
+		cache  string
+	}{
+		{name: "current version", path: current, status: http.StatusOK, cache: immutable},
+		{name: "no version", path: coverPath, status: http.StatusOK, cache: noStore},
+		{name: "empty version", path: coverPath + "?v=", status: http.StatusOK, cache: noStore},
+		{name: "replaced version", path: first, status: http.StatusOK, cache: noStore},
+		{name: "unknown version", path: coverPath + "?v=1", status: http.StatusOK, cache: noStore},
+		{name: "missing edition", path: fmt.Sprintf("/api/editions/%d/cover?v=1", edition+1000), status: http.StatusNotFound, cache: noStore},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			status, h := a.get(tt.path)
+			if status != tt.status {
+				t.Fatalf("GET %s = %d, want %d", tt.path, status, tt.status)
+			}
+			if got := h.Get("Cache-Control"); got != tt.cache {
+				t.Errorf("Cache-Control = %q, want %q", got, tt.cache)
+			}
+			if h.Get("X-Request-Id") == "" || h.Get("X-Frame-Options") != "DENY" || h.Get("X-Content-Type-Options") != "nosniff" {
+				t.Errorf("missing request ID or security headers: %v", h)
+			}
+		})
+	}
+
+	a.mustDo(http.MethodDelete, coverPath, nil, nil, http.StatusNoContent)
+	if status, h := a.get(current); status != http.StatusNotFound || h.Get("Cache-Control") != noStore {
+		t.Errorf("removed photo = %d %q, want 404 %q", status, h.Get("Cache-Control"), noStore)
+	}
+}
+
 func TestCRUDLifecycle(t *testing.T) {
 	a := newAPI(t)
 

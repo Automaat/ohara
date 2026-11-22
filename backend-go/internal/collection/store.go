@@ -454,11 +454,15 @@ func resolvedQueueEntry(ctx context.Context, tx pgx.Tx, editionID int64) (resolv
 	return e, true, nil
 }
 
-func (s *Store) editionCover(ctx context.Context, id int64) ([]byte, error) {
+// editionCover returns edition id's photo and its version, the `v` that
+// editionCoverOverrideURL puts in the photo's URL.
+func (s *Store) editionCover(ctx context.Context, id int64) ([]byte, string, error) {
 	var photo []byte
-	err := s.pool.QueryRow(ctx, `SELECT cover_photo FROM edition WHERE id = $1 AND cover_photo IS NOT NULL`, id).
-		Scan(&photo)
-	return photo, mapErr(err, ErrEditionNotFound, "get edition cover")
+	var version string
+	err := s.pool.QueryRow(ctx, `SELECT cover_photo, extract(epoch FROM updated_at)::text
+		FROM edition WHERE id = $1 AND cover_photo IS NOT NULL`, id).
+		Scan(&photo, &version)
+	return photo, version, mapErr(err, ErrEditionNotFound, "get edition cover")
 }
 
 func (s *Store) setEditionCover(ctx context.Context, id int64, photo []byte) error {

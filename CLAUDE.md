@@ -258,6 +258,11 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   `scan_queue_resolved`; `DELETE /api/editions/{id}?requeue=1` puts it back
   with its scans and times in the same transaction, as the scanner does when
   it undoes an add that created the edition.
+- An edition's own cover photo is served at the `cover_override_url` the API
+  hands out, `/api/editions/{id}/cover?v=` plus the edition's `updated_at`,
+  which a new photo or any edit changes. A request whose `v` is the current
+  one answers `Cache-Control: private, max-age=31536000, immutable`; any
+  other `v`, none or an error answers `no-store`.
 
 ### Frontend
 

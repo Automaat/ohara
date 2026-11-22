@@ -233,3 +233,70 @@ func TestCopyHistoryAPI(t *testing.T) {
 		}
 	}
 }
+
+// TestViewMoves measures every copy from one start day, the newest
+// valuation day 30 to 37 days before the last one: a copy without a row on
+// that day is left out even with a row elsewhere in the span, a day inside
+// the period is not the start, a day without a used value stays null, and
+// without a valuation, or one in the span, there are no moves.
+func TestViewMoves(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	seed(t, pool)
+	exec(t, pool, `INSERT INTO copy (edition_id, status) VALUES (20, 'owned')`)
+	logger := slog.New(slog.DiscardHandler)
+	store := NewStore(pool)
+	runner := NewRunner(store, nil, nil, nil, Config{Window: 90 * 24 * time.Hour}, logger)
+	srv := httptest.NewServer(server.New(server.Config{}, logger, server.Deps{
+		DB: pool, API: []server.Mounter{NewHandler(store, runner, logger)},
+	}))
+	t.Cleanup(srv.Close)
+	ctx := context.Background()
+	save := func(ago int, values ...CopyValue) {
+		t.Helper()
+		if err := store.saveCopyDays(ctx, dbDay(t, pool, ago), values); err != nil {
+			t.Fatal(err)
+		}
+	}
+	valued := func(ago ...int) {
+		t.Helper()
+		for _, a := range ago {
+			if _, err := pool.Exec(ctx, `INSERT INTO valuation_history (day, copies, spent_cents,
+				floor_cents, floor_copies, mid_cents, mid_copies, ceiling_cents, ceiling_copies,
+				low_confidence) VALUES (current_date - $1::int, 0, 0, 0, 0, 0, 0, 0, 0, 0)`, a); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	view := func() View {
+		t.Helper()
+		var v View
+		if code := get(t, srv.URL+"/api/valuation", &v); code != http.StatusOK {
+			t.Fatalf("GET = %d", code)
+		}
+		return v
+	}
+	mid := func(id, cents int64) CopyValue { return CopyValue{CopyID: id, Mid: &Estimate{Cents: cents}} }
+	save(0, mid(1, 6000), mid(2, 4500), CopyValue{CopyID: 3}, mid(5, 5000))
+	save(29, mid(1, 4100), mid(2, 4400))
+	save(33, mid(1, 4000), mid(3, 3000))
+	save(35, mid(2, 2500))
+	save(38, mid(5, 100))
+
+	if v := view(); v.MovesFrom != nil || v.Moves == nil || len(v.Moves) != 0 {
+		t.Fatalf("before a valuation = from %v, %+v, want none", v.MovesFrom, v.Moves)
+	}
+	valued(0, 29, 38)
+	if v := view(); v.MovesFrom != nil || v.Moves == nil || len(v.Moves) != 0 {
+		t.Fatalf("no valuation in the span = from %v, %+v, want none", v.MovesFrom, v.Moves)
+	}
+
+	valued(33, 35)
+	got := view()
+	want := []Move{
+		{CopyID: 1, FromCents: grosze(4000), ToCents: grosze(6000)},
+		{CopyID: 3, FromCents: grosze(3000)},
+	}
+	if got.MovesFrom == nil || *got.MovesFrom != dbDay(t, pool, 33) || !reflect.DeepEqual(got.Moves, want) {
+		t.Fatalf("moves = from %v, %+v, want from %s, %+v", got.MovesFrom, got.Moves, dbDay(t, pool, 33), want)
+	}
+}

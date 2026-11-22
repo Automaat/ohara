@@ -8,6 +8,8 @@ import {
 	copyNote,
 	copyRange,
 	missingCeiling,
+	moveChange,
+	movers,
 	daysAgo,
 	discogsRelease,
 	estimateSource,
@@ -27,6 +29,7 @@ import {
 	recentHistory,
 	sparkline,
 	type CopyValue,
+	type CopyValueMove,
 	type HistoryPoint,
 	type RunResult,
 	type RunnerStatus,
@@ -378,7 +381,9 @@ describe('page summary', () => {
 			summary: s,
 			copies: [],
 			history: [],
-			last_valuation: '2026-11-18'
+			last_valuation: '2026-11-18',
+			moves_from: null,
+			moves: []
 		});
 		const now = new Date(2026, 10, 19, 9);
 
@@ -682,5 +687,85 @@ describe('copy rows', () => {
 		expect(nbsp(copyMeta(copy({ price_cents: 18999 })))).toBe('Winyl · kupiono za 189,99 zł');
 		expect(copyMeta(copy({ format: 'uhd' }))).toBe('4K UHD');
 		expect(copyMeta(copy({ kind: 'book', format: null }))).toBe('Książka');
+	});
+});
+
+describe('movers', () => {
+	const move = (copy_id: number, from: number | null, to: number | null): CopyValueMove => ({
+		copy_id,
+		from_cents: from,
+		to_cents: to
+	});
+	const owned = (...ids: number[]) =>
+		ids.map((id) => copy({ copy_id: id, title_name: `Tytuł ${id}` }));
+	const ids = (list: { copy: CopyValue }[]) => list.map((m) => m.copy.copy_id);
+
+	it('lists a riser and a faller with the change in złoty and percent', () => {
+		const { rising, falling } = movers(owned(1, 2), [move(1, 4000, 6000), move(2, 5000, 4500)]);
+
+		expect(rising.map((m) => [m.copy.title_name, nbsp(m.change)])).toEqual([
+			['Tytuł 1', '+20 zł · +50%']
+		]);
+		expect(falling.map((m) => [m.copy.title_name, nbsp(m.change)])).toEqual([
+			['Tytuł 2', '−5 zł · −10%']
+		]);
+	});
+
+	it('keeps the five largest changes of each direction, the largest first', () => {
+		const copies = owned(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);
+		const moves = [
+			move(1, 1000, 1100),
+			move(2, 1000, 1600),
+			move(3, 1000, 1300),
+			move(4, 1000, 3000),
+			move(5, 1000, 1200),
+			move(6, 1000, 1700),
+			move(7, 5000, 4000),
+			move(8, 5000, 4900),
+			move(9, 5000, 1000),
+			move(10, 5000, 4500),
+			move(11, 5000, 4800),
+			move(12, 5000, 4700)
+		];
+
+		const { rising, falling } = movers(copies, moves);
+
+		expect(ids(rising)).toEqual([4, 6, 2, 3, 5]);
+		expect(ids(falling)).toEqual([9, 7, 10, 12, 11]);
+	});
+
+	it('breaks a tie by copy', () => {
+		expect(ids(movers(owned(1, 2), [move(2, 1000, 2000), move(1, 3000, 4000)]).rising)).toEqual([
+			1, 2
+		]);
+	});
+
+	it.each([
+		['no value at the start', move(1, null, 6000)],
+		['no value now', move(1, 4000, null)],
+		['no value at either end', move(1, null, null)],
+		['an unchanged value', move(1, 4000, 4000)]
+	])('leaves out a copy with %s', (_, m) => {
+		expect(movers(owned(1), [m])).toEqual({ rising: [], falling: [] });
+	});
+
+	it('leaves out a copy no longer owned', () => {
+		expect(movers(owned(1), [move(2, 4000, 6000)])).toEqual({ rising: [], falling: [] });
+	});
+
+	it('has nothing to list without moves', () => {
+		expect(movers(owned(1, 2), [])).toEqual({ rising: [], falling: [] });
+	});
+
+	it('keeps a change under half a złoty and writes it in grosze', () => {
+		const { rising, falling } = movers(owned(1, 2), [move(1, 4000, 4049), move(2, 4000, 3999)]);
+
+		expect(rising.map((m) => nbsp(m.change))).toEqual(['+0,49 zł · +1%']);
+		expect(falling.map((m) => nbsp(m.change))).toEqual(['−0,01 zł · 0%']);
+	});
+
+	it('writes a change from 0 zł without a percent', () => {
+		expect(nbsp(moveChange(0, 1500))).toBe('+15 zł');
+		expect(nbsp(moveChange(4000, 4050))).toBe('+1 zł · +1%');
 	});
 });

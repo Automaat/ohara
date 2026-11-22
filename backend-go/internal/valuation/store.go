@@ -411,6 +411,46 @@ func (s *Store) CopyHistory(ctx context.Context, titleID int64, n int) ([]CopyDa
 	return pgx.CollectRows(rows, pgx.RowToStructByPos[CopyDay])
 }
 
+// Move is a copy's stored used value on the movers' start day (FromCents)
+// and end day (ToCents), in grosze, null for a day the copy had no used
+// value.
+type Move struct {
+	CopyID    int64  `json:"copy_id"`
+	FromCents *int64 `json:"from_cents"`
+	ToCents   *int64 `json:"to_cents"`
+}
+
+// Moves picks the movers' start, the newest valuation day from days to
+// days+slack days before end (YYYY-MM-DD), so a valuation that skipped
+// the day exactly days before still gives one, and returns it with the
+// used value of every copy stored on both days, by copy. Every copy is
+// measured from that one day; a copy without a row on either day is left
+// out. Without a valuation day in that span, it returns false.
+func (s *Store) Moves(ctx context.Context, end string, days, slack int) (string, []Move, bool, error) {
+	var from *string
+	if err := s.pool.QueryRow(ctx, `SELECT to_char(max(day), 'YYYY-MM-DD') FROM valuation_history
+		WHERE day BETWEEN $1::date - ($2::int + $3::int) AND $1::date - $2::int`,
+		end, days, slack).Scan(&from); err != nil {
+		return "", nil, false, fmt.Errorf("moves start: %w", err)
+	}
+	if from == nil {
+		return "", []Move{}, false, nil
+	}
+	rows, err := s.pool.Query(ctx, `SELECT e.copy_id, f.mid_cents, e.mid_cents
+		FROM copy_value_history e
+			JOIN copy_value_history f ON f.copy_id = e.copy_id AND f.day = $2::date
+		WHERE e.day = $1::date
+		ORDER BY e.copy_id`, end, *from)
+	if err != nil {
+		return "", nil, false, fmt.Errorf("moves: %w", err)
+	}
+	moves, err := pgx.CollectRows(rows, pgx.RowToStructByPos[Move])
+	if err != nil {
+		return "", nil, false, fmt.Errorf("moves: %w", err)
+	}
+	return *from, moves, true, nil
+}
+
 // History returns the value of each of the last n days, oldest first.
 func (s *Store) History(ctx context.Context, n int) ([]HistoryPoint, error) {
 	rows, err := s.pool.Query(ctx, `SELECT `+historyColumns+` FROM valuation_history

@@ -329,17 +329,20 @@ func copyDayArgs(day *string, owned []CopyValue) []any {
 // SaveDay stores sum as today's value and each copy in owned as that
 // copy's value today, replacing what an earlier run stored today for the
 // collection and for those copies. A copy valued earlier today but not in
-// owned, such as one sold since, keeps its row. Both go in one batch,
-// which Postgres runs as one implicit transaction, so the day is stored
-// with its copies or not at all.
+// owned, such as one sold since, keeps its row. Both are written in one
+// transaction, so the day is stored with its copies or not at all; the
+// two statements go in one batch to spare a round trip.
 func (s *Store) SaveDay(ctx context.Context, sum *Summary, owned []CopyValue) (HistoryPoint, error) {
 	var p HistoryPoint
-	batch := &pgx.Batch{}
-	batch.Queue(saveDaySQL, sum.Copies, sum.SpentCents, sum.Floor.Cents, sum.Floor.Copies,
-		sum.Mid.Cents, sum.Mid.Copies, sum.Ceiling.Cents, sum.Ceiling.Copies, sum.LowConfidence).
-		QueryRow(func(row pgx.Row) error { return row.Scan(historyFields(&p)...) })
-	batch.Queue(saveCopyDaysSQL, copyDayArgs(nil, owned)...)
-	if err := s.pool.SendBatch(ctx, batch).Close(); err != nil {
+	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		batch := &pgx.Batch{}
+		batch.Queue(saveDaySQL, sum.Copies, sum.SpentCents, sum.Floor.Cents, sum.Floor.Copies,
+			sum.Mid.Cents, sum.Mid.Copies, sum.Ceiling.Cents, sum.Ceiling.Copies, sum.LowConfidence).
+			QueryRow(func(row pgx.Row) error { return row.Scan(historyFields(&p)...) })
+		batch.Queue(saveCopyDaysSQL, copyDayArgs(nil, owned)...)
+		return tx.SendBatch(ctx, batch).Close()
+	})
+	if err != nil {
 		return HistoryPoint{}, fmt.Errorf("save day: %w", err)
 	}
 	return p, nil

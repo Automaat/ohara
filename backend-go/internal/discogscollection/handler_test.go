@@ -216,14 +216,14 @@ func (d *double) moveTo(id, folder int64) {
 	}
 }
 
-// hide makes release id's lookups answer 404, or answer again.
-func (d *double) hide(id int64, hidden bool) {
+// hide makes the test release's lookups answer 404, or answer again.
+func (d *double) hide(hidden bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.hidden == nil {
 		d.hidden = map[int64]bool{}
 	}
-	d.hidden[id] = hidden
+	d.hidden[release] = hidden
 }
 
 // commitLate makes the instances of the adds answered 503.
@@ -365,6 +365,32 @@ func (a *api) push(id int64) (int, string, discogscollection.State) {
 	return code, raw, s
 }
 
+// settle dates copy id's link and unfinished add past the settle time, as
+// if they were made long ago.
+func (a *api) settle(id int64) {
+	a.t.Helper()
+	for _, q := range []string{
+		`UPDATE copy SET discogs_instance_linked_at = now() - interval '11 minutes'
+			WHERE id = $1 AND discogs_instance_id IS NOT NULL`,
+		`UPDATE discogs_add SET sent_at = now() - interval '11 minutes' WHERE copy_id = $1`,
+	} {
+		if _, err := a.pool.Exec(context.Background(), q, id); err != nil {
+			a.t.Fatal(err)
+		}
+	}
+}
+
+// sibling adds another owned copy of copy id's edition with copyFields.
+func (a *api) sibling(id int64, copyFields obj) int64 {
+	a.t.Helper()
+	var edition int64
+	if err := a.pool.QueryRow(context.Background(), `SELECT edition_id FROM copy WHERE id = $1`, id).Scan(&edition); err != nil {
+		a.t.Fatal(err)
+	}
+	copyFields["edition_id"] = edition
+	return a.id("/api/copies", copyFields)
+}
+
 func (a *api) stored(id int64) (*int64, *int64) {
 	a.t.Helper()
 	var instance, rel *int64
@@ -503,6 +529,7 @@ func TestPushReaddsInstanceGoneFromDiscogs(t *testing.T) {
 		t.Fatalf("push = %d %s", code, raw)
 	}
 	d.removeRelease(release)
+	a.settle(id)
 	code, raw, s := a.push(id)
 	adds, _, _ := d.snapshot()
 	if code != http.StatusOK || len(adds) != 2 || s.InstanceID == nil || *s.InstanceID != adds[1].instance {
@@ -602,12 +629,12 @@ func TestPushAnsweredInstanceMissingFromListing(t *testing.T) {
 		t.Fatalf("push = %d %s, want 502", code, raw)
 	}
 	d.failWith(0, "")
-	d.hide(release, true)
+	d.hide(true)
 	code, raw, _ := a.push(id)
 	if adds, _, _ := d.snapshot(); code != http.StatusConflict || !strings.Contains(raw, "nie rozstrzygnęło") || len(adds) != 1 {
 		t.Fatalf("retry while the listing lags = %d %s, adds %+v; want 409 and no second add", code, raw, adds)
 	}
-	d.hide(release, false)
+	d.hide(false)
 	code, raw, s := a.push(id)
 	adds, _, _ := d.snapshot()
 	if code != http.StatusOK || len(adds) != 1 || s.InstanceID == nil || *s.InstanceID != adds[0].instance {
@@ -730,6 +757,7 @@ func TestPushAfterEditionNamesAnotherRelease(t *testing.T) {
 
 	a.relink(id, 77)
 	d.removeRelease(release)
+	a.settle(id)
 	code, raw, s = a.push(id)
 	adds, _, _ = d.snapshot()
 	if code != http.StatusOK || len(adds) != 2 || adds[1].release != 77 || s.InstanceID == nil ||
@@ -965,5 +993,112 @@ func TestDeleteWaitsForPush(t *testing.T) {
 	}
 	if code := <-deleted; code != http.StatusNoContent {
 		t.Fatalf("delete = %d", code)
+	}
+}
+
+// Review F1: a linked instance the lagging listing omits right after the
+// push that made it is not given up, so no second one is made.
+func TestPushLinkedInstanceDuringListingLag(t *testing.T) {
+	d, srv := newDouble(t)
+	a := newAPI(t, srv.URL, discogscollection.DefaultFolder)
+	id := a.album(obj{"status": "owned", "media_grade": "mint"})
+	d.hide(true)
+	if code, raw, _ := a.push(id); code != http.StatusOK {
+		t.Fatalf("push = %d %s", code, raw)
+	}
+	code, raw, _ := a.push(id)
+	if adds, _, _ := d.snapshot(); code != http.StatusConflict || !strings.Contains(raw, "nie rozstrzygnęło") || len(adds) != 1 {
+		t.Fatalf("update while the listing lags = %d %s, adds %+v; want 409 and no second add", code, raw, adds)
+	}
+	d.hide(false)
+	code, raw, s := a.push(id)
+	adds, _, _ := d.snapshot()
+	if code != http.StatusOK || len(adds) != 1 || s.InstanceID == nil || *s.InstanceID != adds[0].instance {
+		t.Fatalf("update once listed = %d %s, adds %+v", code, raw, adds)
+	}
+}
+
+// Review F2: an add of unknown outcome cannot be discarded while it is
+// recent and the listing does not show the release yet.
+func TestDiscardRefusedDuringListingLag(t *testing.T) {
+	d, srv := newDouble(t)
+	a := newAPI(t, srv.URL, discogscollection.DefaultFolder)
+	id := a.album(obj{"status": "owned", "media_grade": "mint"})
+	d.mu.Lock()
+	d.cutAdd = 1
+	d.mu.Unlock()
+	d.hide(true)
+	if code, _, _ := a.push(id); code != http.StatusBadGateway {
+		t.Fatalf("push = %d, want 502", code)
+	}
+	path := fmt.Sprintf("/api/copies/%d/discogs/add", id)
+	if code, raw := a.do(http.MethodDelete, path, nil, nil); code != http.StatusConflict || !strings.Contains(raw, "nie rozstrzygnęło") {
+		t.Fatalf("discard while the listing lags = %d %s, want 409", code, raw)
+	}
+	if code, _, _ := a.push(id); code != http.StatusConflict {
+		t.Fatalf("push = %d, want 409", code)
+	}
+	if adds, _, _ := d.snapshot(); len(adds) != 1 {
+		t.Fatalf("adds = %+v, want one", adds)
+	}
+	d.hide(false)
+	a.must(http.MethodDelete, path, nil, nil, http.StatusOK)
+}
+
+// Review F3: an adoption never takes an instance another copy is linked
+// to, and two copies never share one.
+func TestAdoptSkipsOtherCopysInstance(t *testing.T) {
+	d, srv := newDouble(t)
+	a := newAPI(t, srv.URL, discogscollection.DefaultFolder)
+	copyB := a.album(obj{"status": "owned", "media_grade": "mint"})
+	copyA := a.sibling(copyB, obj{"status": "owned", "media_grade": "poor"})
+	if code, raw, _ := a.push(copyB); code != http.StatusOK {
+		t.Fatalf("push B = %d %s", code, raw)
+	}
+	if _, err := a.pool.Exec(context.Background(),
+		`INSERT INTO discogs_add (copy_id, release_id) VALUES ($1, $2)`, copyA, release); err != nil {
+		t.Fatal(err)
+	}
+	_, before, _ := d.snapshot()
+	code, raw := a.do(http.MethodPost, fmt.Sprintf("/api/copies/%d/discogs/adopt", copyA), nil, nil)
+	if _, after, _ := d.snapshot(); code != http.StatusConflict || len(after) != len(before) {
+		t.Fatalf("adopt A = %d %s, edits %d then %d; want 409 and B's instance untouched", code, raw, len(before), len(after))
+	}
+	if ia, _ := a.stored(copyA); ia != nil {
+		t.Fatalf("copy A linked to %d", *ia)
+	}
+	ib, _ := a.stored(copyB)
+	if ib == nil {
+		t.Fatal("copy B not linked")
+	}
+	if _, err := a.pool.Exec(context.Background(), `UPDATE copy SET discogs_instance_id = $2,
+		discogs_instance_release_id = $3, discogs_instance_linked_at = now() WHERE id = $1`, copyA, *ib, release); err == nil {
+		t.Fatal("two copies linked to one instance")
+	}
+}
+
+// Review F4: a push of a release waits while another copy's add of it has
+// an unknown outcome, so that add's instance stays adoptable.
+func TestSiblingUnknownAddBlocksPush(t *testing.T) {
+	d, srv := newDouble(t)
+	a := newAPI(t, srv.URL, discogscollection.DefaultFolder)
+	copyA := a.album(obj{"status": "owned"})
+	copyB := a.sibling(copyA, obj{"status": "owned"})
+	d.mu.Lock()
+	d.cutAdd = 1
+	d.mu.Unlock()
+	d.hide(true)
+	if code, _, _ := a.push(copyA); code != http.StatusBadGateway {
+		t.Fatalf("push A = %d, want 502", code)
+	}
+	code, raw, _ := a.push(copyB)
+	if adds, _, _ := d.snapshot(); code != http.StatusConflict || !strings.Contains(raw, "Inny egzemplarz") || len(adds) != 1 {
+		t.Fatalf("push B = %d %s, adds %+v; want 409 and no add", code, raw, adds)
+	}
+	d.hide(false)
+	var s discogscollection.State
+	a.must(http.MethodPost, fmt.Sprintf("/api/copies/%d/discogs/adopt", copyA), nil, &s, http.StatusOK)
+	if adds, _, _ := d.snapshot(); s.InstanceID == nil || *s.InstanceID != adds[0].instance {
+		t.Fatalf("adopt A = %+v, adds %+v", s, adds)
 	}
 }

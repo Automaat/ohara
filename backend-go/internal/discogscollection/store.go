@@ -9,7 +9,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -28,18 +27,20 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
-// Pending is an add of a copy's release that has not finished: sent at
-// Since, with the instance Discogs answered with, nil while the add's
-// outcome is unknown.
+// Pending is an add of a copy's release that has not finished, with the
+// instance Discogs answered with, nil while the add's outcome is unknown.
+// Fresh says it was sent less than the settle time ago, by the database's
+// clock.
 type Pending struct {
 	ReleaseID  int64
-	Since      time.Time
+	Fresh      bool
 	InstanceID *int64
 }
 
 // Target is what a push needs of a copy: its status, its title's kind,
 // its edition's Discogs release, its grades, the instance it is linked
-// to with that instance's release, and an add that has not finished.
+// to with that instance's release and whether it was linked less than
+// the settle time ago (LinkFresh), and an add that has not finished.
 type Target struct {
 	CopyID            int64
 	Status            string
@@ -49,6 +50,7 @@ type Target struct {
 	SleeveGrade       *string
 	InstanceID        *int64
 	InstanceReleaseID *int64
+	LinkFresh         bool
 	Pending           *Pending
 }
 
@@ -61,8 +63,14 @@ func (t *Target) Instance() *int64 {
 	return t.InstanceID
 }
 
+// settleSeconds is settleAfter for the queries, which compare times by
+// the database's own clock.
+var settleSeconds = settleAfter.Seconds()
+
 const targetQuery = `SELECT c.status, ti.kind, e.discogs_release_id, c.media_grade, c.sleeve_grade,
-		c.discogs_instance_id, c.discogs_instance_release_id, a.release_id, a.sent_at, a.instance_id
+		c.discogs_instance_id, c.discogs_instance_release_id,
+		coalesce(c.discogs_instance_linked_at > now() - make_interval(secs => $2), false),
+		a.release_id, a.sent_at > now() - make_interval(secs => $2), a.instance_id
 	FROM copy c JOIN edition e ON e.id = c.edition_id JOIN title ti ON ti.id = e.title_id
 		LEFT JOIN discogs_add a ON a.copy_id = c.id
 	WHERE c.id = $1`
@@ -70,24 +78,56 @@ const targetQuery = `SELECT c.status, ti.kind, e.discogs_release_id, c.media_gra
 func scanTarget(row pgx.Row, id int64) (Target, error) {
 	t := Target{CopyID: id}
 	var addRelease, addInstance *int64
-	var addSince *time.Time
+	var addFresh *bool
 	err := row.Scan(&t.Status, &t.Kind, &t.ReleaseID, &t.MediaGrade, &t.SleeveGrade,
-		&t.InstanceID, &t.InstanceReleaseID, &addRelease, &addSince, &addInstance)
+		&t.InstanceID, &t.InstanceReleaseID, &t.LinkFresh, &addRelease, &addFresh, &addInstance)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Target{}, ErrNotFound
 	}
 	if err != nil {
 		return Target{}, fmt.Errorf("discogs target: %w", err)
 	}
-	if addRelease != nil && addSince != nil {
-		t.Pending = &Pending{ReleaseID: *addRelease, Since: *addSince, InstanceID: addInstance}
+	if addRelease != nil && addFresh != nil {
+		t.Pending = &Pending{ReleaseID: *addRelease, Fresh: *addFresh, InstanceID: addInstance}
 	}
 	return t, nil
 }
 
 // Target returns the push target of copy id, or ErrNotFound.
 func (s *Store) Target(ctx context.Context, id int64) (Target, error) {
-	return scanTarget(s.pool.QueryRow(ctx, targetQuery, id), id)
+	return scanTarget(s.pool.QueryRow(ctx, targetQuery, id, settleSeconds), id)
+}
+
+// Claimed returns the instances other copies than id are linked to or
+// made with an unfinished add: no push or adoption of id may take them.
+func (s *Store) Claimed(ctx context.Context, id int64) (map[int64]bool, error) {
+	rows, err := s.pool.Query(ctx, `SELECT discogs_instance_id FROM copy
+			WHERE discogs_instance_id IS NOT NULL AND id <> $1
+		UNION SELECT instance_id FROM discogs_add WHERE instance_id IS NOT NULL AND copy_id <> $1`, id)
+	if err != nil {
+		return nil, fmt.Errorf("claimed discogs instances: %w", err)
+	}
+	ids, err := pgx.CollectRows(rows, pgx.RowTo[int64])
+	if err != nil {
+		return nil, fmt.Errorf("claimed discogs instances: %w", err)
+	}
+	claimed := make(map[int64]bool, len(ids))
+	for _, i := range ids {
+		claimed[i] = true
+	}
+	return claimed, nil
+}
+
+// SiblingUnknownAdd says whether another copy than id has an add of
+// release whose outcome is unknown.
+func (s *Store) SiblingUnknownAdd(ctx context.Context, id, release int64) (bool, error) {
+	var found bool
+	err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM discogs_add
+		WHERE release_id = $2 AND copy_id <> $1 AND instance_id IS NULL)`, id, release).Scan(&found)
+	if err != nil {
+		return false, fmt.Errorf("sibling discogs add: %w", err)
+	}
+	return found, nil
 }
 
 // BeginAdd records, and commits at once, that an add of release for copy
@@ -143,7 +183,7 @@ func (s *Store) Lock(ctx context.Context, id int64) (*Locked, Target, error) {
 	if err != nil {
 		return nil, Target{}, fmt.Errorf("discogs lock: %w", err)
 	}
-	t, err := scanTarget(tx.QueryRow(ctx, targetQuery+` FOR NO KEY UPDATE OF c`, id), id)
+	t, err := scanTarget(tx.QueryRow(ctx, targetQuery+` FOR NO KEY UPDATE OF c`, id, settleSeconds), id)
 	if err != nil {
 		_ = tx.Rollback(ctx)
 		return nil, Target{}, err
@@ -154,7 +194,8 @@ func (s *Store) Lock(ctx context.Context, id int64) (*Locked, Target, error) {
 // Link records that the copy's instance is instance of release, its
 // conditions set.
 func (l *Locked) Link(ctx context.Context, release, instance int64) error {
-	_, err := l.tx.Exec(ctx, `UPDATE copy SET discogs_instance_id = $2, discogs_instance_release_id = $3
+	_, err := l.tx.Exec(ctx, `UPDATE copy SET discogs_instance_id = $2, discogs_instance_release_id = $3,
+		discogs_instance_linked_at = CASE WHEN discogs_instance_id = $2 THEN discogs_instance_linked_at ELSE now() END
 		WHERE id = $1`, l.id, instance, release)
 	if err != nil {
 		return fmt.Errorf("link discogs instance: %w", err)
@@ -164,8 +205,8 @@ func (l *Locked) Link(ctx context.Context, release, instance int64) error {
 
 // Forget drops the link: Discogs no longer has that instance.
 func (l *Locked) Forget(ctx context.Context) error {
-	_, err := l.tx.Exec(ctx, `UPDATE copy SET discogs_instance_id = NULL, discogs_instance_release_id = NULL
-		WHERE id = $1`, l.id)
+	_, err := l.tx.Exec(ctx, `UPDATE copy SET discogs_instance_id = NULL, discogs_instance_release_id = NULL,
+		discogs_instance_linked_at = NULL WHERE id = $1`, l.id)
 	if err != nil {
 		return fmt.Errorf("forget discogs instance: %w", err)
 	}

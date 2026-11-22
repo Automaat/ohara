@@ -84,6 +84,13 @@ var ErrAdoptNotOne = errors.New("release not held exactly once")
 // AdoptNotOneMessage is what the page shows for ErrAdoptNotOne.
 const AdoptNotOneMessage = "Nie można potwierdzić: tego wydania nie ma w kolekcji Discogs dokładnie raz."
 
+// ErrSiblingAddUnknown is a push of a release while another copy's add of
+// it has an unknown outcome: that add's instance must be settled first.
+var ErrSiblingAddUnknown = errors.New("another copy's discogs add of the release unknown")
+
+// SiblingAddUnknownMessage is what the page shows for ErrSiblingAddUnknown.
+const SiblingAddUnknownMessage = "Inny egzemplarz tego wydania czeka na rozstrzygnięcie dodania do Discogs. Najpierw rozstrzygnij tamto dodanie."
+
 // ErrNoUnknownAdd is a confirmation or discard without an add whose
 // outcome is unknown.
 var ErrNoUnknownAdd = errors.New("no discogs add with an unknown outcome")
@@ -269,14 +276,35 @@ func (p *Pusher) Push(ctx context.Context, id int64, adopt bool) (State, error) 
 
 // Discard drops copy id's add whose outcome is unknown, at the owner's
 // word that it made nothing of theirs, and returns its state.
+// While the add is recent and the release not in the collection it
+// answers ErrAddUnsettled: Discogs' listing may not show it yet.
 func (p *Pusher) Discard(ctx context.Context, id int64) (State, error) {
+	if p.client == nil {
+		return State{}, ErrDisabled
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	t, err := p.store.Target(ctx, id)
+	if err != nil {
+		return State{}, err
+	}
+	if pending := t.Pending; pending != nil && pending.InstanceID == nil && pending.Fresh {
+		if err := p.user(ctx); err != nil {
+			return State{}, err
+		}
+		held, err := p.unclaimed(ctx, id, pending.ReleaseID)
+		if err != nil {
+			return State{}, err
+		}
+		if len(held) == 0 {
+			return State{}, ErrAddUnsettled
+		}
+	}
 	dropped, err := p.store.DiscardUnknownAdd(ctx, id)
 	if err != nil {
 		return State{}, err
 	}
-	t, err := p.store.Target(ctx, id)
+	t, err = p.store.Target(ctx, id)
 	if err != nil {
 		return State{}, err
 	}
@@ -289,12 +317,8 @@ func (p *Pusher) Discard(ctx context.Context, id int64) (State, error) {
 // push sets t's grades on its instance, adding one when the copy has
 // none, and reports whether it linked the copy.
 func (p *Pusher) push(ctx, dbctx context.Context, lk *Locked, t *Target, adopt bool) (bool, error) {
-	if p.username == "" {
-		user, err := p.client.Identity(ctx)
-		if err != nil {
-			return false, upstream(err)
-		}
-		p.username = user
+	if err := p.user(ctx); err != nil {
+		return false, err
 	}
 	fields, err := p.client.CollectionFields(ctx, p.username)
 	if err != nil {
@@ -334,6 +358,33 @@ func (p *Pusher) push(ctx, dbctx context.Context, lk *Locked, t *Target, adopt b
 	return true, nil
 }
 
+// user reads, once, the username of the token's owner.
+func (p *Pusher) user(ctx context.Context) error {
+	if p.username != "" {
+		return nil
+	}
+	user, err := p.client.Identity(ctx)
+	if err != nil {
+		return upstream(err)
+	}
+	p.username = user
+	return nil
+}
+
+// unclaimed returns release's instances in the collection but those other
+// copies than id are linked to or made with an unfinished add.
+func (p *Pusher) unclaimed(ctx context.Context, id, release int64) ([]discogs.Instance, error) {
+	held, err := p.client.ReleaseInstances(ctx, p.username, release)
+	if err != nil {
+		return nil, upstream(err)
+	}
+	claimed, err := p.store.Claimed(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return slices.DeleteFunc(held, func(h discogs.Instance) bool { return claimed[h.InstanceID] }), nil
+}
+
 // own finds the copy's instance, the release it is of and that release's
 // instances in the collection. An unfinished add comes first: the
 // instance Discogs answered it with, or, when its outcome is unknown, the
@@ -352,22 +403,27 @@ func (p *Pusher) own(ctx, dbctx context.Context, lk *Locked, t *Target, adopt bo
 		if err != nil {
 			return nil, 0, nil, upstream(err)
 		}
+		claimed, err := p.store.Claimed(dbctx, t.CopyID)
+		if err != nil {
+			return nil, 0, nil, err
+		}
+		candidates := slices.DeleteFunc(slices.Clone(held), func(h discogs.Instance) bool { return claimed[h.InstanceID] })
 		switch made := pending.InstanceID; {
 		case made != nil:
 			if i := slices.IndexFunc(held, func(h discogs.Instance) bool { return h.InstanceID == *made }); i >= 0 {
 				return &held[i], pending.ReleaseID, held, nil
 			}
-			if time.Since(pending.Since) < settleAfter {
+			if pending.Fresh {
 				return nil, 0, nil, ErrAddUnsettled
 			}
 		case adopt:
-			if len(held) != 1 {
+			if len(candidates) != 1 {
 				return nil, 0, nil, ErrAdoptNotOne
 			}
-			return &held[0], pending.ReleaseID, held, nil
-		case len(held) > 0:
+			return &candidates[0], pending.ReleaseID, held, nil
+		case len(candidates) > 0:
 			return nil, 0, nil, ErrAddUnknown
-		case time.Since(pending.Since) < settleAfter:
+		case pending.Fresh:
 			return nil, 0, nil, ErrAddUnsettled
 		}
 		if err := p.store.EndAdd(dbctx, t.CopyID); err != nil {
@@ -377,6 +433,13 @@ func (p *Pusher) own(ctx, dbctx context.Context, lk *Locked, t *Target, adopt bo
 	}
 	if adopt {
 		return nil, 0, nil, ErrNoUnknownAdd
+	}
+	sibling, err := p.store.SiblingUnknownAdd(dbctx, t.CopyID, release)
+	if err != nil {
+		return nil, 0, nil, err
+	}
+	if sibling {
+		return nil, 0, nil, ErrSiblingAddUnknown
 	}
 	if t.InstanceID != nil {
 		linked := *t.InstanceReleaseID
@@ -389,6 +452,9 @@ func (p *Pusher) own(ctx, dbctx context.Context, lk *Locked, t *Target, adopt bo
 				return nil, 0, nil, ErrLinkedElsewhere
 			}
 			return &held[i], release, held, nil
+		}
+		if t.LinkFresh {
+			return nil, 0, nil, ErrAddUnsettled
 		}
 		if err := lk.Forget(dbctx); err != nil {
 			return nil, 0, nil, err
@@ -413,7 +479,7 @@ func (p *Pusher) add(ctx, dbctx context.Context, t *Target) (*discogs.Instance, 
 	if err := p.store.BeginAdd(dbctx, t.CopyID, release); err != nil {
 		return nil, err
 	}
-	t.Pending = &Pending{ReleaseID: release, Since: time.Now()}
+	t.Pending = &Pending{ReleaseID: release, Fresh: true}
 	made, err := p.client.AddToFolder(ctx, p.username, p.folder, release)
 	if err != nil {
 		if se, ok := errors.AsType[discogs.StatusError](err); ok && se.Code >= 400 && se.Code < 500 {

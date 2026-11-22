@@ -14,7 +14,7 @@ export type DiscogsShelf = {
 
 /** What the page says while an add's outcome is unknown. */
 export const addUnknownNotice =
-	'Nie wiadomo, czy ostatnie dodanie do Discogs się udało. Jeśli to wydanie jest w Twojej kolekcji Discogs dzięki Oharze, potwierdź; jeśli dodano je inaczej albo go tam nie ma, porzuć to dodanie.';
+	'Nie wiadomo, czy ostatnie dodanie do Discogs się udało. Jeśli to wydanie jest już w Twojej kolekcji Discogs i dodała je Ohara, potwierdź; jeśli dodano je inaczej, porzuć to dodanie. Jeśli go tam jeszcze nie ma, poczekaj kilka minut: Discogs może pokazać je z opóźnieniem.';
 
 /**
  * The copy page's Discogs collection part, or null when it shows none: without a token, or for a

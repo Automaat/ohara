@@ -232,14 +232,23 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   push then answers 409: while the add's release is not in the collection
   and the add is under 10 minutes old, "jeszcze się nie rozstrzygnęło";
   after that an empty collection settles it and the push adds again; with
-  the release in the collection it asks the owner. `POST
-/api/copies/{id}/discogs/adopt` is the owner's word that the release's
-  only instance is Ohara's (409 when it is not held exactly once): it is
-  graded and linked. `DELETE /api/copies/{id}/discogs/add` is the owner's
-  word that the add made nothing of theirs: the record goes, and a push
-  then treats any instance of the release as the owner's.
+  the release in the collection it asks the owner.
+  `POST /api/copies/{id}/discogs/adopt` is the owner's word that the
+  release's only instance is Ohara's (409 when it is not held exactly
+  once, leaving out instances other copies are linked to or recorded an
+  add of): it is graded and linked. `DELETE /api/copies/{id}/discogs/add`
+  is the owner's word that the add made nothing of theirs: the record
+  goes, and a push then treats any instance of the release as the
+  owner's; it answers 409 "jeszcze się nie rozstrzygnęło" while the add is
+  under 10 minutes old and the release is not listed. A push of a release
+  answers 409 while another copy's add of it has an unknown outcome. Ages
+  are measured by the database's clock. A unique index keeps two copies
+  from ever linking one instance.
 - A linked instance found in whatever folder the owner moved it to is only
-  re-graded. One Discogs no longer has is forgotten and a new one made;
+  re-graded. One the listing omits answers 409 "jeszcze się nie
+  rozstrzygnęło" for 10 minutes after it was linked
+  (`discogs_instance_linked_at`); after that it counts as removed by the
+  owner, is forgotten and a new one made;
   one of a release the edition no longer names, still there, answers 409
   "Ten egzemplarz jest już w kolekcji Discogs jako inne wydanie." and keeps
   the link. Any instance of the release the copy did not make, beside its

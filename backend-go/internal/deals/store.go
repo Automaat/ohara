@@ -1002,18 +1002,23 @@ func unverifiedAlbums(ctx context.Context, q querier) ([]int64, error) {
 // Recent returns the newest deal observations that pass f. It rechecks album
 // associations before paging so an ambiguous match cannot displace a valid one.
 func (s *Store) Recent(ctx context.Context, f RecentFilter) ([]Observation, error) {
+	observations, _, err := s.recent(ctx, f, false)
+	return observations, err
+}
+
+func (s *Store) recent(ctx context.Context, f RecentFilter, automatic bool) ([]Observation, []AutomaticDeal, error) {
 	markets, err := s.marketTable(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("recent observations: %w", err)
+		return nil, nil, fmt.Errorf("recent observations: %w", err)
 	}
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
-		return nil, fmt.Errorf("recent observations: %w", err)
+		return nil, nil, fmt.Errorf("recent observations: %w", err)
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	unverified, err := unverifiedAlbums(ctx, tx)
 	if err != nil {
-		return nil, fmt.Errorf("verify stored album matches: %w", err)
+		return nil, nil, fmt.Errorf("verify stored album matches: %w", err)
 	}
 	listings := allListings
 	if f.Matched || f.UnderLimit || f.Sent {
@@ -1053,9 +1058,14 @@ func (s *Store) Recent(ctx context.Context, f RecentFilter) ([]Observation, erro
 		f.Limit, MaxAttempts, sources, f.UnderLimit, f.Matched, f.Sent, markets.titles, markets.formats, markets.cents,
 		unverified)
 	if err != nil {
-		return nil, fmt.Errorf("recent observations: %w", err)
+		return nil, nil, fmt.Errorf("recent observations: %w", err)
 	}
-	return pgx.CollectRows(rows, pgx.RowToStructByPos[Observation])
+	observations, err := pgx.CollectRows(rows, pgx.RowToStructByPos[Observation])
+	if err != nil || !automatic {
+		return observations, nil, err
+	}
+	deals, err := automaticDeals(ctx, tx, observations)
+	return observations, deals, err
 }
 
 // Dismiss hides the deal listing id from the deals view and keeps its

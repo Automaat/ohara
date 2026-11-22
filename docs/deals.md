@@ -468,6 +468,17 @@ Moved from `CLAUDE.md`, whose conventions still apply.
 
 ## Frontend
 
+- For a wish with neither price limit, Okazje puts an offer in
+  "Pod limitem" when it is at least 20% below the typical asking price.
+  `GET /api/deals/matched` returns the matched offers and their comparisons.
+  The typical price is the median of at least five other verified listings
+  for the same title, medium and known new or used state, priced within
+  90 days. Repeated sightings of a source listing count once. Stored asking
+  prices can outlive a listing and do not establish a sale. Exact-edition
+  wishes require positive edition details on both sides of the comparison.
+  The card shows the state, discount and sample size. Offers without a
+  baseline stay in "Wszystkie" with the reason. The navigation badge and
+  Telegram alerts use the manual limits.
 - Okazje (`/deals`) lists every wish in its "Lista życzeń" section, with
   or without offers, since Kolekcja lists none. The page asks for them
   beside the offers (`GET /api/collection?status=wishlist`) and lists
@@ -477,7 +488,7 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   market percent), and its "Edytuj" opens the copy's form at
   `/copies/<id>`. A failed answer keeps the last list with a retry; with
   no wish the section is left out and the page's "Lista życzeń jest
-  pusta" stands. The offer segments are unchanged.
+  pusta" stands.
 - "Szukaj na Allegro" opens a new tab on click with the wish's title and,
   where available, its TV season, album artist and format. Rendering the
   wishlist makes no request to Allegro.

@@ -69,7 +69,8 @@ Detailed behavior lives in `docs/`; read a file before changing its area:
 - [scanner](docs/scanner.md): the scanner, pending scans and the scan queue.
 - [backend](docs/backend.md): the router's compression and `api seed`.
 - [e2e](docs/e2e.md): the Playwright smoke suite.
-- [ci](docs/ci.md): vulnerability checks and the shared Go version.
+- [ci](docs/ci.md): vulnerability checks, the shared Go version and the
+  release tag protection.
 
 ## Conventions
 

@@ -39,8 +39,9 @@ export async function loadUnderLimit(fetchFn: typeof fetch): Promise<DealsView> 
 }
 
 /**
- * Asks the server for the listings. Every navigation asks again, so a wish limit changed on
- * another page shows at once. The badge is only a hint, so a failed request keeps the last count.
+ * Asks the server for the listings. Every page navigation asks again, so a wish limit changed on
+ * another page shows at once; a shallow one, such as the scanner's sheet, stays on its page and
+ * does not. The badge is only a hint, so a failed request keeps the last count.
  */
 export function refreshDealBadge(fetchFn: typeof fetch): Promise<void> {
 	return loadUnderLimit(fetchFn).then(

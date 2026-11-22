@@ -10,15 +10,19 @@
 		FormError,
 		PageHeader,
 		Section,
-		SegmentedControl
+		SegmentedControl,
+		Toaster,
+		toast
 	} from '@smykla-skalski/sui';
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
+	import { SvelteSet } from 'svelte/reactivity';
 	import { ApiError, errorMessage, request } from '#lib/api.js';
-	import { dealBadge, loadUnderLimit } from '#lib/deal-badge.svelte.js';
+	import { dealBadge, forgetDealListing, loadUnderLimit } from '#lib/deal-badge.svelte.js';
 	import { options, type FormIssue } from '#lib/collection.js';
 	import DealCard from '#lib/components/DealCard.svelte';
 	import {
 		dealsSummary,
+		dismissalPath,
 		intervalLabel,
 		keywordKindLabels,
 		keywordPayload,
@@ -28,6 +32,7 @@
 		searchedFor,
 		segmentLabel,
 		sentPath,
+		withoutDismissed,
 		type DealSegment,
 		type DealsView,
 		type HunterStatus,
@@ -50,6 +55,9 @@
 	let loading = $state(true);
 	let runError = $state<string | null>(null);
 	let starting = $state(false);
+	let dismissError = $state<string | null>(null);
+	/** Listings dismissed here, hidden until undone, before the server's next answer leaves them out. */
+	const dismissed = new SvelteSet<number>();
 
 	let keywords = $state<Keyword[]>([]);
 	let keywordFailure = $state<string | null>(null);
@@ -92,6 +100,49 @@
 		loading = false;
 		clearTimeout(poll);
 		if (deals?.status.running) poll = setTimeout(load, 3000);
+	}
+
+	/**
+	 * "Ignoruj" hides the listing at once and dismisses it on the server, then offers "Cofnij".
+	 * The card's button goes with it, so focus moves to the next card's "Ignoruj", or the previous
+	 * one's, or the segments when the list is empty.
+	 */
+	async function dismissDeal(deal: Observation) {
+		const at = shown.findIndex((o) => o.id === deal.id);
+		const next = shown[at + 1] ?? shown[at - 1];
+		dismissed.add(deal.id);
+		forgetDealListing(deal.id);
+		dismissError = null;
+		await tick();
+		const target = next
+			? document.querySelector<HTMLElement>(`[data-dismiss="${next.id}"]`)
+			: document.querySelector<HTMLElement>('.content input[type="radio"]:checked');
+		target?.focus();
+		try {
+			await request(fetch, 'POST', dismissalPath(deal.id));
+		} catch (err) {
+			dismissed.delete(deal.id);
+			dismissError = `Nie udało się zignorować oferty: ${errorMessage(err)}`;
+			await load();
+			return;
+		}
+		toast({
+			title: 'Zignorowano ofertę',
+			description: deal.listing_title || undefined,
+			action: { label: 'Cofnij', run: () => void restoreDeal(deal) }
+		});
+		await load();
+	}
+
+	async function restoreDeal(deal: Observation) {
+		try {
+			await request(fetch, 'DELETE', dismissalPath(deal.id));
+			dismissed.delete(deal.id);
+			dismissError = null;
+		} catch (err) {
+			dismissError = `Nie udało się przywrócić oferty: ${errorMessage(err)}`;
+		}
+		await load();
 	}
 
 	async function loadKeywords() {
@@ -164,9 +215,9 @@
 
 	const status = $derived(deals?.status);
 	const lists = $derived<Record<DealSegment, Observation[]>>({
-		under: deals ? (dealBadge.listings ?? []) : [],
-		all: deals?.all ?? [],
-		sent: deals?.sent ?? []
+		under: withoutDismissed(deals ? (dealBadge.listings ?? []) : [], dismissed),
+		all: withoutDismissed(deals?.all ?? [], dismissed),
+		sent: withoutDismissed(deals?.sent ?? [], dismissed)
 	});
 	const segments = $derived(
 		(['under', 'all', 'sent'] as const).map((value) => ({
@@ -207,6 +258,7 @@
 
 <div class="content">
 	<FormError message={runError} />
+	<FormError message={dismissError} />
 	{#if !deals}
 		{#if failure}
 			<ErrorState
@@ -246,7 +298,7 @@
 			{#if shown.length > 0}
 				<ul class="deals" aria-label={segmentLabel(segment, shown.length)}>
 					{#each shown as deal (deal.id)}
-						<li><DealCard {deal} /></li>
+						<li><DealCard {deal} ondismiss={() => void dismissDeal(deal)} /></li>
 					{/each}
 				</ul>
 			{:else if segment === 'under' && lists.all.length > 0}
@@ -342,6 +394,10 @@
 	</Disclosure>
 </div>
 
+<div class="toasts">
+	<Toaster label="Powiadomienia" dismissLabel="Zamknij" />
+</div>
+
 <style>
 	.content {
 		display: grid;
@@ -379,5 +435,9 @@
 		gap: 1rem;
 		max-width: 40rem;
 		margin-top: 1.5rem;
+	}
+	/* On a phone the undo toast stands above the floating tab bar instead of covering it. */
+	:global(.ohara-phone) .toasts :global(.sui-toaster) {
+		inset-block-end: calc(4rem + max(env(safe-area-inset-bottom, 0px), 0.75rem));
 	}
 </style>

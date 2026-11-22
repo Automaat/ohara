@@ -480,8 +480,16 @@ func (r *run) deliver(ctx context.Context, only map[string]bool) error {
 				return err
 			}
 		}
+		// The wait may have let the listing be dismissed or its wish change.
+		due, err := r.h.store.AlertDue(ctx, a.ObservationID)
+		if err != nil {
+			return err
+		}
+		if !due {
+			continue
+		}
 		r.tried[a.ObservationID] = true
-		err := r.h.notifier.Send(ctx, alertText(a))
+		err = r.h.notifier.Send(ctx, alertText(a))
 		r.h.sent()
 		metrics.ObserveDealAlert(err)
 		if err != nil {

@@ -49,3 +49,14 @@ export function refreshDealBadge(fetchFn: typeof fetch): Promise<void> {
 		() => undefined
 	);
 }
+
+/**
+ * Takes a dismissed listing out of the badge and "Pod limitem" at once. An answer to a request
+ * sent before the dismissal may still hold it, so only a later request moves the badge again.
+ */
+export function forgetDealListing(id: number): void {
+	applied = issued + 1;
+	if (!dealBadge.listings) return;
+	dealBadge.listings = dealBadge.listings.filter((o) => o.id !== id);
+	dealBadge.count = underLimitCount(dealBadge.listings);
+}

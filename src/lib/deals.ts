@@ -77,6 +77,19 @@ export const matchedPath = '/api/deals?matched=true&limit=500';
 /** The listings whose Telegram alert went out for a wish that still has a limit. */
 export const sentPath = '/api/deals?sent=true&limit=500';
 
+/** POST hides the listing from Okazje ("Ignoruj"), DELETE brings it back. */
+export function dismissalPath(id: number): string {
+	return `/api/deals/${id}/dismissal`;
+}
+
+/** The listings without those just dismissed, before the server's next answer leaves them out. */
+export function withoutDismissed<T extends Pick<Observation, 'id'>>(
+	listings: T[],
+	dismissed: ReadonlySet<number>
+): T[] {
+	return dismissed.size === 0 ? listings : listings.filter((o) => !dismissed.has(o.id));
+}
+
 export type DealSegment = 'under' | 'all' | 'sent';
 
 export const segmentLabels: Record<DealSegment, string> = {

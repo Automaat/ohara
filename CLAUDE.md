@@ -228,6 +228,13 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   queues one `deal_alert` per listing at or below the copy's
   `max_price_cents`; a listing seen again keeps its row, takes the new
   price and `last_seen_at`, and alerts if it has no alert yet. Alerts are retried up to 5 times within a week.
+  Okazje's "Ignoruj" (`POST /api/deals/{id}/dismissal`, undone by `DELETE`,
+  both 204 when repeated, 404 for an id no OLX or Pepper listing has) sets
+  the listing's `dismissed_at`, for every wish it matches: it leaves every
+  deals list and the badge, its unsent alert is never sent (the hunter
+  checks again right before each send) and a run that sees it again keeps
+  it dismissed and queues no alert. The observation, its alert and its
+  price for the valuation stay.
   The wish a listing was recorded for (`raw.wishlist_copy_id`) is also the
   generated, indexed column `wishlist_copy_id`, so the deals list's filters
   start from wished listings instead of reading every observation.

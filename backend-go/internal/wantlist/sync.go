@@ -17,7 +17,7 @@ import (
 // implements it.
 type Discogs interface {
 	Identity(ctx context.Context) (string, error)
-	Wants(ctx context.Context, username string) ([]int64, error)
+	Wants(ctx context.Context, username string) ([]discogs.Want, error)
 	AddWant(ctx context.Context, username string, id int64) error
 	RemoveWant(ctx context.Context, username string, id int64) error
 }
@@ -129,19 +129,26 @@ func (s *Syncer) execute(ctx context.Context) {
 // errDisabled is a Sync without a Discogs client.
 var errDisabled = errors.New("discogs wantlist sync disabled: no Discogs token")
 
+// clockSkew is how far the date_added Discogs gives a want may lie outside
+// Ohara's own times of the add and still identify it: the two clocks
+// differ a little.
+const clockSkew = time.Minute
+
 // Sync reads the whole wantlist of the token's owner, then puts every
-// wished release that is not on it there and takes off every want Ohara
-// added whose wish is gone. A want on the wantlist that Ohara did not add
-// is never removed. Nothing is written when the wantlist already matches.
+// wished release that is not on it there and takes off the wants Ohara
+// added whose wish is gone. Nothing is written when the wantlist already
+// matches.
 //
-// The record of a want Ohara owns changes before the request to Discogs,
-// so a database failure stops the sync before a write it could not record:
-// an add is recorded first and dropped again only when Discogs refuses it,
-// a removal forgets the want first and records it again only when Discogs
-// refuses. A write whose outcome is unknown (a lost answer, a server
-// error) keeps the record of an add and forgets a removal, so a want the
-// collector put back by hand is never taken. The first failure stops the
-// sync with the counts so far, and the next sync retries what is left.
+// A want counts as Ohara's only while it is provably the one Ohara put
+// there. An add is recorded before it is sent and confirmed once Discogs
+// accepts it; a sync then reads the want's date_added and keeps it, but
+// only when it falls between the record and the confirmation (give or
+// take clockSkew). A want is taken off only when the listed one still has
+// that date_added. A want the owner had already, re-added by hand, or
+// whose add has no confirmation (canceled, a lost answer, a server
+// error) is never removed: its record is forgotten instead. A removal is
+// forgotten only once Discogs confirms it, so a failed one is retried by
+// the next sync. The first failure stops the sync with the counts so far.
 func (s *Syncer) Sync(ctx context.Context) (Result, error) {
 	var res Result
 	if s.discogs == nil {
@@ -156,19 +163,30 @@ func (s *Syncer) Sync(ctx context.Context) (Result, error) {
 	if err != nil {
 		return res, err
 	}
-	onList, err := s.discogs.Wants(ctx, username)
+	wants, err := s.discogs.Wants(ctx, username)
 	if err != nil {
 		return res, err
 	}
-	added, err := s.store.Added(ctx, username)
+	owned, err := s.store.Owned(ctx, username)
 	if err != nil {
 		return res, err
 	}
-	on := set(onList)
+	on := make(map[int64]time.Time, len(wants))
+	for _, w := range wants {
+		on[w.ID] = w.DateAdded
+	}
+	mine := make(map[int64]bool, len(owned))
+	for i := range owned {
+		o := &owned[i]
+		if err := s.identify(ctx, username, o, on); err != nil {
+			return res, err
+		}
+		mine[o.Release] = provable(o, on)
+	}
 	wanted := set(wished.Releases)
 
 	for _, id := range wished.Releases {
-		if on[id] {
+		if _, ok := on[id]; ok {
 			res.Already++
 			continue
 		}
@@ -177,54 +195,66 @@ func (s *Syncer) Sync(ctx context.Context) (Result, error) {
 		}
 		res.Added++
 	}
-	for _, id := range added {
-		if wanted[id] {
-			continue
-		}
-		removed, err := s.remove(ctx, username, id, on[id])
-		if err != nil {
-			return res, err
-		}
-		if removed {
+	for _, o := range owned {
+		_, onList := on[o.Release]
+		switch {
+		case wanted[o.Release] && (mine[o.Release] || !onList):
+			// Still Ohara's, or just put back above.
+		case wanted[o.Release] || !mine[o.Release]:
+			if err := s.store.Forget(ctx, username, o.Release); err != nil {
+				return res, err
+			}
+		default:
+			if err := s.discogs.RemoveWant(ctx, username, o.Release); err != nil {
+				return res, err
+			}
+			if err := s.store.Forget(ctx, username, o.Release); err != nil {
+				return res, err
+			}
 			res.Removed++
 		}
 	}
 	return res, nil
 }
 
-// add records release id as Ohara's, then puts it on the wantlist.
-func (s *Syncer) add(ctx context.Context, username string, id int64) error {
-	if err := s.store.RecordAdded(ctx, username, id); err != nil {
+// identify records the date_added of a confirmed want Ohara has not
+// identified yet, when the listed want's date_added falls within the add.
+func (s *Syncer) identify(ctx context.Context, username string, o *Owned, on map[int64]time.Time) error {
+	added, listed := on[o.Release]
+	if !listed || o.ConfirmedAt == nil || o.DiscogsAddedAt != nil || added.IsZero() ||
+		added.Before(o.AddedAt.Add(-clockSkew)) || added.After(o.ConfirmedAt.Add(clockSkew)) {
+		return nil
+	}
+	if err := s.store.Identify(ctx, username, o.Release, added); err != nil {
 		return err
 	}
-	err := s.discogs.AddWant(ctx, username, id)
-	if err != nil && refused(err) {
-		if ferr := s.store.Forget(ctx, username, id); ferr != nil {
-			return errors.Join(err, ferr)
-		}
-	}
-	return err
+	o.DiscogsAddedAt = &added
+	return nil
 }
 
-// remove forgets release id, then takes it off the wantlist when it is
-// there, and says whether it did.
-func (s *Syncer) remove(ctx context.Context, username string, id int64, listed bool) (bool, error) {
-	if err := s.store.Forget(ctx, username, id); err != nil {
-		return false, err
+// provable says the listed want is the one Ohara added: the record holds
+// its date_added.
+func provable(o *Owned, on map[int64]time.Time) bool {
+	added, listed := on[o.Release]
+	return listed && o.DiscogsAddedAt != nil && o.DiscogsAddedAt.Equal(added)
+}
+
+// add records release id as pending, puts it on the wantlist and confirms
+// it once Discogs accepts. A refusal drops the record; an unknown outcome
+// leaves it unconfirmed, so it can never lead to a removal.
+func (s *Syncer) add(ctx context.Context, username string, id int64) error {
+	if err := s.store.Pending(ctx, username, id); err != nil {
+		return err
 	}
-	if !listed {
-		return false, nil
-	}
-	err := s.discogs.RemoveWant(ctx, username, id)
-	if err != nil {
+	if err := s.discogs.AddWant(ctx, username, id); err != nil {
 		if refused(err) {
-			if rerr := s.store.RecordAdded(ctx, username, id); rerr != nil {
-				return false, errors.Join(err, rerr)
+			if ferr := s.store.Forget(ctx, username, id); ferr != nil {
+				return errors.Join(err, ferr)
 			}
 		}
-		return false, err
+		return err
 	}
-	return true, nil
+	return s.store.Confirm(ctx, username, id)
 }
 
 // refused says Discogs answered with a status that leaves the wantlist as

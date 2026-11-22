@@ -164,21 +164,28 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   `discogs_release_id` of a music wishlist copy's edition that is not
   there yet. It counts those added, those already there and the album
   wishes (wishlist copies) whose edition has no release ID (skipped).
-- `discogs_want` records each want Ohara added, per username. A recorded
-  want whose release no wish holds any more (the copy deleted or no
-  longer a wish) is taken off (`DELETE`) and forgotten; a want Ohara did
-  not add is never removed, even when its wish goes. A sync with nothing
-  to change sends no write.
-- `discogs_want` changes before each request: an add is recorded first,
-  a removal forgets the want first, so a database failure stops the sync
-  before a write it could not record. Discogs refusing the write (a
-  redirect or a 4xx, 429 included) undoes that change; an unknown outcome
-  (a 5xx, a lost answer) keeps a recorded add and a forgotten removal, so
-  a want the collector re-adds by hand is never taken. A write is judged
-  by its status alone, its body unread, and a redirect that would turn it
-  into a GET is not followed. The first failure stops the sync; the status
-  keeps the counts so far and the failure, and the next sync retries the
-  rest. The last sync's
-  status lives until the process restarts. Sync requests wait in the
-  Discogs budget as `Background` ([lookup.md](lookup.md)); deal runs never
-  start a sync, and the sync never changes matching, limits or alerts.
+- `discogs_want` records the wants Ohara added, per username. A want is
+  removed (`DELETE`) only while it is provably Ohara's: its add was
+  confirmed (Discogs answered 2xx) and the row holds the want's
+  `date_added`, read by a sync from the wantlist when it falls between the
+  row's writing and the confirmation, give or take a minute of clock
+  skew, and the listed want still has that `date_added`. A want that was
+  there before, one the owner re-added by hand (a new `date_added`) and
+  one whose add has no confirmation (a canceled sync, a lost answer, a
+  5xx) is never removed; its row is forgotten instead. A sync with
+  nothing to change sends no write.
+- An add writes its row first, so a database failure stops the sync
+  before the request; Discogs refusing it (a redirect or a 4xx, 429
+  included) drops the row. A removal forgets the row only after Discogs
+  confirms it (2xx or 404), so a failed one is retried by the next sync
+  while the listed want keeps its `date_added`. A write is judged by its
+  status alone, its body unread, and a redirect that would turn it into a
+  GET is not followed. The first failure stops the sync; the status keeps
+  the counts so far and the failure. The last sync's status lives until
+  the process restarts. Sync requests wait in the Discogs budget as
+  `Background` ([lookup.md](lookup.md)); deal runs never start a sync, and
+  the sync never changes matching, limits or alerts.
+- `WantlistSync` (`src/lib/wantlist-sync.svelte.ts`) polls the status for
+  Okazje. When the status request fails before any status arrives, the
+  page shows the error with "Spróbuj ponownie" instead of the section;
+  leaving the page stops the polling, also for an answer still on its way.

@@ -20,6 +20,7 @@
 	import { dealBadge, forgetDealListing, loadUnderLimit } from '#lib/deal-badge.svelte.js';
 	import { options, type FormIssue } from '#lib/collection.js';
 	import DealCard from '#lib/components/DealCard.svelte';
+	import { WantlistSync } from '#lib/wantlist-sync.svelte.js';
 	import { DealDismissals } from '#lib/deal-dismissals.svelte.js';
 	import {
 		dealsSummary,
@@ -74,13 +75,7 @@
 	let issue = $state<FormIssue | null>(null);
 	let adding = $state(false);
 
-	let wantlist = $state<WantlistStatus | null>(null);
-	let syncError = $state<string | null>(null);
-	let syncStarting = $state(false);
-
 	let poll: ReturnType<typeof setTimeout> | undefined;
-	let wantlistPoll: ReturnType<typeof setTimeout> | undefined;
-	let left = false;
 	let issued = 0;
 
 	/**
@@ -168,41 +163,16 @@
 		}
 	}
 
-	/**
-	 * The Discogs wantlist sync's state, asked again every 2 s while a sync runs. Without a Discogs
-	 * token the server says it is disabled and the page offers no sync. An answer that arrives
-	 * after the page is left asks nothing more.
-	 */
-	async function loadWantlist() {
-		try {
-			wantlist = await request<WantlistStatus>(fetch, 'GET', wantlistPath);
-		} catch (err) {
-			syncError = errorMessage(err);
-		}
-		if (left) return;
-		clearTimeout(wantlistPoll);
-		if (wantlist?.running) wantlistPoll = setTimeout(loadWantlist, 2000);
-	}
-
-	async function syncWantlist() {
-		syncStarting = true;
-		syncError = null;
-		try {
-			await request<WantlistStatus>(fetch, 'POST', `${wantlistPath}/sync`);
-		} catch (err) {
-			syncError =
-				err instanceof ApiError && err.status === 409
-					? 'Synchronizacja już trwa.'
-					: errorMessage(err);
-		}
-		await loadWantlist();
-		syncStarting = false;
-	}
+	/** The Discogs wantlist sync; without a Discogs token the server says it is disabled. */
+	const wantlist = new WantlistSync({
+		status: () => request<WantlistStatus>(fetch, 'GET', wantlistPath),
+		start: () => request<WantlistStatus>(fetch, 'POST', `${wantlistPath}/sync`)
+	});
 
 	onMount(() => {
 		void load();
 		void loadKeywords();
-		void loadWantlist();
+		void wantlist.load();
 		const clock = setInterval(() => (now = new Date()), 30_000);
 		const onvisibility = () => {
 			if (document.visibilityState === 'visible') void load();
@@ -211,8 +181,7 @@
 		return () => {
 			dismissals.destroy();
 			clearTimeout(poll);
-			left = true;
-			clearTimeout(wantlistPoll);
+			wantlist.destroy();
 			clearInterval(clock);
 			document.removeEventListener('visibilitychange', onvisibility);
 		};
@@ -286,8 +255,7 @@
 			: 'Wyszukaj oferty przyciskiem „Szukaj teraz”.'
 	);
 
-	const syncSummary = $derived(wantlistSummary(wantlist?.last_result ?? null));
-	const syncing = $derived(syncStarting || !!wantlist?.running);
+	const syncSummary = $derived(wantlistSummary(wantlist.status?.last_result ?? null));
 
 	/** The add page started as a wish, searching titles the same way the scanner does. */
 	const addWish = '/titles/new?from=deals';
@@ -405,21 +373,30 @@
 		{/if}
 	{/if}
 
-	{#if wantlist?.enabled}
+	{#if wantlist.status?.enabled}
 		<Section
 			title="Lista życzeń Discogs"
 			description="Dodaje albumy z listy życzeń, które mają wydanie Discogs, do Twojej listy życzeń na Discogs. Usuwa tylko te, które dodała Ohara, gdy znikną z listy życzeń."
 		>
-			<FormError message={syncError} />
+			<FormError message={wantlist.error ?? wantlist.failure} />
 			<div>
-				<Button loading={syncing} onclick={syncWantlist}>
-					{wantlist.running ? 'Synchronizuję…' : 'Synchronizuj z Discogs'}
+				<Button loading={wantlist.syncing} onclick={() => void wantlist.sync()}>
+					{wantlist.status.running ? 'Synchronizuję…' : 'Synchronizuj z Discogs'}
 				</Button>
 			</div>
 			{#if syncSummary}
 				<p class="status metadata" role="status">{syncSummary}</p>
 			{/if}
 		</Section>
+	{:else if wantlist.failure}
+		<ErrorState
+			title="Nie udało się sprawdzić synchronizacji z Discogs"
+			description={wantlist.failure}
+			onretry={() => void wantlist.load()}
+			busy={wantlist.loading}
+			retryLabel="Spróbuj ponownie"
+			retryingLabel="Ponawianie…"
+		/>
 	{/if}
 
 	<Disclosure summary="Ustawienia wyszukiwania">

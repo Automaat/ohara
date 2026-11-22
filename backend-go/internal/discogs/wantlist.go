@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"time"
 )
 
 // wantsPerPage is the longest page Discogs serves of a wantlist.
@@ -32,10 +33,16 @@ func (c *Client) Identity(ctx context.Context) (string, error) {
 	return r.Username, err
 }
 
-// Wants returns the release IDs on the wantlist of username, every page
-// of it.
-func (c *Client) Wants(ctx context.Context, username string) ([]int64, error) {
-	var ids []int64
+// Want is one release on a wantlist and when it was put there; DateAdded
+// is zero when Discogs sent none that parses.
+type Want struct {
+	ID        int64
+	DateAdded time.Time
+}
+
+// Wants returns the wants on the wantlist of username, every page of it.
+func (c *Client) Wants(ctx context.Context, username string) ([]Want, error) {
+	var wants []Want
 	for page := 1; ; page++ {
 		if page > maxWantPages {
 			return nil, ErrWantlistTooLong
@@ -46,7 +53,8 @@ func (c *Client) Wants(ctx context.Context, username string) ([]int64, error) {
 				Pages int `json:"pages"`
 			} `json:"pagination"`
 			Wants []struct {
-				ID int64 `json:"id"`
+				ID        int64  `json:"id"`
+				DateAdded string `json:"date_added"`
 			} `json:"wants"`
 		}
 		if err := c.get(ctx, wantsPath(username)+"?"+q.Encode(), &r, func() error {
@@ -59,11 +67,15 @@ func (c *Client) Wants(ctx context.Context, username string) ([]int64, error) {
 		}
 		for _, w := range r.Wants {
 			if w.ID > 0 {
-				ids = append(ids, w.ID)
+				added, err := time.Parse(time.RFC3339, w.DateAdded)
+				if err != nil {
+					added = time.Time{}
+				}
+				wants = append(wants, Want{ID: w.ID, DateAdded: added})
 			}
 		}
 		if page >= r.Pagination.Pages {
-			return ids, nil
+			return wants, nil
 		}
 	}
 }

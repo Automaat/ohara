@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -12,7 +13,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/Automaat/ohara/backend-go/internal/dbtest"
@@ -32,6 +35,7 @@ type fakeDiscogs struct {
 
 	mu            sync.Mutex
 	wants         []int64
+	dates         map[int64]time.Time
 	writes        []string
 	pages         []int
 	failWrite     int
@@ -43,7 +47,10 @@ type fakeDiscogs struct {
 
 func newFakeDiscogs(t *testing.T, wants ...int64) (*fakeDiscogs, *discogs.Client) {
 	t.Helper()
-	f := &fakeDiscogs{t: t, wants: wants}
+	f := &fakeDiscogs{t: t, wants: wants, dates: map[int64]time.Time{}}
+	for _, id := range wants {
+		f.dates[id] = time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /oauth/identity", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(t, w, map[string]string{"username": owner})
@@ -68,17 +75,19 @@ func (f *fakeDiscogs) list(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	f.pages = append(f.pages, page)
 	all := slices.Clone(f.wants)
+	dates := maps.Clone(f.dates)
 	f.mu.Unlock()
 	pages := max(1, (len(all)+per-1)/per)
 	type want struct {
-		ID int64 `json:"id"`
+		ID        int64  `json:"id"`
+		DateAdded string `json:"date_added"`
 	}
 	body := struct {
 		Pagination map[string]int `json:"pagination"`
 		Wants      []want         `json:"wants"`
 	}{Pagination: map[string]int{"page": page, "pages": pages, "per_page": per, "items": len(all)}, Wants: []want{}}
 	for _, id := range all[min(len(all), (page-1)*per):min(len(all), page*per)] {
-		body.Wants = append(body.Wants, want{ID: id})
+		body.Wants = append(body.Wants, want{ID: id, DateAdded: dates[id].In(discogsZone).Format(time.RFC3339)})
 	}
 	writeJSON(f.t, w, body)
 }
@@ -106,6 +115,7 @@ func (f *fakeDiscogs) write(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPut:
 		if at < 0 {
 			f.wants = append(f.wants, id)
+			f.dates[id] = time.Now().Truncate(time.Second)
 		}
 		if failing {
 			f.fail(w)
@@ -123,12 +133,27 @@ func (f *fakeDiscogs) write(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		f.wants = slices.Delete(f.wants, at, at+1)
+		delete(f.dates, id)
 		if failing {
 			f.fail(w)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+// discogsZone is the offset Discogs writes date_added in.
+var discogsZone = time.FixedZone("PDT", -7*60*60)
+
+// byHand is the owner taking release id off the wantlist on discogs.com,
+// when it is there, and putting it back later.
+func (f *fakeDiscogs) byHand(id int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !slices.Contains(f.wants, id) {
+		f.wants = append(f.wants, id)
+	}
+	f.dates[id] = time.Now().Add(10 * time.Minute).Truncate(time.Second)
 }
 
 func (f *fakeDiscogs) fail(w http.ResponseWriter) {
@@ -188,9 +213,14 @@ func exec(t *testing.T, pool *pgxpool.Pool, sql string, args ...any) {
 
 func recorded(t *testing.T, store *Store) []int64 {
 	t.Helper()
-	ids, err := store.Added(context.Background(), owner)
+	rows, err := store.pool.Query(context.Background(),
+		`SELECT release_id FROM discogs_want WHERE username = $1 ORDER BY release_id`, owner)
 	if err != nil {
-		t.Fatalf("added: %v", err)
+		t.Fatalf("recorded: %v", err)
+	}
+	ids, err := pgx.CollectRows(rows, pgx.RowTo[int64])
+	if err != nil {
+		t.Fatalf("recorded: %v", err)
 	}
 	return ids
 }
@@ -425,13 +455,22 @@ func TestSyncSendsNoWriteItCannotRecord(t *testing.T) {
 	fake.took()
 	exec(t, pool, `DELETE FROM copy WHERE id = $1`, copyID)
 	rejectWrites(t, pool, "DELETE")
-	if res, err := syncer.Sync(context.Background()); err == nil || res.Removed != 0 {
-		t.Fatalf("sync with a failing forget = %+v, %v", res, err)
+	if _, err := syncer.Sync(context.Background()); err == nil {
+		t.Fatal("a removal Ohara could not forget did not fail the sync")
+	}
+	if writes, wants := fake.took(); !slices.Equal(writes, []string{"DELETE 31"}) || len(wants) != 0 {
+		t.Fatalf("writes %v, wantlist %v", writes, wants)
+	}
+
+	exec(t, pool, `DROP TRIGGER reject_want ON discogs_want`)
+	fake.byHand(31)
+	if got, want := mustSync(t, syncer), (Result{}); got != want {
+		t.Fatalf("sync after the owner re-added the want = %+v, want %+v", got, want)
 	}
 	if writes, wants := fake.took(); len(writes) != 0 || !slices.Equal(wants, []int64{31}) {
-		t.Fatalf("a removal Ohara could not record was sent: writes %v, wantlist %v", writes, wants)
+		t.Fatalf("the owner's own want was touched: writes %v, wantlist %v", writes, wants)
 	}
-	if got := recorded(t, store); !slices.Equal(got, []int64{31}) {
+	if got := recorded(t, store); len(got) != 0 {
 		t.Fatalf("recorded %v", got)
 	}
 }
@@ -462,7 +501,7 @@ func TestRefusedRemovalIsRetried(t *testing.T) {
 	}
 }
 
-func TestAddWithUnknownOutcomeStaysOharas(t *testing.T) {
+func TestUnconfirmedAddIsNeverRemoved(t *testing.T) {
 	pool := dbtest.Migrated(t)
 	fake, client := newFakeDiscogs(t)
 	store := NewStore(pool)
@@ -473,16 +512,112 @@ func TestAddWithUnknownOutcomeStaysOharas(t *testing.T) {
 	if _, err := syncer.Sync(context.Background()); err == nil {
 		t.Fatal("a 502 on the add did not fail the sync")
 	}
-	if got := recorded(t, store); !slices.Equal(got, []int64{51}) {
-		t.Fatalf("recorded %v, want the add whose outcome is unknown", got)
-	}
 	fake.failWrite = 0
 	if got, want := mustSync(t, syncer), (Result{Already: 1}); got != want {
 		t.Fatalf("retry = %+v, want %+v", got, want)
 	}
 	exec(t, pool, `DELETE FROM copy WHERE id = $1`, copyID)
-	if got, want := mustSync(t, syncer), (Result{Removed: 1}); got != want {
+	if got, want := mustSync(t, syncer), (Result{}); got != want {
 		t.Fatalf("sync after the wish went = %+v, want %+v", got, want)
+	}
+	if writes, wants := fake.took(); !slices.Equal(writes, []string{"PUT 51"}) || !slices.Equal(wants, []int64{51}) {
+		t.Fatalf("a want whose add was never confirmed was removed: writes %v, wantlist %v", writes, wants)
+	}
+	if got := recorded(t, store); len(got) != 0 {
+		t.Fatalf("recorded %v", got)
+	}
+}
+
+// cancelOnAdd cancels the sync as it is about to send an add.
+type cancelOnAdd struct {
+	Discogs
+	cancel context.CancelFunc
+}
+
+func (c cancelOnAdd) AddWant(ctx context.Context, username string, id int64) error {
+	c.cancel()
+	return c.Discogs.AddWant(ctx, username, id)
+}
+
+func TestCanceledAddNeverRemovesAManualWant(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	fake, client := newFakeDiscogs(t)
+	store := NewStore(pool)
+	copyID := wish(t, pool, "music", 101)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if _, err := NewSyncer(store, cancelOnAdd{Discogs: client, cancel: cancel}, nil).Sync(ctx); err == nil {
+		t.Fatal("a canceled sync did not fail")
+	}
+	if writes, _ := fake.took(); len(writes) != 0 {
+		t.Fatalf("a canceled add was sent: %v", writes)
+	}
+
+	fake.byHand(101)
+	exec(t, pool, `DELETE FROM copy WHERE id = $1`, copyID)
+	if got, want := mustSync(t, NewSyncer(store, client, nil)), (Result{}); got != want {
+		t.Fatalf("sync = %+v, want %+v", got, want)
+	}
+	if writes, wants := fake.took(); len(writes) != 0 || !slices.Equal(wants, []int64{101}) {
+		t.Fatalf("the owner's want was removed: writes %v, wantlist %v", writes, wants)
+	}
+}
+
+func TestManualReAddIsNeverRemoved(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	fake, client := newFakeDiscogs(t)
+	store := NewStore(pool)
+	syncer := NewSyncer(store, client, nil)
+	early := wish(t, pool, "music", 103)
+	late := wish(t, pool, "music", 104)
+	mustSync(t, syncer)
+	fake.took()
+
+	// 103 is re-added before any sync reads its date_added, 104 after.
+	fake.byHand(103)
+	if got, want := mustSync(t, syncer), (Result{Already: 2}); got != want {
+		t.Fatalf("second sync = %+v, want %+v", got, want)
+	}
+	if got := recorded(t, store); !slices.Equal(got, []int64{104}) {
+		t.Fatalf("recorded %v, want only the want still provably Ohara's", got)
+	}
+	fake.byHand(104)
+	exec(t, pool, `DELETE FROM copy WHERE id IN ($1, $2)`, early, late)
+	if got, want := mustSync(t, syncer), (Result{}); got != want {
+		t.Fatalf("sync after the wishes went = %+v, want %+v", got, want)
+	}
+	if writes, wants := fake.took(); len(writes) != 0 || !slices.Equal(wants, []int64{103, 104}) {
+		t.Fatalf("a want the owner re-added was removed: writes %v, wantlist %v", writes, wants)
+	}
+	if got := recorded(t, store); len(got) != 0 {
+		t.Fatalf("recorded %v", got)
+	}
+}
+
+func TestFailedRemovalIsRetried(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	fake, client := newFakeDiscogs(t)
+	store := NewStore(pool)
+	syncer := NewSyncer(store, client, nil)
+	copyID := wish(t, pool, "music", 102)
+	mustSync(t, syncer)
+	fake.took()
+
+	exec(t, pool, `DELETE FROM copy WHERE id = $1`, copyID)
+	fake.failWrite, fake.failStatus = 1, http.StatusBadGateway
+	if res, err := syncer.Sync(context.Background()); err == nil || res.Removed != 0 {
+		t.Fatalf("removal answered 502 = %+v, %v", res, err)
+	}
+	if got := recorded(t, store); !slices.Equal(got, []int64{102}) {
+		t.Fatalf("recorded %v after a failed removal, want it kept for the retry", got)
+	}
+	fake.failWrite = 0
+	if got, want := mustSync(t, syncer), (Result{Removed: 1}); got != want {
+		t.Fatalf("retry = %+v, want %+v", got, want)
+	}
+	if writes, wants := fake.took(); !slices.Equal(writes, []string{"DELETE 102", "DELETE 102"}) || len(wants) != 0 {
+		t.Fatalf("writes %v, wantlist %v", writes, wants)
 	}
 }
 

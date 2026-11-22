@@ -7,6 +7,7 @@ package wantlist
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -54,32 +55,70 @@ func (s *Store) Wished(ctx context.Context) (Wished, error) {
 	return w, nil
 }
 
-// Added returns the releases Ohara put on the wantlist of username.
-func (s *Store) Added(ctx context.Context, username string) ([]int64, error) {
-	rows, err := s.pool.Query(ctx,
-		`SELECT release_id FROM discogs_want WHERE username = $1 ORDER BY release_id`, username)
-	if err != nil {
-		return nil, fmt.Errorf("added wants: %w", err)
-	}
-	ids, err := pgx.CollectRows(rows, pgx.RowTo[int64])
-	if err != nil {
-		return nil, fmt.Errorf("added wants: %w", err)
-	}
-	return ids, nil
+// Owned is the record of a want Ohara put on the wantlist. ConfirmedAt is
+// when Discogs accepted the add, nil while its outcome is unknown;
+// DiscogsAddedAt is the date_added Discogs keeps for that want, nil until
+// a sync reads it.
+type Owned struct {
+	Release        int64
+	AddedAt        time.Time
+	ConfirmedAt    *time.Time
+	DiscogsAddedAt *time.Time
 }
 
-// RecordAdded records that Ohara put release on the wantlist of username.
-func (s *Store) RecordAdded(ctx context.Context, username string, release int64) error {
+// Owned returns the wants Ohara put on the wantlist of username.
+func (s *Store) Owned(ctx context.Context, username string) ([]Owned, error) {
+	rows, err := s.pool.Query(ctx, `SELECT release_id, added_at, confirmed_at, discogs_added_at
+		FROM discogs_want WHERE username = $1 ORDER BY release_id`, username)
+	if err != nil {
+		return nil, fmt.Errorf("owned wants: %w", err)
+	}
+	owned, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Owned, error) {
+		var o Owned
+		err := row.Scan(&o.Release, &o.AddedAt, &o.ConfirmedAt, &o.DiscogsAddedAt)
+		return o, err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("owned wants: %w", err)
+	}
+	return owned, nil
+}
+
+// Pending records, before the add is sent, that Ohara is putting release
+// on the wantlist of username; an earlier record of it starts over.
+func (s *Store) Pending(ctx context.Context, username string, release int64) error {
 	_, err := s.pool.Exec(ctx, `INSERT INTO discogs_want (username, release_id) VALUES ($1, $2)
-		ON CONFLICT DO NOTHING`, username, release)
+		ON CONFLICT (username, release_id) DO UPDATE
+		SET added_at = now(), confirmed_at = NULL, discogs_added_at = NULL`, username, release)
 	if err != nil {
 		return fmt.Errorf("record want %d: %w", release, err)
 	}
 	return nil
 }
 
-// Forget drops the record of a want Ohara added, once it is off the
-// wantlist.
+// Confirm records that Discogs accepted the add of release.
+func (s *Store) Confirm(ctx context.Context, username string, release int64) error {
+	_, err := s.pool.Exec(ctx, `UPDATE discogs_want SET confirmed_at = now()
+		WHERE username = $1 AND release_id = $2`, username, release)
+	if err != nil {
+		return fmt.Errorf("confirm want %d: %w", release, err)
+	}
+	return nil
+}
+
+// Identify records the date_added Discogs keeps for the confirmed want
+// release.
+func (s *Store) Identify(ctx context.Context, username string, release int64, added time.Time) error {
+	_, err := s.pool.Exec(ctx, `UPDATE discogs_want SET discogs_added_at = $3
+		WHERE username = $1 AND release_id = $2 AND confirmed_at IS NOT NULL`, username, release, added)
+	if err != nil {
+		return fmt.Errorf("identify want %d: %w", release, err)
+	}
+	return nil
+}
+
+// Forget drops the record of a want: it is off the wantlist, or no longer
+// provably Ohara's.
 func (s *Store) Forget(ctx context.Context, username string, release int64) error {
 	_, err := s.pool.Exec(ctx,
 		`DELETE FROM discogs_want WHERE username = $1 AND release_id = $2`, username, release)

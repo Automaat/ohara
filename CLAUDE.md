@@ -30,7 +30,7 @@ Same layout and tooling as `../baratie`. `package.json` and
     /discogs/          # Discogs API client: barcode search, marketplace stats, price suggestions
     /scanqueue/        # /api/scan-queue: barcodes the scanner could not resolve
     /deals/            # wishlist deal hunter: OLX, Pepper sources, matcher, Telegram alerts
-  /wantlist/         # album wishes pushed to the Discogs wantlist (manual sync)
+    /wantlist/         # album wishes pushed to the Discogs wantlist (manual sync)
     /valuation/        # daily value of owned copies: OLX, SkupSzop buy-back, Discogs; value history
     /server/           # router: /health, /metrics, /api/*, SPA fallback
     /web/              # serves the built SPA, index.html for client routes

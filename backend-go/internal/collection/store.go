@@ -555,25 +555,23 @@ func (s *Store) CreateCopy(ctx context.Context, in *CopyInput) (Copy, bool, erro
 	return c, created, nil
 }
 
-// UpdateCopy replaces a copy.
+// UpdateCopy replaces a copy and returns it as this update left it, so an
+// answer never shows what a concurrent update wrote.
 func (s *Store) UpdateCopy(ctx context.Context, id int64, in *CopyInput) (Copy, error) {
-	tag, err := s.pool.Exec(ctx, `UPDATE copy SET edition_id = $2, status = $3, price_cents = $4,
+	c, err := scanCopy(s.pool.QueryRow(ctx, `UPDATE copy c SET edition_id = $2, status = $3, price_cents = $4,
 		purchased_on = $5, shop = $6, acquired_as = $7, condition = $8, notes = $9,
 		max_price_cents = $10, max_market_percent = $11, sold_on = $12, sale_price_cents = $13,
-		updated_at = now() WHERE id = $1`,
+		updated_at = now() WHERE c.id = $1 RETURNING `+copyColumns,
 		id, in.EditionID, in.Status, in.PriceCents, timeOf(in.PurchasedOn), in.Shop, in.AcquiredAs,
 		in.Condition, in.Notes, in.MaxPriceCents, in.MaxMarketPercent, timeOf(in.SoldOn),
-		in.SalePriceCents)
+		in.SalePriceCents))
+	if isFKViolation(err, "copy_edition_id_fkey") {
+		return Copy{}, ErrEditionNotFound
+	}
 	if err != nil {
-		if isFKViolation(err, "copy_edition_id_fkey") {
-			return Copy{}, ErrEditionNotFound
-		}
 		return Copy{}, mapErr(err, ErrNotFound, "update copy")
 	}
-	if tag.RowsAffected() == 0 {
-		return Copy{}, ErrNotFound
-	}
-	return s.GetCopy(ctx, id)
+	return c, nil
 }
 
 // DeleteCopy removes a copy.

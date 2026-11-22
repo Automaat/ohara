@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -713,6 +714,71 @@ func TestSoldCopy(t *testing.T) {
 		t.Fatalf("created sold copy = %+v", created)
 	}
 	a.fails(http.MethodPost, "/api/copies", obj{"edition_id": edition, "status": "sold"}, http.StatusUnprocessableEntity, "sold_on")
+}
+
+// TestConcurrentCopyUpdatesAnswerTheirOwnRow overlaps updates that sell a
+// copy and put it back: each answer shows the copy as its own update left it.
+func TestConcurrentCopyUpdatesAnswerTheirOwnRow(t *testing.T) {
+	a := newAPI(t)
+	movie := a.title("movie", "Rejs")
+	edition := a.edition(obj{"title_id": movie, "format": "dvd"})
+	id := a.copyOf(obj{"edition_id": edition, "status": "owned"})
+	path := fmt.Sprintf("%s/api/copies/%d", a.url, id)
+
+	put := func(body obj) (collection.Copy, error) {
+		raw, err := json.Marshal(body)
+		if err != nil {
+			return collection.Copy{}, err
+		}
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodPut, path, bytes.NewReader(raw))
+		if err != nil {
+			return collection.Copy{}, err
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return collection.Copy{}, err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return collection.Copy{}, fmt.Errorf("status %d", resp.StatusCode)
+		}
+		var c collection.Copy
+		return c, json.NewDecoder(resp.Body).Decode(&c)
+	}
+
+	const rounds = 100
+	errs := make(chan error, 2*rounds)
+	// Sixty-four in flight overlap the updates while staying within the test
+	// server's listen backlog.
+	inFlight := make(chan struct{}, 64)
+	var wg sync.WaitGroup
+	for i := range rounds {
+		day := fmt.Sprintf("2026-05-%02d", i%28+1)
+		bodies := []obj{
+			{"edition_id": edition, "status": "sold", "sold_on": day, "sale_price_cents": 3500 + i},
+			{"edition_id": edition, "status": "owned"},
+		}
+		for _, body := range bodies {
+			wg.Go(func() {
+				inFlight <- struct{}{}
+				got, err := put(body)
+				<-inFlight
+				switch {
+				case err != nil:
+					errs <- err
+				case got.Status != body["status"]:
+					errs <- fmt.Errorf("sent %v, answer %+v", body, got)
+				case got.Status == "sold" && (got.SoldOn == nil || got.SoldOn.Format("2006-01-02") != day):
+					errs <- fmt.Errorf("sent %v, answer %+v", body, got)
+				}
+			})
+		}
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
 }
 
 func TestCollectionViewKeepsSoldCopiesApart(t *testing.T) {

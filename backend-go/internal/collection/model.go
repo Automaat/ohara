@@ -212,7 +212,8 @@ type Edition struct {
 // its day. MaxPriceCents, the most a wishlist copy may
 // cost, and MaxMarketPercent, the share of the used market price it may
 // cost, apply only to wishlist copies: the deal hunter alerts on listings
-// at or below either.
+// at or below either. So does ExactEdition, which keeps the hunter to
+// listings naming the edition's details.
 type CopyInput struct {
 	EditionID     int64   `json:"edition_id"`
 	Status        string  `json:"status" ts:"CopyStatus"`
@@ -226,6 +227,10 @@ type CopyInput struct {
 	// MaxMarketPercent is 1 to 100: a listing at or under that percent of
 	// the used market price of the wished title and format alerts.
 	MaxMarketPercent *int `json:"max_market_percent,omitempty" ts:",null"`
+	// ExactEdition makes a wish of a movie or book match only listings
+	// that name its edition's packaging, Polish voice-over or subtitles
+	// and binding; false matches every edition of the title and format.
+	ExactEdition bool `json:"exact_edition,omitempty"`
 	// SoldOn is the day a sold copy was sold; SalePriceCents what it sold
 	// for, null when unknown.
 	SoldOn         *Date  `json:"sold_on,omitempty" ts:",null"`
@@ -644,6 +649,9 @@ func (in *CopyInput) Normalize() *httpx.FieldError {
 		if in.Status != StatusWishlist {
 			return fieldErr("max_market_percent", "applies only to wishlist copies")
 		}
+	}
+	if in.ExactEdition && in.Status != StatusWishlist {
+		return fieldErr("exact_edition", "applies only to wishlist copies")
 	}
 	if in.Status == StatusWishlist {
 		if in.PriceCents != nil {

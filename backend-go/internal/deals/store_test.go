@@ -399,3 +399,120 @@ func TestWantsCarryEditionBarcode(t *testing.T) {
 		}
 	}
 }
+
+func TestWantsCarryEditionDetails(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	ctx := context.Background()
+	w := wished(t, pool, Want{Kind: "movie", Name: "Blade Runner 2049", Format: new("bluray")})
+	if _, err := pool.Exec(ctx, `UPDATE edition SET packaging = '{steelbook}', pl_voiceover = 'yes',
+		pl_subtitles = 'no' WHERE id = $1`, w.EditionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE copy SET exact_edition = true WHERE id = $1`, w.CopyID); err != nil {
+		t.Fatal(err)
+	}
+	book := wished(t, pool, diuna(new("9788381880206")))
+	if _, err := pool.Exec(ctx, `UPDATE edition SET binding = 'hardcover' WHERE id = $1`, book.EditionID); err != nil {
+		t.Fatal(err)
+	}
+	wants, err := NewStore(pool).Wants(ctx)
+	if err != nil {
+		t.Fatalf("Wants: %v", err)
+	}
+	got := map[int64]Want{}
+	for _, w := range wants {
+		got[w.CopyID] = w
+	}
+	movie := got[w.CopyID]
+	if !movie.ExactEdition || !slices.Equal(movie.Packaging, []string{"steelbook"}) ||
+		movie.PLVoiceover != "yes" || movie.PLSubtitles != "no" || movie.Binding != nil {
+		t.Errorf("movie want = %+v, want an exact steelbook with Polish voice-over", movie)
+	}
+	if !movie.Matches("Blade Runner 2049 Blu-ray steelbook lektor") || movie.Matches("Blade Runner 2049 Blu-ray") {
+		t.Error("stored exact movie want matches as a want of any edition")
+	}
+	b := got[book.CopyID]
+	if b.ExactEdition || b.Binding == nil || *b.Binding != "hardcover" || b.PLVoiceover != "unknown" {
+		t.Errorf("book want = %+v, want any edition, hardcover", b)
+	}
+	if !b.Matches("Diuna Frank Herbert Rebis") {
+		t.Error("stored book want of any edition needs its binding")
+	}
+}
+
+// TestExactEditionHoldsStoredListings checks that turning a wish into one
+// of only its edition holds the listings stored for it before: their
+// queued alerts no longer go out and the wished deals lists drop them,
+// while every list keeps the listing itself.
+func TestExactEditionHoldsStoredListings(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	w := wished(t, pool, Want{Kind: "movie", Name: "Blade Runner 2049", Format: new("bluray"), MaxPriceCents: new(int64(10000))})
+	if _, err := pool.Exec(ctx, `UPDATE edition SET packaging = '{steelbook}' WHERE id = $1`, w.EditionID); err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range []Listing{
+		{Source: "olx", ExternalID: "plain", Title: "Blade Runner 2049 Blu-ray", PriceCents: 3000},
+		{Source: "olx", ExternalID: "steelbook", Title: "Blade Runner 2049 Blu-ray steelbook", PriceCents: 5000},
+		{Source: "olx", ExternalID: "legacy", Title: "Blade Runner 2049 Blu-ray steelbook", PriceCents: 4000},
+	} {
+		if _, alerted, err := store.Record(ctx, &l, &w, true); err != nil || !alerted {
+			t.Fatalf("record %s: alerted=%v err=%v", l.ExternalID, alerted, err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `UPDATE price_observation SET edition_details = NULL WHERE external_id = 'legacy'`); err != nil {
+		t.Fatal(err)
+	}
+	pending := func() []string {
+		t.Helper()
+		alerts, err := store.PendingAlerts(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ids []string
+		for _, a := range alerts {
+			ids = append(ids, a.ExternalID)
+		}
+		slices.Sort(ids)
+		return ids
+	}
+	recent := func(f RecentFilter) map[string]bool {
+		t.Helper()
+		f.Limit = 10
+		observations, err := store.Recent(ctx, f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wished := map[string]bool{}
+		for _, o := range observations {
+			wished[o.ExternalID] = o.MaxPriceCents != nil
+		}
+		return wished
+	}
+	if got := pending(); !slices.Equal(got, []string{"legacy", "plain", "steelbook"}) {
+		t.Fatalf("pending alerts of a wish of any edition = %v", got)
+	}
+
+	if _, err := pool.Exec(ctx, `UPDATE copy SET exact_edition = true WHERE id = $1`, w.CopyID); err != nil {
+		t.Fatal(err)
+	}
+	if got := pending(); !slices.Equal(got, []string{"steelbook"}) {
+		t.Errorf("pending alerts of a wish of only its edition = %v, want [steelbook]", got)
+	}
+	for _, f := range []RecentFilter{{Matched: true}, {UnderLimit: true}} {
+		if got := recent(f); len(got) != 1 || !got["steelbook"] {
+			t.Errorf("Recent(%+v) = %v, want the steelbook only", f, got)
+		}
+	}
+	if got := recent(RecentFilter{}); len(got) != 3 || got["plain"] || got["legacy"] || !got["steelbook"] {
+		t.Errorf("Recent() = %v, want every listing, only the steelbook for the wish", got)
+	}
+
+	if _, err := pool.Exec(ctx, `UPDATE edition SET packaging = '{}' WHERE id = $1`, w.EditionID); err != nil {
+		t.Fatal(err)
+	}
+	if got := pending(); !slices.Equal(got, []string{"legacy", "plain", "steelbook"}) {
+		t.Errorf("pending alerts of a wish whose edition needs nothing = %v", got)
+	}
+}

@@ -519,6 +519,45 @@ func TestWishlistMarketPercent(t *testing.T) {
 	}
 }
 
+func TestWishlistExactEdition(t *testing.T) {
+	a := newAPI(t)
+	movie := a.title("movie", "Blade Runner 2049")
+	edition := a.edition(obj{"title_id": movie, "format": "bluray", "packaging": []string{"steelbook"}})
+
+	var c collection.Copy
+	a.mustDo(http.MethodPost, "/api/copies", obj{"edition_id": edition, "status": "wishlist"}, &c, http.StatusCreated)
+	if c.ExactEdition {
+		t.Fatalf("a new wish matches only its edition: %+v", c)
+	}
+	path := fmt.Sprintf("/api/copies/%d", c.ID)
+	a.mustDo(http.MethodPut, path, obj{"edition_id": edition, "status": "wishlist", "exact_edition": true}, &c, http.StatusOK)
+	if !c.ExactEdition {
+		t.Fatalf("updated copy = %+v", c)
+	}
+	var kept collection.Copy
+	a.mustDo(http.MethodGet, path, nil, &kept, http.StatusOK)
+	if !kept.ExactEdition {
+		t.Fatalf("stored copy = %+v", kept)
+	}
+	a.fails(http.MethodPut, path, obj{"edition_id": edition, "status": "owned", "exact_edition": true}, http.StatusUnprocessableEntity, "exact_edition")
+	a.mustDo(http.MethodGet, path, nil, &kept, http.StatusOK)
+	if !kept.ExactEdition || kept.Status != collection.StatusWishlist {
+		t.Fatalf("a refused update changed the copy to %+v", kept)
+	}
+	var bought collection.Copy
+	a.mustDo(http.MethodPut, path, obj{"edition_id": edition, "status": "owned"}, &bought, http.StatusOK)
+	if bought.ExactEdition {
+		t.Fatalf("bought copy kept matching only its edition: %+v", bought)
+	}
+
+	var created collection.Copy
+	a.mustDo(http.MethodPost, "/api/copies", obj{"edition_id": edition, "status": "wishlist", "exact_edition": true}, &created, http.StatusCreated)
+	if !created.ExactEdition {
+		t.Fatalf("created copy = %+v", created)
+	}
+	a.fails(http.MethodPost, "/api/copies", obj{"edition_id": edition, "status": "owned", "exact_edition": true}, http.StatusUnprocessableEntity, "exact_edition")
+}
+
 func TestEditionKindRules(t *testing.T) {
 	a := newAPI(t)
 	movie := a.title("movie", "Miś")

@@ -905,16 +905,18 @@ func TestTelegramBought(t *testing.T) {
 	}
 
 	// A listing that says nothing of its state keeps the wish's own; a
-	// share-of-market limit is cleared with the price limit.
-	if _, err := pool.Exec(ctx, `UPDATE copy SET max_market_percent = 40 WHERE id = $1`, wish); err != nil {
+	// share-of-market limit and matching only its edition are cleared
+	// with the price limit.
+	if _, err := pool.Exec(ctx, `UPDATE copy SET max_market_percent = 40, exact_edition = true WHERE id = $1`, wish); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.BuyPress(ctx, "q20", ids["second"], wish); err != nil {
 		t.Fatal(err)
 	}
 	var percent *int
-	if err := pool.QueryRow(ctx, `SELECT max_market_percent FROM copy WHERE id = $1`, wish).Scan(&percent); err != nil || percent != nil {
-		t.Fatalf("market percent after Kupione = %v (%v), want none", percent, err)
+	var exact bool
+	if err := pool.QueryRow(ctx, `SELECT max_market_percent, exact_edition FROM copy WHERE id = $1`, wish).Scan(&percent, &exact); err != nil || percent != nil || exact {
+		t.Fatalf("market percent after Kupione = %v, exact edition %v (%v), want none", percent, exact, err)
 	}
 	if c := readCopy(t, pool, wish); c.Status != "owned" || c.AcquiredAs == nil || *c.AcquiredAs != "new" ||
 		c.PriceCents == nil || *c.PriceCents != 3900 || c.MaxPriceCents != nil {

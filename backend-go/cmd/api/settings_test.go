@@ -25,6 +25,7 @@ func unsetSettings(t *testing.T) {
 		"OHARA_TELEGRAM_CHAT_ID",
 		"OHARA_VALUATION_INTERVAL",
 		"OHARA_VALUATION_WINDOW_DAYS",
+		"OHARA_PRICE_RETENTION_DAYS",
 		"OHARA_DISCOGS_TOKEN",
 	} {
 		t.Setenv(key, "")
@@ -118,13 +119,27 @@ func TestNewHunterSettings(t *testing.T) {
 
 func TestNewValuationSettings(t *testing.T) {
 	for _, tc := range []struct {
-		name         string
-		env          map[string]string
-		wantErr      string
-		wantInterval time.Duration
-		wantWindow   time.Duration
+		name          string
+		env           map[string]string
+		wantErr       string
+		wantInterval  time.Duration
+		wantWindow    time.Duration
+		wantRetention time.Duration
 	}{
 		{name: "defaults", wantWindow: 90 * day},
+		{name: "retention at the window", env: map[string]string{"OHARA_PRICE_RETENTION_DAYS": "90"}, wantWindow: 90 * day, wantRetention: 90 * day},
+		{name: "retention past the window", env: map[string]string{"OHARA_PRICE_RETENTION_DAYS": "365"}, wantWindow: 90 * day, wantRetention: 365 * day},
+		{
+			name:          "retention at a shorter window",
+			env:           map[string]string{"OHARA_VALUATION_WINDOW_DAYS": "30", "OHARA_PRICE_RETENTION_DAYS": "30"},
+			wantWindow:    30 * day,
+			wantRetention: 30 * day,
+		},
+		{name: "retention below the window", env: map[string]string{"OHARA_PRICE_RETENTION_DAYS": "89"}, wantErr: "OHARA_PRICE_RETENTION_DAYS (89) is below OHARA_VALUATION_WINDOW_DAYS (90)"},
+		{name: "retention of zero days", env: map[string]string{"OHARA_PRICE_RETENTION_DAYS": "0"}, wantErr: "OHARA_PRICE_RETENTION_DAYS"},
+		{name: "negative retention", env: map[string]string{"OHARA_PRICE_RETENTION_DAYS": "-5"}, wantErr: "OHARA_PRICE_RETENTION_DAYS"},
+		{name: "retention not a number", env: map[string]string{"OHARA_PRICE_RETENTION_DAYS": "1y"}, wantErr: "OHARA_PRICE_RETENTION_DAYS"},
+		{name: "retention too long", env: map[string]string{"OHARA_PRICE_RETENTION_DAYS": "36501"}, wantErr: "OHARA_PRICE_RETENTION_DAYS"},
 		{name: "interval at the floor", env: map[string]string{"OHARA_VALUATION_INTERVAL": "1h"}, wantInterval: time.Hour, wantWindow: 90 * day},
 		{name: "interval below the floor", env: map[string]string{"OHARA_VALUATION_INTERVAL": "30m"}, wantErr: "OHARA_VALUATION_INTERVAL"},
 		{name: "negative interval", env: map[string]string{"OHARA_VALUATION_INTERVAL": "-1h"}, wantErr: "OHARA_VALUATION_INTERVAL"},
@@ -151,6 +166,9 @@ func TestNewValuationSettings(t *testing.T) {
 			}
 			if got := r.Window(); got != tc.wantWindow {
 				t.Errorf("window = %v, want %v", got, tc.wantWindow)
+			}
+			if got := r.Retention(); got != tc.wantRetention {
+				t.Errorf("retention = %v, want %v", got, tc.wantRetention)
 			}
 		})
 	}

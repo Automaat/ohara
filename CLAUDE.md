@@ -352,11 +352,34 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   query, a listing last found by a query whose answer held fewer offers
   than the 50 asked for, each with a readable ID (`deals.Pager`, a
   complete answer), that no answer of the run held (priced or not) and
-  last seen before the run started on the database clock gets `gone_at`; `last_seen_at` keeps its last
-  sighting. A first page, a failed or skipped query tells nothing, and a
+  neither seen with a price nor offered at all (`last_seen_at`,
+  `last_offered_at`) since the run started on the database clock gets
+  `gone_at`; `last_seen_at` keeps its last sighting. A first page, a failed or skipped query tells nothing, and a
   gone listing any answer holds again, matching or not, is no longer gone.
   Gone listings stay stored and price as before; no request is sent per
-  listing. Beside its range each copy gets `likely_sold`: the trimmed
+  listing. Every hunt or valuation answer, canary and feed answers with an
+  empty wishlist included, moves `last_offered_at` (null for rows not
+  offered since migration 0024) of every stored listing it holds, priced
+  or not, matching or not, as it arrives: an OLX or Pepper `deals.Pager`
+  names every offer with a readable ID in `Page.Seen`, also those its
+  listings leave out; `last_seen_at` moves only with a recorded price.
+  Stored listings stay forever unless `OHARA_PRICE_RETENTION_DAYS` is set
+  (never below the valuation window): then the valuation runner, scheduled
+  or not, deletes in batches of 1000 those whose later of the two is
+  older, 5 minutes after start and then daily, logs the count and adds it
+  to `ohara_price_observations_pruned_total`. A hunt or valuation holds a
+  shared advisory lock (keyed by schema) on a connection of its own for
+  its whole run and is counted as running in the process, which still
+  holds if that lock's session ends; a prune takes the lock exclusive
+  without waiting and checks the count, so it never runs during one: it
+  deletes nothing and tries again 10 minutes later. A
+  dismissed listing and one with a `deal_alert` row, sent or not, are
+  never pruned, so a listing still offered past every answer keeps its
+  dismissal and alert (it does not come back as a new row that alerts
+  again) and a "Kupione" press keeps its listing, alert, `telegram_press`
+  and `telegram_purchase` rows; neither is one a transaction holds. A
+  listing the runs still see is never pruned.
+  Beside its range each copy gets `likely_sold`: the trimmed
   median latest price of the same pool's used OLX listings whose `gone_at`
   is at most `valuation.LikelySoldWithin` (21 days, under OLX's 30-day
   listing run) after `observed_at`. Wartość shows it as "Prawdopodobnie
@@ -570,6 +593,7 @@ browser's `Host` (`changeOrigin: false`) so dev writes pass this check.
 | `OHARA_DEALS_{OLX,PEPPER}_URL`, `OHARA_TELEGRAM_URL`     | public endpoints                                   | Point the sources and Telegram at test doubles                                                            |
 | `OHARA_VALUATION_INTERVAL`                               | `0s` (off)                                         | Valuation schedule, at least `1h` (e.g. `24h`), jittered ±10%; `POST /api/valuation/run` works either way |
 | `OHARA_VALUATION_WINDOW_DAYS`                            | `90`                                               | How many days back a price still counts                                                                   |
+| `OHARA_PRICE_RETENTION_DAYS`                             | unset (keep every listing)                         | Delete stored listings last seen more days ago, daily; at least `OHARA_VALUATION_WINDOW_DAYS`             |
 | `OHARA_VALUATION_SKUPSZOP_URL`                           | public site                                        | Point the SkupSzop quote at a test double                                                                 |
 | `OHARA_TMDB_API_KEY`                                     | unset                                              | TMDB v3 key or v4 read token; enables the movie lookup chain                                              |
 | `OHARA_ALLEGRO_CLIENT_ID`, `OHARA_ALLEGRO_CLIENT_SECRET` | unset                                              | Allegro device-flow app; adds the Allegro catalog to the movie chain after `api allegro-login`            |

@@ -120,6 +120,9 @@ function valued(over: Partial<CopyValue> = {}): CopyValue {
 		ceiling: estimate(10300, 'discogs'),
 		low_confidence: false,
 		likely_sold: null,
+		condition: null,
+		authors: [],
+		binding: null,
 		...over
 	};
 }

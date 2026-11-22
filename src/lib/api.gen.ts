@@ -495,6 +495,9 @@ export type CopyValue = {
 	mid_grade?: DiscogsGrade;
 	low_confidence: boolean;
 	likely_sold: Estimate | null;
+	condition: Condition | null;
+	authors: string[];
+	binding: Binding | null;
 };
 
 export type Bound = {

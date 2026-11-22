@@ -7,16 +7,17 @@ export type PageEvents = { win: EventTarget; doc: EventTarget };
  * The reader's local day as YYYY-MM-DD, which tells a late delivery or loan. While started it
  * moves on at local midnight and whenever the page is shown again, since a phone's timers sleep
  * while the app is in the background. A timer that fires a little early finds the same day and
- * waits for midnight again.
+ * waits for midnight again. Each refresh reads the clock once, so the day it shows and the
+ * midnight it waits for agree even when the reading falls on midnight.
  */
 export class LocalDay {
 	current = $state(isoDate(new Date()));
 	#timer: ReturnType<typeof setTimeout> | undefined;
 
 	#refresh = () => {
-		this.current = isoDate(new Date());
-		clearTimeout(this.#timer);
 		const now = new Date();
+		this.current = isoDate(now);
+		clearTimeout(this.#timer);
 		const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
 		this.#timer = setTimeout(this.#refresh, midnight.getTime() - now.getTime());
 	};

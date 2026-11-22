@@ -41,6 +41,30 @@ describe('LocalDay', () => {
 		}
 	);
 
+	it('shows the day it waits out when the clock passes midnight during a refresh', () => {
+		const day = new LocalDay();
+		const events = page();
+		const stop = day.start(events);
+		const readings = [new Date(2026, 11, 14, 23, 59, 59, 999), new Date(2026, 11, 15, 0, 0)];
+		const RealDate = Date;
+		class SteppingDate extends RealDate {
+			constructor(...args: ConstructorParameters<typeof Date>) {
+				if (args.length > 0) super(...args);
+				else super((readings.length > 1 ? readings.shift() : readings[0]) ?? 0);
+			}
+		}
+		vi.stubGlobal('Date', SteppingDate);
+		try {
+			events.doc.dispatchEvent(new Event('visibilitychange'));
+			expect(day.current).toBe('2026-12-14');
+			vi.advanceTimersByTime(1);
+			expect(day.current).toBe('2026-12-15');
+		} finally {
+			vi.unstubAllGlobals();
+			stop();
+		}
+	});
+
 	it('stops listening once stopped', () => {
 		const day = new LocalDay();
 		const events = page();

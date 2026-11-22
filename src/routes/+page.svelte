@@ -20,6 +20,8 @@
 	import { page } from '$app/state';
 	import { CollectionLoad } from '#lib/collection-load.svelte.js';
 	import SettingsSheet from '#lib/components/SettingsSheet.svelte';
+	import ExportLinks from '#lib/components/ExportLinks.svelte';
+	import ExportMenu from '#lib/components/ExportMenu.svelte';
 	import {
 		collectionSearch,
 		collectionStatusLabels,
@@ -358,6 +360,7 @@
 			{#if !emptyShelf}
 				<Button tone="signal" href="/titles/new">Dodaj tytuł</Button>
 			{/if}
+			<ExportMenu toolbar />
 			<SettingsSheet />
 		{/snippet}
 	</PageHeader>
@@ -368,7 +371,10 @@
 			{#if !emptyShelf}
 				<Button href="/titles/new">Dodaj tytuł</Button>
 			{/if}
-			<SettingsSheet />
+			<!-- A third header control would cover the heading on a narrow phone. -->
+			<SettingsSheet>
+				<ExportLinks />
+			</SettingsSheet>
 		</div>
 		<p class="summary">
 			{summary}

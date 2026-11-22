@@ -297,9 +297,11 @@ export function copyFacts(c: Copy): CopyFact[] {
 			c.max_market_percent == null
 				? []
 				: [{ label: 'Procent ceny rynkowej', value: `${c.max_market_percent}%` }];
+		const exact = c.exact_edition ? [{ label: 'Oferty', value: 'Tylko to wydanie' }] : [];
 		return [
 			{ label: 'Cena maksymalna', value: formatPLN(c.max_price_cents) || '—' },
 			...percent,
+			...exact,
 			{ label: 'Gdzie szukać', value: c.shop || '—' },
 			{ label: 'Stan', value: state }
 		];

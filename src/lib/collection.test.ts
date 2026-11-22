@@ -764,6 +764,31 @@ describe('copy form', () => {
 		expect(owned.ok && 'max_market_percent' in owned.value).toBe(false);
 	});
 
+	it('round-trips a wish of only its edition, off by default', () => {
+		expect(copyToForm(null).exact_edition).toBe(false);
+		const form = copyToForm({
+			edition_id: 3,
+			status: 'wishlist',
+			price_cents: null,
+			purchased_on: null,
+			shop: '',
+			acquired_as: null,
+			condition: null,
+			notes: '',
+			max_price_cents: null,
+			exact_edition: true
+		});
+		expect(form.exact_edition).toBe(true);
+		const wish = copyPayload(form, 3);
+		expect(wish.ok && wish.value.exact_edition).toBe(true);
+		const any = copyPayload({ ...form, exact_edition: false }, 3);
+		expect(any.ok && 'exact_edition' in any.value).toBe(false);
+		const owned = copyPayload({ ...form, status: 'owned' }, 3);
+		expect(owned.ok && 'exact_edition' in owned.value).toBe(false);
+		const sold = copyPayload({ ...form, status: 'sold', sold_on: '2026-05-10' }, 3);
+		expect(sold.ok && 'exact_edition' in sold.value).toBe(false);
+	});
+
 	it('round-trips a sold copy with its purchase and sale', () => {
 		const form = copyToForm({
 			edition_id: 3,

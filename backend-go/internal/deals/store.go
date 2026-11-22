@@ -157,7 +157,8 @@ func (s *Store) Wants(ctx context.Context) ([]Want, error) {
 	}
 	rows, err := s.pool.Query(ctx, `SELECT c.id, e.id, t.id, t.kind, t.name, t.original_title,
 			t.polish_title, t.authors, e.format, e.barcode, c.max_price_cents, c.max_market_percent,
-			CASE WHEN c.max_market_percent IS NOT NULL THEN m.cents END
+			CASE WHEN c.max_market_percent IS NOT NULL THEN m.cents END, c.exact_edition,
+			e.packaging, e.pl_voiceover, e.pl_subtitles, e.binding
 		FROM copy c JOIN edition e ON e.id = c.edition_id JOIN title t ON t.id = e.title_id
 		`+marketJoin("e", 1)+`
 		WHERE c.status = 'wishlist' ORDER BY c.id`, markets.titles, markets.formats, markets.cents)
@@ -168,7 +169,7 @@ func (s *Store) Wants(ctx context.Context) ([]Want, error) {
 		var w Want
 		err := row.Scan(&w.CopyID, &w.EditionID, &w.TitleID, &w.Kind, &w.Name, &w.OriginalTitle,
 			&w.PolishTitle, &w.Authors, &w.Format, &w.Barcode, &w.MaxPriceCents, &w.MaxMarketPercent,
-			&w.MarketCents)
+			&w.MarketCents, &w.ExactEdition, &w.Packaging, &w.PLVoiceover, &w.PLSubtitles, &w.Binding)
 		return w, err
 	})
 }
@@ -392,14 +393,15 @@ func record(ctx context.Context, tx pgx.Tx, l *Listing, w *Want, alert bool, asO
 	var titleID *int64
 	err = tx.QueryRow(ctx, `INSERT INTO price_observation
 			(source, external_id, price_cents, acquired_as, url, edition_id, title_id, raw, assigned_as_of,
-				first_price_cents, last_offered_at)
-		VALUES ($1, $2, $3, $4, $5, nullif($6::bigint, 0), nullif($7::bigint, 0), $8, `+matchedAsOf+`, $10, now())
+				first_price_cents, last_offered_at, edition_details)
+		VALUES ($1, $2, $3, $4, $5, nullif($6::bigint, 0), nullif($7::bigint, 0), $8, `+matchedAsOf+`, $10, now(), $11)
 		ON CONFLICT (source, external_id) WHERE external_id IS NOT NULL DO UPDATE SET
 			price_cents = EXCLUDED.price_cents,
 			last_seen_at = now(),
 			last_offered_at = now(),
 			gone_at = NULL,
 			url = EXCLUDED.url,
+			edition_details = EXCLUDED.edition_details,
 			raw = CASE WHEN `+movedTitle+` THEN coalesce(price_observation.raw, '{}'::jsonb) - 'wishlist_copy_id' || EXCLUDED.raw
 				WHEN `+otherTitle+` THEN coalesce(price_observation.raw, '{}'::jsonb) || (EXCLUDED.raw - 'wishlist_copy_id')
 				ELSE coalesce(price_observation.raw, '{}'::jsonb) || EXCLUDED.raw END,
@@ -414,7 +416,7 @@ func record(ctx context.Context, tx pgx.Tx, l *Listing, w *Want, alert bool, asO
 				ELSE greatest(price_observation.assigned_as_of, `+matchedAsOf+`) END
 		RETURNING id, xmax = 0, dismissed_at IS NOT NULL, `+listingTitle,
 		l.Source, l.ExternalID, l.PriceCents, l.AcquiredAs, l.URL, w.EditionID, w.TitleID, raw, asOf,
-		firstPrice).Scan(&id, &isNew, &dismissed, &titleID)
+		firstPrice, namedDetails(words(l.Title))).Scan(&id, &isNew, &dismissed, &titleID)
 	if err != nil {
 		return false, false, fmt.Errorf("record observation: %w", err)
 	}
@@ -741,7 +743,7 @@ func pendingAlerts(ctx context.Context, q querier, markets marketTable, only *in
 		`+marketJoin("e", 3)+`
 		WHERE a.sent_at IS NULL AND a.attempts < $1 AND a.created_at > now() - `+alertWindow+`
 			AND (o.price_cents <= c.max_price_cents OR o.price_cents * 100 <= m.cents * c.max_market_percent)
-			AND o.dismissed_at IS NULL
+			AND o.dismissed_at IS NULL AND `+wishNamedBy("c")+`
 			AND (a.alerted_price_cents IS NULL OR o.price_cents < a.alerted_price_cents)
 			AND ($2::bigint IS NULL OR a.observation_id = $2)
 		ORDER BY a.created_at, a.observation_id`, MaxAttempts, only, markets.titles, markets.formats, markets.cents)
@@ -841,23 +843,24 @@ const wishOfListingTitle = `EXISTS (SELECT FROM edition we WHERE we.id = w.editi
 
 // Listing rows Recent pages through: each listing with its alert's sent time and the wishlist copy
 // that matches it, the one the hunter recorded it for, else its alert's copy when that copy is for
-// the listing's title, while that copy is still on the wishlist. allListings is every stored listing; wishedListings only those with a
+// the listing's title, while that copy is still on the wishlist and the listing names every
+// edition detail it needs (wishNamedBy). allListings is every stored listing; wishedListings only those with a
 // matching copy, the only ones a filter keeps, found from the wishlist through
 // price_observation_wish_idx and deal_alert without reading the rest.
-const (
+var (
 	allListings = `SELECT o.id, o.observed_at, o.price_cents, o.source, a.sent_at, w.id AS wish_id, w.max_price_cents,
 			w.max_market_percent, w.edition_id AS wish_edition_id
 		FROM price_observation o
 		LEFT JOIN deal_alert a ON a.observation_id = o.id
 		LEFT JOIN copy w ON w.status = 'wishlist' AND w.id = coalesce(o.wishlist_copy_id, a.copy_id)
-			AND (o.wishlist_copy_id IS NOT NULL OR ` + wishOfListingTitle + `)
+			AND (o.wishlist_copy_id IS NOT NULL OR ` + wishOfListingTitle + `) AND ` + wishNamedBy("w") + `
 		WHERE o.dismissed_at IS NULL`
 	wishedListings = `SELECT o.id, o.observed_at, o.price_cents, o.source, a.sent_at, w.id AS wish_id, w.max_price_cents,
 			w.max_market_percent, w.edition_id AS wish_edition_id
 		FROM copy w
 		JOIN price_observation o ON o.wishlist_copy_id = w.id AND o.dismissed_at IS NULL
 		LEFT JOIN deal_alert a ON a.observation_id = o.id
-		WHERE w.status = 'wishlist'
+		WHERE w.status = 'wishlist' AND ` + wishNamedBy("w") + `
 		UNION ALL
 		SELECT o.id, o.observed_at, o.price_cents, o.source, a.sent_at, w.id, w.max_price_cents,
 			w.max_market_percent, w.edition_id
@@ -865,7 +868,7 @@ const (
 		JOIN deal_alert a ON a.copy_id = w.id
 		JOIN price_observation o ON o.id = a.observation_id AND o.wishlist_copy_id IS NULL
 			AND o.dismissed_at IS NULL
-		WHERE w.status = 'wishlist' AND ` + wishOfListingTitle
+		WHERE w.status = 'wishlist' AND ` + wishOfListingTitle + ` AND ` + wishNamedBy("w")
 )
 
 // Recent returns the newest deal observations that pass f. It picks the page from the listing
@@ -1045,7 +1048,7 @@ func buyInTx(ctx context.Context, tx pgx.Tx, callbackQueryID string, id, copyID 
 	if _, err := tx.Exec(ctx, `UPDATE copy SET status = 'owned', price_cents = $2,
 			purchased_on = (now() AT TIME ZONE 'Europe/Warsaw')::date, shop = $3,
 			acquired_as = coalesce($4, acquired_as), max_price_cents = NULL, max_market_percent = NULL,
-			updated_at = now()
+			exact_edition = false, updated_at = now()
 		WHERE id = $1`, copyID, priceCents, shop, acquiredAs); err != nil {
 		return fmt.Errorf("buy press: copy: %w", err)
 	}

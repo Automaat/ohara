@@ -657,6 +657,7 @@ export type CopyForm = {
 	notes: string;
 	max_price: string;
 	market_percent: string;
+	exact_edition: boolean;
 	sold_on: string;
 	sale_price: string;
 	expected_on: string;
@@ -675,6 +676,7 @@ export function copyToForm(c: CopyPayload | null): CopyForm {
 		notes: c?.notes ?? '',
 		max_price: centsToInput(c?.max_price_cents ?? null),
 		market_percent: c?.max_market_percent == null ? '' : String(c.max_market_percent),
+		exact_edition: c?.exact_edition ?? false,
 		sold_on: c?.sold_on ?? '',
 		sale_price: centsToInput(c?.sale_price_cents ?? null),
 		expected_on: c?.expected_on ?? '',
@@ -693,10 +695,10 @@ export function parsePercent(input: string): number | null | undefined {
 
 /**
  * The request body for a copy. A wishlist copy carries no price or purchase date, an owned, sold
- * or ordered copy no maximum price or market percent, only a sold copy its sale's day, which it
- * needs, and price, only an ordered copy its expected delivery and only an owned copy its
- * location. A field a copy does not carry is left out, which the server reads as none, so a sold
- * copy put back on the shelf drops its sale and a received one its delivery day.
+ * or ordered copy no maximum price, market percent or exact edition, only a sold copy its sale's
+ * day, which it needs, and price, only an ordered copy its expected delivery and only an owned
+ * copy its location. A field a copy does not carry is left out, which the server reads as none,
+ * so a sold copy put back on the shelf drops its sale and a received one its delivery day.
  */
 export function copyPayload(f: CopyForm, editionID: number): Parsed<CopyPayload> {
 	const sold = f.status === 'sold';
@@ -753,6 +755,7 @@ export function copyPayload(f: CopyForm, editionID: number): Parsed<CopyPayload>
 			notes: f.notes.trim(),
 			max_price_cents: maxPrice,
 			...(marketPercent == null ? {} : { max_market_percent: marketPercent }),
+			...(!owned && f.exact_edition ? { exact_edition: true } : {}),
 			...sale,
 			...(expected ? { expected_on: expected } : {}),
 			...(location ? { location } : {})

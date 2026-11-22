@@ -277,6 +277,7 @@
 						saving={savingCopy}
 						submitLabel="Zapisz egzemplarz"
 						market={markets.for(d.title_id, d.format)}
+						kind={d.title.kind}
 						onsubmit={() => addCopy(d)}
 						oncancel={() => (adding = false)}
 					/>

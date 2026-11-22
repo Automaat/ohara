@@ -2,6 +2,7 @@ import type { ToastEnd, ToastOptions } from '@smykla-skalski/sui';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from './api';
 import {
+	QueueList,
 	QueueRemovals,
 	swipeAxis,
 	swipeOffset,
@@ -242,5 +243,142 @@ describe('QueueRemovals', () => {
 		expect(p.sent).toEqual([1]);
 		expect(p.toasts.size).toBe(0);
 		expect(p.removals.hidden.has(1)).toBe(false);
+	});
+});
+
+/** Queue reads the test answers when and in what order it chooses. */
+function reads() {
+	const answers: ((res: Response) => void)[] = [];
+	const asked: string[] = [];
+	const fetchFn: typeof fetch = (input, init) => {
+		asked.push(`${init?.method ?? 'GET'} ${String(input)}`);
+		return new Promise<Response>((resolve) => answers.push(resolve));
+	};
+	return {
+		fetchFn,
+		asked,
+		waitAsked: (n: number) => vi.waitFor(() => expect(answers).toHaveLength(n)),
+		answer: (i: number, ...ids: number[]) =>
+			answers[i]?.(new Response(JSON.stringify(ids.map((id) => entry(id))), { status: 200 })),
+		fail: (i: number) =>
+			answers[i]?.(new Response(JSON.stringify({ error: 'boom' }), { status: 500 }))
+	};
+}
+
+const ids = (list: QueueList) => list.entries?.map((e) => e.id) ?? null;
+
+describe('QueueList', () => {
+	it('loads the queue at its path', async () => {
+		const r = reads();
+		const list = new QueueList(r.fetchFn);
+		expect(list.entries).toBeNull();
+		const loading = list.load();
+		await r.waitAsked(1);
+		r.answer(0, 1, 2);
+		await loading;
+		expect(r.asked).toEqual(['GET /api/scan-queue']);
+		expect(ids(list)).toEqual([1, 2]);
+		expect(list.failure).toBeNull();
+	});
+
+	it('loads again when codes leave the device, not when the device keeps more', async () => {
+		const r = reads();
+		const list = new QueueList(r.fetchFn);
+		list.waiting(0);
+		list.waiting(2);
+		list.waiting(3);
+		expect(r.asked).toHaveLength(0);
+		list.waiting(1);
+		await r.waitAsked(1);
+		list.waiting(0);
+		await r.waitAsked(2);
+		list.waiting(0);
+		r.answer(0, 1);
+		r.answer(1, 1, 2);
+		await vi.waitFor(() => expect(ids(list)).toEqual([1, 2]));
+		expect(r.asked).toHaveLength(2);
+	});
+
+	it('keeps the newer answer when the first read answers last', async () => {
+		const r = reads();
+		const list = new QueueList(r.fetchFn);
+		const first = list.load();
+		await r.waitAsked(1);
+		list.waiting(1);
+		list.waiting(0);
+		await r.waitAsked(2);
+		r.answer(1, 1, 2);
+		await vi.waitFor(() => expect(ids(list)).toEqual([1, 2]));
+		r.answer(0, 1);
+		await first;
+		expect(ids(list)).toEqual([1, 2]);
+	});
+
+	it('leaves out an entry removed while its read was out, and shows it once read again', async () => {
+		const r = reads();
+		const list = new QueueList(r.fetchFn);
+		const first = list.load();
+		await r.waitAsked(1);
+		r.answer(0, 1, 2);
+		await first;
+		const second = list.load();
+		await r.waitAsked(2);
+		list.removed(1);
+		expect(ids(list)).toEqual([2]);
+		r.answer(1, 1, 2);
+		await second;
+		expect(ids(list)).toEqual([2]);
+		const third = list.load();
+		await r.waitAsked(3);
+		r.answer(2, 1, 2);
+		await third;
+		expect(ids(list)).toEqual([1, 2]);
+	});
+
+	it('reports a failed first read, and clears it once a read answers', async () => {
+		const r = reads();
+		const list = new QueueList(r.fetchFn);
+		const first = list.load();
+		await r.waitAsked(1);
+		r.fail(0);
+		await first;
+		expect(list.failure).toBe('Serwer zwrócił błąd 500.');
+		expect(list.entries).toBeNull();
+		const retry = list.load();
+		await r.waitAsked(2);
+		r.answer(1, 3);
+		await retry;
+		expect(list.failure).toBeNull();
+		expect(ids(list)).toEqual([3]);
+	});
+
+	it('keeps the list shown when a later read fails', async () => {
+		const r = reads();
+		const list = new QueueList(r.fetchFn);
+		const first = list.load();
+		await r.waitAsked(1);
+		r.answer(0, 1);
+		await first;
+		const again = list.load();
+		await r.waitAsked(2);
+		r.fail(1);
+		await again;
+		expect(list.failure).toBeNull();
+		expect(ids(list)).toEqual([1]);
+	});
+
+	it('shows the first read when a later one failed before it answered', async () => {
+		const r = reads();
+		const list = new QueueList(r.fetchFn);
+		const first = list.load();
+		await r.waitAsked(1);
+		const again = list.load();
+		await r.waitAsked(2);
+		r.fail(1);
+		await again;
+		r.answer(0, 4);
+		await first;
+		expect(list.failure).toBeNull();
+		expect(ids(list)).toEqual([4]);
 	});
 });

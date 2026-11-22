@@ -4,6 +4,7 @@ import {
 	filterCollection,
 	listableCopies,
 	locationsInUse,
+	onlyWishesCarry,
 	lowerCase,
 	searchBarcode,
 	searchTerm
@@ -451,6 +452,27 @@ describe('listableCopies', () => {
 		];
 		expect(listableCopies(copies).map((i) => i.copy_id)).toEqual([1, 3, 4]);
 		expect(listableCopies([])).toEqual([]);
+	});
+});
+
+describe('onlyWishesCarry', () => {
+	const shelf = [
+		item({ copy_id: 1, tags: ['Kult'] }),
+		item({ copy_id: 2, status: 'wishlist', tags: ['Marzenie', 'Kult'] }),
+		item({ copy_id: 3, status: 'sold', tags: ['Sprzedane'] })
+	];
+
+	it.each([
+		['a tag only a wish carries, case aside', 'MARZENIE', [], true],
+		['trimmed as the filter trims it', '  marzenie ', [], true],
+		['a tag an owned copy shares', 'kult', [], false],
+		['a tag a sold copy carries', 'sprzedane', [], false],
+		['a tag a title without copies shares', 'marzenie', [{ tags: ['Marzenie'] }], false],
+		['a tag nothing carries', 'brak', [], false],
+		['no tag', '', [], false],
+		['a tag of spaces', '   ', [], false]
+	] as [string, string, { tags?: string[] }[], boolean][])('%s', (_name, tag, titles, wished) => {
+		expect(onlyWishesCarry(tag, shelf, titles)).toBe(wished);
 	});
 });
 

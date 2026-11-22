@@ -1,4 +1,11 @@
-import { formatPLN, type FormIssue, type Parsed } from '#lib/collection.js';
+import {
+	formatLabels,
+	formatPLN,
+	kindLabels,
+	type CollectionItem,
+	type FormIssue,
+	type Parsed
+} from '#lib/collection.js';
 import type {
 	AlertState,
 	DealSource,
@@ -267,4 +274,28 @@ export function lastRunSummary(result: DealsRunResult | null): string | null {
 	];
 	if (result.errors.length > 0) parts.push(`błędów źródeł: ${result.errors.length}`);
 	return parts.join(', ');
+}
+
+/**
+ * Every wish in the collection, which Okazje lists whether or not an offer was found: Kolekcja
+ * lists none, as a wish is not had yet.
+ */
+export const wishesPath = '/api/collection?status=wishlist';
+
+/**
+ * A wish's line on Okazje, such as "Film · Blu-ray · limit 80 zł" or "Książka · Stanisław Lem": its
+ * kind, authors, format and price limit. The collection does not carry a wish's market percent,
+ * so a wish without a price limit names none rather than claiming it has no limit.
+ */
+export function wishFacts(
+	wish: Pick<CollectionItem, 'kind' | 'authors' | 'format' | 'max_price_cents'>
+): string {
+	return [
+		kindLabels[wish.kind],
+		wish.authors?.join(', '),
+		wish.format ? formatLabels[wish.format] : null,
+		wish.max_price_cents == null ? null : wishLimit(wish.max_price_cents)
+	]
+		.filter(Boolean)
+		.join(' · ');
 }

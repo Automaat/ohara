@@ -153,3 +153,16 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   The last run, scheduled, manual or cut short by shutdown, is kept in
   `deal_run`: after a restart the status shows it and the first scheduled
   run comes one interval after it started, at least 5 minutes on.
+
+## Frontend
+
+- Okazje (`/deals`) lists every wish in its "Lista życzeń" section, with
+  or without offers, since Kolekcja lists none: `GET
+/api/collection?status=wishlist`, asked beside the offers, title A–Z.
+  Each SUI card names the title and links to its page, reads "Film ·
+  Blu-ray · limit 80 zł" (kind, authors, format and the price limit when
+  the wish has one; the collection does not carry a market percent), and
+  its "Edytuj" opens the copy's form at `/copies/<id>`. A failed answer
+  keeps the last list with a retry; with no wish the section is left out
+  and the page's "Lista życzeń jest pusta" stands. The offer segments are
+  unchanged.

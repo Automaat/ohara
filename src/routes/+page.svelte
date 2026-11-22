@@ -47,7 +47,12 @@
 		type CollectionFilter,
 		type CollectionItem
 	} from '#lib/collection.js';
-	import { filterCollection, listableCopies, locationsInUse } from '#lib/collection-filter.js';
+	import {
+		filterCollection,
+		listableCopies,
+		locationsInUse,
+		onlyWishesCarry
+	} from '#lib/collection-filter.js';
 	import { tagKey } from '#lib/tags.js';
 	import {
 		collectionSortLabels,
@@ -282,7 +287,15 @@
 	const tags = $derived(tagsInUse(listableCopies(collection?.items ?? []), uncopied ?? []));
 	/** The filtered tag as it was first saved, whatever case the address spells it in. */
 	const shownTag = $derived(
-		filter.tag ? (tags.find((t) => tagKey(t) === tagKey(filter.tag ?? '')) ?? filter.tag) : ''
+		filter.tag
+			? (tagsInUse(collection?.items ?? [], uncopied ?? []).find(
+					(t) => tagKey(t) === tagKey(filter.tag ?? '')
+				) ?? filter.tag)
+			: ''
+	);
+	/** The filtered tag belongs to wishes only, which Kolekcja leaves to Okazje. */
+	const wishTag = $derived(
+		!listsTitles && onlyWishesCarry(filter.tag ?? '', collection?.items ?? [], uncopied ?? [])
 	);
 	const activeFilters = $derived(
 		(
@@ -419,6 +432,7 @@
 		{locations}
 		tag={filter.tag ?? ''}
 		{tags}
+		{wishTag}
 		onsort={setSort}
 		onformat={(format) => set('format', format)}
 		onstatus={setStatus}
@@ -628,6 +642,18 @@
 		>
 			{#snippet action()}
 				<Button onclick={clearFilters}>Wyczyść filtry</Button>
+			{/snippet}
+		</EmptyState>
+	{:else if activeFilters.length && wishTag}
+		<EmptyState
+			title="Nic nie pasuje"
+			description={`Tag „${shownTag}” mają tylko pozycje z listy życzeń, a nie egzemplarze w kolekcji.`}
+		>
+			{#snippet action()}
+				<div class="empty-actions">
+					<Button onclick={clearFilters}>Wyczyść filtry</Button>
+					<Button href="/deals">Okazje</Button>
+				</div>
 			{/snippet}
 		</EmptyState>
 	{:else if activeFilters.length}

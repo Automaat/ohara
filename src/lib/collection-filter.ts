@@ -11,7 +11,7 @@
 import { shelved, type CollectionFilter, type CollectionItem } from './collection';
 import { lowerCase, trimSpace } from './go-text';
 import { canonicalBarcode, checkDigitMatches } from './scan';
-import { tagMatches } from './tags';
+import { tagMatches, tagTerm } from './tags';
 
 export { lowerCase };
 
@@ -121,6 +121,25 @@ export function filterCollection(
  */
 export function listableCopies<T extends Pick<CollectionItem, 'status'>>(items: readonly T[]): T[] {
 	return items.filter((item) => item.status !== 'wishlist');
+}
+
+/**
+ * Whether only wishes carry the tag: a wish has it, but no other copy and no title without
+ * copies does, so Kolekcja lists nothing for it and the wish waits in Okazje.
+ */
+export function onlyWishesCarry(
+	tag: string,
+	items: readonly Pick<CollectionItem, 'status' | 'tags'>[],
+	titles: readonly { tags?: string[] }[]
+): boolean {
+	if (!tagTerm(tag)) return false;
+	const carries = (list: readonly { tags?: string[] }[]) =>
+		list.some((entry) => tagMatches(entry.tags, tag));
+	return (
+		carries(items.filter((item) => item.status === 'wishlist')) &&
+		!carries(listableCopies(items)) &&
+		!carries(titles)
+	);
 }
 
 /** Orders text by code point, as Go compares strings, so ties sort as the server sorts them. */

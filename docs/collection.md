@@ -202,7 +202,10 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   and on their title's page; no Kolekcja view, chip, search, sort, count
   or header summary shows them, an old `?status=wishlist` address reads
   as the default list, the sheet's "Tag" offers no tag only a wish
-  carries, and a shelf of wishes alone (or of wishes and sold copies)
+  carries; a tag the address names that only wishes carry lists nothing
+  and says so ("Tag „…” mają tylko pozycje z listy życzeń…", in the empty
+  state with a link to Okazje and as the sheet's hint), and a shelf of
+  wishes alone (or of wishes and sold copies)
   says "Półka jest pusta" with a link to Okazje. The API still returns
   them. Kolekcja
   loads all of `GET /api/collection` once per visit and filters,

@@ -233,6 +233,14 @@ func checkLen(field, value string, limit int) *httpx.FieldError {
 	return nil
 }
 
+// checkText refuses a NUL byte, which Postgres text cannot hold.
+func checkText(field, value string) *httpx.FieldError {
+	if strings.ContainsRune(value, 0) {
+		return fieldErr(field, "is not valid")
+	}
+	return nil
+}
+
 func checkEnum(field string, value *string, allowed []string) *httpx.FieldError {
 	if value != nil && !slices.Contains(allowed, *value) {
 		return fieldErr(field, "must be one of: "+strings.Join(allowed, ", "))
@@ -492,6 +500,7 @@ func (in *CopyInput) Normalize() *httpx.FieldError {
 	return firstErr(
 		checkLen("shop", in.Shop, maxText),
 		checkLen("location", deref(in.Location), maxText),
+		checkText("location", deref(in.Location)),
 		checkLen("notes", in.Notes, maxNotes),
 		checkEnum("acquired_as", in.AcquiredAs, acquiredAs),
 		checkEnum("condition", in.Condition, conditions),

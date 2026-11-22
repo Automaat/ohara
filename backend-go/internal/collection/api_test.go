@@ -1114,6 +1114,7 @@ func TestCopyLocation(t *testing.T) {
 		t.Fatalf("500-byte location = %v", got)
 	}
 	a.fails(http.MethodPut, path, obj{"edition_id": edition, "status": "owned", "location": longest + "x"}, http.StatusUnprocessableEntity, "location")
+	a.fails(http.MethodPut, path, obj{"edition_id": edition, "status": "owned", "location": "Regał\u00002"}, http.StatusUnprocessableEntity, "location")
 	if got := put("owned", "   "); got != nil {
 		t.Fatalf("blank location stored as %q", *got)
 	}
@@ -1186,4 +1187,56 @@ func TestCollectionViewFiltersByLocation(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLocationMatchesAsTheBrowserDoes(t *testing.T) {
+	a := newAPI(t)
+	edition := a.edition(obj{"title_id": a.title("movie", "Rejs"), "format": "dvd"})
+	boxed := a.copyOf(obj{"edition_id": edition, "status": "owned", "location": "Box 012345678905"})
+	marked := a.copyOf(obj{"edition_id": edition, "status": "owned", "location": "\ufeffRegał"})
+	upper := a.copyOf(obj{"edition_id": edition, "status": "owned", "location": "\U00010D50"})
+	lower := a.copyOf(obj{"edition_id": edition, "status": "owned", "location": "\U00010D70"})
+
+	var c collection.Copy
+	a.mustDo(http.MethodGet, fmt.Sprintf("/api/copies/%d", marked), nil, &c, http.StatusOK)
+	if c.Location == nil || *c.Location != "\ufeffRegał" {
+		t.Fatalf("location with a byte order mark = %q", deref(c.Location))
+	}
+
+	tests := []struct {
+		query string
+		want  []int64
+	}{
+		{"?q=012345678905", []int64{boxed}},
+		{"?location=" + url.QueryEscape("\ufeffregał"), []int64{marked}},
+		{"?location=" + url.QueryEscape("Regał"), []int64{}},
+		{"?location=" + url.QueryEscape("\U00010D50"), []int64{upper, lower}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			var view collection.CollectionView
+			a.mustDo(http.MethodGet, "/api/collection"+tt.query, nil, &view, http.StatusOK)
+			got := []int64{}
+			for _, it := range view.Items {
+				got = append(got, it.CopyID)
+			}
+			if fmt.Sprint(got) != fmt.Sprint(tt.want) {
+				t.Fatalf("copies = %v, want %v", got, tt.want)
+			}
+		})
+	}
+
+	var locations []string
+	a.mustDo(http.MethodGet, "/api/copies/locations", nil, &locations, http.StatusOK)
+	want := []string{"\U00010D50", "Box 012345678905", "\ufeffRegał"}
+	if fmt.Sprint(locations) != fmt.Sprint(want) {
+		t.Fatalf("locations = %q, want %q", locations, want)
+	}
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return "<nil>"
+	}
+	return *s
 }

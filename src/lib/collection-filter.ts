@@ -6,6 +6,7 @@
  * The `unpriced` status, the owned copies without a purchase price, exists only here.
  */
 import type { CollectionFilter, CollectionItem } from './collection';
+import { trimSpace } from './go-text';
 import { canonicalBarcode, checkDigitMatches } from './scan';
 
 /**
@@ -18,23 +19,18 @@ export function searchBarcode(raw: string): string | null {
 	return checkDigitMatches(code) ? canonicalBarcode(code) : null;
 }
 
-/** The white space Go's strings.TrimSpace drops: unicode.IsSpace, U+0085 included, U+FEFF not. */
-const goSpace =
-	'[\\t\\n\\v\\f\\r \\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]';
-const goTrim = new RegExp(`^${goSpace}+|${goSpace}+$`, 'g');
-
 /**
  * What the server searches for when the address carries `q`: the handler's barcode.Normalize,
  * else the text the store trims by Go's rules.
  */
 export function searchTerm(q: string): string {
-	return searchBarcode(q) ?? q.replace(goTrim, '');
+	return searchBarcode(q) ?? trimSpace(q);
 }
 
 /**
- * Lower case one character at a time, as PostgreSQL's `lower` maps each character on its own:
- * a final capital sigma becomes σ, not ς, and a character whose lower case is longer keeps only
- * its first.
+ * Lower case one character at a time, as PostgreSQL's `lower` and the server's foldCase map each
+ * character on its own: a final capital sigma becomes σ, not ς, and a character whose lower case
+ * is longer keeps only its first.
  */
 export function lowerCase(text: string): string {
 	let out = '';
@@ -74,7 +70,8 @@ function hasStatus(item: CollectionItem, status: CollectionFilter['status']): bo
 
 /**
  * The copies the filter lists, in their order: of its kind, medium, status and location, whose
- * barcode is the searched code or whose text holds the search, case aside.
+ * barcode is the searched code or whose text holds the search, case aside. A search that reads
+ * as a barcode still finds a location holding it as typed, as the server does.
  */
 export function filterCollection(
 	items: readonly CollectionItem[],
@@ -82,15 +79,31 @@ export function filterCollection(
 ): CollectionItem[] {
 	const term = searchTerm(f.q);
 	const words = lowerCase(term);
-	const place = lowerCase((f.location ?? '').replace(goTrim, ''));
+	const typed = lowerCase(trimSpace(f.q));
+	const place = lowerCase(trimSpace(f.location ?? ''));
 	return items.filter(
 		(item) =>
 			(!f.kind || item.kind === f.kind) &&
 			(!f.format || item.format === f.format) &&
 			hasStatus(item, f.status) &&
 			(!place || (item.location != null && lowerCase(item.location) === place)) &&
-			(!term || item.barcode === term || searchedText(item).includes(words))
+			(!term ||
+				item.barcode === term ||
+				searchedText(item).includes(words) ||
+				(item.location != null && lowerCase(item.location).includes(typed)))
 	);
+}
+
+/** Orders text by code point, as Go compares strings, so ties sort as the server sorts them. */
+function byCodePoint(a: string, b: string): number {
+	const [x, y] = [
+		[...a].map((c) => c.codePointAt(0) ?? 0),
+		[...b].map((c) => c.codePointAt(0) ?? 0)
+	];
+	for (let i = 0; i < Math.min(x.length, y.length); i++) {
+		if (x[i] !== y[i]) return (x[i] ?? 0) - (y[i] ?? 0);
+	}
+	return x.length - y.length;
 }
 
 /**
@@ -109,8 +122,8 @@ export function locationsInUse(items: readonly Pick<CollectionItem, 'location'>[
 		places.set(key, place);
 	}
 	const byUse = (a: [string, number], b: [string, number]) =>
-		b[1] - a[1] || a[0].localeCompare(b[0], 'pl');
+		b[1] - a[1] || byCodePoint(a[0], b[0]);
 	return [...places.entries()]
-		.sort(([a, x], [b, y]) => y.copies - x.copies || a.localeCompare(b, 'pl'))
+		.sort(([a, x], [b, y]) => y.copies - x.copies || byCodePoint(a, b))
 		.map(([, place]) => [...place.spellings.entries()].sort(byUse)[0]?.[0] ?? '');
 }

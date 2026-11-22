@@ -1,3 +1,4 @@
+import { trimSpace } from './go-text';
 import { editionCount } from './polish';
 import type {
 	AcquiredAs,
@@ -259,7 +260,7 @@ export function readCollectionFilter(params: Pick<URLSearchParams, 'get'>): Coll
 	}
 
 	const status = read('status', collectionStatusLabels);
-	const location = status === 'none' ? '' : (params.get('location')?.trim() ?? '');
+	const location = status === 'none' ? '' : trimSpace(params.get('location') ?? '');
 	return {
 		kind: read('kind', kindLabels),
 		format: status === 'none' ? '' : read('format', formatLabels),
@@ -274,7 +275,8 @@ export function collectionSearch(f: CollectionFilter): string {
 	if (f.kind) params.set('kind', f.kind);
 	if (f.format) params.set('format', f.format);
 	if (f.status) params.set('status', f.status);
-	if (f.location?.trim()) params.set('location', f.location.trim());
+	const location = trimSpace(f.location ?? '');
+	if (location) params.set('location', location);
 	if (f.q.trim()) params.set('q', f.q.trim());
 	const qs = params.toString();
 	return qs ? `?${qs}` : '';
@@ -535,7 +537,8 @@ export function copyPayload(f: CopyForm, editionID: number): Parsed<CopyPayload>
 			}
 		};
 	}
-	const location = owned ? f.location.trim() : '';
+	// Trimmed as the server trims, so saving other fields leaves a stored location as it is.
+	const location = owned ? trimSpace(f.location) : '';
 	const date = owned ? f.purchased_on.trim() : '';
 	if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
 		return { ok: false, issue: { field: 'purchased_on', message: 'Data w formacie RRRR-MM-DD.' } };

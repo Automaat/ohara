@@ -1,11 +1,14 @@
 package collection
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -676,13 +679,24 @@ func discardUnused(ctx context.Context, tx pgx.Tx, key, lock, used, remove strin
 }
 
 // Filter narrows the collection view; empty fields match everything.
-// Location matches a copy's whole location, case aside.
+// Location matches a copy's whole location, case aside. Query is the search
+// as barcode.Normalize leaves it, Typed as the reader typed it: a location
+// holding a code is found by the code as typed.
 type Filter struct {
 	Kind     string
 	Format   string
 	Status   string
 	Location string
 	Query    string
+	Typed    string
+}
+
+// foldCase lower-cases text one character at a time, the key locations
+// match and merge by. The browser's lowerCase folds the same way, so the
+// filter it applies to the loaded collection lists what this one does;
+// Postgres's lower follows the database's older Unicode tables.
+func foldCase(text string) string {
+	return strings.Map(unicode.ToLower, text)
 }
 
 // Item is one copy in the collection view with its edition and title.
@@ -735,34 +749,76 @@ func (s *Store) Collection(ctx context.Context, f Filter) ([]Item, error) {
 		FROM copy c JOIN edition e ON e.id = c.edition_id JOIN title t ON t.id = e.title_id
 		WHERE ($1 = '' OR t.kind = $1) AND ($2 = '' OR e.format = $2) AND ($3 = '' OR c.status = $3)
 		  AND ($4 = '' OR e.barcode = $4 OR strpos(lower(concat_ws(' ', t.name, t.original_title,
-		       t.polish_title, array_to_string(t.authors, ' '), e.label, c.shop, c.location)), lower($4)) > 0)
-		  AND ($5 = '' OR lower(c.location) = lower($5))
+		       t.polish_title, array_to_string(t.authors, ' '), e.label, c.shop, c.location)), lower($4)) > 0
+		       OR strpos(lower(c.location), lower($5)) > 0)
 		ORDER BY lower(t.name), t.id, e.id, c.id`,
-		f.Kind, f.Format, f.Status, strings.TrimSpace(f.Query), strings.TrimSpace(f.Location))
+		f.Kind, f.Format, f.Status, strings.TrimSpace(f.Query), strings.TrimSpace(f.Typed))
 	if err != nil {
 		return nil, fmt.Errorf("collection: %w", err)
 	}
-	return collect(rows, scanItem, "collection")
+	items, err := collect(rows, scanItem, "collection")
+	if err != nil {
+		return nil, err
+	}
+	if place := foldCase(strings.TrimSpace(f.Location)); place != "" {
+		items = slices.DeleteFunc(items, func(it Item) bool {
+			return it.Location == nil || foldCase(*it.Location) != place
+		})
+	}
+	return items, nil
 }
 
 // Locations returns the locations copies are stored at, each once whatever
-// its letter case, the most used first. A place spelled several ways goes
-// by its most used spelling.
+// its letter case (foldCase), the most used first. A place spelled several
+// ways goes by its most used spelling. Ties go in code point order, as the
+// browser's locationsInUse orders them.
 func (s *Store) Locations(ctx context.Context) ([]string, error) {
-	rows, err := s.pool.Query(ctx, `WITH spelled AS (
-			SELECT location, count(*) AS copies FROM copy WHERE location IS NOT NULL GROUP BY location
-		)
-		SELECT (array_agg(location ORDER BY copies DESC, location))[1] FROM spelled
-		GROUP BY lower(location)
-		ORDER BY sum(copies) DESC, lower(location)`)
+	rows, err := s.pool.Query(ctx, `SELECT location, count(*) FROM copy
+		WHERE location IS NOT NULL GROUP BY location`)
 	if err != nil {
 		return nil, fmt.Errorf("locations: %w", err)
 	}
-	return collect(rows, func(row pgx.Row) (string, error) {
-		var location string
-		err := row.Scan(&location)
-		return location, err
+	type spelling struct {
+		text   string
+		copies int
+	}
+	spellings, err := collect(rows, func(row pgx.Row) (spelling, error) {
+		var sp spelling
+		err := row.Scan(&sp.text, &sp.copies)
+		return sp, err
 	}, "locations")
+	if err != nil {
+		return nil, err
+	}
+	type place struct {
+		key, name   string
+		copies, top int
+	}
+	byKey := map[string]*place{}
+	for _, sp := range spellings {
+		key := foldCase(sp.text)
+		p := byKey[key]
+		if p == nil {
+			p = &place{key: key}
+			byKey[key] = p
+		}
+		p.copies += sp.copies
+		if sp.copies > p.top || (sp.copies == p.top && sp.text < p.name) {
+			p.name, p.top = sp.text, sp.copies
+		}
+	}
+	places := make([]*place, 0, len(byKey))
+	for _, p := range byKey {
+		places = append(places, p)
+	}
+	slices.SortFunc(places, func(a, b *place) int {
+		return cmp.Or(cmp.Compare(b.copies, a.copies), cmp.Compare(a.key, b.key))
+	})
+	names := make([]string, len(places))
+	for i, p := range places {
+		names[i] = p.name
+	}
+	return names, nil
 }
 
 func (s *Store) inTx(ctx context.Context, fn func(pgx.Tx) error) error {

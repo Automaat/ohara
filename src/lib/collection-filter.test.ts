@@ -228,6 +228,32 @@ describe('the location filter', () => {
 	});
 });
 
+describe('the location filter, as the server folds case', () => {
+	const odd: CollectionItem[] = [
+		item({ copy_id: 1, location: 'Box 012345678905' }),
+		item({ copy_id: 2, location: '\ufeffRegał' }),
+		item({ copy_id: 3, location: '\u{10D50}' }),
+		item({ copy_id: 4, location: '\u{10D70}' })
+	];
+
+	it.each([
+		[
+			'a code read as a barcode still finds a location holding it as typed',
+			{ q: '012345678905' },
+			[1]
+		],
+		['a byte order mark is part of the location', { location: '\ufeffregał' }, [2]],
+		['so the location without it is another', { location: 'Regał' }, []],
+		['letters Unicode 17 pairs match case aside', { location: '\u{10D50}' }, [3, 4]]
+	] as [string, Partial<CollectionFilter>, number[]][])('%s', (_name, filter, copies) => {
+		expect(filterCollection(odd, { ...none, ...filter }).map((i) => i.copy_id)).toEqual(copies);
+	});
+
+	it('merges those letters into one place and orders ties by code point', () => {
+		expect(locationsInUse(odd)).toEqual(['\u{10D50}', 'Box 012345678905', '\ufeffRegał']);
+	});
+});
+
 describe('locationsInUse', () => {
 	it('lists each place once whatever its case, the most used first', () => {
 		const places = ['Pudło', 'regał 2', 'Regał 2', 'Regał 2', 'Strych', 'Strych', 'Szafa'];

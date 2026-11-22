@@ -160,6 +160,7 @@ func (h *Handler) collection(w http.ResponseWriter, r *http.Request) {
 	}
 	f.Location = r.URL.Query().Get("location")
 	f.Query = r.URL.Query().Get("q")
+	f.Typed = f.Query
 	if code, err := barcode.Normalize(f.Query); err == nil {
 		f.Query = code
 	}

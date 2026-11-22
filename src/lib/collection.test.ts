@@ -28,6 +28,8 @@ import {
 	unpricedLabel,
 	wishLine,
 	withoutCopies,
+	type CopyForm,
+	type CopyPayload,
 	type Title
 } from './collection';
 
@@ -182,6 +184,15 @@ describe('the location in collection links', () => {
 	});
 });
 
+const anyFilter = { kind: '', format: '', status: '', q: '' } as const;
+
+/** The copy a form describes, as the server would answer it. */
+function copyPayloadOf(form: CopyForm): CopyPayload {
+	const parsed = copyPayload(form, 3);
+	if (!parsed.ok) throw new Error(parsed.issue.message);
+	return parsed.value;
+}
+
 describe('the location of a copy', () => {
 	const owned = { ...copyToForm(null), location: '  Regał 2 ' };
 
@@ -206,6 +217,17 @@ describe('the location of a copy', () => {
 	it('is sent trimmed for an owned copy', () => {
 		const parsed = copyPayload(owned, 3);
 		expect(parsed.ok && parsed.value.location).toBe('Regał 2');
+	});
+
+	it('keeps a byte order mark the server keeps, so saving other fields leaves it', () => {
+		const form = copyToForm({ ...copyPayloadOf(owned), location: '\ufeffRegał' });
+		const parsed = copyPayload({ ...form, notes: 'Nowe' }, 3);
+		expect(parsed.ok && parsed.value.location).toBe('\ufeffRegał');
+		expect(
+			readCollectionFilter(
+				new URLSearchParams(collectionSearch({ ...anyFilter, location: '\ufeffRegał' }))
+			).location
+		).toBe('\ufeffRegał');
 	});
 
 	it('is left out when blank or on a wish', () => {

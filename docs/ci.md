@@ -1,7 +1,7 @@
 # CI details
 
 Read before changing the vulnerability checks, their allowlist, the Go
-version or the built-page CSP check.
+version, the built-page CSP check or how a release is tagged.
 
 Moved from `CLAUDE.md`, whose conventions still apply.
 
@@ -42,3 +42,62 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   JavaScript, `module`, `importmap` or `speculationrules`) need no hash;
   an SVG script reads no `language` or `nomodule`. Fixtures for these cases live in
   `test/check-csp/`, run by `npm run test:coverage`.
+
+## Release tags
+
+`workflow_dispatch` runs the copy of `release.yml` on the ref it is
+dispatched on, so a branch cut before a change to the workflow keeps the
+old copy and its old checks. Repository settings, not the file, decide
+who may tag a release:
+
+- The tag ruleset "Tags: release.yml on main only" covers every tag
+  (`~ALL`), not only `v*`: an old copy checks its version input with
+  `grep`, one line at a time, so a version with a newline passes and can
+  turn the tag into `v/anything`, which a `v*` pattern does not match.
+  `release.yml` on `main` now matches the whole string. The ruleset
+  refuses creating, moving or deleting a tag to everyone, the owner and
+  `GITHUB_TOKEN` included. Its one bypass is "deploy keys".
+- The repository's one write deploy key, "release.yml tag push
+  (environment release)", has its private key in the `RELEASE_DEPLOY_KEY`
+  secret of the `release` environment. The environment admits only the
+  `main` branch, and administrators cannot bypass that.
+- The `release` job runs in that environment and pushes the tag over SSH
+  with the key, checking GitHub's host keys against `gh api meta`. It
+  then creates the release with `--verify-tag`, so the release never
+  creates a tag itself.
+
+A copy on another branch therefore cannot tag, and with no tag it cannot
+cut a release: creating a release for a missing tag creates the tag,
+which the ruleset refuses too. Every copy older than the main-only check
+pushes its tag before it builds the image, so it fails before it pushes
+anything to `ghcr.io`.
+
+What the settings do not cover:
+
+- A release for a tag that already exists changes no ref, so any token
+  with `contents: write` can create one, from any branch. Only `main`
+  creates tags, so such a release can only name a commit a `main` run
+  tagged; an old copy never gets there, because its own tag push fails
+  first.
+- A draft release changes no ref either, so any token with
+  `contents: write` can save a draft for a tag that does not exist. It
+  creates no tag and stays private to writers, and publishing it is
+  refused: publishing creates the tag, which the ruleset refuses.
+- Every job on `main` that names `environment: release` gets the key,
+  whatever its workflow file. Add the environment to no other job.
+- Every write deploy key bypasses the ruleset, so add no other deploy key
+  with write access.
+
+If a run pushes its tag and then fails to create the release, a rerun of
+that version stops at the existing tag, and no one but the deploy key can
+delete the tag. Check that the tag names the intended `main` commit
+(`git ls-remote origin refs/tags/vX.Y.Z` against the run's commit), then
+create the release by hand:
+`gh release create vX.Y.Z --verify-tag --title vX.Y.Z --generate-notes`.
+To drop the tag instead, temporarily disable the ruleset in the
+repository settings, delete the tag and enable the ruleset again.
+
+To rotate the key: create an ed25519 key pair, add the public key as a
+write deploy key, set the private key as `RELEASE_DEPLOY_KEY` in the
+`release` environment (`gh secret set RELEASE_DEPLOY_KEY --env release`),
+then delete the old deploy key and the local private key.

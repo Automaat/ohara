@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { purchaseDate } from './polish';
 import {
 	centsToInput,
 	collectionSearch,
@@ -13,6 +14,9 @@ import {
 	formatOptions,
 	formatPLN,
 	kindCounts,
+	loanPayload,
+	loanSummary,
+	loanToForm,
 	options,
 	parsePLN,
 	readCollectionFilter,
@@ -129,6 +133,12 @@ describe('collection search links', () => {
 	it('keeps the unpriced copies in the address, with kind, format and search', () => {
 		const filter = { kind: 'movie', format: 'dvd', status: 'unpriced', q: 'Alien' } as const;
 		expect(collectionSearch(filter)).toBe('?kind=movie&format=dvd&status=unpriced&q=Alien');
+		expect(readCollectionFilter(new URLSearchParams(collectionSearch(filter)))).toEqual(filter);
+	});
+
+	it('keeps the lent copies in the address, with kind and search', () => {
+		const filter = { kind: 'book', format: '', status: 'loaned', q: 'Lem' } as const;
+		expect(collectionSearch(filter)).toBe('?kind=book&status=loaned&q=Lem');
 		expect(readCollectionFilter(new URLSearchParams(collectionSearch(filter)))).toEqual(filter);
 	});
 
@@ -538,9 +548,74 @@ describe('shelf tile line', () => {
 		expect(shelfLine({ ...owned, status: 'wishlist', max_price_cents: max })).toMatch(want);
 	});
 
+	it.each([
+		{ due: '2026-05-09', want: 'Wypożyczony: Ania · po terminie' },
+		{ due: '2026-05-10', want: 'Wypożyczony: Ania' },
+		{ due: '2026-05-11', want: 'Wypożyczony: Ania' },
+		{ due: undefined, want: 'Wypożyczony: Ania' }
+	])('names who has a lent copy due on $due, late only after that day', ({ due, want }) => {
+		const lent = { ...owned, loan_borrower: 'Ania', loan_due_on: due };
+		expect(shelfLine(lent, '2026-05-10')).toBe(want);
+	});
+
+	it('takes the reader’s today when none is given', () => {
+		expect(shelfLine({ ...owned, loan_borrower: 'Ania', loan_due_on: '2000-01-01' })).toBe(
+			'Wypożyczony: Ania · po terminie'
+		);
+		expect(shelfLine({ ...owned, loan_borrower: 'Ania', loan_due_on: '2999-01-01' })).toBe(
+			'Wypożyczony: Ania'
+		);
+	});
+
 	it('gives an owned copy its creators and edition, without a status', () => {
 		expect(shelfLine(owned)).toBe('Stanisław Lem · Twarda oprawa');
 		expect(shelfLine({ ...owned, authors: [], format: 'bluray', binding: null })).toBe('Blu-ray');
 		expect(shelfLine({ ...owned, authors: undefined, binding: null })).toBe('Wydanie bez opisu');
+	});
+});
+
+describe('loans', () => {
+	it('starts a loan form lent today, with no borrower or due date', () => {
+		expect(loanToForm('2026-05-10')).toEqual({ borrower: '', lent_on: '2026-05-10', due_on: '' });
+	});
+
+	it.each([
+		{
+			form: { borrower: '  Ania ', lent_on: '2026-05-10', due_on: '2026-06-01' },
+			want: { ok: true, value: { borrower: 'Ania', lent_on: '2026-05-10', due_on: '2026-06-01' } }
+		},
+		{
+			form: { borrower: 'Ania', lent_on: ' ', due_on: '' },
+			want: { ok: true, value: { borrower: 'Ania', lent_on: null, due_on: null } }
+		},
+		{
+			form: { borrower: 'Ania', lent_on: '2026-05-10', due_on: '2026-05-10' },
+			want: { ok: true, value: { borrower: 'Ania', lent_on: '2026-05-10', due_on: '2026-05-10' } }
+		},
+		{ form: { borrower: ' ', lent_on: '', due_on: '' }, field: 'borrower' },
+		{ form: { borrower: 'Ania', lent_on: '10.05.2026', due_on: '' }, field: 'lent_on' },
+		{ form: { borrower: 'Ania', lent_on: '', due_on: 'jutro' }, field: 'due_on' },
+		{ form: { borrower: 'Ania', lent_on: '2026-05-10', due_on: '2026-05-09' }, field: 'due_on' }
+	])('reads a loan form $form', ({ form, want, field }) => {
+		const parsed = loanPayload(form);
+		if (want) expect(parsed).toEqual(want);
+		else expect(!parsed.ok && parsed.issue.field).toBe(field);
+	});
+
+	const loan = { borrower: 'Ania', lent_on: '2026-05-01', due_on: null, returned_on: null };
+	const may = (d: number) => purchaseDate(`2026-05-${String(d).padStart(2, '0')}`);
+	it.each([
+		{ over: {}, want: `Ania · od ${may(1)}` },
+		{ over: { due_on: '2026-05-10' }, want: `Ania · od ${may(1)} · termin ${may(10)}` },
+		{
+			over: { due_on: '2026-05-09' },
+			want: `Ania · od ${may(1)} · termin ${may(9)} · po terminie`
+		},
+		{
+			over: { due_on: '2026-05-09', returned_on: '2026-05-20' },
+			want: `Ania · ${may(1)} – ${may(20)}`
+		}
+	])('sums up a loan $over on 10 May', ({ over, want }) => {
+		expect(loanSummary({ ...loan, ...over }, '2026-05-10')).toBe(want);
 	});
 });

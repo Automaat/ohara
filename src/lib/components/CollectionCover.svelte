@@ -6,7 +6,8 @@
 		url,
 		large = false,
 		name,
-		wish = false
+		wish = false,
+		lent = false
 	}: {
 		kind: Kind;
 		url?: string;
@@ -15,6 +16,8 @@
 		name?: string;
 		/** A wishlist copy: the cover carries a heart in the accent colour. */
 		wish?: boolean;
+		/** A copy out on loan: the cover carries an arrow leaving a box. */
+		lent?: boolean;
 	} = $props();
 	let failedURL = $state<string>();
 	let loadedURL = $state<string>();
@@ -71,6 +74,12 @@
 				<path
 					d="M12 20s-7.5-4.6-7.5-10.2A4.3 4.3 0 0 1 12 7.2a4.3 4.3 0 0 1 7.5 2.6C19.5 15.4 12 20 12 20z"
 				/>
+			</svg>
+		</span>
+	{:else if lent}
+		<span class="badge lent">
+			<svg viewBox="0 0 24 24">
+				<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />
 			</svg>
 		</span>
 	{/if}
@@ -160,7 +169,8 @@
 		opacity: 1;
 	}
 
-	.wish {
+	.wish,
+	.badge {
 		position: absolute;
 		inset-block-start: 0.375rem;
 		inset-inline-end: 0.375rem;
@@ -179,5 +189,19 @@
 		inline-size: 0.875rem;
 		block-size: 0.875rem;
 		fill: currentColor;
+	}
+
+	.lent {
+		color: var(--sui-text-primary);
+	}
+
+	.lent svg {
+		inline-size: 0.875rem;
+		block-size: 0.875rem;
+		fill: none;
+		stroke: currentColor;
+		stroke-width: 2.25;
+		stroke-linecap: round;
+		stroke-linejoin: round;
 	}
 </style>

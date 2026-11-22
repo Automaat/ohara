@@ -1,0 +1,135 @@
+package collection_test
+
+import (
+	"fmt"
+	"net/http"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Automaat/ohara/backend-go/internal/collection"
+)
+
+// todayInPoland is the calendar day a loan without lent_on starts on.
+func todayInPoland(t *testing.T) string {
+	t.Helper()
+	warsaw, err := time.LoadLocation("Europe/Warsaw")
+	if err != nil {
+		t.Fatalf("load location: %v", err)
+	}
+	return time.Now().In(warsaw).Format(time.DateOnly)
+}
+
+func day(d *collection.Date) string {
+	if d == nil {
+		return ""
+	}
+	return d.Format(time.DateOnly)
+}
+
+func TestLendAndReturnCopy(t *testing.T) {
+	a := newAPI(t)
+	edition := a.edition(obj{"title_id": a.title("movie", "Rejs"), "format": "dvd"})
+	owned := a.copyOf(obj{"edition_id": edition, "status": "owned"})
+	wish := a.copyOf(obj{"edition_id": edition, "status": "wishlist"})
+	lend := fmt.Sprintf("/api/copies/%d/loans", owned)
+
+	before := todayInPoland(t)
+	var first collection.Loan
+	a.mustDo(http.MethodPost, lend, obj{"borrower": "  Ania  ", "due_on": "2999-01-31"}, &first, http.StatusCreated)
+	if after := todayInPoland(t); first.Borrower != "Ania" || first.CopyID != owned ||
+		(day(&first.LentOn) != before && day(&first.LentOn) != after) ||
+		day(first.DueOn) != "2999-01-31" || first.ReturnedOn != nil {
+		t.Fatalf("loan = %+v, want Ania's open loan from today until 2999-01-31", first)
+	}
+
+	a.fails(http.MethodPost, lend, obj{"borrower": "Bartek"}, http.StatusConflict, "")
+	a.fails(http.MethodPost, fmt.Sprintf("/api/copies/%d/loans", wish), obj{"borrower": "Ania"}, http.StatusConflict, "")
+	a.fails(http.MethodPost, "/api/copies/999999/loans", obj{"borrower": "Ania"}, http.StatusNotFound, "")
+	a.fails(http.MethodPut, fmt.Sprintf("/api/copies/%d", owned), obj{"edition_id": edition, "status": "wishlist"},
+		http.StatusConflict, "status")
+
+	loan := fmt.Sprintf("/api/loans/%d", first.ID)
+	a.fails(http.MethodPut, loan, obj{"returned_on": "2000-01-01"}, http.StatusUnprocessableEntity, "returned_on")
+	a.fails(http.MethodPut, loan, obj{}, http.StatusUnprocessableEntity, "returned_on")
+	a.fails(http.MethodPut, "/api/loans/999999", obj{"returned_on": "2999-01-01"}, http.StatusNotFound, "")
+
+	var returned collection.Loan
+	a.mustDo(http.MethodPut, loan, obj{"returned_on": "2999-02-01"}, &returned, http.StatusOK)
+	if returned.ID != first.ID || day(returned.ReturnedOn) != "2999-02-01" || returned.Borrower != "Ania" {
+		t.Fatalf("returned loan = %+v, want Ania's loan back on 2999-02-01", returned)
+	}
+
+	var second collection.Loan
+	a.mustDo(http.MethodPost, lend, obj{"borrower": "Bartek", "lent_on": "2999-03-01"}, &second, http.StatusCreated)
+	if day(&second.LentOn) != "2999-03-01" || second.DueOn != nil {
+		t.Fatalf("second loan = %+v, want one from 2999-03-01 without a due date", second)
+	}
+
+	var detail collection.CopyDetail
+	a.mustDo(http.MethodGet, fmt.Sprintf("/api/copies/%d", owned), nil, &detail, http.StatusOK)
+	if len(detail.Loans) != 2 || detail.Loans[0].ID != second.ID || detail.Loans[1].ID != first.ID ||
+		detail.Loans[1].ReturnedOn == nil {
+		t.Fatalf("loans = %+v, want Bartek's open loan, then Ania's returned one", detail.Loans)
+	}
+	var wishDetail collection.CopyDetail
+	a.mustDo(http.MethodGet, fmt.Sprintf("/api/copies/%d", wish), nil, &wishDetail, http.StatusOK)
+	if wishDetail.Loans == nil || len(wishDetail.Loans) != 0 {
+		t.Fatalf("wish loans = %#v, want an empty list", wishDetail.Loans)
+	}
+
+	a.mustDo(http.MethodDelete, fmt.Sprintf("/api/copies/%d", owned), nil, nil, http.StatusNoContent)
+	a.fails(http.MethodPut, loan, obj{"returned_on": "2999-02-02"}, http.StatusNotFound, "")
+	a.fails(http.MethodPut, fmt.Sprintf("/api/loans/%d", second.ID), obj{"returned_on": "2999-03-02"},
+		http.StatusNotFound, "")
+}
+
+func TestLoanValidation(t *testing.T) {
+	a := newAPI(t)
+	edition := a.edition(obj{"title_id": a.title("book", "Lalka")})
+	lend := fmt.Sprintf("/api/copies/%d/loans", a.copyOf(obj{"edition_id": edition, "status": "owned"}))
+	yesterday := time.Now().AddDate(0, 0, -2).Format(time.DateOnly)
+
+	tests := []struct {
+		name  string
+		body  obj
+		field string
+	}{
+		{"blank borrower", obj{"borrower": "   "}, "borrower"},
+		{"no borrower", obj{}, "borrower"},
+		{"long borrower", obj{"borrower": strings.Repeat("ż", 251)}, "borrower"},
+		{"NUL in borrower", obj{"borrower": "An\x00ia"}, "borrower"},
+		{"due before lent", obj{"borrower": "Ania", "lent_on": "2026-05-10", "due_on": "2026-05-09"}, "due_on"},
+		{"due before today", obj{"borrower": "Ania", "due_on": yesterday}, "due_on"},
+		{"bad date", obj{"borrower": "Ania", "lent_on": "10.05.2026"}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.field == "" {
+				if got := a.do(http.MethodPost, lend, tt.body, nil); got != http.StatusBadRequest &&
+					got != http.StatusUnprocessableEntity {
+					t.Fatalf("POST %s = %d, want a refusal", lend, got)
+				}
+				return
+			}
+			a.fails(http.MethodPost, lend, tt.body, http.StatusUnprocessableEntity, tt.field)
+		})
+	}
+
+	var l collection.Loan
+	longest := obj{"borrower": strings.Repeat("ż", 250), "lent_on": "2026-05-10", "due_on": "2026-05-10"}
+	a.mustDo(http.MethodPost, lend, longest, &l, http.StatusCreated)
+	a.mustDo(http.MethodPut, fmt.Sprintf("/api/loans/%d", l.ID), obj{"returned_on": "2026-05-10"}, nil, http.StatusOK)
+}
+
+func TestDiscardRequestKeepsALentCopy(t *testing.T) {
+	a := newAPI(t)
+	edition := a.edition(obj{"title_id": a.title("movie", "Miś"), "format": "dvd"})
+	var c collection.Copy
+	a.mustDo(http.MethodPost, "/api/copies", obj{"edition_id": edition, "status": "owned", "request_key": "k-lent"},
+		&c, http.StatusCreated)
+	a.mustDo(http.MethodPost, fmt.Sprintf("/api/copies/%d/loans", c.ID), obj{"borrower": "Ania"}, nil, http.StatusCreated)
+
+	a.mustDo(http.MethodDelete, "/api/requests/k-lent", nil, nil, http.StatusNoContent)
+	a.mustDo(http.MethodGet, fmt.Sprintf("/api/copies/%d", c.ID), nil, nil, http.StatusOK)
+}

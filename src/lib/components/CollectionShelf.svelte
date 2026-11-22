@@ -205,6 +205,7 @@
 		{#each drawn as row, i (row.copy_id)}
 			{@const name = displayName(row)}
 			{@const wish = row.status === 'wishlist'}
+			{@const lent = row.loan_borrower != null}
 			<li
 				data-cover-title={row.title_id}
 				data-cover-key={row.copy_id}
@@ -212,7 +213,7 @@
 				aria-posinset={i + 1}
 			>
 				<div class="artwork">
-					<CollectionCover kind={row.kind} url={row.cover_url} large {name} {wish} />
+					<CollectionCover kind={row.kind} url={row.cover_url} large {name} {wish} {lent} />
 				</div>
 				<Link href={`/titles/${row.title_id}`}>{name}</Link>
 				<span class="meta" class:wish>{shelfLine(row)}</span>

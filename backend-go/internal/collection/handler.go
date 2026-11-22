@@ -54,6 +54,8 @@ func (h *Handler) Mount(r chi.Router) {
 	r.Get("/copies/{id}", h.getCopy)
 	r.Put("/copies/{id}", h.updateCopy)
 	r.Delete("/copies/{id}", h.deleteCopy)
+	r.Post("/copies/{id}/loans", h.lendCopy)
+	r.Put("/loans/{id}", h.returnLoan)
 
 	r.Delete("/requests/{key}", h.discardRequest)
 }
@@ -75,7 +77,10 @@ func (h *Handler) writeErr(w http.ResponseWriter, r *http.Request, op string, er
 		httpx.WriteJSON(w, h.logger, http.StatusConflict, httpx.Error{Error: err.Error(), Field: "request_key"})
 	case errors.Is(err, ErrKindLocked):
 		httpx.WriteJSON(w, h.logger, http.StatusConflict, httpx.Error{Error: err.Error(), Field: "kind"})
-	case errors.Is(err, ErrHasEditions), errors.Is(err, ErrHasCopies):
+	case errors.Is(err, ErrLentCopyStays):
+		httpx.WriteJSON(w, h.logger, http.StatusConflict, httpx.Error{Error: err.Error(), Field: "status"})
+	case errors.Is(err, ErrHasEditions), errors.Is(err, ErrHasCopies), errors.Is(err, ErrNotOwned),
+		errors.Is(err, ErrAlreadyLent):
 		httpx.WriteError(w, h.logger, http.StatusConflict, err.Error())
 	default:
 		httpx.WriteInternal(w, r, h.logger, op, err)
@@ -157,6 +162,12 @@ func (h *Handler) collection(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteFieldError(w, h.logger, fe)
 		return
 	}
+	loaned, fe := queryEnum(r, "loaned", []string{"1"})
+	if fe != nil {
+		httpx.WriteFieldError(w, h.logger, fe)
+		return
+	}
+	f.Loaned = loaned == "1"
 	f.Query = r.URL.Query().Get("q")
 	if code, err := barcode.Normalize(f.Query); err == nil {
 		f.Query = code
@@ -416,11 +427,13 @@ func (h *Handler) deleteEdition(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// CopyDetail is the GET /api/copies/{id} body.
+// CopyDetail is the GET /api/copies/{id} body. Loans are newest first,
+// returned ones included.
 type CopyDetail struct {
 	Copy
 	Edition Edition `json:"edition"`
 	Title   Title   `json:"title"`
+	Loans   []Loan  `json:"loans"`
 }
 
 func (h *Handler) getCopy(w http.ResponseWriter, r *http.Request) {
@@ -444,7 +457,12 @@ func (h *Handler) getCopy(w http.ResponseWriter, r *http.Request) {
 		h.writeErr(w, r, "get copy title", err)
 		return
 	}
-	httpx.WriteJSON(w, h.logger, http.StatusOK, CopyDetail{Copy: c, Edition: e, Title: t})
+	loans, err := h.store.ListLoans(ctx, id)
+	if err != nil {
+		h.writeErr(w, r, "get copy loans", err)
+		return
+	}
+	httpx.WriteJSON(w, h.logger, http.StatusOK, CopyDetail{Copy: c, Edition: e, Title: t, Loans: loans})
 }
 
 func (h *Handler) decodeCopy(w http.ResponseWriter, r *http.Request) (*CopyInput, bool) {
@@ -502,6 +520,48 @@ func (h *Handler) deleteCopy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) lendCopy(w http.ResponseWriter, r *http.Request) {
+	id, ok := httpx.PathID(w, r, h.logger, "id")
+	if !ok {
+		return
+	}
+	var in LoanInput
+	if !httpx.DecodeJSON(w, r, h.logger, &in) {
+		return
+	}
+	if fe := in.Normalize(); fe != nil {
+		httpx.WriteFieldError(w, h.logger, fe)
+		return
+	}
+	l, err := h.store.LendCopy(r.Context(), id, &in)
+	if err != nil {
+		h.writeErr(w, r, "lend copy", err)
+		return
+	}
+	httpx.WriteJSON(w, h.logger, http.StatusCreated, l)
+}
+
+func (h *Handler) returnLoan(w http.ResponseWriter, r *http.Request) {
+	id, ok := httpx.PathID(w, r, h.logger, "id")
+	if !ok {
+		return
+	}
+	var in ReturnInput
+	if !httpx.DecodeJSON(w, r, h.logger, &in) {
+		return
+	}
+	if in.ReturnedOn == nil {
+		httpx.WriteFieldError(w, h.logger, fieldErr("returned_on", "is required"))
+		return
+	}
+	l, err := h.store.ReturnLoan(r.Context(), id, in.ReturnedOn.Time)
+	if err != nil {
+		h.writeErr(w, r, "return loan", err)
+		return
+	}
+	httpx.WriteJSON(w, h.logger, http.StatusOK, l)
 }
 
 // discardRequest serves DELETE /api/requests/{key}: what a failed add with

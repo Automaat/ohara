@@ -543,23 +543,169 @@ func (s *Store) CreateCopy(ctx context.Context, in *CopyInput) (Copy, bool, erro
 	return c, created, nil
 }
 
-// UpdateCopy replaces a copy.
+// UpdateCopy replaces a copy. A lent copy cannot become a wish
+// (ErrLentCopyStays): only owned copies are lent.
 func (s *Store) UpdateCopy(ctx context.Context, id int64, in *CopyInput) (Copy, error) {
-	tag, err := s.pool.Exec(ctx, `UPDATE copy SET edition_id = $2, status = $3, price_cents = $4,
-		purchased_on = $5, shop = $6, acquired_as = $7, condition = $8, notes = $9,
-		max_price_cents = $10, max_market_percent = $11, updated_at = now() WHERE id = $1`,
-		id, in.EditionID, in.Status, in.PriceCents, purchasedOn(in), in.Shop, in.AcquiredAs,
-		in.Condition, in.Notes, in.MaxPriceCents, in.MaxMarketPercent)
-	if err != nil {
-		if isFKViolation(err, "copy_edition_id_fkey") {
-			return Copy{}, ErrEditionNotFound
+	err := s.inTx(ctx, func(tx pgx.Tx) error {
+		if in.Status != StatusOwned {
+			if err := checkNotLent(ctx, tx, id); err != nil {
+				return err
+			}
 		}
-		return Copy{}, mapErr(err, ErrNotFound, "update copy")
-	}
-	if tag.RowsAffected() == 0 {
-		return Copy{}, ErrNotFound
+		tag, err := tx.Exec(ctx, `UPDATE copy SET edition_id = $2, status = $3, price_cents = $4,
+			purchased_on = $5, shop = $6, acquired_as = $7, condition = $8, notes = $9,
+			max_price_cents = $10, max_market_percent = $11, updated_at = now() WHERE id = $1`,
+			id, in.EditionID, in.Status, in.PriceCents, purchasedOn(in), in.Shop, in.AcquiredAs,
+			in.Condition, in.Notes, in.MaxPriceCents, in.MaxMarketPercent)
+		if err != nil {
+			if isFKViolation(err, "copy_edition_id_fkey") {
+				return ErrEditionNotFound
+			}
+			return mapErr(err, ErrNotFound, "update copy")
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrNotFound
+		}
+		return nil
+	})
+	if err != nil {
+		return Copy{}, err
 	}
 	return s.GetCopy(ctx, id)
+}
+
+// lockCopy locks copy id against a concurrent loan or status change and
+// returns its status; ErrNotFound when there is none.
+func lockCopy(ctx context.Context, tx pgx.Tx, id int64) (string, error) {
+	var status string
+	err := tx.QueryRow(ctx, `SELECT status FROM copy WHERE id = $1 FOR UPDATE`, id).Scan(&status)
+	return status, mapErr(err, ErrNotFound, "lock copy")
+}
+
+// checkNotLent locks the copy, then looks for its open loan as its own
+// statement, as checkNoEditions does, so it sees a loan committed while the
+// lock waited.
+func checkNotLent(ctx context.Context, tx pgx.Tx, id int64) error {
+	if _, err := lockCopy(ctx, tx, id); err != nil {
+		return err
+	}
+	var lent bool
+	err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM loan WHERE copy_id = $1 AND returned_on IS NULL)`, id).
+		Scan(&lent)
+	if err != nil {
+		return fmt.Errorf("check open loan: %w", err)
+	}
+	if lent {
+		return ErrLentCopyStays
+	}
+	return nil
+}
+
+const loanColumns = `l.id, l.copy_id, l.borrower, l.lent_on, l.due_on, l.returned_on, l.created_at, l.updated_at`
+
+func scanLoan(row pgx.Row) (Loan, error) {
+	var l Loan
+	var due, returned *time.Time
+	err := row.Scan(&l.ID, &l.CopyID, &l.Borrower, &l.LentOn.Time, &due, &returned, &l.CreatedAt, &l.UpdatedAt)
+	l.DueOn = datePtr(due)
+	l.ReturnedOn = datePtr(returned)
+	return l, err
+}
+
+func datePtr(t *time.Time) *Date {
+	if t == nil {
+		return nil
+	}
+	return &Date{*t}
+}
+
+func dateArg(d *Date) *time.Time {
+	if d == nil {
+		return nil
+	}
+	return &d.Time
+}
+
+func getLoan(ctx context.Context, q rowQuerier, id int64) (Loan, error) {
+	l, err := scanLoan(q.QueryRow(ctx, `SELECT `+loanColumns+` FROM loan l WHERE l.id = $1`, id))
+	return l, mapErr(err, ErrNotFound, "get loan")
+}
+
+// ListLoans returns the loans of copyID, newest first, returned ones included.
+func (s *Store) ListLoans(ctx context.Context, copyID int64) ([]Loan, error) {
+	rows, err := s.pool.Query(ctx, `SELECT `+loanColumns+` FROM loan l
+		WHERE l.copy_id = $1 ORDER BY l.lent_on DESC, l.id DESC`, copyID)
+	if err != nil {
+		return nil, fmt.Errorf("list loans: %w", err)
+	}
+	return collect(rows, scanLoan, "list loans")
+}
+
+// LendCopy opens a loan of owned copy copyID, lent today in Poland unless
+// in names the day. Errors: ErrNotFound, ErrNotOwned, ErrAlreadyLent or a
+// *httpx.FieldError for a due date before that day.
+func (s *Store) LendCopy(ctx context.Context, copyID int64, in *LoanInput) (Loan, error) {
+	var l Loan
+	err := s.inTx(ctx, func(tx pgx.Tx) error {
+		status, err := lockCopy(ctx, tx, copyID)
+		if err != nil {
+			return err
+		}
+		if status != StatusOwned {
+			return ErrNotOwned
+		}
+		var lentOn time.Time
+		err = tx.QueryRow(ctx, `SELECT COALESCE($1::date, (now() AT TIME ZONE 'Europe/Warsaw')::date)`,
+			dateArg(in.LentOn)).Scan(&lentOn)
+		if err != nil {
+			return fmt.Errorf("lent on: %w", err)
+		}
+		if fe := checkDue(in.DueOn, lentOn); fe != nil {
+			return fe
+		}
+		var id int64
+		err = tx.QueryRow(ctx, `INSERT INTO loan (copy_id, borrower, lent_on, due_on)
+			VALUES ($1, $2, $3, $4) RETURNING id`, copyID, in.Borrower, lentOn, dateArg(in.DueOn)).Scan(&id)
+		if code, constraint := pgCode(err); code == pgUniqueViolation && constraint == "loan_open_key" {
+			return ErrAlreadyLent
+		}
+		if err != nil {
+			return fmt.Errorf("lend copy: %w", err)
+		}
+		l, err = getLoan(ctx, tx, id)
+		return err
+	})
+	if err != nil {
+		return Loan{}, err
+	}
+	return l, nil
+}
+
+// ReturnLoan records the day loan id came back; a returned loan takes the
+// corrected day. Errors: ErrNotFound or a *httpx.FieldError for a day before
+// the loan began.
+func (s *Store) ReturnLoan(ctx context.Context, id int64, returnedOn time.Time) (Loan, error) {
+	var l Loan
+	err := s.inTx(ctx, func(tx pgx.Tx) error {
+		var lentOn time.Time
+		err := tx.QueryRow(ctx, `SELECT lent_on FROM loan WHERE id = $1 FOR UPDATE`, id).Scan(&lentOn)
+		if err != nil {
+			return mapErr(err, ErrNotFound, "lock loan")
+		}
+		if returnedOn.Before(lentOn) {
+			return fieldErr("returned_on", "cannot be before lent_on")
+		}
+		_, err = tx.Exec(ctx, `UPDATE loan SET returned_on = $2, updated_at = now() WHERE id = $1`, id, returnedOn)
+		if err != nil {
+			return fmt.Errorf("return loan: %w", err)
+		}
+		l, err = getLoan(ctx, tx, id)
+		return err
+	})
+	if err != nil {
+		return Loan{}, err
+	}
+	return l, nil
 }
 
 // DeleteCopy removes a copy.
@@ -591,8 +737,9 @@ func (s *Store) DiscardRequest(ctx context.Context, key string) error {
 			ON CONFLICT DO NOTHING`, key); err != nil {
 			return fmt.Errorf("record discarded key: %w", err)
 		}
-		// A copy someone edited since the add made it is theirs now.
-		if _, err := tx.Exec(ctx, `DELETE FROM copy WHERE request_key = $1 AND updated_at = created_at`, key); err != nil {
+		// A copy someone edited or lent since the add made it is theirs now.
+		if _, err := tx.Exec(ctx, `DELETE FROM copy WHERE request_key = $1 AND updated_at = created_at
+			AND NOT EXISTS (SELECT 1 FROM loan WHERE loan.copy_id = copy.id)`, key); err != nil {
 			return fmt.Errorf("discard copy: %w", err)
 		}
 		err := discardUnused(ctx, tx, key,
@@ -679,6 +826,8 @@ type Filter struct {
 	Format string
 	Status string
 	Query  string
+	// Loaned keeps only copies with an open loan.
+	Loaned bool
 }
 
 // Item is one copy in the collection view with its edition and title.
@@ -705,19 +854,22 @@ type Item struct {
 	Year          *int     `json:"year"`
 	CoverURL      *string  `json:"cover_url,omitempty"`
 	Authors       []string `json:"authors,omitempty"`
+	// LoanBorrower and LoanDueOn come from the copy's open loan, if any.
+	LoanBorrower *string `json:"loan_borrower,omitempty"`
+	LoanDueOn    *Date   `json:"loan_due_on,omitempty"`
 }
 
 func scanItem(row pgx.Row) (Item, error) {
 	var it Item
 	var createdAt time.Time
-	var purchased *time.Time
+	var purchased, due *time.Time
 	err := row.Scan(&it.CopyID, &createdAt, &it.Status, &it.PriceCents, &it.MaxPriceCents, &purchased, &it.Shop,
 		&it.AcquiredAs, &it.Condition, &it.EditionID, &it.Barcode, &it.Label, &it.Format, &it.Binding,
-		&it.TitleID, &it.Kind, &it.Name, &it.OriginalTitle, &it.PolishTitle, &it.Year, &it.CoverURL, &it.Authors)
+		&it.TitleID, &it.Kind, &it.Name, &it.OriginalTitle, &it.PolishTitle, &it.Year, &it.CoverURL, &it.Authors,
+		&it.LoanBorrower, &due)
 	it.CreatedAtUS = createdAt.UnixMicro()
-	if purchased != nil {
-		it.PurchasedOn = &Date{*purchased}
-	}
+	it.PurchasedOn = datePtr(purchased)
+	it.LoanDueOn = datePtr(due)
 	return it, err
 }
 
@@ -726,13 +878,15 @@ func (s *Store) Collection(ctx context.Context, f Filter) ([]Item, error) {
 	rows, err := s.pool.Query(ctx, `SELECT c.id, c.created_at, c.status, c.price_cents, c.max_price_cents,
 			c.purchased_on, c.shop, c.acquired_as, c.condition, e.id, e.barcode, e.label, e.format, e.binding,
 			t.id, t.kind, t.name, t.original_title, t.polish_title, t.year,
-			`+CoverURL+`, t.authors
+			`+CoverURL+`, t.authors, l.borrower, l.due_on
 		FROM copy c JOIN edition e ON e.id = c.edition_id JOIN title t ON t.id = e.title_id
+		LEFT JOIN loan l ON l.copy_id = c.id AND l.returned_on IS NULL
 		WHERE ($1 = '' OR t.kind = $1) AND ($2 = '' OR e.format = $2) AND ($3 = '' OR c.status = $3)
 		  AND ($4 = '' OR e.barcode = $4 OR strpos(lower(concat_ws(' ', t.name, t.original_title,
 		       t.polish_title, array_to_string(t.authors, ' '), e.label, c.shop)), lower($4)) > 0)
+		  AND (NOT $5 OR l.id IS NOT NULL)
 		ORDER BY lower(t.name), t.id, e.id, c.id`,
-		f.Kind, f.Format, f.Status, strings.TrimSpace(f.Query))
+		f.Kind, f.Format, f.Status, strings.TrimSpace(f.Query), f.Loaned)
 	if err != nil {
 		return nil, fmt.Errorf("collection: %w", err)
 	}

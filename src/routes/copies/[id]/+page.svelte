@@ -4,7 +4,9 @@
 		Button,
 		ConfirmDialog,
 		ErrorState,
+		Field,
 		FormError,
+		Modal,
 		PageHeader,
 		Skeleton
 	} from '@smykla-skalski/sui';
@@ -17,10 +19,15 @@
 		copyToForm,
 		displayName,
 		editionSummary,
+		isoDate,
+		loanPayload,
+		loanSummary,
+		loanToForm,
 		statusLabels,
 		type Copy,
 		type CopyDetail,
-		type FormIssue
+		type FormIssue,
+		type Loan
 	} from '#lib/collection.js';
 	import CopyFormFields from '#lib/components/CopyFormFields.svelte';
 	import { LatestLoad } from '#lib/scan.js';
@@ -43,6 +50,20 @@
 	let confirmDelete = $state(false);
 	let deleteError = $state<string | null>(null);
 
+	/** The copy's loan still out, if any: it offers "Zwrócono" instead of "Wypożycz". */
+	const openLoan = $derived(detail?.loans.find((l) => l.returned_on === null) ?? null);
+	let lending = $state(false);
+	let loanForm = $state(loanToForm(''));
+	let loanIssue = $state<FormIssue | null>(null);
+	let loanBusy = $state(false);
+	let loanError = $state<string | null>(null);
+	const loanFields = ['borrower', 'lent_on', 'due_on'];
+	const loanErrorFor = (field: string) =>
+		loanIssue?.field === field ? loanIssue.message : undefined;
+	const loanGeneral = $derived(
+		loanIssue && !loanFields.includes(loanIssue.field) ? loanIssue.message : null
+	);
+
 	/** The copy the page was last asked for; another one's answers and forms are dropped. */
 	let requested: number | undefined;
 	/** A slower answer for an earlier load never replaces a newer one. */
@@ -58,6 +79,9 @@
 			saved = false;
 			confirmDelete = false;
 			deleteError = null;
+			lending = false;
+			loanIssue = null;
+			loanError = null;
 		}
 		const isLatest = loads.start();
 		busy = true;
@@ -108,6 +132,49 @@
 		}
 	}
 
+	function startLoan() {
+		loanForm = loanToForm(isoDate(new Date()));
+		loanIssue = null;
+		loanError = null;
+		lending = true;
+	}
+
+	async function lend(d: CopyDetail) {
+		const parsed = loanPayload(loanForm);
+		if (!parsed.ok) {
+			loanIssue = parsed.issue;
+			return;
+		}
+		if (loanBusy) return;
+		loanBusy = true;
+		try {
+			await request<Loan>(fetch, 'POST', `/api/copies/${d.id}/loans`, parsed.value);
+			if (d.id !== requested) return;
+			lending = false;
+			await load(d.id);
+		} catch (err) {
+			if (d.id === requested) loanIssue = issueFrom(err);
+		} finally {
+			loanBusy = false;
+		}
+	}
+
+	async function giveBack(d: CopyDetail, loan: Loan) {
+		if (loanBusy) return;
+		loanBusy = true;
+		loanError = null;
+		try {
+			await request<Loan>(fetch, 'PUT', `/api/loans/${loan.id}`, {
+				returned_on: isoDate(new Date())
+			});
+			if (d.id === requested) await load(d.id);
+		} catch (err) {
+			if (d.id === requested) loanError = errorMessage(err);
+		} finally {
+			loanBusy = false;
+		}
+	}
+
 	async function remove(d: CopyDetail) {
 		try {
 			await request(fetch, 'DELETE', `/api/copies/${d.id}`);
@@ -145,6 +212,12 @@
 			<BackLink href={`/editions/${d.edition_id}`} label={editionSummary(d.edition)} />
 		{/snippet}
 		{#snippet actions()}
+			{#if openLoan}
+				{@const loan = openLoan}
+				<Button tone="signal" loading={loanBusy} onclick={() => giveBack(d, loan)}>Zwrócono</Button>
+			{:else if d.status === 'owned'}
+				<Button onclick={startLoan}>Wypożycz</Button>
+			{/if}
 			<Button tone="stop-quiet" onclick={() => ((deleteError = null), (confirmDelete = true))}>
 				Usuń
 			</Button>
@@ -153,6 +226,18 @@
 
 	<div class="content">
 		<FormError message={deleteError} />
+		<FormError message={loanError} />
+		{#if d.loans.length}
+			{@const today = isoDate(new Date())}
+			<section class="loans" aria-labelledby="loans-heading">
+				<h2 id="loans-heading">Wypożyczenia</h2>
+				<ul>
+					{#each d.loans as loan (loan.id)}
+						<li class:out={loan.returned_on === null}>{loanSummary(loan, today)}</li>
+					{/each}
+				</ul>
+			</section>
+		{/if}
 		{#if saved}
 			<p role="status">Zapisano.</p>
 		{/if}
@@ -165,6 +250,43 @@
 			onsubmit={() => save(d)}
 		/>
 	</div>
+
+	<Modal bind:open={lending} title="Wypożycz egzemplarz" closeLabel="Zamknij">
+		<form
+			id="loan-form"
+			class="loan-form"
+			novalidate
+			onsubmit={(e) => {
+				e.preventDefault();
+				void lend(d);
+			}}
+		>
+			<FormError message={loanGeneral} />
+			<Field
+				label="Komu"
+				required
+				requiredLabel="Wymagane"
+				bind:value={loanForm.borrower}
+				error={loanErrorFor('borrower')}
+			/>
+			<Field
+				label="Data wypożyczenia"
+				placeholder="RRRR-MM-DD"
+				bind:value={loanForm.lent_on}
+				error={loanErrorFor('lent_on')}
+			/>
+			<Field
+				label="Termin zwrotu"
+				hint="Zostaw puste, jeśli bez terminu."
+				placeholder="RRRR-MM-DD"
+				bind:value={loanForm.due_on}
+				error={loanErrorFor('due_on')}
+			/>
+		</form>
+		{#snippet footer()}
+			<Button tone="signal" type="submit" form="loan-form" loading={loanBusy}>Wypożycz</Button>
+		{/snippet}
+	</Modal>
 
 	<ConfirmDialog
 		bind:open={confirmDelete}
@@ -183,5 +305,29 @@
 		display: grid;
 		gap: 1.5rem;
 		padding: var(--sui-pane-gutter, 1.5rem);
+	}
+
+	.loans h2 {
+		margin: 0 0 0.5rem;
+		font-size: 1rem;
+	}
+
+	.loans ul {
+		display: grid;
+		gap: 0.25rem;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+		color: var(--sui-text-muted);
+	}
+
+	.loans .out {
+		color: var(--sui-text-primary);
+		font-weight: 600;
+	}
+
+	.loan-form {
+		display: grid;
+		gap: var(--sui-space-4);
 	}
 </style>

@@ -3,7 +3,8 @@
  * chip, a sheet choice or a search answers without asking the server. It lists what
  * `GET /api/collection` would for the same filter: the `WHERE` clause of `Store.Collection` in
  * backend-go/internal/collection/store.go, with the search normalized as the handler does.
- * The `unpriced` status, the owned copies without a purchase price, exists only here.
+ * The `unpriced` status, the owned copies without a purchase price, exists only here; the
+ * `loaned` status is the server's `?loaned=1`.
  */
 import type { CollectionFilter, CollectionItem } from './collection';
 import { canonicalBarcode, checkDigitMatches } from './scan';
@@ -64,9 +65,13 @@ function searchedText(item: CollectionItem): string {
 	);
 }
 
-/** Whether a copy has the filter's status; `unpriced` is an owned copy without a price. */
+/**
+ * Whether a copy has the filter's status; `unpriced` is an owned copy without a price, `loaned`
+ * a copy with an open loan.
+ */
 function hasStatus(item: CollectionItem, status: CollectionFilter['status']): boolean {
 	if (status === 'unpriced') return item.status === 'owned' && item.price_cents === null;
+	if (status === 'loaned') return item.loan_borrower != null;
 	return !status || item.status === status;
 }
 

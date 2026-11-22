@@ -476,7 +476,7 @@
 						{:else if column.key === 'status'}
 							<Link href={`/copies/${row.copy_id}`}>
 								<Pill tone={row.status === 'owned' ? 'success' : 'neutral'}>
-									{statusLabels[row.status]}
+									{row.loan_borrower != null ? 'Wypożyczony' : statusLabels[row.status]}
 								</Pill>
 							</Link>
 						{:else if column.key === 'price_cents'}

@@ -519,8 +519,21 @@ export type ValuationView = {
 	last_valuation: string | null;
 };
 
+export type CopyValueDay = {
+	copy_id: number;
+	day: string;
+	floor_cents: number | null;
+	mid_cents: number | null;
+	ceiling_cents: number | null;
+};
+
 export type TitleValues = {
 	copies: CopyValue[];
+};
+
+export type CopyValueHistory = {
+	days: number;
+	history: CopyValueDay[];
 };
 
 export type MarketPrice = {

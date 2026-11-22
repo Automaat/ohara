@@ -86,7 +86,9 @@ func Ohara() API {
 			Of[valuation.RunResult]("ValuationRunResult"),
 			Of[valuation.Status]("RunnerStatus"),
 			Of[valuation.View]("ValuationView"),
+			Of[valuation.CopyDay]("CopyValueDay"),
 			Of[valuation.TitleCopies]("TitleValues"),
+			Of[valuation.CopyHistory]("CopyValueHistory"),
 			Of[valuation.Market]("MarketPrice"),
 			Of[valuation.MarketView]("MarketView"),
 

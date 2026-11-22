@@ -76,6 +76,17 @@ type TokenStore interface {
 	Save(ctx context.Context, provider string, t Token) error
 }
 
+// TokenSwapper is a TokenStore that can save a pair conditionally. Swap
+// stores t and returns it with true when nothing is stored or the stored
+// pair's refresh token is in expected, in one step; otherwise it leaves
+// the store alone and returns the stored pair with false. A refresh saves
+// through Swap when the store has it, so a pair `api allegro-login` stores
+// at the same moment is never overwritten; with Load and Save alone a login
+// landing between the two is lost.
+type TokenSwapper interface {
+	Swap(ctx context.Context, provider string, expected []string, t Token) (Token, bool, error)
+}
+
 // Allegro errors. ErrAllegroRefused is the issue's stop-and-flag condition:
 // the app is not allowed to read the catalog.
 var (
@@ -240,18 +251,32 @@ func (a *Allegro) runOp(ctx context.Context, op *tokenOp, t Token) {
 func (a *Allegro) persist(ctx context.Context, t Token, chain []string) (Token, bool) {
 	ctx, cancel := context.WithTimeout(ctx, a.timeout())
 	defer cancel()
-	stored, ok, err := a.Store.Load(ctx, a.Name())
-	if err == nil && ok && !slices.Contains(chain, stored.Refresh) {
-		return stored, true
-	}
-	if err == nil {
-		err = a.Store.Save(ctx, a.Name(), t)
-	}
+	stored, kept, err := a.save(ctx, t, chain)
 	if err != nil {
 		slog.WarnContext(ctx, "allegro: save token, retrying on the next lookup", "err", err)
 		return t, false
 	}
+	if kept {
+		return stored, true
+	}
 	return t, true
+}
+
+// save stores t unless the store holds a pair outside chain, which it
+// returns with true.
+func (a *Allegro) save(ctx context.Context, t Token, chain []string) (Token, bool, error) {
+	if s, ok := a.Store.(TokenSwapper); ok {
+		stored, swapped, err := s.Swap(ctx, a.Name(), chain, t)
+		return stored, !swapped && err == nil, err
+	}
+	stored, ok, err := a.Store.Load(ctx, a.Name())
+	if err != nil {
+		return Token{}, false, err
+	}
+	if ok && !slices.Contains(chain, stored.Refresh) {
+		return stored, true, nil
+	}
+	return Token{}, false, a.Store.Save(ctx, a.Name(), t)
 }
 
 // refresh trades refreshToken for a new pair.

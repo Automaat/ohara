@@ -156,7 +156,7 @@ func prices(ctx context.Context, q querier, window time.Duration, titleID int64)
 	}
 	rows, err := q.Query(ctx, `SELECT o.edition_id, e.title_id, e.format, o.source,
 			o.price_cents, o.acquired_as, o.last_seen_at, o.observed_at, o.gone_at, t.kind, e.barcode,
-			coalesce(o.raw->>'title', ''), t.name, t.original_title, t.polish_title, t.authors
+			`+priceTitleFields+`
 		FROM price_observation o JOIN edition e ON e.id = o.edition_id JOIN title t ON t.id = e.title_id
 		WHERE o.source = ANY ($1)
 			AND o.last_seen_at > now() - make_interval(secs => $2)
@@ -172,41 +172,44 @@ func prices(ctx context.Context, q querier, window time.Duration, titleID int64)
 	if err != nil {
 		return nil, fmt.Errorf("prices: %w", err)
 	}
-	type row struct {
-		Price
-		listing string
-		want    deals.Want
-	}
-	read, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (row, error) {
-		var x row
-		p, w := &x.Price, &x.want
-		err := r.Scan(&p.EditionID, &p.TitleID, &p.Format, &p.Source, &p.Cents, &p.AcquiredAs,
-			&p.SeenAt, &p.FirstSeenAt, &p.GoneAt, &p.Kind, &p.Barcode,
-			&x.listing, &w.Name, &w.OriginalTitle, &w.PolishTitle, &w.Authors)
-		return x, err
-	})
+	seen, err := collectPrices(rows, true)
 	if err != nil {
 		return nil, fmt.Errorf("prices: %w", err)
 	}
-	out := make([]Price, 0, len(read))
-	wants := map[int64]*deals.Want{}
-	for i := range read {
-		x := &read[i]
-		if x.listing != "" && slices.Contains(pooledSources, x.Source) &&
-			deals.PolishBookEdition(x.Kind, x.Barcode) && !polishWant(wants, x.Price, x.want).Matches(x.listing) {
-			continue
-		}
-		out = append(out, x.Price)
-	}
-	return out, nil
+	return seen, nil
 }
 
-// polishWant is the want of p's Polish book edition, with the names and
-// authors of w, kept in wants so each edition's text is split once. A
-// listing stored while the edition had another barcode was matched by
-// names a Polish edition no longer carries, so a stored price counts
-// only while its listing still matches this want.
-func polishWant(wants map[int64]*deals.Want, p Price, w deals.Want) *deals.Want {
+const priceTitleFields = `coalesce(o.raw->>'title', ''), t.name, t.original_title, t.polish_title, t.authors`
+
+func collectPrices(rows pgx.Rows, verifyPolishBooks bool) ([]Price, error) {
+	defer rows.Close()
+	out := []Price{}
+	wants := map[int64]*deals.Want{}
+	for rows.Next() {
+		var p Price
+		var w deals.Want
+		var title string
+		if err := rows.Scan(&p.EditionID, &p.TitleID, &p.Format, &p.Source, &p.Cents, &p.AcquiredAs,
+			&p.SeenAt, &p.FirstSeenAt, &p.GoneAt, &p.Kind, &p.Barcode,
+			&title, &w.Name, &w.OriginalTitle, &w.PolishTitle, &w.Authors); err != nil {
+			return nil, err
+		}
+		if slices.Contains(pooledSources, p.Source) {
+			if p.Kind == "music" && !priceWant(wants, p, w).VerifiesAlbum(&deals.Listing{Title: title}) {
+				continue
+			}
+			if verifyPolishBooks && title != "" && deals.PolishBookEdition(p.Kind, p.Barcode) &&
+				!priceWant(wants, p, w).Matches(title) {
+				continue
+			}
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// Cache the matcher text for all prices of the same edition.
+func priceWant(wants map[int64]*deals.Want, p Price, w deals.Want) *deals.Want {
 	if have := wants[p.EditionID]; have != nil {
 		return have
 	}
@@ -234,7 +237,8 @@ func (s *Store) Markets(ctx context.Context, window time.Duration, titleID int64
 		scope = ` AND e.title_id = $3`
 	}
 	rows, err := s.pool.Query(ctx, `SELECT o.edition_id, e.title_id, e.format, o.source,
-			o.price_cents, o.acquired_as, o.last_seen_at, o.observed_at, o.gone_at, t.kind, e.barcode
+			o.price_cents, o.acquired_as, o.last_seen_at, o.observed_at, o.gone_at, t.kind, e.barcode,
+			`+priceTitleFields+`
 		FROM price_observation o JOIN edition e ON e.id = o.edition_id JOIN title t ON t.id = e.title_id
 		WHERE o.source = ANY ($1)
 			AND o.last_seen_at > now() - make_interval(secs => $2)
@@ -244,7 +248,7 @@ func (s *Store) Markets(ctx context.Context, window time.Duration, titleID int64
 	if err != nil {
 		return nil, fmt.Errorf("markets: %w", err)
 	}
-	seen, err := pgx.CollectRows(rows, pgx.RowToStructByPos[Price])
+	seen, err := collectPrices(rows, false)
 	if err != nil {
 		return nil, fmt.Errorf("markets: %w", err)
 	}

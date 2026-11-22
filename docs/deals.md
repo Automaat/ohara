@@ -47,6 +47,17 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   `max_price_cents` or its `max_market_percent` (1 to 100) of the
   title and format's used market price, when either holds; a listing seen again keeps its row, takes the new
   price and `last_seen_at`, and alerts if it has no alert yet. Alerts are retried up to 5 times within a week.
+  An answer that contradicts a stored listing keeps its stored price,
+  but takes its unsent alert to none (`Store.Unmatch`), so the alert
+  never goes out at that price, even in a later run that no answer
+  carries the listing. An answer contradicts it when it holds the
+  listing under a title that matches no wish (a Blu-ray listing renamed
+  "4K UHD"), the canary's answer included, or without a price, also
+  next to the listing under a matching title with a price; that record
+  is not stored, so a sent alert stays sent. `Store.Unmatch` takes the
+  listing's row as `Store.SendAlert` does, so a message already on its
+  way goes out first. An answer that matches the listing again within a
+  wish's limit queues it for that wish at the new price.
   A hunt or valuation that matches a stored listing to another title (its
   edition's) moves it to that title and the matched edition and sets
   `moved_at`; a valuation match drops the wish it was recorded for. Its
@@ -60,6 +71,12 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   from older data) and queues no alert for a wish of another title than
   the listing's. Another edition of the same title keeps the
   stored one.
+  An album title that repeats its artist needs a distinct album alias
+  in the listing (such as "Space Oddity" in "David Bowie aka Space Oddity")
+  or a Discogs inventory release ID matching the edition. Deal searches
+  use distinct aliases when available. The app verifies stored matches
+  before showing them in the matched, under-limit or sent lists and before
+  sending queued alerts. It keeps the observations, dismissals and alert history.
   A wish with "Tylko to wydanie" (`copy.exact_edition`, wishes only, off
   by default, cleared when the copy becomes owned) of a movie or book
   also needs the listing to name each detail its edition has: every
@@ -135,7 +152,18 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   answers 409) is logged and retried after 30 s.
   The wish a listing was recorded for (`raw.wishlist_copy_id`) is also the
   generated, indexed column `wishlist_copy_id`, so the deals list's filters
-  start from wished listings instead of reading every observation.
+  start from wished listings instead of reading every observation. They
+  take the listings an alert alone ties to a wish in one query, and read
+  the hunter's own for wishes still on the wishlist newest first
+  (`price_observation_wish_recent_idx`, or `price_observation_wish_idx`
+  when those wishes hold few of them) in steps of 100 or the page size,
+  then twice the last, until the page is full or none are left. All of
+  it reads one snapshot, and a Discogs listing is fresh as of that
+  snapshot's first query, so an alert sent after the listing expired
+  does not bring it back. After a long hunt
+  with alerts, when nearly every stored listing was recorded for a wish,
+  a filtered page so neither sorts nor filters all of them; each
+  listing's `raw` is read only after the cheaper filters kept it.
   A source that answers 403 or 429 is asked nothing more until the next
   run, in a hunt and in a valuation (SkupSzop quotes too); the run's
   errors name the refusal once with the requests it skipped, and skipped
@@ -143,8 +171,14 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   Hunts and valuations share one `deals.Pacer`, built in `cmd/api`, each
   in a lane of its own that paces every request of its HTTP client,
   redirects too: a request to a host is sent at least half of
-  `OHARA_DEALS_DELAY` after the other lane's last one there. A request
-  holds the site until it is written, never while it waits for an answer,
+  `OHARA_DEALS_DELAY` after the other lane's last one there. Sent means
+  its last bytes reached the connection: HTTP/1 reports a request
+  written while its end still sits in a buffer, so the pacer waits for
+  the flush, and the lane's transport sends each TLS record whole so a
+  flush is one write. HTTP/2 flushes before it reports a request
+  written, as does HTTP/1 a Content-Length body larger than the buffer;
+  those count as sent when reported written. A
+  request holds the site until it is sent, never while it waits for an answer,
   so neither run waits for the other to finish; a lane never waits for
   itself, so a run on its own keeps its pacing.
   Every run also asks each query source the canary query, wishlist or not,
@@ -155,6 +189,19 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   The last run, scheduled, manual or cut short by shutdown, is kept in
   `deal_run`: after a restart the status shows it and the first scheduled
   run comes one interval after it started, at least 5 minutes on.
+- Operators can read the last run's coverage with
+  `SELECT result->'coverage' FROM deal_run`. Each row identifies a source
+  and wishlist copy. It counts successful replies (including empty ones),
+  empty replies, failed requests, refusals and queries skipped after a
+  refusal. A shared query credits each wish that asked for it, and feeds
+  credit each eligible wish. A canary counts only when reused for a wish.
+  Candidates count listing appearances, including repeats across queries.
+  A match reached through another wish's query also credits the wish it
+  was assigned to. Unique matches count each listing ID once per source
+  and wish. Rejection counts show the first matcher reason for each
+  rejected candidate, so the highest counts show the main causes.
+  The summary keeps up to 1,000 source and wish pairs and sets
+  `truncated` when it omits a pair. Prometheus keeps its source-level labels.
 - BlueDVD (bluedvd.pl, a shop of 4K UHD and Blu-ray discs, steelbooks and
   preorders) is a query source, on unless `OHARA_BLUEDVD=false`. Each
   query is one GET of the shop's WooCommerce Store API,
@@ -329,8 +376,8 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   6 hours old, whatever requests fail, overlap or hang, the system clock
   does or the computer sleeps, and one a run found gone leaves within 10
   minutes. The purchase happens on discogs.com.
-- The valuation never reads `discogs_inventory`, and wants are not
-  matched by Discogs release ID.
+- The valuation never reads `discogs_inventory`. A Discogs inventory
+  release ID can confirm a self-titled album for the deal hunter.
 
 ## Discogs wantlist
 
@@ -438,6 +485,23 @@ Moved from `CLAUDE.md`, whose conventions still apply.
 
 ## Frontend
 
+- For a wish with neither price limit, Okazje puts an offer in
+  "Pod limitem" when it is at least 20% below the typical asking price.
+  `GET /api/deals/matched` returns the matched offers and their comparisons.
+  The typical price is the median of at least five other verified listings
+  for the same title, medium and known new or used state, priced within
+  90 days. Repeated sightings of a source listing count once. Stored asking
+  prices can outlive a listing and do not establish a sale. Exact-edition
+  wishes require positive edition details on both sides of the comparison.
+  The card shows the state, discount and sample size. Offers without a
+  baseline stay in "Wszystkie" with the reason. The navigation badge uses
+  the manual limits.
+- Set `OHARA_DEALS_AUTOMATIC_ALERTS=true` with the Telegram bot and chat
+  configured to send these automatic deals. The setting defaults to
+  off. At the end of each run, the hunter queues qualifying offers it
+  matched in that run and rechecks the comparison before each send,
+  including retries. Automatic alerts share the manual queue's dismissal,
+  retry and price-drop rules. Sent automatic alerts appear in "Wysłane".
 - Okazje (`/deals`) lists every wish in its "Lista życzeń" section, with
   or without offers, since Kolekcja lists none. The page asks for them
   beside the offers (`GET /api/collection?status=wishlist`) and lists
@@ -447,7 +511,7 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   market percent), and its "Edytuj" opens the copy's form at
   `/copies/<id>`. A failed answer keeps the last list with a retry; with
   no wish the section is left out and the page's "Lista życzeń jest
-  pusta" stands. The offer segments are unchanged.
+  pusta" stands.
 - "Szukaj na Allegro" opens a new tab on click with the wish's title and,
   where available, its TV season, album artist and format. Rendering the
   wishlist makes no request to Allegro.

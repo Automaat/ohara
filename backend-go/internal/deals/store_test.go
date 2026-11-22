@@ -2,10 +2,13 @@ package deals
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/Automaat/ohara/backend-go/internal/dbtest"
@@ -230,6 +233,100 @@ func TestSendAlertSkipsAnAlertMovedAway(t *testing.T) {
 	if got := stored(t, pool); got.AlertSent {
 		t.Fatalf("alert = %+v, want it unsent", got)
 	}
+}
+
+// TestUnmatchTakesOnlyNamedUnsentAlerts: Unmatch takes the unsent alerts
+// of the named listings of one source off their wish and leaves a sent
+// alert, a listing it does not name and another source's listing with the
+// same ID.
+func TestUnmatchTakesOnlyNamedUnsentAlerts(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	ctx := context.Background()
+	store := NewStore(pool)
+	wish := wished(t, pool, bladeRunner("bluray"))
+	for _, l := range []Listing{
+		{Source: "olx", ExternalID: "sent"},
+		{Source: "olx", ExternalID: "pending"},
+		{Source: "olx", ExternalID: "other"},
+		{Source: "bluedvd", ExternalID: "pending"},
+	} {
+		l.Title, l.URL, l.PriceCents = "Blade Runner Blu-ray", "https://example.test/"+l.ExternalID, 4000
+		if _, alerted, err := store.Record(ctx, &l, &wish, true); err != nil || !alerted {
+			t.Fatalf("Record %s %s = %v, %v; want an alert", l.Source, l.ExternalID, alerted, err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `UPDATE deal_alert a SET sent_at = now() FROM price_observation o
+		WHERE o.id = a.observation_id AND o.external_id = 'sent'`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.Unmatch(ctx, "olx", []string{"sent", "pending", "never-stored"}); err != nil {
+		t.Fatalf("Unmatch: %v", err)
+	}
+	rows, err := pool.Query(ctx, `SELECT o.source || ' ' || o.external_id FROM deal_alert a
+		JOIN price_observation o ON o.id = a.observation_id WHERE a.copy_id = $1 ORDER BY 1`, wish.CopyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"bluedvd pending", "olx other", "olx sent"}; !slices.Equal(bound, want) {
+		t.Fatalf("alerts still for the wish = %q, want %q", bound, want)
+	}
+}
+
+// TestUnmatchWaitsForASendInProgress: Unmatch of a listing whose alert
+// SendAlert is sending waits for its outcome, so the message goes out and
+// its sent alert keeps its wish.
+func TestUnmatchWaitsForASendInProgress(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	ctx := context.Background()
+	store := NewStore(pool)
+	w := bladeRunner("bluray")
+	w.MaxPriceCents = new(int64(5000))
+	wish := wished(t, pool, w)
+	l := Listing{Source: "olx", ExternalID: "1", Title: "Blade Runner Blu-ray", URL: "https://example.test/1", PriceCents: 4000}
+	if _, alerted, err := store.Record(ctx, &l, &wish, true); err != nil || !alerted {
+		t.Fatalf("Record = %v, %v; want an alert", alerted, err)
+	}
+	unmatched := make(chan error, 1)
+	delivered, err := store.SendAlert(ctx, stored(t, pool).ID, func(*Alert) error {
+		go func() { unmatched <- store.Unmatch(ctx, "olx", []string{"1"}) }()
+		return waitForUnmatch(ctx, pool, unmatched)
+	})
+	if err != nil || !delivered {
+		t.Fatalf("SendAlert = %v, %v; want the message sent", delivered, err)
+	}
+	if err := <-unmatched; err != nil {
+		t.Fatalf("Unmatch: %v", err)
+	}
+	if got := stored(t, pool); !got.AlertSent || !is(got.AlertCopyID, wish.CopyID) {
+		t.Fatalf("alert = sent %v for copy %v, want sent for %d", got.AlertSent, deref(got.AlertCopyID), wish.CopyID)
+	}
+}
+
+// waitForUnmatch returns nil once Unmatch waits for a row lock, or an error
+// when it finished first or never waited.
+func waitForUnmatch(ctx context.Context, pool *pgxpool.Pool, unmatched <-chan error) error {
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		select {
+		case err := <-unmatched:
+			return fmt.Errorf("unmatch finished during the send: %w", err)
+		default:
+		}
+		var waiting bool
+		if err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT FROM pg_stat_activity
+			WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE 'WITH locked AS%')`).
+			Scan(&waiting); err != nil {
+			return err
+		}
+		if waiting {
+			return nil
+		}
+	}
+	return errors.New("unmatch never waited for the listing's row")
 }
 
 // TestRecordAsOfKeepsANewerMove follows a hunt that read the wishlist
@@ -514,5 +611,100 @@ func TestExactEditionHoldsStoredListings(t *testing.T) {
 	}
 	if got := pending(); !slices.Equal(got, []string{"legacy", "plain", "steelbook"}) {
 		t.Errorf("pending alerts of a wish whose edition needs nothing = %v", got)
+	}
+}
+
+// TestRecentFreshAsOfSnapshot pins the clock a filtered page judges a Discogs listing's
+// freshness by: its snapshot's, so a listing that expired before an alert was sent is not shown
+// with that alert, even when the send commits after the page's transaction began.
+func TestRecentFreshAsOfSnapshot(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	want := wished(t, pool, *wantBluray(new(int64(5000))))
+	listing := Listing{Source: DiscogsSource, ExternalID: "expiring", Title: "Blade Runner Blu-ray", PriceCents: 4000}
+	if _, alerted, err := store.Record(ctx, &listing, &want, true); err != nil || !alerted {
+		t.Fatalf("record = %v, %v", alerted, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE price_observation
+		SET last_offered_at = now() - make_interval(secs => $1) + interval '2 seconds'`,
+		discogsShown.Seconds()); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	time.Sleep(3 * time.Second)
+	if _, err := pool.Exec(ctx, `UPDATE deal_alert SET sent_at = now(), attempts = 1`); err != nil {
+		t.Fatal(err)
+	}
+	wishes, err := readWishedCopies(ctx, tx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := wishedPage(ctx, tx, RecentFilter{Limit: 1, Sent: true},
+		marketTable{titles: []int64{}, formats: []string{}, cents: []int64{}}, wishes, []int64{})
+	if err != nil || len(page) != 0 {
+		t.Fatalf("page = %v, %v; want the expired listing left out", page, err)
+	}
+}
+
+// TestRecentLeavesOutUnverifiedAlbums pins the album recheck on both pages: a stored listing its
+// album wish no longer verifies keeps its place in the deals list without that wish, and no
+// filter keeps it, whether the hunter recorded it for the wish or only a sent alert names the
+// wish.
+func TestRecentLeavesOutUnverifiedAlbums(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		recorded bool
+	}{
+		{name: "recorded for the wish", recorded: true},
+		{name: "alert only"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pool := dbtest.Migrated(t)
+			store := NewStore(pool)
+			ctx := context.Background()
+			want := wished(t, pool, Want{
+				Kind: "music", Name: "David Bowie aka Space Oddity", Authors: []string{"David Bowie"},
+				Format: new("vinyl"), MaxPriceCents: new(int64(9000)),
+			})
+			raw := `jsonb_build_object('title', $4::text)`
+			if tc.recorded {
+				raw = `jsonb_build_object('title', $4::text, 'wishlist_copy_id', $5::bigint)`
+			}
+			for _, l := range []struct{ id, title string }{
+				{id: "verified", title: "David Bowie – Space Oddity (Parlophone 2016) LP"},
+				{id: "unverified", title: "David Bowie – Hunky Dory Parlophone 2016 LP"},
+			} {
+				if _, err := pool.Exec(ctx, `WITH o AS (INSERT INTO price_observation
+						(source, external_id, price_cents, url, edition_id, title_id, raw)
+					VALUES ('olx', $1, 5000, 'https://www.olx.pl/d/oferta/' || $1 || '.html', $2, $3, `+raw+`)
+					RETURNING id)
+					INSERT INTO deal_alert (observation_id, copy_id, sent_at, attempts)
+					SELECT id, $5::bigint, now(), 1 FROM o`,
+					l.id, want.EditionID, want.TitleID, l.title, want.CopyID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			all, err := store.Recent(ctx, RecentFilter{Limit: 10})
+			if err != nil || !slices.Equal(externalIDs(all), []string{"unverified", "verified"}) {
+				t.Fatalf("Recent() = %v, %v; want both listings", externalIDs(all), err)
+			}
+			if all[0].MaxPriceCents != nil || all[1].MaxPriceCents == nil {
+				t.Fatalf("Recent() limits = %v, %v; want the wish's only on the verified listing",
+					all[0].MaxPriceCents, all[1].MaxPriceCents)
+			}
+			for _, f := range []RecentFilter{
+				{Limit: 10, Matched: true}, {Limit: 10, UnderLimit: true}, {Limit: 10, Sent: true},
+			} {
+				got, err := store.Recent(ctx, f)
+				if err != nil || !slices.Equal(externalIDs(got), []string{"verified"}) {
+					t.Errorf("Recent(%+v) = %v, %v; want the verified listing only", f, externalIDs(got), err)
+				}
+			}
+		})
 	}
 }

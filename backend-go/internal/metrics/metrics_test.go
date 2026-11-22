@@ -10,11 +10,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 func TestObserveSourceTracksHealth(t *testing.T) {
 	const src = "test-health"
+	t.Cleanup(func() {
+		source := prometheus.Labels{"source": src}
+		sourceRequests.DeletePartialMatch(source)
+		sourceErrors.DeletePartialMatch(source)
+		sourceParseErrors.DeletePartialMatch(source)
+		sourceDuration.DeletePartialMatch(source)
+		sourceLastSuccess.DeletePartialMatch(source)
+	})
 	InitSource(src)
 	if got := testutil.ToFloat64(sourceErrors.WithLabelValues(src)); got != 0 {
 		t.Fatalf("errors after init = %v", got)

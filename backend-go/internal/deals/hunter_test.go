@@ -536,6 +536,172 @@ func TestRunAlertsOnListingsStoredBefore(t *testing.T) {
 	}
 }
 
+// pagedSource is an OLX Pager whose answer to a query is pages[query],
+// else pages[""].
+type pagedSource struct {
+	mu    sync.Mutex
+	pages map[string]Page
+}
+
+func (p *pagedSource) Name() string   { return "olx" }
+func (p *pagedSource) PerQuery() bool { return true }
+
+func (p *pagedSource) Search(ctx context.Context, query string) ([]Listing, error) {
+	page, err := p.SearchPage(ctx, query)
+	return page.Listings, err
+}
+
+func (p *pagedSource) SearchPage(_ context.Context, query string) (Page, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if page, ok := p.pages[query]; ok {
+		return page, nil
+	}
+	return p.pages[""], nil
+}
+
+func (p *pagedSource) answer(pages map[string]Page) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.pages = pages
+}
+
+// offers is the answer that holds ls, each priced.
+func offers(ls ...Listing) Page {
+	page := Page{Listings: ls}
+	for i := range ls {
+		page.Seen = append(page.Seen, ls[i].ExternalID)
+	}
+	return page
+}
+
+// TestRunDropsAlertTheAnswerContradicts: a pending alert whose listing a
+// later answer contradicts is not sent at the stored price, also in a run
+// no answer carries the listing. An answer contradicts it by holding the
+// listing under a title that matches no wish, above or under the limit,
+// also when only the canary query found it, or by holding it both so and
+// under the matching title, or without a price. An answer that matches the
+// listing again within the limit sends it at the new price.
+func TestRunDropsAlertTheAnswerContradicts(t *testing.T) {
+	listing := Listing{
+		Source: "olx", ExternalID: "171", Title: "Blade Runner Blu-ray",
+		URL: "https://www.olx.pl/d/oferta/z-ID171.html", PriceCents: 4000,
+	}
+	renamed := func(price int64) Listing {
+		l := listing
+		l.Title, l.PriceCents = "Blade Runner Blu-ray 4K UHD", price
+		return l
+	}
+	tests := []struct {
+		name   string
+		canary string
+		pages  map[string]Page
+	}{
+		{name: "renamed above the limit", pages: map[string]Page{"": offers(renamed(6500))}},
+		{name: "renamed under the limit", pages: map[string]Page{"": offers(renamed(3000))}},
+		{
+			name: "renamed in the canary answer only", canary: "dvd",
+			pages: map[string]Page{"dvd": offers(renamed(6500)), "": {}},
+		},
+		{name: "renamed next to the matching record", pages: map[string]Page{"": offers(listing, renamed(6500))}},
+		{name: "offered without a price", pages: map[string]Page{"": {Seen: []string{"171"}}}},
+		{
+			name:  "offered without a price next to the matching record",
+			pages: map[string]Page{"": {Listings: []Listing{listing}, Seen: []string{"171", "171"}}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pool := dbtest.Migrated(t)
+			wishlist(t, pool, wantBluray(new(int64(5000))))
+			olx := &pagedSource{pages: map[string]Page{"": offers(listing)}}
+			notifier := &fakeNotifier{fail: 1}
+			h := NewHunter(NewStore(pool), []Source{olx}, notifier, Config{CanaryQuery: tt.canary},
+				slog.New(slog.DiscardHandler))
+			h.sleep = func(ctx context.Context, _ time.Duration) error { return ctx.Err() }
+
+			if res := mustRun(t, h); res.Alerts != 1 || res.Sent != 0 {
+				t.Fatalf("failing run = %+v, want one pending alert", res)
+			}
+			olx.answer(tt.pages)
+			if res := mustRun(t, h); res.Sent != 0 {
+				t.Fatalf("contradicting run = %+v, want no message", res)
+			}
+			olx.answer(map[string]Page{"": {}})
+			if res := mustRun(t, h); res.Sent != 0 {
+				t.Fatalf("run without the listing = %+v, want no message", res)
+			}
+			if got := notifier.messages(); len(got) != 0 {
+				t.Fatalf("sent %q, want nothing at a price the answer contradicts", got)
+			}
+			if n := count(t, pool, `SELECT price_cents FROM price_observation WHERE external_id = '171'`); n != 4000 {
+				t.Fatalf("stored price %d, want the matched one kept", n)
+			}
+
+			back := listing
+			back.PriceCents = 4500
+			olx.answer(map[string]Page{"": offers(back)})
+			if res := mustRun(t, h); res.Sent != 1 {
+				t.Fatalf("matching again run = %+v, want the alert sent", res)
+			}
+			if got := notifier.messages(); len(got) != 1 || !strings.Contains(got[0], "45,00 zł (limit 50,00 zł)") {
+				t.Fatalf("sent %q, want one message at the new price", got)
+			}
+		})
+	}
+}
+
+// TestRunKeepsASentAlertAnAnswerContradicts: an answer that holds a
+// listing whose alert went out at 40 zł both at 35 zł under the matching
+// title and renamed or without a price sends nothing and leaves the alert
+// sent. An answer that only matches it at 35 zł alerts again.
+func TestRunKeepsASentAlertAnAnswerContradicts(t *testing.T) {
+	listing := Listing{
+		Source: "olx", ExternalID: "171", Title: "Blade Runner Blu-ray",
+		URL: "https://www.olx.pl/d/oferta/z-ID171.html", PriceCents: 4000,
+	}
+	cheaper := listing
+	cheaper.PriceCents = 3500
+	renamed := listing
+	renamed.Title, renamed.PriceCents = "Blade Runner Blu-ray 4K UHD", 6500
+	tests := []struct {
+		name string
+		page Page
+	}{
+		{"renamed", offers(cheaper, renamed)},
+		{"without a price", Page{Listings: []Listing{cheaper}, Seen: []string{"171", "171"}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pool := dbtest.Migrated(t)
+			copyID := wishlist(t, pool, wantBluray(new(int64(5000))))
+			olx := &pagedSource{pages: map[string]Page{"": offers(listing)}}
+			notifier := &fakeNotifier{}
+			h := newTestHunter(pool, notifier, olx)
+
+			if res := mustRun(t, h); res.Sent != 1 {
+				t.Fatalf("first run = %+v, want the alert sent", res)
+			}
+			olx.answer(map[string]Page{"": tt.page})
+			if res := mustRun(t, h); res.Sent != 0 {
+				t.Fatalf("contradicting run = %+v, want no message", res)
+			}
+			if n := count(t, pool, `SELECT count(*) FROM deal_alert
+				WHERE sent_at IS NOT NULL AND alerted_price_cents = 4000 AND copy_id = `+strconv.FormatInt(copyID, 10)); n != 1 {
+				t.Fatalf("sent alerts for the wish at 40 zł = %d, want the alert kept sent", n)
+			}
+
+			olx.answer(map[string]Page{"": offers(cheaper)})
+			if res := mustRun(t, h); res.Sent != 1 {
+				t.Fatalf("matching run = %+v, want the alert sent again", res)
+			}
+			if got := notifier.messages(); len(got) != 2 || !strings.Contains(got[1], "35,00 zł (było 40,00 zł, limit 50,00 zł)") {
+				t.Fatalf("sent %q, want a second message at 35 zł", got)
+			}
+		})
+	}
+}
+
 // TestRunAlertsAgainOnPriceDrop follows one listing under a 50 zł wish
 // through price changes: only a price under the one the last sent alert
 // named, still within the limit, alerts again.
@@ -1430,6 +1596,47 @@ func TestStartWithoutHistoryWaitsFiveMinutes(t *testing.T) {
 	_, waits := restarted(t, pool)
 	if got := <-waits; got < 5*time.Minute || got > 6*time.Minute {
 		t.Fatalf("first wait = %v, want about 5m", got)
+	}
+}
+
+// TestStartWithoutHistoryJittersTheFirstWait pins the hunter's first wait
+// without a stored run: five minutes jittered by 20%, never below five
+// minutes.
+func TestStartWithoutHistoryJittersTheFirstWait(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	for _, tc := range []struct {
+		name   string
+		sample float64
+		want   time.Duration
+	}{
+		{"top of the spread", 1, 6 * time.Minute},
+		{"middle of the spread", 0.5, 5*time.Minute + 30*time.Second},
+		{"bottom of the spread", -1, 5 * time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := NewHunter(NewStore(pool), nil, nil, Config{Interval: 2 * time.Hour}, slog.New(slog.DiscardHandler))
+			h.startJitter = func(d time.Duration, spread float64) time.Duration {
+				return time.Duration(float64(d) * (1 + tc.sample*spread))
+			}
+			waits := make(chan time.Duration, 1)
+			h.sleep = func(_ context.Context, d time.Duration) error {
+				waits <- d
+				return context.Canceled
+			}
+			h.Start(t.Context())
+			h.Wait()
+			if got := <-waits; got != tc.want {
+				t.Fatalf("first wait = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestZeroHunterReportsAndWaits(t *testing.T) {
+	var h Hunter
+	h.Wait()
+	if s := h.Status(); s.Running || s.LastStartedAt != nil {
+		t.Fatalf("zero hunter status = %+v", s)
 	}
 }
 

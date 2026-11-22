@@ -2,6 +2,7 @@ package deals
 
 import (
 	"math"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -32,6 +33,7 @@ type Want struct {
 	Authors          []string
 	Format           *string
 	Barcode          *string
+	DiscogsReleaseID *int64
 	MaxPriceCents    *int64
 	MaxMarketPercent *int
 	MarketCents      *int64
@@ -71,6 +73,8 @@ type wantText struct {
 	hasPolish, hasOriginal bool
 	authors                []string
 	polishBook             bool
+	album                  bool
+	selfTitled             bool
 
 	names    []nameText // the titles the want is sold under
 	ownWords [][]string // the words of each name, then of each author
@@ -134,7 +138,10 @@ func (w *Want) polishBook() bool {
 // original title, which names the foreign editions, so it keeps only its
 // Polish title and name.
 func newWantText(w *Want) *wantText {
-	p := &wantText{name: w.Name, authors: slices.Clone(w.Authors), polishBook: w.polishBook()}
+	p := &wantText{name: w.Name, authors: slices.Clone(w.Authors), polishBook: w.polishBook(), album: w.Kind == "music"}
+	if len(w.Authors) > 0 {
+		p.artist = required(w.Authors[0])
+	}
 	if w.PolishTitle != nil {
 		p.polish, p.hasPolish = *w.PolishTitle, true
 	}
@@ -150,8 +157,9 @@ func newWantText(w *Want) *wantText {
 		if n == nil {
 			continue
 		}
-		nt := newNameText(*n)
-		key := spelledKey(*n)
+		name := p.albumAlias(*n)
+		nt := newNameText(name)
+		key := spelledKey(name)
 		if nt == nil || seen[key] {
 			continue
 		}
@@ -172,9 +180,34 @@ func newWantText(w *Want) *wantText {
 		if ws := spelledWords(w.Authors[0]); len(ws) > 0 {
 			p.ownName = ws[len(ws)-1]
 		}
-		p.artist = required(w.Authors[0])
 	}
 	return p
+}
+
+var aka = regexp.MustCompile(`(?i)\b(?:aka|a\.k\.a\.?)\s+`)
+
+func (p *wantText) albumAlias(name string) string {
+	if !p.album || len(p.authors) == 0 {
+		return name
+	}
+	if at := aka.FindStringIndex(name); len(at) == 2 && p.artistOnly(name[:at[0]]) {
+		p.selfTitled = true
+		name = strings.Trim(name[at[1]:], " \t()[]")
+	}
+	if p.artistOnly(name) {
+		p.selfTitled = true
+		return ""
+	}
+	return name
+}
+
+func (p *wantText) artistOnly(name string) bool {
+	req := required(name)
+	if len(req) == 0 {
+		nameWords := words(name)
+		return len(nameWords) > 0 && slices.Equal(nameWords, words(p.authors[0]))
+	}
+	return containsAll(p.artist, req)
 }
 
 // from reports whether p was made from w's current names and authors.
@@ -183,6 +216,7 @@ func (p *wantText) from(w *Want) bool {
 		sameText(p.hasPolish, p.polish, w.PolishTitle) &&
 		sameText(p.hasOriginal, p.original, w.OriginalTitle) &&
 		slices.Equal(p.authors, w.Authors) &&
+		p.album == (w.Kind == "music") &&
 		p.polishBook == w.polishBook()
 }
 
@@ -381,7 +415,8 @@ type ListingText struct {
 	details []string
 	// medium is the album medium the listing's source names
 	// (Listing.Medium), empty when only its title does.
-	medium string
+	medium    string
+	releaseID int64
 }
 
 // NewListingText readies a listing title for matching under rules.
@@ -408,8 +443,21 @@ func NewListingText(title string, rules Rules) *ListingText {
 // (Rules.RejectedFor) and it names no other title of titles more
 // specifically (Titles.Outranks).
 func (l *ListingText) Belongs(w *Want, titles Titles) bool {
+	return l.rejection(w, titles) == ""
+}
+
+func (l *ListingText) rejection(w *Want, titles Titles) rejectionReason {
 	p := w.text()
-	return l.matches(w, p) && !l.rejectedFor(p) && !titles.outranks(w, p, l)
+	if reason := l.mismatch(w, p); reason != "" {
+		return reason
+	}
+	if l.rejectedFor(p) {
+		return rejectionKeyword
+	}
+	if titles.outranks(w, p, l) {
+		return rejectionOtherTitle
+	}
+	return ""
 }
 
 // rejectedFor reports whether the listing holds a reject phrase the want
@@ -496,6 +544,9 @@ func (w *Want) Queries() []string {
 			q += " " + audiobook
 		}
 		out = append(out, q)
+	}
+	if len(out) == 0 && p.selfTitled {
+		return []string{artist}
 	}
 	return out
 }
@@ -670,7 +721,65 @@ func (w *Want) Matches(title string) bool {
 
 // matches is Matches for the want of p.
 func (l *ListingText) matches(w *Want, p *wantText) bool {
-	return qualifies(w, p, l) && l.fitsBookMedium(w, p) && p.carries(w.Kind, l) && !l.lotFor(w.Kind, p)
+	return l.mismatch(w, p) == ""
+}
+
+func (l *ListingText) mismatch(w *Want, p *wantText) rejectionReason {
+	if reason := l.qualification(w, p); reason != "" {
+		return reason
+	}
+	switch {
+	case !l.fitsBookMedium(w, p):
+		return rejectionFormat
+	case !l.matchesTitle(w, p):
+		return rejectionTitle
+	case l.lotFor(w.Kind, p):
+		return rejectionLot
+	default:
+		return ""
+	}
+}
+
+// VerifiesAlbum reports whether a stored listing still identifies a self-titled
+// album. Other titles keep their existing matching rules.
+func (w *Want) VerifiesAlbum(listing *Listing) bool {
+	if w.Kind != "music" {
+		return true
+	}
+	p := w.text()
+	return !p.selfTitled || listing.text(Rules{}).matches(w, p)
+}
+
+func (l *ListingText) matchesTitle(w *Want, p *wantText) bool {
+	if !p.selfTitled {
+		return p.carries(w.Kind, l)
+	}
+	if l.releaseID > 0 && w.DiscogsReleaseID != nil && l.releaseID == *w.DiscogsReleaseID {
+		return true
+	}
+	return slices.ContainsFunc(p.names, func(n nameText) bool {
+		return n.albumAliasIn(l, p.byline)
+	})
+}
+
+func (n *nameText) albumAliasIn(l *ListingText, byline []string) bool {
+	for i := range l.words {
+		end := i + len(n.words)
+		if end > len(l.words) {
+			break
+		}
+		if !slices.Equal(l.words[i:end], n.words) || slices.Contains(l.gaps[i+1:end], gapApart) {
+			continue
+		}
+		afterByline := i > 0 && inByline(byline, l.words[i-1])
+		if !l.startsTitle(i, afterByline) {
+			continue
+		}
+		if len(n.words) > 1 || l.endsTitle(end, byline) {
+			return true
+		}
+	}
+	return false
 }
 
 // fitsBookMedium reports whether the listing is the want's book medium: an
@@ -844,28 +953,32 @@ func lotWords(text []string) (bool, []int) {
 // artist's words and a fitting medium for an album, and the edition's
 // details for a want of only its edition (editionNamed).
 func qualifies(w *Want, p *wantText, l *ListingText) bool {
+	return l.qualification(w, p) == ""
+}
+
+func (l *ListingText) qualification(w *Want, p *wantText) rejectionReason {
 	text := l.words
 	if w.Kind == "movie" && w.Format != nil && l.format != *w.Format {
-		return false
+		return rejectionFormat
 	}
 	if !editionNamed(w, l.details) {
-		return false
+		return rejectionEdition
 	}
 	if w.Kind == "book" && p.surname != "" && !namesSurname(text, p.surname) {
-		return false
+		return rejectionCreator
 	}
 	if l.medium != "" && w.Kind != "music" {
-		return false
+		return rejectionKind
 	}
 	if w.Kind == "music" {
 		if !containsAll(text, p.artist) {
-			return false
+			return rejectionCreator
 		}
 		if w.Format != nil && !l.albumMedium(p, *w.Format) {
-			return false
+			return rejectionFormat
 		}
 	}
-	return true
+	return ""
 }
 
 // albumMedium reports whether the listing can be the wanted album format:
@@ -921,12 +1034,15 @@ func (n *nameText) standsAt(l *ListingText, byline []string) int {
 			continue
 		}
 		afterByline := i > 0 && inByline(byline, l.words[i-1])
-		starts := i == 0 || afterByline || l.gaps[i] == gapApart || isMediaWord(l.words[i-1])
-		if starts && (afterByline || l.endsTitle(i+k, byline) || lone && l.gaps[i+k] == gapSpace) {
+		if l.startsTitle(i, afterByline) && (afterByline || l.endsTitle(i+k, byline) || lone && l.gaps[i+k] == gapSpace) {
 			return i
 		}
 	}
 	return -1
+}
+
+func (l *ListingText) startsTitle(i int, afterByline bool) bool {
+	return i == 0 || afterByline || l.gaps[i] == gapApart || isMediaWord(l.words[i-1])
 }
 
 // endsTitle reports whether a title can end before word j: j is past the
@@ -1200,12 +1316,14 @@ func pick(wants []Want, l *Listing, rules Rules, titles Titles) *Want {
 // pickOf is pick among the wants of kinds, or among every want when kinds
 // is nil. A listing with Kinds also goes to no want of another kind.
 func pickOf(wants []Want, kinds []string, l *Listing, rules Rules, titles Titles) *Want {
-	text := NewListingText(l.Title, rules)
-	text.medium = l.Medium
+	return pickListing(wants, kinds, l, l.text(rules), titles)
+}
+
+func pickListing(wants []Want, kinds []string, l *Listing, text *ListingText, titles Titles) *Want {
 	var first *Want
 	for i := range wants {
 		w := &wants[i]
-		if kinds != nil && !slices.Contains(kinds, w.Kind) || l.Kinds != nil && !slices.Contains(l.Kinds, w.Kind) {
+		if !allowsKind(kinds, w.Kind) || !allowsKind(l.Kinds, w.Kind) {
 			continue
 		}
 		if !text.Belongs(w, titles) {
@@ -1219,4 +1337,17 @@ func pickOf(wants []Want, kinds []string, l *Listing, rules Rules, titles Titles
 		}
 	}
 	return first
+}
+
+func (l *Listing) text(rules Rules) *ListingText {
+	text := NewListingText(l.Title, rules)
+	text.medium = l.Medium
+	if l.Source == DiscogsSource {
+		text.releaseID = l.DiscogsReleaseID
+	}
+	return text
+}
+
+func allowsKind(kinds []string, kind string) bool {
+	return kinds == nil || slices.Contains(kinds, kind)
 }

@@ -550,6 +550,14 @@ func TestStartWithoutHistoryWaitsFiveMinutes(t *testing.T) {
 	}
 }
 
+func TestZeroRunnerReportsAndWaits(t *testing.T) {
+	var r Runner
+	r.Wait()
+	if s := r.Status(); s.Running || s.LastStartedAt != nil {
+		t.Fatalf("zero runner status = %+v", s)
+	}
+}
+
 type blockingSource struct {
 	started chan struct{}
 	release chan struct{}

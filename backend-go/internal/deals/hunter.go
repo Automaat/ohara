@@ -2,8 +2,6 @@ package deals
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/binary"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -11,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
@@ -45,9 +42,10 @@ const firstRunDelay = 5 * time.Minute
 // answers with none is broken. A Canaried source asks its own query
 // instead. A feed source's one request is its canary.
 type Config struct {
-	Interval    time.Duration
-	Delay       time.Duration
-	CanaryQuery string
+	Interval        time.Duration
+	Delay           time.Duration
+	CanaryQuery     string
+	AutomaticAlerts bool
 }
 
 // RunResult counts what one run did. Errors holds source failures, which do
@@ -62,6 +60,7 @@ type RunResult struct {
 	Sent     int      `json:"sent"`
 	Errors   []string `json:"errors"`
 	Failure  string   `json:"failure,omitempty"`
+	coverage *runCoverage
 }
 
 // Status is the hunter state the deals view shows.
@@ -84,15 +83,16 @@ type Hunter struct {
 	logger   *slog.Logger
 	cfg      Config
 	sleep    func(ctx context.Context, d time.Duration) error
+	// startJitter spreads the first scheduled wait; tests replace it.
+	startJitter func(d time.Duration, spread float64) time.Duration
 	// now reads the clock that paces alert messages.
 	now func() time.Time
-
-	running atomic.Bool
-	wg      sync.WaitGroup
-	base    context.Context
-
-	mu     sync.Mutex
+	// status holds the settings the status view shows; task holds the
+	// runs.
 	status Status
+	task   Task[RunResult]
+
+	mu sync.Mutex
 	// lastSend is when the notifier last returned, kept across runs so
 	// messages stay telegramPause apart; guarded by mu.
 	lastSend time.Time
@@ -106,8 +106,9 @@ func NewHunter(store *Store, sources []Source, notifier Notifier, cfg Config, lo
 	}
 	h := &Hunter{
 		store: store, sources: sources, notifier: notifier, logger: logger, cfg: cfg,
-		sleep: sleepCtx, now: time.Now, base: context.Background(),
+		sleep: sleepCtx, startJitter: jitter, now: time.Now,
 	}
+	h.task.Init(h.execute)
 	h.status.Scheduled = cfg.Interval > 0
 	h.status.IntervalSeconds = int64(cfg.Interval.Seconds())
 	h.status.Telegram = notifier != nil
@@ -121,25 +122,6 @@ func NewHunter(store *Store, sources []Source, notifier Notifier, cfg Config, lo
 	return h
 }
 
-func sleepCtx(ctx context.Context, d time.Duration) error {
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-t.C:
-		return nil
-	}
-}
-
-// jitter spreads d uniformly over d*(1-spread) to d*(1+spread).
-func jitter(d time.Duration, spread float64) time.Duration {
-	var b [8]byte
-	_, _ = rand.Read(b[:])
-	u := float64(binary.LittleEndian.Uint64(b[:])>>11) / (1 << 53)
-	return time.Duration(float64(d) * (1 - spread + 2*spread*u))
-}
-
 // PollTelegram makes Start run p, which turns presses of an alert's
 // "Ignoruj" button into dismissals, until Start's context ends.
 func (h *Hunter) PollTelegram(p *TelegramPoller) { h.poller = p }
@@ -150,9 +132,9 @@ func (h *Hunter) PollTelegram(p *TelegramPoller) { h.poller = p }
 // five minutes after start without one, and never sooner than
 // firstRunDelay.
 func (h *Hunter) Start(ctx context.Context) {
-	h.base = ctx
+	h.task.Bind(ctx)
 	if h.poller != nil {
-		h.wg.Go(func() { h.poller.Run(ctx) })
+		h.task.Go(func() { h.poller.Run(ctx) })
 	}
 	last, ok := h.restore(ctx)
 	if h.cfg.Interval <= 0 {
@@ -162,18 +144,7 @@ func (h *Hunter) Start(ctx context.Context) {
 	if ok {
 		due, spread = time.Until(last.Add(h.cfg.Interval)), 0.1
 	}
-	h.wg.Go(func() {
-		wait := max(jitter(due, spread), firstRunDelay)
-		for {
-			if h.sleep(ctx, wait) != nil {
-				return
-			}
-			if h.running.CompareAndSwap(false, true) {
-				h.execute(ctx)
-			}
-			wait = jitter(h.cfg.Interval, 0.1)
-		}
-	})
+	h.task.Schedule(ctx, max(h.startJitter(due, spread), firstRunDelay), h.cfg.Interval, h.sleep)
 }
 
 // restore puts the last stored run into the status and returns its start;
@@ -187,47 +158,32 @@ func (h *Hunter) restore(ctx context.Context) (time.Time, bool) {
 	if !ok {
 		return time.Time{}, false
 	}
-	h.mu.Lock()
-	if h.status.LastStartedAt == nil {
-		h.status.LastStartedAt = &last.StartedAt
-		h.status.LastFinishedAt = last.FinishedAt
-		h.status.LastResult = last.Result
-	}
-	h.mu.Unlock()
+	h.task.Restore(TaskRun[RunResult]{StartedAt: &last.StartedAt, FinishedAt: last.FinishedAt, Result: last.Result})
 	return last.StartedAt, true
 }
 
 // Wait blocks until the schedule and any manual run have stopped.
-func (h *Hunter) Wait() { h.wg.Wait() }
+func (h *Hunter) Wait() { h.task.Wait() }
 
 // Trigger starts a run in the background and reports false when one is
 // already running.
-func (h *Hunter) Trigger() bool {
-	if !h.running.CompareAndSwap(false, true) {
-		return false
-	}
-	h.wg.Go(func() { h.execute(h.base) })
-	return true
-}
+func (h *Hunter) Trigger() bool { return h.task.Trigger() }
 
 // Status returns a copy of the current state.
 func (h *Hunter) Status() Status {
-	h.mu.Lock()
-	defer h.mu.Unlock()
+	last, running := h.task.State()
 	s := h.status
-	s.Running = h.running.Load()
+	s.Running = running
+	s.LastStartedAt, s.LastFinishedAt, s.LastResult = last.StartedAt, last.FinishedAt, last.Result
 	return s
 }
 
 // execute runs once and records the outcome, in the status and the
-// database; the caller holds running. Times keep the database's
-// microseconds, so a restart restores the same status.
+// database; h.task calls it holding the one run. Times keep the
+// database's microseconds, so a restart restores the same status.
 func (h *Hunter) execute(ctx context.Context) {
-	defer h.running.Store(false)
 	started := time.Now().Truncate(time.Microsecond)
-	h.mu.Lock()
-	h.status.LastStartedAt = &started
-	h.mu.Unlock()
+	h.task.Started(started)
 	h.saveRun(ctx, func(ctx context.Context) error { return h.store.RunStarted(ctx, started) })
 
 	res, err := recovery.Call(h.logger, "deal search panicked", func() (RunResult, error) { return h.Run(ctx) })
@@ -240,10 +196,7 @@ func (h *Hunter) execute(ctx context.Context) {
 			"alerts", res.Alerts, "sent", res.Sent, "errors", len(res.Errors))
 	}
 	finished := time.Now().Truncate(time.Microsecond)
-	h.mu.Lock()
-	h.status.LastFinishedAt = &finished
-	h.status.LastResult = &res
-	h.mu.Unlock()
+	h.task.Finished(finished, &res)
 	h.saveRun(ctx, func(ctx context.Context) error { return h.store.RunFinished(ctx, started, finished, &res) })
 	metrics.ObserveBackgroundRun(metrics.TaskDeals, finished.Sub(started), err)
 }
@@ -276,6 +229,8 @@ type run struct {
 	// missed holds the listings this run stored that met no rule, by
 	// listingKey, to judge again once a later answer moves the market.
 	missed map[string]Listing
+	// automatic keeps current offers for wishes without limits until the run has all comparisons.
+	automatic map[string]matchedOffer
 	// tried holds the observations whose alert this run sent or failed to
 	// send; a failed one waits for the next run.
 	tried map[int64]bool
@@ -283,6 +238,10 @@ type run struct {
 	// feeds sums the answers of the feed sources that share a name (one
 	// Discogs seller each), by name.
 	feeds map[string]feedTally
+
+	queryWants      map[string][]*Want
+	coverageRows    map[coverageKey]*wishCoverage
+	coverageMatches map[coverageMatch]struct{}
 }
 
 // feedTally is what the feed sources of one name answered in a run: how
@@ -327,6 +286,10 @@ func (h *Hunter) Run(ctx context.Context) (RunResult, error) {
 	r := &run{
 		h: h, wants: wants, rules: rules, titles: titles, asOf: asOf, first: true, tried: map[int64]bool{},
 		missed: map[string]Listing{}, feeds: map[string]feedTally{},
+		coverageRows: map[coverageKey]*wishCoverage{}, coverageMatches: map[coverageMatch]struct{}{},
+	}
+	if h.cfg.AutomaticAlerts && h.notifier != nil {
+		r.automatic = make(map[string]matchedOffer)
 	}
 	for i := range wants {
 		wants[i].Prepare()
@@ -334,17 +297,21 @@ func (h *Hunter) Run(ctx context.Context) (RunResult, error) {
 	}
 	r.res.Wants = len(wants)
 	r.res.Errors = []string{}
-	var queries []string
-	if len(wants) > 0 {
-		queries = searchQueries(wants)
-		r.res.Queries = len(queries)
-	}
+	r.res.coverage = &runCoverage{Rows: []*wishCoverage{}}
+	queries, queryWants := planQueries(wants)
+	r.queryWants = queryWants
+	r.res.Queries = len(queries)
 	if len(wants) > 0 || h.cfg.CanaryQuery != "" {
 		for _, src := range h.sources {
 			if err := r.search(ctx, src, r.queriesFor(src, queries)); err != nil {
 				return r.res, err
 			}
 		}
+	}
+	queued, err := h.store.queueAutomaticAlerts(ctx, r.automatic, asOf)
+	r.res.Alerts += queued
+	if err != nil {
+		return r.res, err
 	}
 	if err := r.deliver(ctx, nil); err != nil {
 		return r.res, err
@@ -381,18 +348,27 @@ func (r *run) queriesFor(src Source, all []string) []string {
 
 // searchQueries are the distinct queries of every want, in want order.
 func searchQueries(wants []Want) []string {
+	queries, _ := planQueries(wants)
+	return queries
+}
+
+func planQueries(wants []Want) ([]string, map[string][]*Want) {
 	var out []string
-	seen := map[string]bool{}
+	owners := map[string][]*Want{}
 	for i := range wants {
-		for _, q := range wants[i].Queries() {
+		w := &wants[i]
+		for _, q := range w.Queries() {
 			key := spelledKey(q)
-			if !seen[key] {
-				seen[key] = true
+			previous := owners[key]
+			if len(previous) == 0 {
 				out = append(out, q)
+			}
+			if len(previous) == 0 || previous[len(previous)-1] != w {
+				owners[key] = append(previous, w)
 			}
 		}
 	}
-	return out
+	return out, owners
 }
 
 func (r *run) pause(ctx context.Context) error {
@@ -426,10 +402,12 @@ func (r *run) search(ctx context.Context, src Source, queries []string) error {
 func (r *run) searchAll(ctx context.Context, src Source, f *Refused, queries []string) error {
 	canary := canaryQuery(src, r.h.cfg.CanaryQuery)
 	if !src.PerQuery() {
-		listings, ok, err := r.ask(ctx, src, f, "")
+		listings, outcome, err := r.ask(ctx, src, f, "")
 		if err != nil {
 			return err
 		}
+		targets := r.queryCoverage(src.Name(), "", true, outcome, len(listings))
+		ok := outcome == querySucceeded
 		t := r.feeds[src.Name()]
 		t.listings += len(listings)
 		t.ok = t.ok || ok && len(listings) > 0
@@ -440,37 +418,43 @@ func (r *run) searchAll(ctx context.Context, src Source, f *Refused, queries []s
 		}
 		metrics.SetSourceResults(src.Name(), t.listings)
 		if ok && len(r.wants) > 0 {
-			return r.record(ctx, listings)
+			return r.record(ctx, src.Name(), listings, targets)
 		}
 		return nil
 	}
 	results := 0
 	var answered []Listing
-	answeredOK := false
+	var answeredOutcome queryOutcome
 	if canary != "" {
-		listings, ok, err := r.ask(ctx, src, f, canary)
+		listings, outcome, err := r.ask(ctx, src, f, canary)
 		if err != nil {
 			return err
 		}
-		r.canary(src, canary, ok, len(listings))
+		r.canary(src, canary, outcome == querySucceeded, len(listings))
 		results += len(listings)
-		answered, answeredOK = listings, ok
-	}
-	for _, q := range queries {
-		listings, ok := answered, answeredOK
-		if canary == "" || q != canary {
-			var err error
-			if listings, ok, err = r.ask(ctx, src, f, q); err != nil {
+		answered, answeredOutcome = listings, outcome
+		if outcome == querySucceeded && len(r.wants) > 0 && !slices.Contains(queries, canary) {
+			if err := r.contradict(ctx, r.unmatchedOf(listings), nil); err != nil {
 				return err
 			}
-			if ok {
+		}
+	}
+	for _, q := range queries {
+		listings, outcome := answered, answeredOutcome
+		if canary == "" || q != canary {
+			var err error
+			if listings, outcome, err = r.ask(ctx, src, f, q); err != nil {
+				return err
+			}
+			if outcome == querySucceeded {
 				results += len(listings)
 			}
 		}
-		if !ok {
+		targets := r.queryCoverage(src.Name(), q, false, outcome, len(listings))
+		if outcome != querySucceeded {
 			continue
 		}
-		if err := r.record(ctx, listings); err != nil {
+		if err := r.record(ctx, src.Name(), listings, targets); err != nil {
 			return err
 		}
 	}
@@ -479,40 +463,68 @@ func (r *run) searchAll(ctx context.Context, src Source, f *Refused, queries []s
 }
 
 // ask sends one request to the source after the pause and counts its
-// outcome. A source failure is logged and kept in the result with ok
-// false; a refusal is kept once, when the source is done. A source that
+// outcome. A source failure is logged and kept in the result; a refusal
+// is kept once, when the source is done. A source that
 // refused is not asked again: the query is skipped without a pause. Every
 // offer a successful answer holds, priced or not, matching or not, is
 // recorded as offered (Store.MarkOffered) before ask returns; for an
 // Expiring source, a stored listing of its scope the answer lacks is gone
-// (Store.UpdateGone). err is the run's cancellation or a database failure.
-func (r *run) ask(ctx context.Context, src Source, f *Refused, query string) ([]Listing, bool, error) {
+// (Store.UpdateGone). An offer the answer holds without a price
+// contradicts the stored price of its listing, whose unsent alert leaves
+// its wish (Store.Unmatch), and drops the listing from the answer even
+// where it also holds the listing with a price. err is the run's
+// cancellation or a database failure.
+func (r *run) ask(ctx context.Context, src Source, f *Refused, query string) ([]Listing, queryOutcome, error) {
 	if f.Skip() {
-		return nil, false, ctx.Err()
+		return nil, querySkipped, ctx.Err()
 	}
 	if err := r.pause(ctx); err != nil {
-		return nil, false, err
+		return nil, queryFailed, err
 	}
 	page, err := searchPage(ctx, src, query)
 	if err != nil && ctx.Err() != nil {
-		return nil, false, ctx.Err()
+		return nil, queryFailed, ctx.Err()
 	}
 	ObserveSearch(src, err)
 	if err != nil {
 		r.h.logger.Warn("deal source failed", "source", src.Name(), "query", query, "err", err)
-		if !f.Note(err) {
-			r.fail(err.Error())
+		if f.Note(err) {
+			return nil, queryRefused, nil
 		}
-		return nil, false, nil
+		r.fail(err.Error())
+		return nil, queryFailed, nil
 	}
 	if e, ok := src.(Expiring); ok {
 		if _, err := r.h.store.UpdateGone(ctx, src.Name(), []string{QueryKey(e.Scope())}, page.Seen, r.asOf); err != nil {
-			return nil, false, err
+			return nil, queryFailed, err
 		}
 	} else if err := r.h.store.MarkOffered(ctx, src.Name(), page.Seen); err != nil {
-		return nil, false, err
+		return nil, queryFailed, err
 	}
-	return page.Listings, true, nil
+	ids := unpriced(page)
+	if err := r.contradict(ctx, map[string][]string{src.Name(): ids}, nil); err != nil {
+		return nil, queryFailed, err
+	}
+	return slices.DeleteFunc(page.Listings, func(l Listing) bool { return slices.Contains(ids, l.ExternalID) }),
+		querySucceeded, nil
+}
+
+// unpriced are the external IDs of the offers page holds without a price:
+// those page.Seen names more often than its listings do, each once. A
+// listing the answer also holds with a price is left out of the answer.
+func unpriced(page Page) []string {
+	priced := make(map[string]int, len(page.Listings))
+	for i := range page.Listings {
+		priced[page.Listings[i].ExternalID]++
+	}
+	var out []string
+	for _, id := range page.Seen {
+		priced[id]--
+		if priced[id] == -1 {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // searchPage asks src one query. A Pager's answer names every offer it
@@ -557,13 +569,31 @@ func (r *run) fail(msg string) {
 // which may have changed since the run read the wishlist. A listing of
 // this run that met no rule is judged again against the market prices read
 // once the answer is stored, since its listings may have moved them.
-func (r *run) record(ctx context.Context, listings []Listing) error {
+// A stored listing the answer holds under a title that matches no want
+// keeps its price, but its unsent alert leaves its wish (contradict): the
+// answer contradicts the listing the alert was queued for. So does an
+// answer that holds one listing both under a matching title and not, whose
+// matching record is not stored, so a sent alert stays sent.
+func (r *run) record(ctx context.Context, source string, listings []Listing, targets []coverageTarget) error {
 	r.res.Listings += len(listings)
 	refreshed := map[string]bool{}
+	unmatched := map[string][]string{}
+	contradicted := map[string]bool{}
+	picks := make([]*Want, len(listings))
 	for i := range listings {
 		l := &listings[i]
-		w := pickOf(r.wants, r.kinds[l.Source], l, r.rules, r.titles)
-		if w == nil {
+		text := l.text(r.rules)
+		picks[i] = pickListing(r.wants, r.kinds[l.Source], l, text, r.titles)
+		r.coverListing(source, targets, l, text, picks[i])
+		key := listingKey(l.Source, l.ExternalID)
+		if picks[i] == nil && l.ExternalID != "" && !contradicted[key] {
+			contradicted[key] = true
+			unmatched[l.Source] = append(unmatched[l.Source], l.ExternalID)
+		}
+	}
+	for i := range listings {
+		l, w := &listings[i], picks[i]
+		if w == nil || contradicted[listingKey(l.Source, l.ExternalID)] {
 			continue
 		}
 		r.res.Matched++
@@ -579,12 +609,20 @@ func (r *run) record(ctx context.Context, listings []Listing) error {
 			r.res.Alerts++
 		}
 		key := listingKey(l.Source, l.ExternalID)
+		if r.automatic != nil && l.ExternalID != "" && w.MaxPriceCents == nil && w.MaxMarketPercent == nil {
+			r.automatic[key] = matchedOffer{source: l.Source, externalID: l.ExternalID, copyID: w.CopyID}
+		} else {
+			delete(r.automatic, key)
+		}
 		if r.h.notifier != nil && r.percent && !alert {
 			r.missed[key] = *l
 		} else {
 			delete(r.missed, key)
 		}
 		refreshed[key] = true
+	}
+	if err := r.contradict(ctx, unmatched, refreshed); err != nil {
+		return err
 	}
 	if len(refreshed) == 0 {
 		return nil
@@ -595,6 +633,39 @@ func (r *run) record(ctx context.Context, listings []Listing) error {
 		}
 	}
 	return r.deliver(ctx, refreshed)
+}
+
+// unmatchedOf are the external IDs, by source, of the listings that match
+// no want.
+func (r *run) unmatchedOf(listings []Listing) map[string][]string {
+	out := map[string][]string{}
+	for i := range listings {
+		l := &listings[i]
+		if l.ExternalID != "" && pickOf(r.wants, r.kinds[l.Source], l, r.rules, r.titles) == nil {
+			out[l.Source] = append(out[l.Source], l.ExternalID)
+		}
+	}
+	return out
+}
+
+// contradict takes the unsent alerts of the stored listings named by
+// source in ids off their wishes (Store.Unmatch), since an answer
+// contradicts them, and leaves those listings out of refreshed, if given,
+// and the run's missed listings, so neither sends nor queues their alerts
+// again in this run.
+func (r *run) contradict(ctx context.Context, ids map[string][]string, refreshed map[string]bool) error {
+	for _, source := range slices.Sorted(maps.Keys(ids)) {
+		for _, id := range ids[source] {
+			key := listingKey(source, id)
+			delete(refreshed, key)
+			delete(r.missed, key)
+			delete(r.automatic, key)
+		}
+		if err := r.h.store.Unmatch(ctx, source, ids[source]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // remeasure reads the market prices again and queues the alerts of the
@@ -633,7 +704,8 @@ func (r *run) deliver(ctx context.Context, only map[string]bool) error {
 	if r.h.notifier == nil {
 		return nil
 	}
-	alerts, err := r.h.store.PendingAlerts(ctx)
+	automatic := r.automatic != nil && only == nil
+	alerts, err := r.h.store.pendingAlerts(ctx, automatic)
 	if err != nil {
 		return err
 	}
@@ -648,7 +720,7 @@ func (r *run) deliver(ctx context.Context, only map[string]bool) error {
 			}
 		}
 		r.tried[a.ObservationID] = true
-		delivered, err := r.h.store.SendAlert(ctx, a.ObservationID, func(due *Alert) error {
+		delivered, err := r.h.store.sendAlert(ctx, a.ObservationID, automatic, func(due *Alert) error {
 			err := r.h.notify(ctx, due)
 			r.h.sent()
 			metrics.ObserveDealAlert(err)

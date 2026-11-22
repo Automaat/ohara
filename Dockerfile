@@ -3,7 +3,7 @@ WORKDIR /src
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY vite.config.ts tsconfig.json ./
-COPY scripts/check-csp.mjs ./scripts/
+COPY scripts/check-csp.mjs scripts/csp-problems.mjs ./scripts/
 COPY src ./src
 COPY static ./static
 RUN npm run build

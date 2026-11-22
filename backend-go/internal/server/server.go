@@ -82,7 +82,9 @@ func newRouter(cfg Config, logger *slog.Logger, deps Deps, timeout time.Duration
 	r.Use(crossOriginGuard(logger))
 	r.Use(jsonMethodNotAllowed(r, logger))
 
-	r.Get("/health", healthHandler(logger, deps.DB))
+	health := healthHandler(logger, deps.DB)
+	r.Get("/health", health)
+	r.Head("/health", health)
 	r.Handle("/metrics", metrics.Handler())
 
 	r.Route("/api", func(r chi.Router) {
@@ -313,20 +315,23 @@ func remoteUserGuard(logger *slog.Logger, share bool) func(http.Handler) http.Ha
 	}
 }
 
-// probePath reports a GET of /health or /metrics, the requests served without
-// the Remote-User header. Only GET is exempt: chi has the health probe for GET
-// alone and sends HEAD /health to the frontend. The path is read the way chi
-// routes it, RawPath when set, so an escaped spelling such as /heal%74h, which
-// chi also sends to the frontend, is not exempt.
+// probePath reports a GET of /health or /metrics, or a HEAD of /health, the
+// requests served without the Remote-User header. HEAD /health is exempt for
+// monitors that probe with HEAD first; chi routes it to the health handler.
+// The path is read the way chi routes it, RawPath when set, so an escaped
+// spelling such as /heal%74h, which chi sends to the frontend, is not exempt.
 func probePath(r *http.Request) bool {
-	if r.Method != http.MethodGet {
-		return false
-	}
 	path := r.URL.RawPath
 	if path == "" {
 		path = r.URL.Path
 	}
-	return path == "/health" || path == "/metrics"
+	switch r.Method {
+	case http.MethodGet:
+		return path == "/health" || path == "/metrics"
+	case http.MethodHead:
+		return path == "/health"
+	}
+	return false
 }
 
 // sharePath reports a GET under wishshare.Prefix, the public wishlist pages.
@@ -453,6 +458,9 @@ func dbState(ctx context.Context, logger *slog.Logger, db Pinger) string {
 	return DatabaseOK
 }
 
+// healthHandler answers GET and HEAD /health: 200 when the database ping
+// succeeds or no database is configured, 503 when it fails. net/http drops
+// the body of a HEAD answer and keeps its Content-Length.
 func healthHandler(logger *slog.Logger, db Pinger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if dbState(r.Context(), logger, db) == DatabaseUnavailable {

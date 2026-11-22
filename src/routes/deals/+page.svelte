@@ -35,6 +35,7 @@
 		allegroSearchURL,
 		dealsSummary,
 		dismissalPath,
+		displayedDeals,
 		intervalLabel,
 		keywordKindLabels,
 		keywordPayload,
@@ -53,11 +54,13 @@
 		wishFacts,
 		wishesPath,
 		withoutDismissed,
+		type AutomaticDeal,
 		type DealSegment,
 		type DealsView,
 		type HunterStatus,
 		type Keyword,
 		type KeywordKind,
+		type MatchedDealsView,
 		type MarketPrice,
 		type MarketView,
 		type Observation,
@@ -71,6 +74,7 @@
 		searchedWishes: number;
 		all: Observation[];
 		sent: Observation[];
+		automatic: ReadonlyMap<number, AutomaticDeal>;
 		/** When the requests for all and sent were asked, on the age clock (confirmedListings). */
 		askedAt: number;
 	};
@@ -102,8 +106,8 @@
 	let destroyed = false;
 
 	/**
-	 * "Pod limitem" lists the listings the Okazje badge last counted, so a refresh from this page,
-	 * a navigation or a returning tab moves the segment and the badge together. The page asks again
+	 * "Pod limitem" combines the manual offers counted by the Okazje badge with automatic offers.
+	 * The page asks again
 	 * when the tab becomes visible, so the other segments follow. An answer that arrives after a
 	 * later request's answer is dropped. The search counts as running while any answer says so.
 	 * The wishes' market prices load beside them without holding them back. A failed request keeps
@@ -120,7 +124,7 @@
 			const askedAt = ageClock();
 			const [under, all, sent] = await Promise.all([
 				loadUnderLimit(fetch),
-				request<DealsView>(fetch, 'GET', matchedPath),
+				request<MatchedDealsView>(fetch, 'GET', matchedPath),
 				request<DealsView>(fetch, 'GET', sentPath)
 			]);
 			if (ticket !== issued || destroyed) return;
@@ -132,6 +136,9 @@
 				searchedWishes: all.searched_wishes,
 				all: all.observations,
 				sent: sent.observations,
+				automatic: new Map(
+					all.automatic.map((comparison) => [comparison.observation_id, comparison])
+				),
 				askedAt
 			};
 			failure = null;
@@ -299,17 +306,21 @@
 	}
 
 	const status = $derived(deals?.status);
+	const matched = $derived(deals ? confirmedListings(deals.all, deals.askedAt, clock) : []);
 	const lists = $derived<Record<DealSegment, Observation[]>>({
 		under: withoutDismissed(
-			deals && dealBadge.answeredAt !== null
-				? confirmedListings(dealBadge.listings ?? [], dealBadge.answeredAt, clock)
+			deals
+				? displayedDeals(
+						dealBadge.answeredAt !== null
+							? confirmedListings(dealBadge.listings ?? [], dealBadge.answeredAt, clock)
+							: [],
+						matched,
+						deals.automatic
+					)
 				: [],
 			dismissals.hidden
 		),
-		all: withoutDismissed(
-			deals ? confirmedListings(deals.all, deals.askedAt, clock) : [],
-			dismissals.hidden
-		),
+		all: withoutDismissed(matched, dismissals.hidden),
 		sent: withoutDismissed(
 			deals ? confirmedListings(deals.sent, deals.askedAt, clock) : [],
 			dismissals.hidden
@@ -398,6 +409,7 @@
 						<li>
 							<DealCard
 								{deal}
+								automatic={deals.automatic.get(deal.id)}
 								market={marketFor(markets, deal.title_id, deal.format)}
 								ondismiss={() => void dismissDeal(deal)}
 							/>

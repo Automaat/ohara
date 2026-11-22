@@ -120,6 +120,28 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   repeated taps cost one request per provider and code per hour even
   while one is in flight or after it failed. The page drops the flag
   from the address once used, so a reload reads the cache.
+- A failed answer is never cached, so a cached provider (one with a
+  TTL) gets at most `lookup.FailureRequests` (3) requests per code within
+  any `lookup.FailureWindow` (10 minutes) while none succeeds, for every
+  lookup path: a scan, a typed code, "Spróbuj ponownie" and "Szukaj
+  ponownie". Each request frees its slot a whole window after it was
+  made. Past the limit the lookup answers with that provider's last
+  failure, partial candidates included, without a request, and a success
+  clears the count. The count lives in memory, so a restart clears it.
+- Requests still in flight count, and a failure the source answered
+  counts even when the client gave up on the lookup, also when it comes
+  with another source's cancellation. A lookup given up
+  on before it starts asks nothing; one given up on before its source
+  answered (for example while it waits behind Discogs' pacing) counts,
+  but such requests alone never refuse another, as they prove nothing
+  about the source.
+- A failure that names a source paused for its rate limit
+  (`lookup.PausedError`, the movie chain's UPCitemdb after a 429) lets
+  one more request past the limit once the provider reports the pause
+  over, so the first lookup after the reset asks again, even when later
+  failures without a pause came in meanwhile. That first request uses
+  the retry even when it fits within the limit. A pause already over when
+  the request failed lets nothing past.
 - A music barcode no source knows falls back to a Discogs text search for
   Allegro's product name.
 - `GET /api/search?kind=&q=&barcode=&format=` searches by the title the

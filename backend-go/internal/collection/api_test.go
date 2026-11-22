@@ -731,6 +731,11 @@ func TestMusicCopyGrades(t *testing.T) {
 			http.StatusUnprocessableEntity, field)
 	}
 
+	// A repeated condition key cannot hide a wrongly typed first value.
+	a.fails(http.MethodPut, fmt.Sprintf("/api/copies/%d", c.ID),
+		[]byte(fmt.Sprintf(`{"edition_id": %d, "status": "owned", "condition": 1, "condition": "good"}`, vinyl)),
+		http.StatusUnprocessableEntity, "condition")
+
 	// Moving a graded copy to a film edition is refused.
 	a.fails(http.MethodPut, fmt.Sprintf("/api/copies/%d", c.ID), obj{
 		"edition_id": film, "status": "owned", "media_grade": "mint",

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"reflect"
 	"slices"
 	"strconv"
 
@@ -603,20 +604,42 @@ func (h *Handler) getCopy(w http.ResponseWriter, r *http.Request) {
 // without one keeps the stored condition and a null clears it.
 type copyBody struct {
 	CopyInput
-	Condition json.RawMessage `json:"condition"`
+	Condition sentCondition `json:"condition"`
+}
+
+// sentCondition is a condition as a body carries it: whether the key was
+// there and its value, null or a string. Each occurrence of the key is
+// checked as it is read, so a repeated key cannot hide a wrong type.
+type sentCondition struct {
+	sent  bool
+	value *string
+}
+
+// UnmarshalJSON takes null or a string; anything else is a type error
+// naming the field.
+func (c *sentCondition) UnmarshalJSON(b []byte) error {
+	c.sent = true
+	if string(b) == "null" {
+		c.value = nil
+		return nil
+	}
+	var value string
+	if err := json.Unmarshal(b, &value); err != nil {
+		return &json.UnmarshalTypeError{Value: "value", Type: reflect.TypeFor[string](), Field: "condition"}
+	}
+	c.value = &value
+	return nil
 }
 
 func (h *Handler) decodeCopy(w http.ResponseWriter, r *http.Request) (*CopyInput, bool) {
 	var body copyBody
-	if !httpx.DecodeJSONFields(w, r, h.logger, &body, "sale_price_cents", "media_grade", "sleeve_grade") {
+	fields := []string{"sale_price_cents", "media_grade", "sleeve_grade", "condition"}
+	if !httpx.DecodeJSONFields(w, r, h.logger, &body, fields...) {
 		return nil, false
 	}
 	in := body.CopyInput
-	in.KeepCondition = body.Condition == nil
-	if !in.KeepCondition && json.Unmarshal(body.Condition, &in.Condition) != nil {
-		httpx.WriteFieldError(w, h.logger, fieldErr("condition", "must be a string or null"))
-		return nil, false
-	}
+	in.KeepCondition = !body.Condition.sent
+	in.Condition = body.Condition.value
 	if fe := in.Normalize(); fe != nil {
 		httpx.WriteFieldError(w, h.logger, fe)
 		return nil, false

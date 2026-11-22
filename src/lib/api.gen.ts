@@ -21,6 +21,22 @@ export type AcquiredAs = 'new' | 'used';
 
 export type Condition = 'mint' | 'very_good' | 'good' | 'fair' | 'poor';
 
+export type MediaGrade =
+	'mint' | 'near_mint' | 'very_good_plus' | 'very_good' | 'good_plus' | 'good' | 'fair' | 'poor';
+
+export type SleeveGrade =
+	| 'mint'
+	| 'near_mint'
+	| 'very_good_plus'
+	| 'very_good'
+	| 'good_plus'
+	| 'good'
+	| 'fair'
+	| 'poor'
+	| 'generic'
+	| 'not_graded'
+	| 'no_cover';
+
 export type QueueReason = 'not_found' | 'lookup_failed';
 
 export type DealSource = 'olx' | 'pepper';
@@ -146,6 +162,8 @@ export type CopyPayload = {
 	shop: string;
 	acquired_as: AcquiredAs | null;
 	condition: Condition | null;
+	media_grade?: MediaGrade | null;
+	sleeve_grade?: SleeveGrade | null;
 	notes: string;
 	max_price_cents: number | null;
 	max_market_percent?: number | null;
@@ -166,6 +184,8 @@ export type Copy = {
 	shop: string;
 	acquired_as: AcquiredAs | null;
 	condition: Condition | null;
+	media_grade?: MediaGrade | null;
+	sleeve_grade?: SleeveGrade | null;
 	notes: string;
 	max_price_cents: number | null;
 	max_market_percent?: number | null;
@@ -298,6 +318,8 @@ export type CopyDetail = {
 	shop: string;
 	acquired_as: AcquiredAs | null;
 	condition: Condition | null;
+	media_grade?: MediaGrade | null;
+	sleeve_grade?: SleeveGrade | null;
 	notes: string;
 	max_price_cents: number | null;
 	max_market_percent?: number | null;
@@ -324,6 +346,8 @@ export type CollectionItem = {
 	shop: string;
 	acquired_as: AcquiredAs | null;
 	condition: Condition | null;
+	media_grade?: MediaGrade | null;
+	sleeve_grade?: SleeveGrade | null;
 	sold_on?: string | null;
 	sale_price_cents?: number | null;
 	expected_on?: string | null;

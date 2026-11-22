@@ -32,6 +32,8 @@ func Ohara() API {
 			{Name: "CopyStatus", Values: c["CopyStatus"]},
 			{Name: "AcquiredAs", Values: c["AcquiredAs"]},
 			{Name: "Condition", Values: c["Condition"]},
+			{Name: "MediaGrade", Values: c["MediaGrade"]},
+			{Name: "SleeveGrade", Values: c["SleeveGrade"]},
 			{Name: "QueueReason", Values: []string{scanqueue.ReasonNotFound, scanqueue.ReasonLookupFailed}},
 			{Name: "DealSource", Values: []string{deals.OLX{}.Name(), deals.Pepper{}.Name()}},
 			{Name: "AlertState", Values: []string{deals.AlertNone, deals.AlertPending, deals.AlertSent, deals.AlertFailed}},

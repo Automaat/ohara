@@ -62,6 +62,12 @@ var (
 	statuses     = []string{StatusOwned, StatusWishlist, StatusSold, StatusOrdered}
 	acquiredAs   = []string{"new", "used"}
 	conditions   = []string{"mint", "very_good", "good", "fair", "poor"}
+	// mediaGrades is the Goldmine scale Discogs grades records on, best
+	// first: Mint (M), Near Mint (NM or M-), Very Good Plus (VG+), Very
+	// Good (VG), Good Plus (G+), Good (G), Fair (F), Poor (P).
+	mediaGrades = []string{"mint", "near_mint", "very_good_plus", "very_good", "good_plus", "good", "fair", "poor"}
+	// sleeveGrades adds the sleeve-only Discogs grades to the scale.
+	sleeveGrades = slices.Concat(mediaGrades, []string{"generic", "not_graded", "no_cover"})
 )
 
 // Enums lists the values each enum field of this package's JSON accepts, by
@@ -78,6 +84,8 @@ func Enums() map[string][]string {
 		"CopyStatus":  slices.Clone(statuses),
 		"AcquiredAs":  slices.Clone(acquiredAs),
 		"Condition":   slices.Clone(conditions),
+		"MediaGrade":  slices.Clone(mediaGrades),
+		"SleeveGrade": slices.Clone(sleeveGrades),
 	}
 }
 
@@ -250,13 +258,17 @@ type Edition struct {
 // at or below either. So does ExactEdition, which keeps the hunter to
 // listings naming the edition's details.
 type CopyInput struct {
-	EditionID     int64   `json:"edition_id"`
-	Status        string  `json:"status" ts:"CopyStatus"`
-	PriceCents    *int64  `json:"price_cents"`
-	PurchasedOn   *Date   `json:"purchased_on"`
-	Shop          string  `json:"shop"`
-	AcquiredAs    *string `json:"acquired_as" ts:"AcquiredAs"`
-	Condition     *string `json:"condition" ts:"Condition"`
+	EditionID   int64   `json:"edition_id"`
+	Status      string  `json:"status" ts:"CopyStatus"`
+	PriceCents  *int64  `json:"price_cents"`
+	PurchasedOn *Date   `json:"purchased_on"`
+	Shop        string  `json:"shop"`
+	AcquiredAs  *string `json:"acquired_as" ts:"AcquiredAs"`
+	Condition   *string `json:"condition" ts:"Condition"`
+	// MediaGrade and SleeveGrade are an album copy's Goldmine grades of
+	// the disc or tape and of its sleeve; a copy of another kind has none.
+	MediaGrade    *string `json:"media_grade,omitempty" ts:"MediaGrade,null"`
+	SleeveGrade   *string `json:"sleeve_grade,omitempty" ts:"SleeveGrade,null"`
 	Notes         string  `json:"notes"`
 	MaxPriceCents *int64  `json:"max_price_cents"`
 	// MaxMarketPercent is 1 to 100: a listing at or under that percent of
@@ -694,6 +706,8 @@ func (in *CopyInput) Normalize() *httpx.FieldError {
 	in.Notes = strings.TrimSpace(in.Notes)
 	in.AcquiredAs = trimOpt(in.AcquiredAs)
 	in.Condition = trimOpt(in.Condition)
+	in.MediaGrade = trimOpt(in.MediaGrade)
+	in.SleeveGrade = trimOpt(in.SleeveGrade)
 	in.Location = trimOpt(in.Location)
 	key, fe := normalizeRequestKey(in.RequestKey)
 	if fe != nil {
@@ -753,7 +767,24 @@ func (in *CopyInput) Normalize() *httpx.FieldError {
 		checkLen("notes", in.Notes, maxNotes),
 		checkEnum("acquired_as", in.AcquiredAs, acquiredAs),
 		checkEnum("condition", in.Condition, conditions),
+		checkEnum("media_grade", in.MediaGrade, mediaGrades),
+		checkEnum("sleeve_grade", in.SleeveGrade, sleeveGrades),
 	)
+}
+
+// CheckGradeKind keeps the Goldmine grades to copies of albums: kind is the
+// kind of the copy's title.
+func (in *CopyInput) CheckGradeKind(kind string) *httpx.FieldError {
+	if kind == KindMusic {
+		return nil
+	}
+	switch {
+	case in.MediaGrade != nil:
+		return fieldErr("media_grade", "applies only to albums")
+	case in.SleeveGrade != nil:
+		return fieldErr("sleeve_grade", "applies only to albums")
+	}
+	return nil
 }
 
 // checkSale requires the day of a sold copy's sale and keeps a sale off any

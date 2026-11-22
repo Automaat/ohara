@@ -283,9 +283,9 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   stored before migration 0018) and the query that last found it
   (`raw.query`, `deals.QueryKey`). After a valuation run asks OLX every
   query, a listing last found by a query whose answer held fewer offers
-  than the 50 asked for (`deals.Pager`, a complete answer), that no answer
-  of the run held (priced or not) and last seen before the run started on
-  the database clock gets `gone_at`; `last_seen_at` keeps its last
+  than the 50 asked for, each with a readable ID (`deals.Pager`, a
+  complete answer), that no answer of the run held (priced or not) and
+  last seen before the run started on the database clock gets `gone_at`; `last_seen_at` keeps its last
   sighting. A first page, a failed or skipped query tells nothing, and a
   gone listing any answer holds again, matching or not, is no longer gone.
   Gone listings stay stored and price as before; no request is sent per

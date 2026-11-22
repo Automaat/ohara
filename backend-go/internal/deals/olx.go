@@ -38,7 +38,8 @@ func (o OLX) Search(ctx context.Context, query string) ([]Listing, error) {
 }
 
 // SearchPage implements Pager: an answer with fewer offers than asked for
-// is complete.
+// is complete, unless an offer's ID could not be read, since that offer
+// may be a stored listing still offered.
 func (o OLX) SearchPage(ctx context.Context, query string) (Page, error) {
 	u := o.BaseURL + "?" + url.Values{
 		"query":  {query},
@@ -56,7 +57,7 @@ func (o OLX) SearchPage(ctx context.Context, query string) (Page, error) {
 	for i := range listings {
 		listings[i].Query = query
 	}
-	return Page{Listings: listings, Seen: seen, Complete: offers < olxLimit}, nil
+	return Page{Listings: listings, Seen: seen, Complete: offers < olxLimit && len(seen) == offers}, nil
 }
 
 type olxResponse struct {
@@ -112,8 +113,8 @@ func parseOLXPage(body []byte) ([]Listing, []string, int, error) {
 	for _, raw := range resp.Data {
 		var o olxOffer
 		err := json.Unmarshal(raw, &o)
-		if o.ID != 0 {
-			seen = append(seen, strconv.FormatInt(o.ID, 10))
+		if id, ok := olxOfferID(raw); ok {
+			seen = append(seen, id)
 		}
 		if err != nil || o.ID == 0 || o.Title == "" {
 			continue
@@ -152,4 +153,16 @@ func parseOLXPage(body []byte) ([]Listing, []string, int, error) {
 		}
 	}
 	return out, seen, len(resp.Data), nil
+}
+
+// olxOfferID reads an offer's ID on its own, so an offer whose other
+// fields do not decode still counts as seen.
+func olxOfferID(raw json.RawMessage) (string, bool) {
+	var o struct {
+		ID int64 `json:"id"`
+	}
+	if json.Unmarshal(raw, &o) != nil || o.ID == 0 {
+		return "", false
+	}
+	return strconv.FormatInt(o.ID, 10), true
 }

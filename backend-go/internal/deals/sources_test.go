@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -147,6 +148,12 @@ func TestOLXPageIsCompleteBelowItsLimit(t *testing.T) {
 		if l := &page.Listings[i]; l.Query != "Blade Runner blu-ray" {
 			t.Fatalf("listing %s query %q, want the query that found it", l.ExternalID, l.Query)
 		}
+	}
+	answer = `{"data": [{"id": "207", "title": "Blade Runner", "params": []}, {"id": 208, "title": "x", "params": "?"}]}`
+	page, err = olx.SearchPage(ctx, "x")
+	if err != nil || page.Complete || !slices.Equal(page.Seen, []string{"208"}) {
+		t.Fatalf("offer with an unreadable ID: seen %v, complete %v, %v; want 208 seen of an incomplete answer",
+			page.Seen, page.Complete, err)
 	}
 	for _, tc := range []struct {
 		offers   int

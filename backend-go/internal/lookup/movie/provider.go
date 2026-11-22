@@ -51,12 +51,17 @@ const (
 	maxLimitReset = 48 * time.Hour
 )
 
-// sourceTimeout caps the wait for one name source and namesTimeout the
-// wait for all of them, fallbacks included, so a catalog that hangs leaves
-// the TMDB search at least 4 s of the lookup's 10 s budget.
+// sourceTimeout caps the wait for each first-stage name source and
+// fallbackTimeout the wait for each fallback, counted from when the
+// fallbacks are asked. fetchTimeout is the provider's own fetch limit
+// (lookup.Timed): after a first stage that ran into its limit and a
+// fallback that did too, the TMDB search still has at least 5 s, unless
+// the lookup's overall budget ends the fetch sooner (a second round after
+// slow book providers).
 const (
-	sourceTimeout = 4 * time.Second
-	namesTimeout  = 6 * time.Second
+	sourceTimeout   = 4 * time.Second
+	fallbackTimeout = 6 * time.Second
+	fetchTimeout    = 15 * time.Second
 )
 
 // maxQueries bounds TMDB searches per barcode when sources disagree.
@@ -80,6 +85,12 @@ type Search struct {
 // Name is "movie".
 func (*Provider) Name() string { return "movie" }
 
+// FetchTimeout is fetchTimeout: the fallbacks wait for the first stage, so
+// the chain needs longer than the lookup's default provider timeout.
+func (*Provider) FetchTimeout() time.Duration { return fetchTimeout }
+
+var _ lookup.Timed = (*Provider)(nil)
+
 // Fallback reports ISBN-range codes: book providers answer those first,
 // and the chain is asked only when none of them found the code (a film
 // sold with a book or a magazine).
@@ -88,8 +99,8 @@ func (*Provider) Fallback(code string) bool { return barcode.IsBook(code) }
 // Fetch asks every name source concurrently, and the fallbacks only when
 // those name nothing searchable, then searches TMDB for the distinct
 // titles. A source paused for its rate limit is skipped and counts as
-// failed, and so does one that has not answered within sourceTimeout or
-// namesTimeout. With no product found, a failed source fails the fetch so
+// failed, and so does one that has not answered within sourceTimeout (a
+// fallback: fallbackTimeout). With no product found, a failed source fails the fetch so
 // a "no match" built on an outage is not cached. When another source found the product, the answer
 // comes back as a *lookup.PartialError naming the failed sources (an Allegro
 // refusal included), so the lookup reports them and does not cache the
@@ -128,28 +139,27 @@ func (p *Provider) Fetch(ctx context.Context, code string) (json.RawMessage, err
 }
 
 // names asks the sources, then the fallbacks when the sources name no
-// searchable title. The fallbacks wait for the slowest source: a slow miss
-// can leave them too little of the lookup's deadline, which then fails
-// uncached rather than spending their quota on a product the sources name.
+// searchable title. The fallbacks wait for the slowest source, so they
+// spend no quota on a product the sources name, and then get their own
+// fallbackTimeout: a slow miss does not eat into their time.
 func (p *Provider) names(ctx context.Context, code string) ([]Product, error) {
-	ctx, cancel := context.WithTimeout(ctx, namesTimeout)
-	defer cancel()
-	found, err := p.ask(ctx, nil, p.Sources, 0, code)
+	found, err := p.ask(ctx, nil, p.Sources, 0, code, sourceTimeout)
 	if len(p.Fallbacks) == 0 || len(queries(found)) > 0 {
 		return found, err
 	}
-	found, fallbackErr := p.ask(ctx, found, p.Fallbacks, len(p.Sources), code)
+	found, fallbackErr := p.ask(ctx, found, p.Fallbacks, len(p.Sources), code, fallbackTimeout)
 	return found, errors.Join(err, fallbackErr)
 }
 
-// ask asks sources concurrently and appends what they name to out. first
-// is the position of sources[0] among all the provider's name sources.
-func (p *Provider) ask(ctx context.Context, out []Product, sources []NameSource, first int, code string) ([]Product, error) {
+// ask asks sources concurrently, each for at most limit, and appends what
+// they name to out. first is the position of sources[0] among all the
+// provider's name sources.
+func (p *Provider) ask(ctx context.Context, out []Product, sources []NameSource, first int, code string, limit time.Duration) ([]Product, error) {
 	found := make([][]Product, len(sources))
 	errs := make([]error, len(sources))
 	var wg sync.WaitGroup
 	for i, s := range sources {
-		wg.Go(func() { found[i], errs[i] = p.products(ctx, first+i, s, code) })
+		wg.Go(func() { found[i], errs[i] = p.products(ctx, first+i, s, code, limit) })
 	}
 	wg.Wait()
 	for _, f := range found {
@@ -161,10 +171,10 @@ func (p *Provider) ask(ctx context.Context, out []Product, sources []NameSource,
 // products asks one name source, unless it is paused for its rate limit. A
 // panic in it, its name included, fails that source with an error naming
 // it, or naming its position when the name itself panicked. A source that
-// has not answered within sourceTimeout fails with an error naming it; the
-// wait ends then even when the source ignores its context, for example
-// while it waits on a lock.
-func (p *Provider) products(ctx context.Context, i int, s NameSource, code string) ([]Product, error) {
+// has not answered within limit fails with an error naming it; the wait
+// ends then even when the source ignores its context, for example while it
+// waits on a lock.
+func (p *Provider) products(ctx context.Context, i int, s NameSource, code string, limit time.Duration) ([]Product, error) {
 	name, err := recovery.Call(p.Logger, "movie name source panicked", func() (string, error) {
 		return s.Name(), nil
 	}, "source_index", i, "barcode", code)
@@ -174,18 +184,18 @@ func (p *Provider) products(ctx context.Context, i int, s NameSource, code strin
 	if until, ok := p.pausedUntil(name); ok {
 		return nil, fmt.Errorf("%s: %w, skipped until %s", name, ErrQuotaExceeded, until.UTC().Format(time.RFC3339))
 	}
-	found, err := p.within(ctx, s, name, code)
+	found, err := p.within(ctx, s, name, code, limit)
 	if pe, ok := errors.AsType[*recovery.PanicError](err); ok {
 		return nil, fmt.Errorf("%s: %w", name, pe)
 	}
 	return found, err
 }
 
-// within asks s for at most sourceTimeout and returns its answer, or an
-// error naming it when the time runs out first. A rate limit the source
-// reports pauses it even when its answer comes after the wait ended.
-func (p *Provider) within(ctx context.Context, s NameSource, name, code string) ([]Product, error) {
-	ctx, cancel := context.WithTimeout(ctx, sourceTimeout)
+// within asks s for at most limit and returns its answer, or an error
+// naming it when the time runs out first. A rate limit the source reports
+// pauses it even when its answer comes after the wait ended.
+func (p *Provider) within(ctx context.Context, s NameSource, name, code string, limit time.Duration) ([]Product, error) {
+	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 	type answer struct {
 		found []Product

@@ -17,7 +17,9 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   round, only when no book provider returned a candidate (a failed one
   counts as no answer and keeps its error). Both rounds together end within
   17 s, under the client's 20 s request deadline: a second round after a
-  first that hit the 10 s provider timeout gets what is left. The stub
+  first that hit the 10 s provider timeout gets what is left. A provider
+  that implements `lookup.Timed` gets its own fetch limit instead of the
+  10 s, still under the 17 s. The stub
   provider waits in that round too for an ISBN. Book candidates for the scanned ISBN
   from several providers merge into one; registration order is the field
   priority. Every provider gets `ohara_lookup_provider_requests_total`,
@@ -57,10 +59,15 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   Browser-like sites get `fetch.BrowserUserAgent`.
   When some of its sources fail but others answered, it returns a
   `*lookup.PartialError`: the lookup reports the failure next to the
-  candidates and does not cache the answer. The movie chain waits at most
-  4 s for each name source and 6 s for all of them, fallbacks included,
-  so a hanging catalog fails as that source and leaves TMDB the rest of
-  the 10 s lookup. An Allegro token refresh runs on past that wait.
+  candidates and does not cache the answer. The movie chain's fetch may
+  take 15 s. It waits at most 4 s for each name source and then, when
+  they name no searchable title, 6 s for each fallback (UPCitemdb),
+  counted from when the fallbacks are asked, so a slow Allegro miss
+  leaves UPCitemdb its own time and TMDB keeps at least 5 s, unless the
+  17 s lookup budget ends first: an ISBN-range code asks the movie chain
+  in the second round, after the book providers. A source that runs out
+  of time fails as that source; the answer is then partial and not
+  cached. An Allegro token refresh runs on past that wait.
 - Music is the kind `music`: an album title whose `authors` are its credited
   artists, editions with a `cd`, `vinyl` or `cassette` format (required, like
   a movie's `dvd`/`bluray`/`uhd`) and an optional `discogs_release_id`. The

@@ -1167,6 +1167,11 @@ type LastRun struct {
 	Result     *RunResult
 }
 
+type storedRunResult struct {
+	RunResult
+	Coverage *runCoverage `json:"coverage,omitempty"`
+}
+
 // LastRun returns the stored last run; false before the first.
 func (s *Store) LastRun(ctx context.Context) (LastRun, bool, error) {
 	var (
@@ -1182,11 +1187,12 @@ func (s *Store) LastRun(ctx context.Context) (LastRun, bool, error) {
 		return LastRun{}, false, fmt.Errorf("last run: %w", err)
 	}
 	if result != nil {
-		var res RunResult
+		var res storedRunResult
 		if err := json.Unmarshal(result, &res); err != nil {
 			return LastRun{}, false, fmt.Errorf("last run result: %w", err)
 		}
-		run.Result = &res
+		res.coverage = res.Coverage
+		run.Result = &res.RunResult
 	}
 	return run, true, nil
 }
@@ -1204,7 +1210,7 @@ func (s *Store) RunStarted(ctx context.Context, at time.Time) error {
 // RunFinished stores a whole run: its start too, in case storing that
 // failed.
 func (s *Store) RunFinished(ctx context.Context, started, finished time.Time, res *RunResult) error {
-	result, err := json.Marshal(res)
+	result, err := json.Marshal(storedRunResult{RunResult: *res, Coverage: res.coverage})
 	if err != nil {
 		return fmt.Errorf("run finished: %w", err)
 	}

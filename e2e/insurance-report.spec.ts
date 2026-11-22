@@ -223,6 +223,9 @@ test('Raport dla ubezpieczyciela shows an empty state without an owned copy', as
 /** One creator name of 500 letters without a space, as long as the API takes. */
 const unbroken = 'W'.repeat(500);
 
+/** A title of 500 bytes, the API's limit, mostly one word too wide for any column. */
+const longTitle = `Pozycja 07 ${'W'.repeat(482)} ROWEND`;
+
 /** Twenty creators of 495 letters each, far more than one printed row holds. */
 const crowd = Array.from(
 	{ length: 20 },
@@ -233,8 +236,8 @@ const discogsRelease = 4242;
 
 /**
  * Sixty owned copies of every kind, valued in parts, each with a cover from the app's origin.
- * Copy 2 has an unbroken 500-letter creator, copy 3 twenty long ones, and copy 5 a Discogs
- * release priced at Very Good Plus.
+ * Copy 2 has an unbroken 500-letter creator, copy 3 twenty long ones, copy 5 a Discogs
+ * release priced at Very Good Plus and copy 7 a 500-byte title of one long word.
  */
 function sixty(): CopyValue[] {
 	const kinds = ['movie', 'book', 'music'] as const;
@@ -255,7 +258,10 @@ function sixty(): CopyValue[] {
 			copy_id: id,
 			edition_id: id,
 			title_id: id,
-			title_name: `Pozycja ${String(i).padStart(2, '0')} o dość długim tytule do zawinięcia`,
+			title_name:
+				i === 7
+					? longTitle
+					: `Pozycja ${String(i).padStart(2, '0')} o dość długim tytule do zawinięcia`,
 			kind,
 			format: formats[kind],
 			barcode: `590000000${String(i).padStart(4, '0')}`,
@@ -318,6 +324,16 @@ function clipped(table: Element): number {
 	).length;
 }
 
+/** The height in CSS pixels an A4 page holds inside the report's 12 mm margins. */
+const printableHeight = ((297 - 24) / 25.4) * 96;
+
+/** The height of the tallest table row, which must fit one printed page to stay whole. */
+function tallestRow(table: Element): number {
+	return Math.max(
+		...[...table.querySelectorAll('tbody tr')].map((r) => r.getBoundingClientRect().height)
+	);
+}
+
 test('Raport dla ubezpieczyciela prints on A4 with every cover and no controls', async ({
 	page
 }) => {
@@ -350,12 +366,16 @@ test('Raport dla ubezpieczyciela prints on A4 with every cover and no controls',
 		'href',
 		new RegExp(`/release/${discogsRelease}$`)
 	);
-	await expect(row('02')).toContainText('(pełna lista: przypis 1)');
-	await expect(row('03')).toContainText('(pełna lista: przypis 2)');
-	const appendix = page.getByRole('region', { name: 'Przypisy: pełne listy twórców' });
-	await expect(appendix.getByRole('listitem')).toHaveCount(2);
-	await expect(appendix.getByRole('listitem').first()).toContainText(unbroken);
-	await expect(appendix.getByRole('listitem').last()).toContainText(crowd[19]);
+	await expect(row('02')).toContainText('(pełne dane: przypis 1)');
+	await expect(row('03')).toContainText('(pełne dane: przypis 2)');
+	await expect(row('07')).toContainText('(pełne dane: przypis 3)');
+	await expect(row('07')).not.toContainText('ROWEND');
+	const appendix = page.getByRole('region', { name: 'Przypisy: pełne tytuły i listy twórców' });
+	const notes = appendix.getByRole('listitem');
+	await expect(notes).toHaveCount(3);
+	await expect(notes.nth(0)).toContainText(unbroken);
+	await expect(notes.nth(1)).toContainText(crowd[19]);
+	await expect(notes.nth(2)).toContainText(longTitle);
 
 	await page.setViewportSize({ width: 718, height: 1047 });
 	await page.emulateMedia({ media: 'print' });
@@ -365,6 +385,7 @@ test('Raport dla ubezpieczyciela prints on A4 with every cover and no controls',
 	await expect(page.getByRole('link')).toHaveText(/Data provided by Discogs\./);
 	expect(await covers.evaluateAll(drawn)).toBe(true);
 	expect(await table.evaluate(clipped)).toBe(0);
+	expect(await table.evaluate(tallestRow)).toBeLessThan(printableHeight);
 	const layout = await table.evaluate((t) => ({
 		head: getComputedStyle(t.querySelector('thead') as Element).display,
 		rows: [...t.querySelectorAll('tbody tr')].map((r) => getComputedStyle(r).breakInside),
@@ -415,4 +436,20 @@ test('Raport dla ubezpieczyciela offers printing only once every cover has loade
 	release();
 	await expect(page.getByRole('button', { name: 'Drukuj' })).toBeEnabled();
 	await expect.poll(() => reportTable(page).locator('tbody img').evaluateAll(loaded)).toBe(true);
+});
+
+test('Raport dla ubezpieczyciela keeps its columns on a wide screen with a 500-byte title', async ({
+	page
+}) => {
+	await fulfillSixty(page);
+	await page.setViewportSize({ width: 2560, height: 1440 });
+	await page.goto('/valuation/report');
+	const table = reportTable(page);
+	await expect(table.locator('tbody tr')).toHaveCount(60);
+	expect(await table.evaluate(clipped)).toBe(0);
+	const width = await page.evaluate(() => ({
+		page: document.documentElement.scrollWidth,
+		view: window.innerWidth
+	}));
+	expect(width.page).toBeLessThanOrEqual(width.view);
 });

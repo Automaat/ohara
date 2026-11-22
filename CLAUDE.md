@@ -685,8 +685,9 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   each name the copies they cover (`src/lib/insurance-report.ts`), the
   last valuation's day and the day the amounts stand for. It reads only
   `GET /api/valuation`, whose copies carry `condition`, `authors` and
-  `binding` from the snapshot that priced them. Creators past 160
-  characters are cut in the row and listed whole in a footnote appendix.
+  `binding` from the snapshot that priced them. A title or creators past
+  160 characters are cut in the row and listed whole in a footnote
+  appendix, so a row never outgrows a page or the screen.
   The browser's Print to PDF makes the document: an `@media print` rule
   puts the report on its own A4 page type (`@page insurance-report`, so
   other pages keep the printer's paper), hides the navigation, tab bar and

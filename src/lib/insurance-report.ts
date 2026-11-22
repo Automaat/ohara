@@ -19,15 +19,19 @@ export const reportTitle = 'Raport dla ubezpieczyciela';
 export const unvalued = 'brak wyceny';
 
 /**
- * The most characters of creators a printed row holds. A longer list is cut there and printed
- * in full in the report's appendix, so no row grows past an A4 page.
+ * The most characters of a title or of creators a printed row holds. A longer one is cut there
+ * and printed in full in the report's appendix, so no row grows past an A4 page.
  */
-export const creatorsLimit = 160;
+export const cellLimit = 160;
 
 /** One printed row: the valued copy and its labels. */
 export type ReportRow = {
 	copy: CopyValue;
-	/** The title's authors or artists, comma separated and cut at creatorsLimit; empty for none. */
+	/** The title's name, cut at cellLimit. */
+	title: string;
+	/** The whole name when title was cut, for the appendix; null otherwise. */
+	fullTitle: string | null;
+	/** The title's authors or artists, comma separated and cut at cellLimit; empty for none. */
 	creators: string;
 	/** The whole list when creators was cut, for the appendix; null otherwise. */
 	fullCreators: string | null;
@@ -54,23 +58,27 @@ function edition(c: CopyValue): string {
 	return kind;
 }
 
-/** The creators as printed in a row: whole up to creatorsLimit, else cut with "…". */
-export function creatorsCell(authors: readonly string[]): {
-	text: string;
-	full: string | null;
-} {
-	const full = authors.join(', ');
-	const chars = [...full];
-	if (chars.length <= creatorsLimit) return { text: full, full: null };
-	return { text: `${chars.slice(0, creatorsLimit - 1).join('')}…`, full };
+/** Text as printed in a row: whole up to cellLimit characters, else cut with "…". */
+export function cut(text: string): { text: string; full: string | null } {
+	const chars = [...text];
+	if (chars.length <= cellLimit) return { text, full: null };
+	return { text: `${chars.slice(0, cellLimit - 1).join('')}…`, full: text };
+}
+
+/** The creators as printed in a row: comma separated, cut as cut does. */
+export function creatorsCell(authors: readonly string[]): { text: string; full: string | null } {
+	return cut(authors.join(', '));
 }
 
 /** The report's rows in the valuation's order. */
 export function reportRows(copies: readonly CopyValue[]): ReportRow[] {
 	return copies.map((copy) => {
 		const creators = creatorsCell(copy.authors);
+		const title = cut(copy.title_name);
 		return {
 			copy,
+			title: title.text,
+			fullTitle: title.full,
 			creators: creators.text,
 			fullCreators: creators.full,
 			edition: edition(copy),

@@ -3,7 +3,8 @@ import {
 	boundCell,
 	coverage,
 	creatorsCell,
-	creatorsLimit,
+	cellLimit,
+	cut,
 	imagesSettled,
 	midGrade,
 	paidCell,
@@ -139,16 +140,29 @@ describe('creatorsCell', () => {
 			full: null
 		});
 		expect(creatorsCell([])).toEqual({ text: '', full: null });
-		const exact = 'ż'.repeat(creatorsLimit);
+		const exact = 'ż'.repeat(cellLimit);
 		expect(creatorsCell([exact])).toEqual({ text: exact, full: null });
 	});
 
 	it('cuts a longer list at the limit and keeps the whole one for the appendix', () => {
 		const names = Array.from({ length: 20 }, (_, i) => `${'Ł'.repeat(490)} ${i}`);
 		const cell = creatorsCell(names);
-		expect([...cell.text]).toHaveLength(creatorsLimit);
+		expect([...cell.text]).toHaveLength(cellLimit);
 		expect(cell.text.endsWith('…')).toBe(true);
 		expect(cell.full).toBe(names.join(', '));
+	});
+});
+
+describe('cut', () => {
+	it('keeps a title up to the limit and cuts a longer one for the appendix', () => {
+		const exact = 'W'.repeat(cellLimit);
+		expect(cut(exact)).toEqual({ text: exact, full: null });
+		const long = `PrintCopy001 ${'W'.repeat(480)} ROWEND`;
+		const cell = cut(long);
+		expect([...cell.text]).toHaveLength(cellLimit);
+		expect(cell.text.startsWith('PrintCopy001 ')).toBe(true);
+		expect(cell.text.endsWith('…')).toBe(true);
+		expect(cell.full).toBe(long);
 	});
 });
 
@@ -170,7 +184,8 @@ describe('reportRows', () => {
 			[1, '', 'Film · Blu-ray', 'Bardzo dobry'],
 			[3, 'Björk', 'Muzyka · Winyl', 'Idealny']
 		]);
-		expect(rows.every((r) => r.fullCreators === null)).toBe(true);
+		expect(rows.every((r) => r.fullCreators === null && r.fullTitle === null)).toBe(true);
+		expect(rows.map((r) => r.title)).toEqual(['Diuna', 'Diuna', 'Diuna']);
 	});
 
 	it('names only the kind of a book without a binding', () => {

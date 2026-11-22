@@ -50,8 +50,8 @@
 	const description = $derived(
 		view && lastValuation ? reportDating(lastValuation, today, view.window_days) : undefined
 	);
-	/** The rows whose creators were cut, numbered for the appendix that lists them whole. */
-	const appendix = $derived(rows.filter((r) => r.fullCreators !== null));
+	/** The rows whose title or creators were cut, numbered for the appendix that lists them whole. */
+	const appendix = $derived(rows.filter((r) => r.fullTitle !== null || r.fullCreators !== null));
 
 	/**
 	 * Marks the covers ready once every one in root has loaded or failed, so printing never misses
@@ -153,13 +153,13 @@
 							<td class="cover-cell">
 								<CollectionCover kind={row.copy.kind} url={row.copy.cover_url} large eager />
 							</td>
-							<th scope="row" class="title">{row.copy.title_name}</th>
-							<td data-label="Twórcy" class="creators">
-								{row.creators || '—'}
+							<th scope="row" class="title">
+								{row.title}
 								{#if note > 0}
-									<span class="note-ref">(pełna lista: przypis {note})</span>
+									<span class="note-ref">(pełne dane: przypis {note})</span>
 								{/if}
-							</td>
+							</th>
+							<td data-label="Twórcy" class="creators">{row.creators || '—'}</td>
 							<td data-label="Wydanie">{row.edition}</td>
 							<td data-label="Kod kreskowy" class="code">{row.copy.barcode ?? '—'}</td>
 							<td data-label="Stan">{row.condition || '—'}</td>
@@ -226,10 +226,15 @@
 
 			{#if appendix.length > 0}
 				<section class="appendix" aria-labelledby="report-appendix">
-					<h2 id="report-appendix">Przypisy: pełne listy twórców</h2>
+					<h2 id="report-appendix">Przypisy: pełne tytuły i listy twórców</h2>
 					<ol>
 						{#each appendix as row (row.copy.copy_id)}
-							<li><strong>{row.copy.title_name}:</strong> {row.fullCreators}</li>
+							<li>
+								<strong>{row.copy.title_name}</strong>
+								{#if row.fullCreators !== null}
+									<span class="full-creators">Twórcy: {row.fullCreators}</span>
+								{/if}
+							</li>
 						{/each}
 					</ol>
 				</section>
@@ -273,7 +278,11 @@
 	.copies .title {
 		min-inline-size: 8rem;
 		font-weight: 700;
-		overflow-wrap: break-word;
+		overflow-wrap: anywhere;
+	}
+
+	.full-creators {
+		display: block;
 	}
 
 	.copies .num {
@@ -293,6 +302,7 @@
 	.note-ref,
 	.grade {
 		display: block;
+		font-weight: 400;
 		color: var(--sui-text-muted);
 		font-size: 0.6875rem;
 	}
@@ -467,6 +477,7 @@
 		.copies {
 			table-layout: fixed;
 			font-size: 8pt;
+			line-height: 1.3;
 		}
 
 		.copies th,

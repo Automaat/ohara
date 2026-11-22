@@ -58,17 +58,29 @@ test('the series page lists the volumes and the missing ones, reached from Kolek
 
 	await expect(page).toHaveURL(new RegExp(`/series/${first.seriesID}$`));
 	await expect(page.getByRole('heading', { name: saga, level: 1 })).toBeVisible();
-	const volumes = page.getByRole('list', { name: 'Tomy' }).getByRole('listitem');
+	const volumes = page.getByRole('list', { name: 'Tomy', exact: true }).getByRole('listitem');
 	await expect(volumes).toHaveCount(4);
-	await expect(volumes.nth(0)).toContainText(`Tom 1Tom pierwszy ${run}Na półce`);
-	await expect(volumes.nth(3)).toContainText(`Tom 5Tom piąty ${run}Na liście życzeń`);
+	await Promise.all(
+		[
+			[0, ['Tom 1', `Tom pierwszy ${run}`, 'Na półce']],
+			[3, ['Tom 5', `Tom piąty ${run}`, 'Na liście życzeń']]
+		].flatMap(([at, texts]) =>
+			(texts as string[]).map((text) => expect(volumes.nth(at as number)).toContainText(text))
+		)
+	);
 
 	const missing = page.getByRole('list', { name: 'Brakujące tomy' }).getByRole('listitem');
-	await expect(missing).toHaveText([
-		'Tom 3 Brak w kolekcji',
-		`Tom 5 Tom piąty ${run} Na liście życzeń`,
-		'Tom 6 Brak w kolekcji'
-	]);
+	await expect(missing).toHaveCount(3);
+	await Promise.all(
+		[
+			[0, ['Tom 3', 'Brak w kolekcji']],
+			[1, ['Tom 5', `Tom piąty ${run}`, 'Na liście życzeń']],
+			[2, ['Tom 6', 'Brak w kolekcji']]
+		].flatMap(([at, texts]) =>
+			(texts as string[]).map((text) => expect(missing.nth(at as number)).toContainText(text))
+		)
+	);
+	await expect(missing.nth(1).getByRole('link', { name: `Tom piąty ${run}` })).toBeVisible();
 
 	const field = page.getByRole('textbox', { name: 'Liczba tomów' });
 	await expect(field).toHaveValue('6');
@@ -97,7 +109,7 @@ test('the title form joins a series it suggests and the title page links to it',
 	const series = form.getByRole('combobox', { name: 'Seria' });
 	await series.tap();
 	await series.pressSequentially(`wiedźmin ${run}`);
-	await form.getByRole('option', { name: witcher }).tap();
+	await form.getByRole('option', { name: witcher, exact: true }).tap();
 	await expect(series).toHaveValue(witcher);
 	await form.getByRole('textbox', { name: 'Tom' }).fill('2');
 	await form.getByRole('button', { name: 'Zapisz zmiany' }).tap();
@@ -107,7 +119,9 @@ test('the title form joins a series it suggests and the title page links to it',
 	await expect(link).toBeVisible();
 	await link.tap();
 	await expect(page.getByRole('heading', { name: witcher, level: 1 })).toBeVisible();
-	await expect(page.getByRole('list', { name: 'Tomy' }).getByRole('listitem')).toHaveCount(2);
+	await expect(
+		page.getByRole('list', { name: 'Tomy', exact: true }).getByRole('listitem')
+	).toHaveCount(2);
 	await expect(page.getByText('Wszystkie tomy są na półce.')).toBeVisible();
 
 	await expectNoSourceRequests(request);

@@ -22,6 +22,9 @@ var (
 // reported as failed and no longer retried.
 const MaxAttempts = 5
 
+// alertWindow is how long an unsent alert stays worth sending.
+const alertWindow = `interval '7 days'`
+
 // sources are the price_observation sources this package writes.
 var sources = []string{"olx", "pepper"}
 
@@ -129,8 +132,14 @@ type observationRaw struct {
 // reported keeps its row and first observation time; its price and
 // last_seen_at move to now. The alert is queued when the listing has none
 // yet, so a listing the valuation run stored first, or one whose price
-// dropped under the limit, still alerts once. It reports whether the
-// listing was new and whether an alert was queued.
+// dropped under the limit, still alerts. A listing whose alert was sent
+// alerts again when its price is under the one that alert named, unless
+// an alert for it is still waiting to be sent: that one goes out at the
+// current price. An alert that gave up or expired unsent is queued again
+// only under the lowest price it was queued or tried at. An unsent alert
+// whose wish is gone or no longer wished for moves to w, keeping its
+// attempts and age. It reports whether the listing was new and whether an
+// alert was queued.
 func (s *Store) Record(ctx context.Context, l *Listing, w *Want, alert bool) (bool, bool, error) {
 	raw, err := json.Marshal(observationRaw{Title: l.Title, Data: l.Raw, PhotoURL: l.PhotoURL, WishlistCopyID: w.CopyID})
 	if err != nil {
@@ -160,17 +169,36 @@ func (s *Store) Record(ctx context.Context, l *Listing, w *Want, alert bool) (bo
 		return false, false, fmt.Errorf("record observation: %w", err)
 	}
 	if alert {
-		tag, err := tx.Exec(ctx, `INSERT INTO deal_alert (observation_id, copy_id) VALUES ($1, $2)
-			ON CONFLICT (observation_id) DO NOTHING`, id, w.CopyID)
-		if err != nil {
-			return false, false, fmt.Errorf("record alert: %w", err)
+		if alerted, err = queueAlert(ctx, tx, id, w.CopyID, l.PriceCents); err != nil {
+			return false, false, err
 		}
-		alerted = tag.RowsAffected() == 1
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return false, false, fmt.Errorf("record: commit: %w", err)
 	}
 	return isNew, alerted, nil
+}
+
+// queueAlert queues the alert for observation id at priceCents for wishlist
+// copy copyID, as Record describes, and reports whether it did.
+func queueAlert(ctx context.Context, tx pgx.Tx, id, copyID, priceCents int64) (bool, error) {
+	if _, err := tx.Exec(ctx, `UPDATE deal_alert SET copy_id = $2
+		WHERE observation_id = $1 AND sent_at IS NULL AND copy_id IS DISTINCT FROM $2
+			AND NOT EXISTS (SELECT FROM copy c WHERE c.id = deal_alert.copy_id AND c.status = 'wishlist')`,
+		id, copyID); err != nil {
+		return false, fmt.Errorf("record alert: rebind: %w", err)
+	}
+	tag, err := tx.Exec(ctx, `INSERT INTO deal_alert (observation_id, copy_id, queued_price_cents) VALUES ($1, $2, $3)
+		ON CONFLICT (observation_id) DO UPDATE SET copy_id = EXCLUDED.copy_id, created_at = now(),
+			sent_at = NULL, attempts = 0, last_error = '', queued_price_cents = EXCLUDED.queued_price_cents
+		WHERE $3 < deal_alert.alerted_price_cents AND (deal_alert.sent_at IS NOT NULL
+			OR $3 < deal_alert.queued_price_cents
+				AND (deal_alert.attempts >= $4 OR deal_alert.created_at <= now() - `+alertWindow+`))`,
+		id, copyID, priceCents, MaxAttempts)
+	if err != nil {
+		return false, fmt.Errorf("record alert: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
 }
 
 // Alert is a queued Telegram message with what it reports.
@@ -185,21 +213,27 @@ type Alert struct {
 	TitleName     string
 	Format        *string
 	MaxPriceCents *int64
+	// AlertedPriceCents is the price the listing's last sent alert named;
+	// nil before its first alert is sent.
+	AlertedPriceCents *int64
 }
 
 // PendingAlerts returns undelivered alerts with attempts left, oldest
 // first. Alerts for copies no longer on the wishlist, alerts above the
-// copy's current maximum price and alerts older than a week are skipped.
+// copy's current maximum price, alerts older than a week and repeat alerts
+// whose listing is no longer under the price its last sent alert named are
+// skipped.
 func (s *Store) PendingAlerts(ctx context.Context) ([]Alert, error) {
 	rows, err := s.pool.Query(ctx, `SELECT o.id, o.source, coalesce(o.external_id, ''), o.url, coalesce(o.raw->>'title', ''),
-			o.price_cents, o.acquired_as, t.name, e.format, c.max_price_cents
+			o.price_cents, o.acquired_as, t.name, e.format, c.max_price_cents, a.alerted_price_cents
 		FROM deal_alert a
 		JOIN price_observation o ON o.id = a.observation_id
 		JOIN copy c ON c.id = a.copy_id AND c.status = 'wishlist'
 		JOIN edition e ON e.id = c.edition_id
 		JOIN title t ON t.id = e.title_id
-		WHERE a.sent_at IS NULL AND a.attempts < $1 AND a.created_at > now() - interval '7 days'
+		WHERE a.sent_at IS NULL AND a.attempts < $1 AND a.created_at > now() - `+alertWindow+`
 			AND o.price_cents <= c.max_price_cents
+			AND (a.alerted_price_cents IS NULL OR o.price_cents < a.alerted_price_cents)
 		ORDER BY a.created_at, a.observation_id`, MaxAttempts)
 	if err != nil {
 		return nil, fmt.Errorf("pending alerts: %w", err)
@@ -207,25 +241,25 @@ func (s *Store) PendingAlerts(ctx context.Context) ([]Alert, error) {
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Alert, error) {
 		var a Alert
 		err := row.Scan(&a.ObservationID, &a.Source, &a.ExternalID, &a.URL, &a.ListingTitle, &a.PriceCents,
-			&a.AcquiredAs, &a.TitleName, &a.Format, &a.MaxPriceCents)
+			&a.AcquiredAs, &a.TitleName, &a.Format, &a.MaxPriceCents, &a.AlertedPriceCents)
 		return a, err
 	})
 }
 
-// MarkSent records a delivered alert.
-func (s *Store) MarkSent(ctx context.Context, observationID int64) error {
+// MarkSent records a delivered alert and the price its message named.
+func (s *Store) MarkSent(ctx context.Context, observationID, priceCents int64) error {
 	_, err := s.pool.Exec(ctx, `UPDATE deal_alert SET sent_at = now(), attempts = attempts + 1,
-		last_error = '' WHERE observation_id = $1`, observationID)
+		last_error = '', alerted_price_cents = $2 WHERE observation_id = $1`, observationID, priceCents)
 	if err != nil {
 		return fmt.Errorf("mark sent: %w", err)
 	}
 	return nil
 }
 
-// MarkFailed records a failed delivery attempt.
-func (s *Store) MarkFailed(ctx context.Context, observationID int64, reason string) error {
-	_, err := s.pool.Exec(ctx, `UPDATE deal_alert SET attempts = attempts + 1, last_error = $2
-		WHERE observation_id = $1`, observationID, reason)
+// MarkFailed records a failed delivery attempt at priceCents.
+func (s *Store) MarkFailed(ctx context.Context, observationID, priceCents int64, reason string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE deal_alert SET attempts = attempts + 1, last_error = $2,
+		queued_price_cents = least(queued_price_cents, $3) WHERE observation_id = $1`, observationID, reason, priceCents)
 	if err != nil {
 		return fmt.Errorf("mark failed: %w", err)
 	}

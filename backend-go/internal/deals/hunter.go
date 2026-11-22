@@ -486,7 +486,7 @@ func (r *run) deliver(ctx context.Context, only map[string]bool) error {
 		metrics.ObserveDealAlert(err)
 		if err != nil {
 			r.h.logger.Warn("telegram alert failed", "observation", a.ObservationID, "err", err)
-			if err := r.h.store.MarkFailed(ctx, a.ObservationID, err.Error()); err != nil {
+			if err := r.h.store.MarkFailed(ctx, a.ObservationID, a.PriceCents, err.Error()); err != nil {
 				return err
 			}
 			continue
@@ -494,11 +494,13 @@ func (r *run) deliver(ctx context.Context, only map[string]bool) error {
 		// The message is out: record it even when ctx was canceled during
 		// the send, or the next run sends it again.
 		markCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), markSentTimeout)
-		err = r.h.store.MarkSent(markCtx, a.ObservationID)
+		err = r.h.store.MarkSent(markCtx, a.ObservationID, a.PriceCents)
 		cancel()
 		if err != nil {
 			return err
 		}
+		// A later sighting in this run may queue it again at a lower price.
+		delete(r.tried, a.ObservationID)
 		r.res.Sent++
 	}
 	return nil
@@ -541,8 +543,15 @@ func alertText(a *Alert) string {
 		}
 	}
 	price := formatPLN(a.PriceCents)
+	var notes []string
+	if a.AlertedPriceCents != nil {
+		notes = append(notes, "było "+formatPLN(*a.AlertedPriceCents))
+	}
 	if a.MaxPriceCents != nil {
-		price += " (limit " + formatPLN(*a.MaxPriceCents) + ")"
+		notes = append(notes, "limit "+formatPLN(*a.MaxPriceCents))
+	}
+	if len(notes) > 0 {
+		price += " (" + strings.Join(notes, ", ") + ")"
 	}
 	price += " · " + sourceLabels[a.Source]
 	if a.AcquiredAs != nil {

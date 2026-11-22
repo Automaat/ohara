@@ -650,8 +650,11 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   in Poland by purchase date (an unpriced copy counts, adds nothing) with
   one "Bez daty" figure for undated copies; "Przyrost kolekcji" counts
   owned copies at each month's end by purchase date, else the day the copy
-  was added; "Nowe czy używane" splits them new, used and not recorded by
-  count and by money, in whole percents adding up to 100. Charts are plain
+  was added, and names apart those dated after this month; "Nowe czy
+  używane" splits them new, used and not recorded by count and by money,
+  in whole percents adding up to 100 (a 0 zł price is a price). The months
+  move on once the month in Poland has changed (`src/lib/stats-month.svelte.ts`:
+  checked every minute and when the page is shown again). Charts are plain
   SVG and CSS, each with its data under "Pokaż dane"; no value figures.
   Without an owned copy the page offers "Skanuj".
 - Discogs data carries `DiscogsCredit`: "Data provided by Discogs." linked

@@ -82,20 +82,21 @@ export function joinedOn(item: Pick<StatsItem, 'purchased_on' | 'created_at_us'>
 export type MonthCount = { month: string; copies: number };
 
 /**
- * How many owned copies the collection held at the end of each of the last 12 months. A copy
- * dated after this month counts in it, so the last month holds every copy on the shelf.
+ * How many owned copies the collection held at the end of each of the last 12 months, by the day
+ * each joined it. A copy dated after this month counts in no month: see `datedLater`.
  */
 export function collectionGrowth(items: readonly StatsItem[], now: Date): MonthCount[] {
-	const months = lastMonths(now);
-	const current = months[months.length - 1];
-	const joined = ownedCopies(items).map((item) => {
-		const month = monthOf(joinedOn(item));
-		return month > current ? current : month;
-	});
-	return months.map((month) => ({
+	const joined = ownedCopies(items).map((item) => monthOf(joinedOn(item)));
+	return lastMonths(now).map((month) => ({
 		month,
 		copies: joined.filter((m) => m <= month).length
 	}));
+}
+
+/** How many owned copies carry a purchase date after now's month in Poland. */
+export function datedLater(items: readonly StatsItem[], now: Date): number {
+	const current = monthOf(warsawDay(now));
+	return ownedCopies(items).filter((item) => monthOf(joinedOn(item)) > current).length;
 }
 
 export type AcquiredKey = AcquiredAs | 'unknown';
@@ -112,9 +113,11 @@ export const acquiredShareLabels: Record<AcquiredKey, string> = {
 export type Share = {
 	key: AcquiredKey;
 	copies: number;
+	/** How many of them have a price, 0 zł included. */
+	priced: number;
 	cents: number;
 	copyPercent: number;
-	/** Null when no owned copy has a price, so money has no shares. */
+	/** Null when the prices sum to 0 zł, so money has no shares. */
 	centsPercent: number | null;
 };
 
@@ -141,13 +144,15 @@ export function percents(values: readonly number[]): number[] {
 
 /** The owned copies bought new, used and with nothing recorded, by count and by money paid. */
 export function acquiredShare(items: readonly StatsItem[]): Share[] {
-	const rows = acquiredKeys.map((key) => ({ key, copies: 0, cents: 0 }));
+	const rows = acquiredKeys.map((key) => ({ key, copies: 0, priced: 0, cents: 0 }));
 	const byKey = new Map(rows.map((r) => [r.key, r]));
 	for (const item of ownedCopies(items)) {
 		const row = byKey.get(item.acquired_as ?? 'unknown');
 		if (!row) continue;
 		row.copies += 1;
-		row.cents += item.price_cents ?? 0;
+		if (item.price_cents == null) continue;
+		row.priced += 1;
+		row.cents += item.price_cents;
 	}
 	const copyPercents = percents(rows.map((r) => r.copies));
 	const paid = rows.some((r) => r.cents > 0);

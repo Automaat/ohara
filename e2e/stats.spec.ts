@@ -48,32 +48,36 @@ async function expectNoSideScroll(page: Page) {
 	expect(scroll).toBeLessThanOrEqual(inner);
 }
 
+/** A `GET /api/collection` item for a routed answer: a DVD copy with the given fields. */
+function item(id: number, over: Record<string, unknown>) {
+	return {
+		copy_id: id,
+		created_at_us: Date.now() * 1000,
+		status: 'owned',
+		price_cents: null,
+		max_price_cents: null,
+		purchased_on: null,
+		shop: '',
+		acquired_as: null,
+		condition: null,
+		edition_id: id,
+		barcode: null,
+		label: '',
+		format: 'dvd',
+		binding: null,
+		title_id: id,
+		kind: 'movie',
+		name: `Film ${id}`,
+		original_title: null,
+		polish_title: null,
+		year: null,
+		...over
+	};
+}
+
 test('Statystyki without owned copies leads to Skanuj', async ({ page }) => {
 	const empty = {
-		items: [
-			{
-				copy_id: 1,
-				created_at_us: Date.now() * 1000,
-				status: 'wishlist',
-				price_cents: null,
-				max_price_cents: null,
-				purchased_on: null,
-				shop: '',
-				acquired_as: null,
-				condition: null,
-				edition_id: 1,
-				barcode: null,
-				label: '',
-				format: 'dvd',
-				binding: null,
-				title_id: 1,
-				kind: 'movie',
-				name: 'Życzenie',
-				original_title: null,
-				polish_title: null,
-				year: null
-			}
-		],
+		items: [item(1, { status: 'wishlist', name: 'Życzenie' })],
 		totals: { copies: 1, owned: 0, wishlist: 1, priced: 0, spent_cents: 0 }
 	};
 	await page.route('**/api/collection', (route) => route.fulfill({ json: empty }));
@@ -130,4 +134,24 @@ test('Statystyki draws spending, growth and the new and used split', async ({ pa
 	} finally {
 		await Promise.all(copies.map((id) => request.delete(`/api/copies/${id}`)));
 	}
+});
+
+test('Statystyki tells 0 zł purchases and later dates from missing ones', async ({ page }) => {
+	const later = `${new Date().getFullYear() + 1}-06-01`;
+	const view = {
+		items: [
+			item(1, { purchased_on: pastDay(), price_cents: 0, acquired_as: 'used' }),
+			item(2, { purchased_on: later, price_cents: 0 })
+		],
+		totals: { copies: 2, owned: 2, wishlist: 0, priced: 2, spent_cents: 0 }
+	};
+	await page.route('**/api/collection', (route) => route.fulfill({ json: view }));
+	await page.goto('/stats');
+	const spending = page.getByRole('region', { name: 'Wydatki w miesiącach' });
+	await expect(spending.getByText(/^Najwięcej|^Brak zakupów/)).toHaveCount(0);
+	await expect(
+		page.getByRole('region', { name: 'Przyrost kolekcji' }).getByText(/^1 egzemplarz z datą/)
+	).toBeVisible();
+	await expect(page.getByText('Posiadane egzemplarze kosztowały razem 0 zł.')).toBeVisible();
+	await expectNoSideScroll(page);
 });

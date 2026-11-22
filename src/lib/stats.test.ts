@@ -3,6 +3,7 @@ import {
 	acquiredShare,
 	bars,
 	collectionGrowth,
+	datedLater,
 	growthPaths,
 	joinedOn,
 	lastMonths,
@@ -123,10 +124,15 @@ describe('collectionGrowth', () => {
 		expect(growth.at(-1)).toEqual({ month: '2026-02', copies: 4 });
 	});
 
-	it('counts a copy dated after this month in this month', () => {
-		const growth = collectionGrowth([copy({ purchased_on: '2026-05-01' })], now);
-		expect(growth.at(-1)).toEqual({ month: '2026-02', copies: 1 });
-		expect(growth.at(-2)?.copies).toBe(0);
+	it('counts a copy dated after this month in no month', () => {
+		const items = [copy({ purchased_on: '2026-05-01' }), copy({ purchased_on: '2026-02-28' })];
+		expect(collectionGrowth(items, now).at(-1)).toEqual({ month: '2026-02', copies: 1 });
+		expect(collectionGrowth(items, new Date('2026-02-28T23:01:00Z')).at(-1)).toEqual({
+			month: '2026-03',
+			copies: 1
+		});
+		expect(datedLater(items, now)).toBe(1);
+		expect(datedLater(items, new Date('2026-04-30T22:00:00Z'))).toBe(0);
 	});
 
 	it('is flat at 0 without owned copies', () => {
@@ -174,9 +180,9 @@ describe('acquiredShare', () => {
 			copy({ status: 'wishlist', acquired_as: 'new', price_cents: 9999 })
 		];
 		expect(acquiredShare(items)).toEqual([
-			{ key: 'new', copies: 1, cents: 6000, copyPercent: 25, centsPercent: 60 },
-			{ key: 'used', copies: 2, cents: 2000, copyPercent: 50, centsPercent: 20 },
-			{ key: 'unknown', copies: 1, cents: 2000, copyPercent: 25, centsPercent: 20 }
+			{ key: 'new', copies: 1, priced: 1, cents: 6000, copyPercent: 25, centsPercent: 60 },
+			{ key: 'used', copies: 2, priced: 1, cents: 2000, copyPercent: 50, centsPercent: 20 },
+			{ key: 'unknown', copies: 1, priced: 1, cents: 2000, copyPercent: 25, centsPercent: 20 }
 		]);
 	});
 
@@ -186,6 +192,15 @@ describe('acquiredShare', () => {
 			['new', 0, 0, null],
 			['used', 0, 0, null],
 			['unknown', 2, 100, null]
+		]);
+	});
+
+	it('tells copies priced at 0 zł from unpriced ones', () => {
+		const share = acquiredShare([copy({ acquired_as: 'used', price_cents: 0 }), copy()]);
+		expect(share.map((s) => [s.key, s.priced, s.cents, s.centsPercent])).toEqual([
+			['new', 0, 0, null],
+			['used', 1, 0, null],
+			['unknown', 0, 0, null]
 		]);
 	});
 

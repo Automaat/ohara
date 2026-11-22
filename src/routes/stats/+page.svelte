@@ -7,9 +7,11 @@
 	import StatsGrowth from '#lib/components/StatsGrowth.svelte';
 	import StatsSpending from '#lib/components/StatsSpending.svelte';
 	import { copyCount } from '#lib/polish.js';
+	import { StatsMonth } from '#lib/stats-month.svelte.js';
 	import {
 		acquiredShare,
 		collectionGrowth,
+		datedLater,
 		monthlySpending,
 		ownedCopies,
 		type StatsItem
@@ -18,14 +20,13 @@
 	let items = $state<StatsItem[] | null>(null);
 	let failure = $state<string | null>(null);
 	let loading = $state(true);
-	let now = $state(new Date());
+	const month = new StatsMonth();
 
 	async function load() {
 		loading = true;
 		try {
 			const view = await request<CollectionView>(fetch, 'GET', '/api/collection');
 			items = view.items;
-			now = new Date();
 			failure = null;
 		} catch (err) {
 			failure = errorMessage(err);
@@ -36,11 +37,13 @@
 
 	onMount(() => {
 		void load();
+		return month.start();
 	});
 
 	const owned = $derived(items ? ownedCopies(items) : []);
-	const spending = $derived(monthlySpending(owned, now));
-	const growth = $derived(collectionGrowth(owned, now));
+	const spending = $derived(monthlySpending(owned, month.now));
+	const growth = $derived(collectionGrowth(owned, month.now));
+	const later = $derived(datedLater(owned, month.now));
 	const shares = $derived(acquiredShare(owned));
 	const description = $derived(
 		items && owned.length > 0 ? `${copyCount(owned.length)} na półce` : undefined
@@ -81,7 +84,7 @@
 	{:else}
 		<div class="cards">
 			<StatsSpending {spending} />
-			<StatsGrowth {growth} />
+			<StatsGrowth {growth} {later} />
 			<StatsAcquired {shares} />
 		</div>
 	{/if}

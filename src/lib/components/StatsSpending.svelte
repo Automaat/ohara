@@ -19,6 +19,7 @@
 	);
 	const total = $derived(months.reduce((sum, m) => sum + m.cents, 0));
 	const unpriced = $derived(months.reduce((sum, m) => sum + m.unpriced, 0));
+	const dated = $derived(months.reduce((sum, m) => sum + m.copies, 0));
 	const peak = $derived(
 		months.reduce<(typeof months)[number] | null>(
 			(best, m) => (m.cents > 0 && (!best || m.cents > best.cents) ? m : best),
@@ -57,7 +58,7 @@
 	</ol>
 	{#if peak}
 		<p class="note">Najwięcej: {formatPLN(peak.cents)} ({monthLabel(peak.month)}).</p>
-	{:else}
+	{:else if dated === 0}
 		<p class="note">Brak zakupów z datą w ostatnich {months.length} miesiącach.</p>
 	{/if}
 	{#if unpriced > 0}

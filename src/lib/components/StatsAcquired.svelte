@@ -7,6 +7,7 @@
 	let { shares }: { shares: Share[] } = $props();
 
 	const paid = $derived(shares.every((s) => s.centsPercent !== null));
+	const priced = $derived(shares.some((s) => s.priced > 0));
 	const spoken = (pick: (s: Share) => number | null) =>
 		shares.map((s) => `${acquiredShareLabels[s.key]} ${pick(s) ?? 0}%`).join(', ');
 </script>
@@ -53,7 +54,11 @@
 				{/each}
 			</ul>
 		{:else}
-			<p class="note">Żaden posiadany egzemplarz nie ma ceny zakupu.</p>
+			<p class="note">
+				{priced
+					? 'Posiadane egzemplarze kosztowały razem 0 zł.'
+					: 'Żaden posiadany egzemplarz nie ma ceny zakupu.'}
+			</p>
 		{/if}
 	</div>
 </StatsCard>

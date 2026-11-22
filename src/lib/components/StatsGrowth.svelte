@@ -4,7 +4,7 @@
 	import { growthPaths, monthLabel, monthTick, type MonthCount } from '#lib/stats.js';
 	import StatsCard from './StatsCard.svelte';
 
-	let { growth }: { growth: MonthCount[] } = $props();
+	let { growth, later = 0 }: { growth: MonthCount[]; later?: number } = $props();
 
 	const width = 326;
 	const height = 120;
@@ -17,6 +17,9 @@
 	);
 	const first = $derived(growth.at(0));
 	const last = $derived(growth.at(-1));
+	const laterLine = $derived(
+		`${copyCount(later)} z datą zakupu w kolejnych miesiącach, poza wykresem.`
+	);
 </script>
 
 <StatsCard
@@ -42,10 +45,13 @@
 	{/if}
 	{#if first && last}
 		<p class="note">
-			Na koniec miesiąca {monthLabel(first.month)}: {copyCount(first.copies)}; teraz: {copyCount(
-				last.copies
-			)}. Egzemplarze bez daty zakupu liczą się od dnia dodania.
+			Na koniec miesiąca {monthLabel(first.month)}: {copyCount(first.copies)}; na koniec miesiąca
+			{monthLabel(last.month)}: {copyCount(last.copies)}. Egzemplarze bez daty zakupu liczą się od
+			dnia dodania.
 		</p>
+	{/if}
+	{#if later > 0}
+		<p class="note">{laterLine}</p>
 	{/if}
 	<Disclosure summary="Pokaż dane">
 		<div class="table">

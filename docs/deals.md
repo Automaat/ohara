@@ -149,3 +149,34 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   The last run, scheduled, manual or cut short by shutdown, is kept in
   `deal_run`: after a restart the status shows it and the first scheduled
   run comes one interval after it started, at least 5 minutes on.
+
+## Wishlist share link
+
+- `internal/wishshare` keeps at most one read-only link to the wishlist
+  (`wishlist_share`, a single row). `POST /api/wishlist/share` makes a new
+  one and answers `{url, created_at}`, `url` being its path on this site,
+  `/share/{token}`; the token is 256 random bits in base64url. Making one
+  again replaces the token, so the old link answers 404.
+  `GET /api/wishlist/share` shows the current link (404 when off) and
+  `DELETE` turns it off (204, also when already off). The token is stored
+  as is: anyone who can read the database already reads the whole
+  wishlist, so a hash would protect nothing, and the owner can copy the
+  same link again later.
+- Okazje's "Udostępnij listę życzeń" asks for the link when opened and
+  offers "Utwórz link", then the link with "Kopiuj", "Nowy link" and
+  "Wyłącz link".
+- Everything public sits under `/share/`, served by the Go server, not
+  the SPA, so the page loads no app asset, script or service worker:
+  `GET /share/{token}` is the page "Lista życzeń", rendered on the server
+  with its own style and a CSP that allows no script, and
+  `GET /share/{token}/wishes` is its data, `{"wishes": [...]}` with
+  `title` (a TV season's carries ", sezon N"), `creators`, `year`, `kind`,
+  `format`, `binding` and `cover_url` per wished copy, TV series included,
+  by title. Nothing else leaves: no price, limit, note, ID, owned copy or
+  "Gdzie szukać". `cover_url` is the edition's or title's outside cover;
+  an edition's own photo, served only under `/api`, is left out.
+- An unknown or turned-off token, any other path under `/share/` and any
+  method but GET answer the API's own 404 (`{"error":"not found"}`).
+  Share answers carry `Cache-Control: no-store`,
+  `Referrer-Policy: no-referrer` and `X-Robots-Tag: noindex, nofollow`.
+  The access log, when on, records the path with its token.

@@ -23,7 +23,8 @@ export type {
 	KeywordPayload,
 	MarketPrice,
 	MarketView,
-	Observation
+	Observation,
+	ShareLink
 } from '#lib/api.gen.js';
 
 const wholePLN = new Intl.NumberFormat('pl-PL', {
@@ -267,4 +268,12 @@ export function lastRunSummary(result: DealsRunResult | null): string | null {
 	];
 	if (result.errors.length > 0) parts.push(`błędów źródeł: ${result.errors.length}`);
 	return parts.join(', ');
+}
+
+/** The owner's share link of the wishlist: GET shows it, POST makes a new one, DELETE turns it off. */
+export const shareLinkPath = '/api/wishlist/share';
+
+/** The full address of a share link, whose `url` is its path on this site. */
+export function shareURL(link: { url: string }, origin: string): string {
+	return new URL(link.url, origin).href;
 }

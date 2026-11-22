@@ -14,8 +14,10 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   under active filters, tags from the title form to Kolekcja's filter,
   series from the title form and Kolekcja to the series page,
   cover photo uploads, the collection export, Statystyki with its value
-  sections, and the insurance report
-  with its A4 printout. `scripts/e2e.sh` builds
+  sections, the insurance report
+  with its A4 printout, and the wishlist share link from Okazje with its
+  public page, opened in a context without cookies and asking nothing
+  outside `/share/`. `scripts/e2e.sh` builds
   the image (or takes one as its first argument), starts it from
   `e2e/compose.yaml`
   with Postgres, `OHARA_LOOKUP_STUB=true`, `OHARA_MUSICBRAINZ=false` and no

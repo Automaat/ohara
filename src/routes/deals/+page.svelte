@@ -20,6 +20,7 @@
 	import { dealBadge, forgetDealListing, loadUnderLimit } from '#lib/deal-badge.svelte.js';
 	import { options, type FormIssue } from '#lib/collection.js';
 	import DealCard from '#lib/components/DealCard.svelte';
+	import WishlistShare from '#lib/components/WishlistShare.svelte';
 	import { DealDismissals } from '#lib/deal-dismissals.svelte.js';
 	import {
 		dealsSummary,
@@ -358,6 +359,8 @@
 			{/if}
 		{/if}
 	{/if}
+
+	<WishlistShare />
 
 	<Disclosure summary="Ustawienia wyszukiwania">
 		<Section

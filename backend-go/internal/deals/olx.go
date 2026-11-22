@@ -15,6 +15,10 @@ import (
 // without notice; a failing parse surfaces as a source error in the run.
 const OLXURL = "https://www.olx.pl/api/v1/offers/"
 
+// olxLimit is how many offers one OLX query asks for; the source reads
+// only that first page.
+const olxLimit = 50
+
 // OLX searches olx.pl offers, 50 per query.
 type OLX struct {
 	Client  *http.Client
@@ -29,16 +33,30 @@ func (OLX) PerQuery() bool { return true }
 
 // Search implements Source.
 func (o OLX) Search(ctx context.Context, query string) ([]Listing, error) {
+	page, err := o.SearchPage(ctx, query)
+	return page.Listings, err
+}
+
+// SearchPage implements Pager: an answer with fewer offers than asked for
+// is complete.
+func (o OLX) SearchPage(ctx context.Context, query string) (Page, error) {
 	u := o.BaseURL + "?" + url.Values{
 		"query":  {query},
 		"offset": {"0"},
-		"limit":  {"50"},
+		"limit":  {strconv.Itoa(olxLimit)},
 	}.Encode()
 	body, err := get(ctx, o.Client, o.Name(), u, "application/json")
 	if err != nil {
-		return nil, fmt.Errorf("olx: %w", err)
+		return Page{}, fmt.Errorf("olx: %w", err)
 	}
-	return parseOLX(body)
+	listings, offers, err := parseOLXPage(body)
+	if err != nil {
+		return Page{}, err
+	}
+	for i := range listings {
+		listings[i].Query = query
+	}
+	return Page{Listings: listings, Complete: offers < olxLimit}, nil
 }
 
 type olxResponse struct {
@@ -74,12 +92,19 @@ type olxState struct {
 // parseOLX reads an OLX search response. Offers without a PLN price (free,
 // exchange or "price on request") are left out.
 func parseOLX(body []byte) ([]Listing, error) {
+	listings, _, err := parseOLXPage(body)
+	return listings, err
+}
+
+// parseOLXPage reads an OLX search response into its priced listings and
+// the number of offers it held, priced or not.
+func parseOLXPage(body []byte) ([]Listing, int, error) {
 	var resp olxResponse
 	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, parseError{fmt.Errorf("olx: decode: %w", err)}
+		return nil, 0, parseError{fmt.Errorf("olx: decode: %w", err)}
 	}
 	if resp.Data == nil {
-		return nil, parseError{errors.New("olx: response has no data")}
+		return nil, 0, parseError{errors.New("olx: response has no data")}
 	}
 	out := make([]Listing, 0, len(resp.Data))
 	for _, raw := range resp.Data {
@@ -120,5 +145,5 @@ func parseOLX(body []byte) ([]Listing, error) {
 			out = append(out, l)
 		}
 	}
-	return out, nil
+	return out, len(resp.Data), nil
 }

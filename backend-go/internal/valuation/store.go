@@ -77,6 +77,13 @@ func (s *Store) Record(ctx context.Context, l *deals.Listing, h *Holding) (bool,
 	return isNew, err
 }
 
+// MarkGone marks gone the stored listings of source the run's complete
+// answers no longer offer, through the deal hunter's store
+// (deals.Store.MarkGone).
+func (s *Store) MarkGone(ctx context.Context, source string, queries, seen []string, since time.Time) (int64, error) {
+	return s.deals.MarkGone(ctx, source, queries, seen, since)
+}
+
 // Prices returns the valuation sources' observations last seen within
 // window that value an owned edition. OLX prices of an edition without an
 // owned copy count when an edition of the same title and format is owned,

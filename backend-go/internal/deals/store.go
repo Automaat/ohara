@@ -142,13 +142,21 @@ type observationRaw struct {
 	PhotoURL       string          `json:"photo_url"`
 	WishlistCopyID int64           `json:"wishlist_copy_id,omitempty"`
 	Title          string          `json:"title"`
+	Query          string          `json:"query,omitempty"`
 	Data           json.RawMessage `json:"data,omitempty"`
 }
+
+// listingSources are the sources whose stored listings keep their first
+// price and are marked gone once no longer offered.
+var listingSources = map[string]bool{"olx": true}
 
 // Record stores l as an observation of w and, with alert, queues its
 // Telegram alert in the same transaction. A listing a source already
 // reported keeps its row and first observation time; its price and
-// last_seen_at move to now. The alert is queued when the listing has none
+// last_seen_at move to now. An OLX listing keeps the price it was first
+// stored at (unknown for rows stored before that was kept) and the query
+// key that last found it, and a gone one seen again is no longer gone.
+// The alert is queued when the listing has none
 // yet, so a listing the valuation run stored first, or one whose price
 // dropped under the limit, still alerts. A listing whose alert was sent
 // alerts again when its price is under the one that alert named, unless
@@ -160,9 +168,15 @@ type observationRaw struct {
 // alert. It reports whether the listing was new and whether an alert was
 // queued.
 func (s *Store) Record(ctx context.Context, l *Listing, w *Want, alert bool) (bool, bool, error) {
-	raw, err := json.Marshal(observationRaw{Title: l.Title, Data: l.Raw, PhotoURL: l.PhotoURL, WishlistCopyID: w.CopyID})
+	raw, err := json.Marshal(observationRaw{
+		Title: l.Title, Data: l.Raw, PhotoURL: l.PhotoURL, WishlistCopyID: w.CopyID, Query: QueryKey(l.Query),
+	})
 	if err != nil {
 		return false, false, fmt.Errorf("record: encode raw: %w", err)
+	}
+	var firstPrice *int64
+	if listingSources[l.Source] {
+		firstPrice = &l.PriceCents
 	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -172,18 +186,20 @@ func (s *Store) Record(ctx context.Context, l *Listing, w *Want, alert bool) (bo
 	var id int64
 	var isNew, dismissed, alerted bool
 	err = tx.QueryRow(ctx, `INSERT INTO price_observation
-			(source, external_id, price_cents, acquired_as, url, edition_id, title_id, raw)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			(source, external_id, price_cents, acquired_as, url, edition_id, title_id, raw, first_price_cents)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		ON CONFLICT (source, external_id) WHERE external_id IS NOT NULL DO UPDATE SET
 			price_cents = EXCLUDED.price_cents,
 			last_seen_at = now(),
+			gone_at = NULL,
 			url = EXCLUDED.url,
 			raw = coalesce(price_observation.raw, '{}'::jsonb) || EXCLUDED.raw,
 			acquired_as = coalesce(EXCLUDED.acquired_as, price_observation.acquired_as),
 			edition_id = coalesce(price_observation.edition_id, EXCLUDED.edition_id),
 			title_id = coalesce(price_observation.title_id, EXCLUDED.title_id)
 		RETURNING id, xmax = 0, dismissed_at IS NOT NULL`,
-		l.Source, l.ExternalID, l.PriceCents, l.AcquiredAs, l.URL, w.EditionID, w.TitleID, raw).Scan(&id, &isNew, &dismissed)
+		l.Source, l.ExternalID, l.PriceCents, l.AcquiredAs, l.URL, w.EditionID, w.TitleID, raw, firstPrice).
+		Scan(&id, &isNew, &dismissed)
 	if err != nil {
 		return false, false, fmt.Errorf("record observation: %w", err)
 	}
@@ -196,6 +212,27 @@ func (s *Store) Record(ctx context.Context, l *Listing, w *Want, alert bool) (bo
 		return false, false, fmt.Errorf("record: commit: %w", err)
 	}
 	return isNew, alerted, nil
+}
+
+// MarkGone marks gone the stored listings of source that a complete
+// answer no longer offers: those last found by one of the query keys,
+// whose external ID is none of seen (every listing the source answered
+// in the run) and last seen before since (the run's start), so a listing
+// another run recorded meanwhile stays. gone_at is set once; last_seen_at
+// keeps the last time the listing was offered. It reports how many it
+// marked.
+func (s *Store) MarkGone(ctx context.Context, source string, queries, seen []string, since time.Time) (int64, error) {
+	if len(queries) == 0 {
+		return 0, nil
+	}
+	tag, err := s.pool.Exec(ctx, `UPDATE price_observation SET gone_at = now()
+		WHERE source = $1 AND gone_at IS NULL AND external_id IS NOT NULL
+			AND raw->>'query' = ANY ($2) AND external_id <> ALL ($3) AND last_seen_at < $4`,
+		source, queries, append([]string{}, seen...), since)
+	if err != nil {
+		return 0, fmt.Errorf("mark gone: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }
 
 // queueAlert queues the alert for observation id at priceCents for wishlist

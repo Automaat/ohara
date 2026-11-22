@@ -346,7 +346,7 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   `other` binding need nothing, and a mention after "bez" or "brak"
   ("bez lektora", "brak polskich napisów") names nothing. Each stored
   listing keeps the details its title names (`edition_details`, null
-  before migration 0034, naming none), so a wish turned exact later
+  before migration 0035, naming none), so a wish turned exact later
   stops alerting on its stored listings and the wished deals lists
   (matched, "Pod limitem", "Wysłane", the badge) drop them. The wish form
   and the quick confirm's wish (Okazje's "Dodaj pozycję" too) offer it,

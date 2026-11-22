@@ -195,6 +195,17 @@ export function applyFinish(
 }
 
 /**
+ * A title edit's answer without the finished state: an edit never changes that state, and an
+ * answer read before a finish confirmed since would show the title unfinished again.
+ */
+export function withoutFinish<T extends Pick<Title, 'finished' | 'finished_on'>>(
+	answer: T
+): Omit<T, 'finished' | 'finished_on'> {
+	const { finished: _finished, finished_on: _finishedOn, ...rest } = answer;
+	return rest;
+}
+
+/**
  * The `PUT /api/titles/{id}/finished` body that records a title as finished on a day (null when
  * unknown) or not finished. It carries nothing else, so a page holding an older title never
  * writes its name or notes back.

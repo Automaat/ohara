@@ -23,6 +23,7 @@ import {
 	titleArtwork,
 	titleHero,
 	todayInPoland,
+	withoutFinish,
 	valueCard,
 	wantsCopy,
 	type TitleEdition
@@ -268,6 +269,16 @@ describe('finished titles', () => {
 		expect(shown).toMatchObject({ finished: true, finished_on: null });
 		applyFinish(shown, { finished: false });
 		expect(shown).toMatchObject({ name: 'Nowa nazwa', finished: false, finished_on: null });
+	});
+
+	it('leaves the finish state out of a title edit answer', () => {
+		const answer = title({ name: 'Nowa nazwa', finished: false });
+		const rest = withoutFinish(answer);
+		expect(rest).not.toHaveProperty('finished');
+		expect(rest).not.toHaveProperty('finished_on');
+		const shown = title({ name: 'Stara nazwa', finished: true, finished_on: '2026-05-01' });
+		Object.assign(shown, rest);
+		expect(shown).toMatchObject({ name: 'Nowa nazwa', finished: true, finished_on: '2026-05-01' });
 	});
 
 	it('sends only the finished state, never the rest of the title', () => {

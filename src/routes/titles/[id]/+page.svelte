@@ -62,6 +62,7 @@
 		soleCopy,
 		titleHero,
 		todayInPoland,
+		withoutFinish,
 		trendHeight,
 		trendWidth,
 		valueCard,
@@ -281,7 +282,7 @@
 		savingTitle = true;
 		try {
 			const saved = await request<Title>(fetch, 'PUT', `/api/titles/${id}`, parsed.value);
-			if (detail?.id === saved.id) Object.assign(detail, saved);
+			if (detail?.id === saved.id) Object.assign(detail, withoutFinish(saved));
 			titleSheet = false;
 			await load(id);
 		} catch (err) {

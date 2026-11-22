@@ -81,6 +81,18 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   with the request's context adds `request_id`, `method` and `path`;
   `httpx.WriteInternal` takes the request for that. Lines logged outside a
   request keep their form.
+- The router, not Traefik, compresses: `compressibleTypes` in
+  `internal/server/compress.go` lists the types (HTML, JS, CSS, JSON, SVG,
+  the manifest, `.wasm`) gzipped at the best level for a client whose
+  `Accept-Encoding` allows gzip (quality values count; no deflate). Every
+  answer carries `Vary: Accept-Encoding`. Other images go out as they are and
+  a response that already has a `Content-Encoding` (`/metrics`) is left
+  alone. A client that accepts gzip gets the whole resource for a `Range`
+  request unless the path's extension names a type never compressed (a
+  PNG keeps its range). A compressed answer drops `Accept-Ranges` and
+  weakens its `ETag` (a 304 for that weak `ETag` keeps it weak) and a
+  compressed HEAD sends no `Content-Length`; a client without gzip keeps
+  its ranges.
 - Money is integer grosze (`price_cents`). Barcodes are stored normalized
   (`barcode.Normalize`: EAN-8, EAN-13 or GTIN-14; a UPC-A becomes its
   EAN-13 with a leading 0, ISBN-10 becomes ISBN-13), one edition per barcode.
@@ -271,6 +283,10 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   Vite, never loaded from a CDN. A keyboard-wedge scanner types into the
   focused barcode field. The flow lives in `src/lib/scan.ts`: existing
   edition → add a copy, lookup candidates → quick confirm, nothing → queue.
+  A camera scan leaves focus where it was: the sheet reads each resolved
+  result line and the item's name once from a polite `status`
+  (`ScanFlow.announcement`); the other results speak through their live
+  `Callout`. Only a typed code moves focus to the next step.
 - A code whose check gets no answer is kept in IndexedDB
   (`src/lib/pending-scans.svelte.ts`, barcode only, once in the server's
   normalized form) and posted to `/api/scan-queue` as `lookup_failed` on app

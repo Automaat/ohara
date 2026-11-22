@@ -131,7 +131,7 @@
 	onDestroy(() => loader.leave());
 
 	$effect(() => {
-		if (overview && shelvedCount(overview.totals) === 0 && untrack(() => uncopied) === null) {
+		if (overview?.totals.copies === 0 && untrack(() => uncopied) === null) {
 			loader.loadUncopied();
 		}
 	});
@@ -235,16 +235,18 @@
 	});
 	const titleRows = $derived(sortTitles(uncopiedTitles(uncopied ?? [], filter), sort));
 	const listed = $derived(listsTitles ? uncopied : collection);
+	/** Sold copies, which only "Sprzedane" lists. */
+	const soldCount = $derived(overview ? overview.totals.copies - shelvedCount(overview.totals) : 0);
 	/**
 	 * An empty collection greets the reader whatever the filter, except "Bez ceny", which keeps
-	 * "Nic nie pasuje" and its "Wyczyść filtry" like any filter that lists nothing.
+	 * "Nic nie pasuje" and its "Wyczyść filtry" like any filter that lists nothing. A collection
+	 * whose every copy was sold is not empty: it keeps its filters, so "Sprzedane" stays in reach.
 	 */
 	const emptyShelf = $derived(
 		!failure &&
 			!listsTitles &&
 			filter.status !== 'unpriced' &&
-			overview !== null &&
-			shelvedCount(overview.totals) === 0 &&
+			overview?.totals.copies === 0 &&
 			rows.length === 0
 	);
 	const activeFilters = $derived(
@@ -568,6 +570,17 @@
 		<EmptyState title="Nic nie pasuje" description="Żaden egzemplarz nie spełnia filtrów.">
 			{#snippet action()}
 				<Button onclick={clearFilters}>Wyczyść filtry</Button>
+			{/snippet}
+		</EmptyState>
+	{:else if soldCount > 0}
+		<EmptyState title="Półka jest pusta" description="Wszystkie egzemplarze są sprzedane.">
+			{#snippet action()}
+				<div class="empty-actions">
+					<Button tone="signal" onclick={() => setStatus('sold')}>
+						{`${collectionStatusLabels.sold} (${soldCount})`}
+					</Button>
+					<Button href="/titles/new">Dodaj tytuł</Button>
+				</div>
 			{/snippet}
 		</EmptyState>
 	{:else}

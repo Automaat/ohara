@@ -453,7 +453,7 @@ func (h *Handler) getCopy(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) decodeCopy(w http.ResponseWriter, r *http.Request) (*CopyInput, bool) {
 	var in CopyInput
-	if !httpx.DecodeJSON(w, r, h.logger, &in) {
+	if !httpx.DecodeJSONFields(w, r, h.logger, &in, "sale_price_cents") {
 		return nil, false
 	}
 	if fe := in.Normalize(); fe != nil {

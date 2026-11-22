@@ -498,6 +498,17 @@ describe('copy form', () => {
 		});
 	});
 
+	it('takes a leap day', () => {
+		const parsed = copyPayload(
+			{ ...copyToForm(null), status: 'sold', purchased_on: '2024-02-29', sold_on: '2028-02-29' },
+			3
+		);
+		expect(parsed.ok && parsed.value).toMatchObject({
+			purchased_on: '2024-02-29',
+			sold_on: '2028-02-29'
+		});
+	});
+
 	it('sends a sold copy without a sale price, and no limit of a wish', () => {
 		const form = {
 			...copyToForm(null),
@@ -537,6 +548,9 @@ describe('copy form', () => {
 	it.each([
 		[{ sold_on: '' }, 'sold_on'],
 		[{ sold_on: '10.05.2026' }, 'sold_on'],
+		[{ sold_on: '2026-02-30' }, 'sold_on'],
+		[{ sold_on: '2026-13-01' }, 'sold_on'],
+		[{ sold_on: '2026-05-10', purchased_on: '2023-02-29' }, 'purchased_on'],
 		[{ sold_on: '2026-05-10', sale_price: 'dużo' }, 'sale_price_cents'],
 		[{ sold_on: '2026-05-10', sale_price: '-5' }, 'sale_price_cents'],
 		[{ sold_on: '2026-05-10', sale_price: '1000000,01' }, 'sale_price_cents'],

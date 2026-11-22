@@ -658,3 +658,37 @@ test('a copy marked sold leaves the shelf and shows under Sprzedane', async ({ p
 		await request.delete(`/api/copies/${copyID}`);
 	}
 });
+
+/**
+ * A collection whose every copy was sold keeps its filters and offers "Sprzedane" instead of
+ * greeting the reader as an empty collection.
+ */
+test('a shelf emptied by sales keeps Sprzedane in reach', async ({ page, request }) => {
+	const name = `Ostatni ${tag()}`;
+	const { copyID } = await seed(request, { kind: 'book', name });
+	try {
+		const copy = (await (await request.get(`/api/copies/${copyID}`)).json()) as {
+			edition_id: number;
+		};
+		const sold = await request.put(`/api/copies/${copyID}`, {
+			data: { edition_id: copy.edition_id, status: 'sold', sold_on: '2026-05-10' }
+		});
+		expect(sold.ok(), await sold.text()).toBe(true);
+		const view = (await (await request.get('/api/collection?status=sold')).json()) as {
+			items: Item[];
+		};
+		const items = view.items.filter((i) => i.copy_id === copyID);
+		const totals = { copies: 1, owned: 0, wishlist: 0, priced: 0, spent_cents: 0 };
+		await page.route('**/api/collection', (route) => route.fulfill({ json: { items, totals } }));
+
+		await page.goto('/');
+		await expect(page.getByText('Półka jest pusta', { exact: true })).toBeVisible();
+		await expect(page.getByText('Kolekcja jest pusta', { exact: true })).toHaveCount(0);
+		await expect(page.getByRole('button', { name: /^Sortowanie i filtry/ })).toBeVisible();
+		await page.getByRole('button', { name: 'Sprzedane (1)' }).tap();
+		await expect(page).toHaveURL(/\/\?status=sold$/);
+		await expect(tile(page, name)).toBeVisible();
+	} finally {
+		await request.delete(`/api/copies/${copyID}`);
+	}
+});

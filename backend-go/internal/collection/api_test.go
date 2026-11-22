@@ -673,6 +673,8 @@ func TestSoldCopy(t *testing.T) {
 		{"wish with a sale price", obj{"edition_id": edition, "status": "wishlist", "sale_price_cents": 3500}, "sale_price_cents"},
 		{"negative sale price", with(sold, obj{"sale_price_cents": -1}), "sale_price_cents"},
 		{"sale price over the cap", with(sold, obj{"sale_price_cents": collection.MaxPriceCents + 1}), "sale_price_cents"},
+		{"sale price past int64", with(sold, obj{"sale_price_cents": json.Number("9223372036854775808")}), "sale_price_cents"},
+		{"sale price not a number", with(sold, obj{"sale_price_cents": "35"}), "sale_price_cents"},
 		{"sold with a wish limit", with(sold, obj{"max_price_cents": 3000}), "max_price_cents"},
 		{"sold with a market percent", with(sold, obj{"max_market_percent": 70}), "max_market_percent"},
 	}

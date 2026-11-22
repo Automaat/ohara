@@ -170,6 +170,16 @@ describe('Discogs listings', () => {
 		expect(badge.dealBadge.count).toBe(0);
 	});
 
+	it('leave at once when their answer arrives after its 14 minutes', async () => {
+		fake();
+		const held = Promise.withResolvers<Response>();
+		const load = badge.loadUnderLimit(vi.fn(() => held.promise));
+		vi.setSystemTime(Date.now() + 16 * 60_000);
+		held.resolve(dealsResponse([discogs]));
+		await load;
+		expect(badge.dealBadge.count).toBe(0);
+	});
+
 	it('leave at once when checked after the timers slept past their time', async () => {
 		fake();
 		await badge.loadUnderLimit(deals([discogs]));

@@ -209,12 +209,13 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   notice as a followable link to the listing. A visible Okazje page asks
   for its lists again every 10 minutes, and every list, the badge's
   included, draws a Discogs listing only while less than 14 minutes have
-  passed since its own answer arrived, on both the wall clock and the
-  monotonic one (`confirmedListings`, `stillConfirmed`), checked every
-  30 seconds and when the tab shows again. With the 5 h 45 min window no
-  card is more than 6 hours old, whatever requests fail, overlap or hang,
-  the system clock does or the computer sleeps, and one a run found gone
-  leaves within 10 minutes. The purchase happens on discogs.com.
+  passed since its request was asked (`confirmedListings`), checked when
+  an answer arrives, every 30 seconds and when the tab shows again. The
+  time is read on an age clock (`ageClock`) that moves by the larger of
+  the wall and the monotonic clock's steps and never back, so with the
+  5 h 45 min window no card is more than 6 hours old, whatever requests
+  fail, overlap or hang, the system clock does or the computer sleeps, and
+  one a run found gone leaves within 10 minutes. The purchase happens on discogs.com.
 - The valuation never reads `discogs_inventory`, and wants are not
   matched by Discogs release ID.
 

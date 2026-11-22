@@ -227,9 +227,10 @@ export const sourceLabels: Record<DealSource, string> = {
 export const expiringSources: ReadonlySet<DealSource> = new Set<DealSource>(['discogs_inventory']);
 
 /**
- * How long after its answer arrived a page may draw a listing of an expiring source. The server
- * answers with one only while its seller offered it within 5 h 45 min (deals.discogsShown), so
- * with this a drawn card is never older than six hours, whatever answers fail, overlap or hang.
+ * How long after its request was asked a page may draw a listing of an expiring source. The
+ * server answers with one only while its seller offered it within 5 h 45 min
+ * (deals.discogsShown), so with this and the 30-second checks a drawn card is never older than
+ * six hours, whatever answers fail, overlap or hang.
  */
 export const unconfirmedAfterMs = 14 * 60_000;
 
@@ -240,38 +241,43 @@ export function withoutUnconfirmed<T extends Pick<Observation, 'source'>>(listin
 		: listings;
 }
 
-/**
- * A moment on the wall clock and on the monotonic clock (performance.now): a system clock set
- * back does not move the second, and a sleep that pauses the second still moves the first.
- */
-export type ClockTime = { wall: number; mono: number };
+let sampled: { wall: number; mono: number } | null = null;
+let aged = 0;
 
-export function clockTime(): ClockTime {
-	return { wall: Date.now(), mono: performance.now() };
+/**
+ * Milliseconds on the age clock that expires the listings of expiring sources. Each reading moves
+ * it by the larger of the wall and the monotonic clock's steps since the last one and never back,
+ * so neither a system clock set back nor a sleep that pauses the monotonic clock slows it, and
+ * what expired stays expired. Pages read it every 30 seconds while such a listing shows, so the
+ * two clocks are never both behind across one step.
+ */
+export function ageClock(): number {
+	const now = { wall: Date.now(), mono: performance.now() };
+	if (sampled) aged += Math.max(0, now.wall - sampled.wall, now.mono - sampled.mono);
+	sampled = now;
+	return aged;
 }
 
 /**
- * Whether an answer that arrived at answeredAt still lets a page draw its listings of expiring
- * sources at now: less than unconfirmedAfterMs passed on both clocks.
+ * Whether an answer to a request asked at askedAt on the age clock still lets a page draw its
+ * listings of expiring sources at now: less than unconfirmedAfterMs passed. The request's start is
+ * earlier than the server's answer, so a late or slowly handled answer only expires sooner.
  */
-export function stillConfirmed(answeredAt: ClockTime, now: ClockTime): boolean {
-	return (
-		now.wall - answeredAt.wall < unconfirmedAfterMs &&
-		now.mono - answeredAt.mono < unconfirmedAfterMs
-	);
+export function stillConfirmed(askedAt: number, now: number): boolean {
+	return now - askedAt < unconfirmedAfterMs;
 }
 
 /**
- * The listings of an answer that arrived at answeredAt that a page may draw at now: all of them
- * while the answer still confirms them (stillConfirmed), then only those of sources that do not
- * expire.
+ * The listings of an answer to a request asked at askedAt that a page may draw at now (both on
+ * the age clock): all of them while the answer still confirms them (stillConfirmed), then only
+ * those of sources that do not expire.
  */
 export function confirmedListings<T extends Pick<Observation, 'source'>>(
 	listings: T[],
-	answeredAt: ClockTime,
-	now: ClockTime
+	askedAt: number,
+	now: number
 ): T[] {
-	return stillConfirmed(answeredAt, now) ? listings : withoutUnconfirmed(listings);
+	return stillConfirmed(askedAt, now) ? listings : withoutUnconfirmed(listings);
 }
 
 /** The attribution a source's terms require next to its listing, linked to the listing. */

@@ -1,25 +1,24 @@
 import { request } from '#lib/api.js';
 import {
-	clockTime,
+	ageClock,
 	expiringSources,
 	stillConfirmed,
 	underLimitCount,
 	withoutUnconfirmed,
-	type ClockTime,
 	type DealsView,
 	type Observation
 } from '#lib/deals.js';
 
 /**
  * The listings at or under their wish's price limit from the newest answer, null before the
- * first one, how many there are, for the Okazje tab's badge, and when that answer arrived, null
- * before the first. The deals page lists these same listings under "Pod limitem", so a refresh
+ * first one, how many there are, for the Okazje tab's badge, and when its request was asked on
+ * the age clock (ageClock), null before the first. The deals page lists these same listings under "Pod limitem", so a refresh
  * from any page moves the badge and the segment together.
  */
 export const dealBadge = $state<{
 	count: number;
 	listings: Observation[] | null;
-	answeredAt: ClockTime | null;
+	answeredAt: number | null;
 }>({
 	count: 0,
 	listings: null,
@@ -49,16 +48,18 @@ let watch: ReturnType<typeof setInterval> | undefined;
  */
 export async function loadUnderLimit(fetchFn: typeof fetch): Promise<DealsView> {
 	const ticket = ++issued;
+	const askedAt = ageClock();
 	const view = await request<DealsView>(fetchFn, 'GET', badgePath);
 	if (ticket >= applied) {
 		applied = ticket;
 		dealBadge.listings = view.observations;
 		dealBadge.count = underLimitCount(view.observations);
-		dealBadge.answeredAt = clockTime();
+		dealBadge.answeredAt = askedAt;
 		clearInterval(watch);
 		watch = view.observations.some((o) => expiringSources.has(o.source))
 			? setInterval(expireUnconfirmed, expiryCheckMs)
 			: undefined;
+		expireUnconfirmed();
 	}
 	return view;
 }
@@ -69,8 +70,8 @@ export async function loadUnderLimit(fetchFn: typeof fetch): Promise<DealsView> 
  * whenever the tab shows again, since timers stop while a computer sleeps.
  */
 export function expireUnconfirmed(): void {
-	if (!dealBadge.listings || !dealBadge.answeredAt) return;
-	if (stillConfirmed(dealBadge.answeredAt, clockTime())) return;
+	if (!dealBadge.listings || dealBadge.answeredAt === null) return;
+	if (stillConfirmed(dealBadge.answeredAt, ageClock())) return;
 	clearInterval(watch);
 	watch = undefined;
 	dealBadge.listings = withoutUnconfirmed(dealBadge.listings);

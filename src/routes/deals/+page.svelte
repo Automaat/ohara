@@ -39,10 +39,9 @@
 		sentPath,
 		wantlistPath,
 		wantlistSummary,
-		clockTime,
+		ageClock,
 		confirmedListings,
 		withoutDismissed,
-		type ClockTime,
 		type DealSegment,
 		type DealsView,
 		type HunterStatus,
@@ -60,23 +59,16 @@
 		/** The wishes the hunter looks for: TV series are left out. */
 		searchedWishes: number;
 		all: Observation[];
-		/** When the answer holding all arrived (confirmedListings). */
-		allAt: ClockTime;
 		sent: Observation[];
-		sentAt: ClockTime;
+		/** When the requests for all and sent were asked, on the age clock (confirmedListings). */
+		askedAt: number;
 	};
-
-	/** The answer of request with the moment it arrived, each answer on its own. */
-	async function stamped<T>(request: Promise<T>): Promise<[T, ClockTime]> {
-		const view = await request;
-		return [view, clockTime()];
-	}
 
 	let deals = $state<Deals | null>(null);
 	let markets = $state<MarketPrice[]>([]);
 	let now = $state(new Date());
-	/** The page clock that expires Discogs cards (confirmedListings), moved with now. */
-	let clock = $state(clockTime());
+	/** The age clock's reading that expires Discogs cards (confirmedListings), moved with now. */
+	let clock = $state(ageClock());
 	let segment = $state<DealSegment>('under');
 	let failure = $state<string | null>(null);
 	let loading = $state(true);
@@ -109,22 +101,22 @@
 		loading = true;
 		try {
 			void loadMarkets();
-			const [under, [all, allAt], [sent, sentAt]] = await Promise.all([
+			const askedAt = ageClock();
+			const [under, all, sent] = await Promise.all([
 				loadUnderLimit(fetch),
-				stamped(request<DealsView>(fetch, 'GET', matchedPath)),
-				stamped(request<DealsView>(fetch, 'GET', sentPath))
+				request<DealsView>(fetch, 'GET', matchedPath),
+				request<DealsView>(fetch, 'GET', sentPath)
 			]);
 			if (ticket !== issued || destroyed) return;
 			now = new Date();
-			clock = clockTime();
+			clock = ageClock();
 			deals = {
 				status: [under, all, sent].find((v) => v.status.running)?.status ?? all.status,
 				wishes: all.wishes,
 				searchedWishes: all.searched_wishes,
 				all: all.observations,
-				allAt,
 				sent: sent.observations,
-				sentAt
+				askedAt
 			};
 			failure = null;
 		} catch (err) {
@@ -203,7 +195,7 @@
 		void wantlist.load();
 		const ticking = setInterval(() => {
 			now = new Date();
-			clock = clockTime();
+			clock = ageClock();
 		}, 30_000);
 		const reload = setInterval(() => {
 			if (document.visibilityState === 'visible') void load();
@@ -211,7 +203,7 @@
 		const onvisibility = () => {
 			if (document.visibilityState !== 'visible') return;
 			now = new Date();
-			clock = clockTime();
+			clock = ageClock();
 			void load();
 		};
 		document.addEventListener('visibilitychange', onvisibility);
@@ -273,17 +265,17 @@
 	const status = $derived(deals?.status);
 	const lists = $derived<Record<DealSegment, Observation[]>>({
 		under: withoutDismissed(
-			deals && dealBadge.answeredAt
+			deals && dealBadge.answeredAt !== null
 				? confirmedListings(dealBadge.listings ?? [], dealBadge.answeredAt, clock)
 				: [],
 			dismissals.hidden
 		),
 		all: withoutDismissed(
-			deals ? confirmedListings(deals.all, deals.allAt, clock) : [],
+			deals ? confirmedListings(deals.all, deals.askedAt, clock) : [],
 			dismissals.hidden
 		),
 		sent: withoutDismissed(
-			deals ? confirmedListings(deals.sent, deals.sentAt, clock) : [],
+			deals ? confirmedListings(deals.sent, deals.askedAt, clock) : [],
 			dismissals.hidden
 		)
 	});

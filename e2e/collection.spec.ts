@@ -247,6 +247,40 @@ for (const viewport of viewports) {
 			await expect(page).toHaveURL(new RegExp(`\\?q=${isbn10}$`));
 			await expect(shelf(page).getByRole('listitem')).toHaveCount(1);
 			await expect(tile(page, name)).toBeVisible();
+
+			await search.fill('');
+			await expect(page).toHaveURL(/\/$/);
+			await search.fill(`\u00a0${isbn10}\u00a0`);
+			await expect(page).toHaveURL(new RegExp(`\\?q=${isbn10}$`));
+			await expect(shelf(page).getByRole('listitem')).toHaveCount(1);
+			await expect(tile(page, name)).toBeVisible();
+		});
+
+		test('a failed refresh keeps filtering what is drawn', async ({ page, request }) => {
+			const t = tag();
+			const book = `Książka ${t}`;
+			const film = `Film ${t}`;
+			const opened = await seed(request, { kind: 'book', name: book });
+			await seed(request, { kind: 'movie', name: film }, { format: 'dvd' });
+			await page.goto(`/?q=${t}`);
+			await press(tile(page, book).getByRole('link'));
+			await expect(page).toHaveURL(new RegExp(`/titles/${opened.titleID}$`));
+
+			await page.route('**/api/collection', (route) =>
+				route.fulfill({ status: 500, json: { error: 'awaria' } })
+			);
+			const sent = collectionRequests(page);
+			await page.goBack();
+			await expect(page.getByRole('button', { name: 'Spróbuj ponownie' }).first()).toBeVisible();
+			await expect(tile(page, film)).toBeVisible();
+			expect(sent).toHaveLength(1);
+			sent.length = 0;
+
+			await press(chip(page, /^Filmy/));
+			await expect(page).toHaveURL(new RegExp(`\\?kind=movie&q=${t}$`));
+			await expect(tile(page, film)).toBeVisible();
+			await expect(tile(page, book)).toHaveCount(0);
+			expect(sent, 'requests to /api/collection after the chip').toEqual([]);
 		});
 
 		test('Back from a title restores the filter, the scroll and the cover', async ({

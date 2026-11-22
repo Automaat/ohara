@@ -331,7 +331,12 @@
 		updateFilter(emptyFilter);
 	}
 
-	function updateFilter(next: CollectionFilter) {
+	/**
+	 * Applies a filter and writes it to the address. The search is kept as the address carries
+	 * it, trimmed, so the shelf lists what the address lists after a reload.
+	 */
+	function updateFilter(changed: CollectionFilter) {
+		const next = { ...changed, q: changed.q.trim() };
 		const from = sourceURL(filter);
 		filter = next;
 		const search = collectionSearch(next);
@@ -351,12 +356,13 @@
 	}
 
 	/**
-	 * Whether a new filter needs a request: the titles each time "Bez egzemplarzy" is chosen,
-	 * the collection until it has loaded, and either again after its load failed.
+	 * Whether a new filter needs a request: the titles each time "Bez egzemplarzy" is chosen or
+	 * after their load failed, the collection only until one has loaded. A failed refresh keeps
+	 * the collection on screen, and "Spróbuj ponownie" asks again.
 	 */
 	function needsLoad(from: Listing['url'], to: Listing['url']): boolean {
 		if (to === '/api/titles') return from !== to || failure !== null;
-		return collection === null || (from === to && failure !== null);
+		return collection === null;
 	}
 
 	const columns: DataTableColumn<Row>[] = [

@@ -190,7 +190,7 @@ describe('searchTerm', () => {
 		expect(searchTerm(' 83-7469-099-2 ')).toBe('9788374690997');
 		expect(searchTerm('  Lem ')).toBe('Lem');
 		expect(searchTerm('\u0085 Lem\u3000')).toBe('Lem');
-		expect(searchTerm('\ufeffLem')).toBe('Lem');
+		expect(searchTerm('\ufeffLem')).toBe('\ufeffLem');
 	});
 });
 
@@ -204,10 +204,12 @@ describe('where JavaScript differs from PostgreSQL and Go', () => {
 		['U+0085 around the search is white space to Go', '\u0085solaris\u0085', [8]],
 		['a search of U+0085 alone is no search', '\u0085', [7, 8]],
 		[
-			'an ISBN-10 between no-break spaces is searched as the address sends it',
+			'an ISBN-10 between no-break spaces is no barcode to Go, only text',
 			'\u00a08374690992\u00a0',
-			[8]
+			[]
 		],
+		['nor is one between newlines', '\n8374690992\n', []],
+		['a lone U+FEFF is text Go does not trim', '\ufeff', []],
 		['text between no-break spaces too', '\u00a0solaris\u00a0', [8]]
 	])('%s', (_name, q, copies) => {
 		const listed = filterCollection([greek, book], { ...none, q });

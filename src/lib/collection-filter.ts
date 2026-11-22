@@ -23,13 +23,11 @@ const goSpace =
 const goTrim = new RegExp(`^${goSpace}+|${goSpace}+$`, 'g');
 
 /**
- * What the server searches for when the address carries the search: `collectionSearch` sends
- * it trimmed, the handler normalizes a barcode, and the store trims anything else again by
- * Go's rules.
+ * What the server searches for when the address carries `q`: the handler's barcode.Normalize,
+ * else the text the store trims by Go's rules.
  */
 export function searchTerm(q: string): string {
-	const sent = q.trim();
-	return searchBarcode(sent) ?? sent.replace(goTrim, '');
+	return searchBarcode(q) ?? q.replace(goTrim, '');
 }
 
 /**

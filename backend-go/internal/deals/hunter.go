@@ -293,10 +293,10 @@ func (h *Hunter) Run(ctx context.Context) (RunResult, error) {
 	r.res.Errors = []string{}
 	r.res.coverage = &runCoverage{Rows: []*wishCoverage{}}
 	queries, queryWants := planQueries(wants)
-	r.queryWants = queryWants
 	r.res.Queries = len(queries)
 	if len(wants) > 0 || h.cfg.CanaryQuery != "" {
 		for _, src := range h.sources {
+			r.queryWants = queryWants
 			if err := r.search(ctx, src, r.queriesFor(src, queries)); err != nil {
 				return r.res, err
 			}
@@ -326,13 +326,13 @@ func (r *run) queriesFor(src Source, all []string) []string {
 		r.kinds = map[string][]string{}
 	}
 	r.kinds[src.Name()] = kinds
-	var wants []Want
-	for i := range r.wants {
-		if slices.Contains(kinds, r.wants[i].Kind) {
-			wants = append(wants, r.wants[i])
-		}
+	query := (*Want).Queries
+	if catalog, ok := src.(interface{ wishQueries(*Want) []string }); ok {
+		query = catalog.wishQueries
 	}
-	return searchQueries(wants)
+	queries, owners := queriesBy(r.wants, kinds, query)
+	r.queryWants = owners
+	return queries
 }
 
 // searchQueries are the distinct queries of every want, in want order.
@@ -342,11 +342,18 @@ func searchQueries(wants []Want) []string {
 }
 
 func planQueries(wants []Want) ([]string, map[string][]*Want) {
+	return queriesBy(wants, nil, (*Want).Queries)
+}
+
+func queriesBy(wants []Want, kinds []string, query func(*Want) []string) ([]string, map[string][]*Want) {
 	var out []string
 	owners := map[string][]*Want{}
 	for i := range wants {
 		w := &wants[i]
-		for _, q := range w.Queries() {
+		if !allowsKind(kinds, w.Kind) {
+			continue
+		}
+		for _, q := range query(w) {
 			key := spelledKey(q)
 			previous := owners[key]
 			if len(previous) == 0 {
@@ -756,7 +763,7 @@ var (
 		"cd": "CD", "vinyl": "Winyl", "cassette": "Kaseta", FormatAudiobook: "Audiobook",
 	}
 	sourceLabels = map[string]string{
-		"olx": "OLX", "bluedvd": "BlueDVD", "winylownia": "Winylownia", "swiatksiazki": "Świat Książki", "pepper": "Pepper", "tezeusz": "Tezeusz",
+		"olx": "OLX", "bluedvd": "BlueDVD", "dvdmax": "DVDmax", "winylownia": "Winylownia", "swiatksiazki": "Świat Książki", "pepper": "Pepper", "tezeusz": "Tezeusz",
 		DiscogsSource: "Discogs",
 	}
 	stateLabels = map[string]string{"new": "nowy", "used": "używany"}

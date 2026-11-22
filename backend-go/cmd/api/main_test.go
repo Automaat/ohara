@@ -36,6 +36,7 @@ func newUpstreams(t *testing.T) *upstreams {
 	fixtures := map[string]string{
 		"/olx/":          "../../internal/deals/testdata/olx.json",
 		"/bluedvd/":      "../../internal/deals/testdata/bluedvd.json",
+		"/dvdmax/":       "../../internal/deals/testdata/dvdmax.json",
 		"/winylownia/":   "../../internal/deals/testdata/winylownia.html",
 		"/swiatksiazki/": "../../internal/deals/testdata/swiatksiazki.json",
 		"/pepper":        "../../internal/deals/testdata/pepper.xml",
@@ -68,6 +69,8 @@ func newUpstreams(t *testing.T) *upstreams {
 	t.Setenv("OHARA_DEALS_OLX_URL", u.srv.URL+"/olx/")
 	t.Setenv("OHARA_DEALS_BLUEDVD_URL", u.srv.URL+"/bluedvd/wp-json/wc/store/v1/products")
 	t.Setenv("OHARA_BLUEDVD", "true")
+	t.Setenv("OHARA_DEALS_DVDMAX_URL", u.srv.URL+"/dvdmax/app/v2/products/q/title/")
+	t.Setenv("OHARA_DVDMAX", "false")
 	t.Setenv("OHARA_DEALS_WINYLOWNIA_URL", u.srv.URL+"/winylownia/search.php")
 	t.Setenv("OHARA_WINYLOWNIA", "true")
 	t.Setenv("OHARA_DEALS_SWIATKSIAZKI_URL", u.srv.URL+"/swiatksiazki/graphql")
@@ -143,7 +146,7 @@ func sample(body, series string) (float64, bool) {
 func checkSources(t *testing.T) {
 	t.Helper()
 	for _, s := range metricSources(t, "ohara_source_") {
-		if !slices.Contains([]string{"bluedvd", "olx", "pepper", "swiatksiazki", "tezeusz", "winylownia", "skupszop"}, s) {
+		if !slices.Contains([]string{"bluedvd", "dvdmax", "olx", "pepper", "swiatksiazki", "tezeusz", "winylownia", "skupszop"}, s) {
 			t.Errorf("metrics name source %q", s)
 		}
 	}
@@ -197,6 +200,27 @@ func TestHunterWithoutTezeusz(t *testing.T) {
 	}
 	if got, paths := u.asked(); !slices.Equal(got, []string{"olx", "bluedvd", "winylownia", "swiatksiazki", "pepper"}) {
 		t.Fatalf("asked %v (paths %v), want olx, bluedvd, winylownia, swiatksiazki and pepper only", got, paths)
+	}
+}
+
+func TestHunterAsksDVDmaxByDefault(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	u := newUpstreams(t)
+	t.Setenv("OHARA_DVDMAX", "")
+	h, _, err := newHunter(pool, deals.NewPacer(0).Lane(), slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatalf("newHunter: %v", err)
+	}
+	res, err := h.Run(context.Background())
+	if err != nil || len(res.Errors) != 0 {
+		t.Fatalf("run: %+v, %v", res, err)
+	}
+	_, paths := u.asked()
+	if !slices.Contains(paths, "/dvdmax/app/v2/products/q/title/") {
+		t.Fatalf("DVDmax canary missing from %q", paths)
+	}
+	if got, ok := sample(scrape(t), `ohara_source_canary_ok{source="dvdmax"}`); !ok || got != 1 {
+		t.Fatalf("dvdmax canary = %v (exported %v), want 1", got, ok)
 	}
 }
 

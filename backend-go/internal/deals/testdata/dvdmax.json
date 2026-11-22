@@ -1,0 +1,10 @@
+{
+  "products": [
+    {"aId":2729806,"aName":"Past Lives (Poprzednie życie)","aPrice":"92.99","aPricePromotion":"0.00","dictionaryDcStatus":"DOSTEPNY24","nosnik":"BLU-RAY","images":["2729806_0001.jpg"],"url":"/past-lives-poprzednie-zycie-blu-ray,art2729806"},
+    {"aId":654056,"aName":"Blade Runner","aPrice":"89.99","aPricePromotion":"79.99","dictionaryDcStatus":"PROMOCJA","nosnik":"BLU-RAY 4K","url":"/blade-runner,art654056"},
+    {"aId":1218175,"aName":"Red Sparrow / Kursk (Czerwona jaskółka)","aPrice":"59.99","dictionaryDcStatus":"DOSTEPNY24","nosnik":"BLU-RAY","url":"/red-sparrow-kursk,art1218175"},
+    {"aId":1,"aName":"Past Lives","aPrice":"30.00","dictionaryDcStatus":"WKROTCE","nosnik":"BLU-RAY","url":"/past-lives,art1"},
+    {"aId":2,"aName":"Past Lives","aPrice":"20.00","dictionaryDcStatus":"DOSTEPNY24","nosnik":"HD-DVD","url":"/past-lives,art2"},
+    {"aId":3,"aName":"Uncle Boonmee Who Can Recall His Past Lives","aPrice":"50.00","dictionaryDcStatus":"DOSTEPNY24","nosnik":"BLU-RAY","url":"/uncle-boonmee,art3"}
+  ]
+}

@@ -514,11 +514,15 @@ var formatKeyword = map[string]string{"dvd": "dvd", "bluray": "blu-ray", "uhd": 
 // for an album ("Pink Floyd The Wall"), as album titles alone are often
 // generic. An album query names no medium: CD listings often do not.
 func (w *Want) Queries() []string {
+	return w.queries(true)
+}
+
+func (w *Want) queries(movieFormat bool) []string {
 	p := w.text()
 	// suffix is added unless q already has the word key.
 	suffix, key := "", ""
 	switch {
-	case w.Kind == "movie" && w.Format != nil:
+	case movieFormat && w.Kind == "movie" && w.Format != nil:
 		suffix = formatKeyword[*w.Format]
 		key = suffix
 	case w.Kind == "book":

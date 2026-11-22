@@ -22,6 +22,9 @@ func (BlueDVD) Name() string { return "bluedvd" }
 // PerQuery implements Source.
 func (BlueDVD) PerQuery() bool { return true }
 
+// Kinds limits the source to its film and television catalog.
+func (BlueDVD) Kinds() []string { return []string{"movie", "tv"} }
+
 // CanaryQuery implements Canaried: "dvd" finds almost only out-of-stock
 // DVDs in this shop, "4k" its current 4K UHD releases.
 func (BlueDVD) CanaryQuery() string { return "4k" }

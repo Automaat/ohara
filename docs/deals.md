@@ -197,7 +197,7 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   The summary keeps up to 1,000 source and wish pairs and sets
   `truncated` when it omits a pair. Prometheus keeps its source-level labels.
 - BlueDVD (bluedvd.pl, a shop of 4K UHD and Blu-ray discs, steelbooks and
-  preorders) is a query source, on unless `OHARA_BLUEDVD=false`. Each
+  preorders) serves film and TV wishes, on unless `OHARA_BLUEDVD=false`. Each
   query is one GET of the shop's WooCommerce Store API,
   `/wp-json/wc/store/v1/products?search=<query>&per_page=50`, with no
   `orderby` (robots.txt disallows it); no product page is fetched, and the
@@ -216,6 +216,16 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   valuation does not ask BlueDVD. Its regulamin (§4) asks only that the
   shop is used lawfully and nothing disrupts it; it does not forbid
   automated access.
+- DVDmax serves film wishes unless `OHARA_DVDMAX=false`. It searches the
+  Polish and original titles without adding a format term, one paced
+  request per distinct title to `/app/v2/products/q/title/`, for the first
+  50 results in the film category. The product title or its parenthesized
+  translation must match the whole query. It takes the disc format from `nosnik`
+  and passes it to the matcher. New copies with a positive price can match
+  when available or on preorder. Unavailable items, unsupported media and
+  products that list several titles separated by `/` are skipped. The
+  canary is `Blade Runner`. The list response carries neither the EAN nor
+  Polish language details. The source fetches no product pages.
 - Winylownia (winylownia.pl, an IdoSell shop of new vinyl records) is a
   query source, on unless `OHARA_WINYLOWNIA=false`. As a record shop
   (`deals.KindSource`, kinds `music`) it is asked only the queries of album

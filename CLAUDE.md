@@ -485,7 +485,8 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
 - `GET /api/export?format=csv|json` (any other `format` 422) downloads the
   whole collection as `ohara-YYYY-MM-DD.<format>` (the day in Poland),
   each owned copy with the floor, mid and ceiling `GET /api/valuation`
-  shows now. The CSV is for Polish Excel: UTF-8 with a BOM, `;`, CRLF,
+  shows now, all read in one snapshot. The CSV is for Polish Excel: UTF-8
+  with a BOM, `;`, LF line ends (a CR inside a cell survives),
   Polish headers and labels, złoty with a decimal comma, one row per copy
   (sold ones too) and one per title without copies, and a `'` before a
   cell starting with `=`, `+`, `-`, `@`, a tab or a CR. The JSON is the

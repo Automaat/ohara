@@ -5,11 +5,14 @@ package export
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/Automaat/ohara/backend-go/internal/collection"
 	"github.com/Automaat/ohara/backend-go/internal/httpx"
@@ -46,19 +49,18 @@ type Title struct {
 
 // Handler is the HTTP boundary of the export.
 type Handler struct {
-	collection *collection.Store
-	values     *valuation.Store
-	window     time.Duration
-	logger     *slog.Logger
+	pool   *pgxpool.Pool
+	window time.Duration
+	logger *slog.Logger
 }
 
-// NewHandler reads the collection from titles and the value bounds from
-// values, over the valuation's price window.
-func NewHandler(titles *collection.Store, values *valuation.Store, window time.Duration, logger *slog.Logger) *Handler {
+// NewHandler reads the collection and its value bounds, over the
+// valuation's price window, from pool.
+func NewHandler(pool *pgxpool.Pool, window time.Duration, logger *slog.Logger) *Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Handler{collection: titles, values: values, window: window, logger: logger}
+	return &Handler{pool: pool, window: window, logger: logger}
 }
 
 // Mount registers the routes under the /api router.
@@ -95,13 +97,25 @@ func (h *Handler) export(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// read joins the collection with the value bounds of its owned copies.
+// read joins the collection with the value bounds of its owned copies,
+// both from one snapshot, so a copy never takes the bounds of an edition
+// or release it no longer has.
 func (h *Handler) read(ctx context.Context) ([]Title, string, error) {
-	details, day, err := h.collection.Export(ctx)
+	tx, err := h.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return nil, "", fmt.Errorf("export: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	return readIn(ctx, tx, h.window)
+}
+
+// readIn is the export as tx sees it, the bounds over window.
+func readIn(ctx context.Context, tx pgx.Tx, window time.Duration) ([]Title, string, error) {
+	details, day, err := collection.Export(ctx, tx)
 	if err != nil {
 		return nil, "", err
 	}
-	valued, _, err := h.values.Valued(ctx, h.window)
+	valued, err := valuation.OwnedValues(ctx, tx, window)
 	if err != nil {
 		return nil, "", err
 	}

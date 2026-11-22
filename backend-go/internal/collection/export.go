@@ -8,14 +8,9 @@ import (
 )
 
 // Export reads every title with its editions and their copies, sold ones
-// too, from one snapshot: titles by name, editions and copies in the order a
-// title page lists them, and the snapshot's date in Poland (YYYY-MM-DD).
-func (s *Store) Export(ctx context.Context) ([]TitleDetail, string, error) {
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
-	if err != nil {
-		return nil, "", fmt.Errorf("export: %w", err)
-	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+// too, through tx: titles by name, editions and copies in the order a title
+// page lists them, and the date in Poland (YYYY-MM-DD) of tx's snapshot.
+func Export(ctx context.Context, tx pgx.Tx) ([]TitleDetail, string, error) {
 	var day string
 	if err := tx.QueryRow(ctx, `SELECT to_char(now() AT TIME ZONE 'Europe/Warsaw', 'YYYY-MM-DD')`).
 		Scan(&day); err != nil {

@@ -16,20 +16,18 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/Automaat/ohara/backend-go/internal/collection"
 	"github.com/Automaat/ohara/backend-go/internal/dbtest"
 	"github.com/Automaat/ohara/backend-go/internal/export"
 	"github.com/Automaat/ohara/backend-go/internal/server"
-	"github.com/Automaat/ohara/backend-go/internal/valuation"
 )
 
-const trickyNote = "półka; \"górna\"\ndruga linia"
+const trickyNote = "półka; \"górna\"\ndruga linia\rtrzecia"
 
 func newServer(t *testing.T) (*pgxpool.Pool, string) {
 	t.Helper()
 	pool := dbtest.Migrated(t)
 	logger := slog.New(slog.DiscardHandler)
-	h := export.NewHandler(collection.NewStore(pool), valuation.NewStore(pool), 90*24*time.Hour, logger)
+	h := export.NewHandler(pool, 90*24*time.Hour, logger)
 	srv := httptest.NewServer(server.New(server.Config{}, logger, server.Deps{DB: pool, API: []server.Mounter{h}}))
 	t.Cleanup(srv.Close)
 	return pool, srv.URL

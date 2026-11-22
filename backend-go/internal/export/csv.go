@@ -47,15 +47,14 @@ var header = []string{
 }
 
 // writeCSV writes titles for Polish Excel: a UTF-8 byte order mark, ";"
-// between cells, CRLF line ends, one row per copy and one per title
-// without copies.
+// between cells, one row per copy and one per title without copies. Lines
+// end in LF: the writer's CRLF mode would drop a lone CR inside a cell.
 func writeCSV(w io.Writer, titles []Title) error {
 	if _, err := io.WriteString(w, "\uFEFF"); err != nil {
 		return fmt.Errorf("write csv: %w", err)
 	}
 	out := csv.NewWriter(w)
 	out.Comma = ';'
-	out.UseCRLF = true
 	write := func(cells []string) error {
 		for i := range cells {
 			cells[i] = defuse(cells[i])

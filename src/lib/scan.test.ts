@@ -605,6 +605,29 @@ describe('scan payloads', () => {
 		});
 	});
 
+	it('keeps an audiobook picked in the quick confirm', () => {
+		const audiobook: Candidate = {
+			...book,
+			edition: { ...book.edition, format: 'audiobook', binding: 'paperback' }
+		};
+		const picked = quickForm(audiobook, emptySticky, '9788375780420');
+		expect(picked).toMatchObject({ kind: 'book', format: 'audiobook' });
+		expect(scanEditionPayload(picked, audiobook, '9788375780420', 1)).toMatchObject({
+			ok: true,
+			value: { format: 'audiobook', binding: null, barcode: '9788375780420' }
+		});
+		const chosen = form({ kind: 'book', name: 'Lalka', format: 'audiobook', binding: 'hardcover' });
+		expect(scanEditionPayload(chosen, book, '9788324000016', 1)).toMatchObject({
+			ok: true,
+			value: { format: 'audiobook', binding: null }
+		});
+		const leftover = form({ kind: 'book', name: 'Lalka', format: 'bluray', binding: 'hardcover' });
+		expect(scanEditionPayload(leftover, book, '9788324000016', 1)).toMatchObject({
+			ok: true,
+			value: { format: null, binding: 'hardcover' }
+		});
+	});
+
 	it('carries a series the candidate names, dropping values the API would refuse', () => {
 		const f = form({ kind: 'book', name: 'Lalka', format: '', binding: '' });
 		const inSeries = {

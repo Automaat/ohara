@@ -249,8 +249,9 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   checked every minute and when the page is shown again). Charts are plain
   SVG and CSS, each with its data under "Pokaż dane". It also reads
   `GET /api/valuation` and groups its copies (`src/lib/stats-value.ts`):
-  "Wartość według rodzaju" and "Wartość według nośnika" (books, which have
-  no format, as one group) give each group's summed used value, price paid
+  "Wartość według rodzaju" and "Wartość według nośnika" (print books,
+  which have no format, as one group and audiobooks as another) give each
+  group's summed used value, price paid
   (with its unpriced copies), copy count and how many copies have no used
   value or a low-confidence one, the most valuable group first; no history,
   gains or movers. The figures are today's values from the window's prices,

@@ -326,9 +326,10 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   `cmd/api`, since `deals` cannot import `valuation`), at queue time, at
   send time (read once the listing's row is held) and for "Pod limitem",
   the badge and "Wysłane"; the alert message and deal card name it ("70%
-  ceny rynkowej 50,00 zł"). A run reads it again after storing an answer
-  with a listing no rule met, and queues the alerts of those that now meet
-  it, so a listing counts in the market that judges it, as on later runs.
+  ceny rynkowej 50,00 zł"). A run reads it again after each answer while
+  a listing it stored met no rule, and queues the alerts of those that now
+  meet it, so a listing counts in the market that judges it, as on later
+  runs.
 - A barcode no provider resolves goes to `scan_queue`; a trigger on `edition`
   removes it once an edition carries that barcode. `ohara_scan_queue_size`
   counts it on each scrape. The trigger keeps the entry it removes in

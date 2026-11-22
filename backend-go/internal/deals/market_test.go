@@ -275,3 +275,48 @@ func waitForLockWait(t *testing.T, pool *pgxpool.Pool) {
 	}
 	t.Fatal("no query waited for the listing's row")
 }
+
+// answersSource gives its answers in turn, one a query, then none.
+type answersSource struct {
+	mu      sync.Mutex
+	answers [][]deals.Listing
+}
+
+func (*answersSource) Name() string   { return "olx" }
+func (*answersSource) PerQuery() bool { return true }
+
+func (s *answersSource) Search(context.Context, string) ([]deals.Listing, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.answers) == 0 {
+		return nil, nil
+	}
+	next := s.answers[0]
+	s.answers = s.answers[1:]
+	return next, nil
+}
+
+// TestRunAlertsOnAMarketALaterAnswerMade judges a listing an earlier answer
+// brought again once a later answer of the run makes its market: the first
+// answer's 35 zł listing has no market yet, the second answer's three 50 zł
+// listings make one, and the 35 zł listing alerts at 70% in that run.
+func TestRunAlertsOnAMarketALaterAnswerMade(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	marketWish(t, pool, nil, new(70), 0)
+	n := &notifier{}
+	logger := slog.New(slog.DiscardHandler)
+	store := deals.NewStore(pool)
+	runner := valuation.NewRunner(valuation.NewStore(pool), nil, nil, nil,
+		valuation.Config{Window: 90 * 24 * time.Hour}, logger)
+	store.UseMarkets(runner.DealMarkets)
+	src := &answersSource{answers: [][]deals.Listing{
+		{bluray("deal", 3500)},
+		{bluray("m1", 5000), bluray("m2", 5000), bluray("m3", 5000)},
+	}}
+	h := deals.NewHunter(store, []deals.Source{src}, n, deals.Config{}, logger)
+	res := run(t, h)
+	if msgs := n.messages(); res.Alerts != 1 || res.Sent != 1 || len(msgs) != 1 ||
+		!strings.Contains(msgs[0], "35,00 zł (70% ceny rynkowej 50,00 zł)") {
+		t.Fatalf("run = %+v, messages %q; want the 35 zł listing sent at 70%% of 50 zł", res, msgs)
+	}
+}

@@ -277,3 +277,16 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   break the one already sent. The service worker leaves `/share/` to the
   network (`serverPaths`), so offline a share link fails instead of
   showing the app.
+
+## Frontend
+
+- Okazje (`/deals`) lists every wish in its "Lista życzeń" section, with
+  or without offers, since Kolekcja lists none. The page asks for them
+  beside the offers (`GET /api/collection?status=wishlist`) and lists
+  them title A–Z. Each SUI card names the title and links to its page,
+  reads "Film · Blu-ray · limit 80 zł" (kind, authors, format and the
+  price limit when the wish has one; the collection does not carry a
+  market percent), and its "Edytuj" opens the copy's form at
+  `/copies/<id>`. A failed answer keeps the last list with a retry; with
+  no wish the section is left out and the page's "Lista życzeń jest
+  pusta" stands. The offer segments are unchanged.

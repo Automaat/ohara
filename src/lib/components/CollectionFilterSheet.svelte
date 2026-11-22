@@ -24,6 +24,7 @@
 		locations,
 		tag,
 		tags,
+		wishTag = false,
 		onsort,
 		onformat,
 		onstatus,
@@ -47,6 +48,8 @@
 		tag: string;
 		/** The tags the loaded titles carry, by name. */
 		tags: readonly string[];
+		/** Whether only wishes carry the chosen tag, so it lists no copy here. */
+		wishTag?: boolean;
 		onsort: (sort: CollectionSort) => void;
 		onformat: (format: CollectionFilter['format']) => void;
 		onstatus: (status: CollectionFilter['status']) => void;
@@ -137,7 +140,11 @@
 		</Field>
 		<Field
 			label="Tag"
-			hint={tags.length === 0 && !chosenTag ? 'Tagi dodasz w edycji tytułu.' : undefined}
+			hint={wishTag
+				? 'Ten tag mają tylko pozycje z listy życzeń, a nie egzemplarze w kolekcji.'
+				: tags.length === 0 && !chosenTag
+					? 'Tagi dodasz w edycji tytułu.'
+					: undefined}
 		>
 			{#snippet control(c)}
 				<Select

@@ -36,6 +36,9 @@ import {
 	seriesTotalPayload,
 	shelfLine,
 	shelfSummary,
+	shelved,
+	shelvedCount,
+	soldCount,
 	tagHref,
 	tagsInUse,
 	titlePayload,
@@ -51,7 +54,8 @@ import {
 	type CollectionStatus,
 	type CopyForm,
 	type CopyPayload,
-	type Title
+	type Title,
+	type Totals
 } from './collection';
 
 describe('money', () => {
@@ -188,6 +192,16 @@ describe('labels', () => {
 });
 
 describe('collection search links', () => {
+	it('reads an old wishlist address as no status, since wishes live in Okazje', () => {
+		const blank = { kind: '', format: '', status: '', q: '' };
+		expect(readCollectionFilter(new URLSearchParams('status=wishlist'))).toEqual(blank);
+		expect(readCollectionFilter(new URLSearchParams('kind=book&status=wishlist&q=Lem'))).toEqual({
+			...blank,
+			kind: 'book',
+			q: 'Lem'
+		});
+	});
+
 	it('restores shareable filters and encodes special characters', () => {
 		const filter = {
 			kind: 'music',
@@ -286,7 +300,6 @@ describe('collection search links', () => {
 			'unfinished=true',
 			'unfinished=0',
 			'status=none&unfinished=1',
-			'status=wishlist&unfinished=1',
 			'status=sold&unfinished=1'
 		]) {
 			expect(readCollectionFilter(new URLSearchParams(off))).not.toHaveProperty('unfinished');
@@ -1248,20 +1261,54 @@ describe('collection header', () => {
 	});
 
 	it.each([
-		{ owned: 20, wishlist: 4, want: '20 na półce · 4 na liście życzeń' },
-		{ owned: 0, wishlist: 0, want: '0 na półce · 0 na liście życzeń' },
-		{ owned: 12345, wishlist: 1, want: /^12\s345 na półce · 1 na liście życzeń$/ }
-	])('summarizes $owned owned and $wishlist wanted', ({ owned, wishlist, want }) => {
-		expect(shelfSummary({ owned, wishlist })).toMatch(want);
+		{ owned: 20, want: '20 na półce' },
+		{ owned: 0, want: '0 na półce' },
+		{ owned: 12345, want: /^12\s345 na półce$/ }
+	])('summarizes $owned owned', ({ owned, want }) => {
+		expect(shelfSummary({ owned })).toMatch(want);
 	});
 
 	it.each([
-		{ ordered: 1, want: '20 na półce · 1 zamówiony · 4 na liście życzeń' },
-		{ ordered: 2, want: '20 na półce · 2 zamówione · 4 na liście życzeń' },
-		{ ordered: 5, want: '20 na półce · 5 zamówionych · 4 na liście życzeń' },
-		{ ordered: 0, want: '20 na półce · 4 na liście życzeń' }
+		{ ordered: 1, want: '20 na półce · 1 zamówiony' },
+		{ ordered: 2, want: '20 na półce · 2 zamówione' },
+		{ ordered: 5, want: '20 na półce · 5 zamówionych' },
+		{ ordered: 0, want: '20 na półce' }
 	])('names $ordered copies on order', ({ ordered, want }) => {
-		expect(shelfSummary({ owned: 20, ordered, wishlist: 4 })).toBe(want);
+		expect(shelfSummary({ owned: 20, ordered })).toBe(want);
+	});
+
+	describe('Kolekcja counts no wishes', () => {
+		/** 20 on the shelf, 2 on order, 4 wishes and 3 sold copies. */
+		const totals: Totals = {
+			copies: 29,
+			owned: 20,
+			ordered: 2,
+			wishlist: 4,
+			priced: 18,
+			spent_cents: 0
+		};
+
+		it('leaves wishes out of the summary', () => {
+			expect(shelfSummary(totals)).toBe('20 na półce · 2 zamówione');
+			expect(shelfSummary({ ...totals, ordered: undefined })).toBe('20 na półce');
+		});
+
+		it('counts the copies on the shelf or on order', () => {
+			expect(shelvedCount(totals)).toBe(22);
+			expect(shelvedCount({ ...totals, ordered: undefined })).toBe(20);
+		});
+
+		it('counts the sold copies apart from the wishes', () => {
+			expect(soldCount(totals)).toBe(3);
+			expect(soldCount({ ...totals, copies: 26 })).toBe(0);
+		});
+
+		it('shelves owned and ordered copies only', () => {
+			expect(shelved('owned')).toBe(true);
+			expect(shelved('ordered')).toBe(true);
+			expect(shelved('wishlist')).toBe(false);
+			expect(shelved('sold')).toBe(false);
+		});
 	});
 });
 

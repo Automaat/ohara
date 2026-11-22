@@ -310,6 +310,87 @@ func TestRecordKeepsAnEarlierEdition(t *testing.T) {
 	}
 }
 
+// TestMovedListingPricesNewTitle stores three "Diuna: Część druga" Blu-ray
+// listings against seed's owned "Diuna" Blu-ray, as a run before the
+// second title was owned did. A run that matches them to the owned
+// "Diuna: Część druga" Blu-ray prices that title with them, not "Diuna".
+func TestMovedListingPricesNewTitle(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	seed(t, pool)
+	ctx := context.Background()
+	exec(t, pool, `INSERT INTO title (id, kind, name, original_title) OVERRIDING SYSTEM VALUE
+		VALUES (3, 'movie', 'Diuna: Część druga', 'Dune: Part Two')`)
+	exec(t, pool, `INSERT INTO edition (id, title_id, barcode, format) OVERRIDING SYSTEM VALUE
+		VALUES (30, 3, '5902600069737', 'bluray')`)
+	exec(t, pool, `INSERT INTO copy (edition_id, status, price_cents) VALUES (30, 'owned', 6000)`)
+	found := []deals.Listing{
+		listing("d1", "Diuna Część druga Blu-ray", 4000, used()),
+		listing("d2", "Diuna Część druga Blu-ray PL", 4500, used()),
+		listing("d3", "Diuna Część druga Blu-ray stan idealny", 5000, used()),
+	}
+	exec(t, pool, `INSERT INTO price_observation (source, external_id, price_cents, acquired_as, edition_id, title_id)
+		VALUES ('olx', 'd1', 4000, 'used', 20, 2), ('olx', 'd2', 4500, 'used', 20, 2), ('olx', 'd3', 5000, 'used', 20, 2)`)
+	r := newTestRunner(pool, &fakeBuyBack{quotes: map[string]Quote{}}, &fakeSource{name: "olx", listings: found})
+	if _, err := r.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	copies, _, err := r.store.Valued(ctx, r.Window())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var priced bool
+	for _, c := range copies {
+		switch c.EditionID {
+		case 20:
+			if c.Mid != nil {
+				t.Fatalf("Diuna Blu-ray mid = %+v, want none from the moved listings", c.Mid)
+			}
+		case 30:
+			if c.Mid == nil || c.Mid.Count != 3 {
+				t.Fatalf("Diuna: Część druga Blu-ray mid = %+v, want the 3 moved listings", c.Mid)
+			}
+			priced = true
+		}
+	}
+	if !priced {
+		t.Fatal("no Diuna: Część druga Blu-ray copy valued")
+	}
+}
+
+// TestListingMovedToANewerWishPricesItsTitle stores a listing first seen a
+// day ago against seed's owned "Diuna" Blu-ray. A hunt then moves it to a
+// "Diuna: Część druga" Blu-ray wished for today, beside an owned Blu-ray of
+// that title: its price is pooled into that title's mid, since it was
+// matched to the wished edition after the edition last changed.
+func TestListingMovedToANewerWishPricesItsTitle(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	seed(t, pool)
+	ctx := context.Background()
+	exec(t, pool, `INSERT INTO title (id, kind, name) OVERRIDING SYSTEM VALUE
+		VALUES (3, 'movie', 'Diuna: Część druga')`)
+	exec(t, pool, `INSERT INTO edition (id, title_id, barcode, format) OVERRIDING SYSTEM VALUE
+		VALUES (30, 3, '5902600069737', 'bluray'), (31, 3, '5902600069744', 'bluray')`)
+	exec(t, pool, `INSERT INTO copy (edition_id, status) VALUES (30, 'owned'), (31, 'wishlist')`)
+	exec(t, pool, `INSERT INTO price_observation (source, external_id, price_cents, acquired_as, edition_id, title_id,
+			observed_at) VALUES ('olx', 'd1', 4000, 'used', 20, 2, now() - interval '1 day')`)
+	var wish int64
+	if err := pool.QueryRow(ctx, `SELECT id FROM copy WHERE edition_id = 31`).Scan(&wish); err != nil {
+		t.Fatal(err)
+	}
+	l := listing("d1", "Diuna Część druga Blu-ray", 4000, used())
+	want := deals.Want{CopyID: wish, EditionID: 31, TitleID: 3, Kind: "movie", Name: "Diuna: Część druga", Format: new("bluray")}
+	if _, _, err := deals.NewStore(pool).Record(ctx, &l, &want, false); err != nil {
+		t.Fatal(err)
+	}
+	copies, err := NewStore(pool).TitleValued(ctx, 90*24*time.Hour, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(copies) != 1 || copies[0].Mid == nil || copies[0].Mid.Count != 1 || copies[0].Mid.Cents != 4000 {
+		t.Fatalf("Diuna: Część druga copies = %+v, want a mid from the moved listing", copies)
+	}
+}
+
 // wishBluray adds a wished Blu-ray edition 22 of "Diuna" next to seed's
 // owned Blu-ray 20 and records found against it, as the deal hunter does.
 func wishBluray(t *testing.T, pool *pgxpool.Pool, found []deals.Listing) {

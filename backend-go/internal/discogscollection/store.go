@@ -130,6 +130,23 @@ func (s *Store) SiblingUnknownAdd(ctx context.Context, id, release int64) (bool,
 	return found, nil
 }
 
+// SiblingSettling says whether another copy than id made an instance of
+// release that Discogs' listing may not show yet: one linked less than
+// the settle time ago, by the database's clock, or one recorded by an
+// unfinished add.
+func (s *Store) SiblingSettling(ctx context.Context, id, release int64) (bool, error) {
+	var found bool
+	err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM discogs_add
+			WHERE release_id = $2 AND copy_id <> $1 AND instance_id IS NOT NULL)
+		OR EXISTS (SELECT 1 FROM copy WHERE id <> $1 AND discogs_instance_release_id = $2
+			AND discogs_instance_linked_at > now() - make_interval(secs => $3))`,
+		id, release, settleSeconds).Scan(&found)
+	if err != nil {
+		return false, fmt.Errorf("sibling discogs instance: %w", err)
+	}
+	return found, nil
+}
+
 // BeginAdd records, and commits at once, that an add of release for copy
 // id is about to be sent; it outlives the push that sends it.
 func (s *Store) BeginAdd(ctx context.Context, id, release int64) error {

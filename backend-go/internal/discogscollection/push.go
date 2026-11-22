@@ -91,6 +91,14 @@ var ErrSiblingAddUnknown = errors.New("another copy's discogs add of the release
 // SiblingAddUnknownMessage is what the page shows for ErrSiblingAddUnknown.
 const SiblingAddUnknownMessage = "Inny egzemplarz tego wydania czeka na rozstrzygnięcie dodania do Discogs. Najpierw rozstrzygnij tamto dodanie."
 
+// ErrSiblingSettling is an add of a release while another copy's instance
+// of it is so recent that Discogs' listing may not show it yet: an add
+// now could make a second instance.
+var ErrSiblingSettling = errors.New("another copy's discogs instance of the release not listed yet")
+
+// SiblingSettlingMessage is what the page shows for ErrSiblingSettling.
+const SiblingSettlingMessage = "Inny egzemplarz tego wydania właśnie trafił do kolekcji Discogs. Spróbuj ponownie za kilka minut."
+
 // ErrNoUnknownAdd is a confirmation or discard without an add whose
 // outcome is unknown.
 var ErrNoUnknownAdd = errors.New("no discogs add with an unknown outcome")
@@ -338,6 +346,13 @@ func (p *Pusher) push(ctx, dbctx context.Context, lk *Locked, t *Target, adopt b
 		}
 	}
 	if own == nil {
+		settling, err := p.store.SiblingSettling(dbctx, t.CopyID, release)
+		if err != nil {
+			return false, err
+		}
+		if settling {
+			return false, ErrSiblingSettling
+		}
 		if own, err = p.add(ctx, dbctx, t); err != nil {
 			return false, err
 		}

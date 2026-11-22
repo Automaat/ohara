@@ -241,9 +241,18 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   goes, and a push then treats any instance of the release as the
   owner's; it answers 409 "jeszcze się nie rozstrzygnęło" while the add is
   under 10 minutes old and the release is not listed. A push of a release
-  answers 409 while another copy's add of it has an unknown outcome. Ages
-  are measured by the database's clock. A unique index keeps two copies
-  from ever linking one instance.
+  answers 409 while another copy's add of it has an unknown outcome, and
+  an add answers 409 "Inny egzemplarz tego wydania właśnie trafił do
+  kolekcji Discogs. Spróbuj ponownie za kilka minut." while another copy
+  of the release is linked less than 10 minutes ago or has an instance
+  recorded in `discogs_add` but not yet linked, since the listing may not
+  show it yet. Ages are measured by the database's clock. A unique index
+  keeps two copies from ever linking one instance.
+- Two owned copies of one release: only the first is pushed. The second
+  copy's push answers 409 "To wydanie jest już w Twojej kolekcji
+  Discogs.", since the release is held in an instance it did not make,
+  and if the owner adds a second instance by hand, both copies' updates
+  answer 409 from then on. Supporting this is #500.
 - A linked instance found in whatever folder the owner moved it to is only
   re-graded. One the listing omits answers 409 "jeszcze się nie
   rozstrzygnęło" for 10 minutes after it was linked

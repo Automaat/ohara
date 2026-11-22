@@ -1102,3 +1102,46 @@ func TestSiblingUnknownAddBlocksPush(t *testing.T) {
 		t.Fatalf("adopt A = %+v, adds %+v", s, adds)
 	}
 }
+
+// Review: a sibling copy's add waits while another copy's instance of the
+// release is too recent for the listing to show it, linked or recorded.
+func TestSiblingWaitsForFreshInstance(t *testing.T) {
+	d, srv := newDouble(t)
+	a := newAPI(t, srv.URL, discogscollection.DefaultFolder)
+	copyA := a.album(obj{"status": "owned", "media_grade": "mint"})
+	copyC := a.sibling(copyA, obj{"status": "owned", "media_grade": "poor"})
+	d.hide(true)
+	if code, raw, _ := a.push(copyA); code != http.StatusOK {
+		t.Fatalf("push A = %d %s", code, raw)
+	}
+	code, raw, _ := a.push(copyC)
+	if adds, _, _ := d.snapshot(); code != http.StatusConflict || !strings.Contains(raw, "za kilka minut") || len(adds) != 1 {
+		t.Fatalf("push C while A's instance is unlisted = %d %s, adds %+v; want 409 and no add", code, raw, adds)
+	}
+	d.hide(false)
+	a.settle(copyA)
+	if code, raw, _ := a.push(copyA); code != http.StatusOK {
+		t.Fatalf("push A later = %d %s", code, raw)
+	}
+	if adds, _, _ := d.snapshot(); len(adds) != 1 {
+		t.Fatalf("adds = %+v, want one", adds)
+	}
+}
+
+func TestSiblingWaitsForRecordedInstance(t *testing.T) {
+	d, srv := newDouble(t)
+	a := newAPI(t, srv.URL, discogscollection.DefaultFolder)
+	copyA := a.album(obj{"status": "owned", "media_grade": "mint"})
+	copyC := a.sibling(copyA, obj{"status": "owned"})
+	d.failWith(http.StatusInternalServerError,
+		"POST /users/vinyl%20owner/collection/folders/1/releases/1873013/instances/")
+	if code, _, _ := a.push(copyA); code != http.StatusBadGateway {
+		t.Fatalf("push A = %d, want 502", code)
+	}
+	d.failWith(0, "")
+	d.hide(true)
+	code, raw, _ := a.push(copyC)
+	if adds, _, _ := d.snapshot(); code != http.StatusConflict || !strings.Contains(raw, "za kilka minut") || len(adds) != 1 {
+		t.Fatalf("push C while A's recorded instance is unlisted = %d %s, adds %+v; want 409 and no add", code, raw, adds)
+	}
+}

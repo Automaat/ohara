@@ -115,6 +115,8 @@ func (h *Handler) writeErr(w http.ResponseWriter, r *http.Request, id int64, err
 		h.fail(w, http.StatusConflict, AddUnsettledMessage)
 	case errors.Is(err, ErrAdoptNotOne):
 		h.fail(w, http.StatusConflict, AdoptNotOneMessage)
+	case errors.Is(err, ErrSiblingSettling):
+		h.fail(w, http.StatusConflict, SiblingSettlingMessage)
 	case errors.Is(err, ErrSiblingAddUnknown):
 		h.fail(w, http.StatusConflict, SiblingAddUnknownMessage)
 	case errors.Is(err, ErrNoUnknownAdd):

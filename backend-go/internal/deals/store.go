@@ -170,8 +170,9 @@ const movedTitle = listingTitle + ` <> EXCLUDED.title_id`
 // current price. An alert that gave up or expired unsent is queued again
 // only under the lowest price it was queued or tried at. An unsent alert
 // whose wish is gone or no longer wished for moves to w, keeping its
-// attempts and age. It reports whether the listing was new and whether an
-// alert was queued.
+// attempts and age. A dismissed listing stays dismissed and queues no
+// alert. It reports whether the listing was new and whether an alert was
+// queued.
 func (s *Store) Record(ctx context.Context, l *Listing, w *Want, alert bool) (bool, bool, error) {
 	raw, err := json.Marshal(observationRaw{Title: l.Title, Data: l.Raw, PhotoURL: l.PhotoURL, WishlistCopyID: w.CopyID})
 	if err != nil {
@@ -183,7 +184,7 @@ func (s *Store) Record(ctx context.Context, l *Listing, w *Want, alert bool) (bo
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	var id int64
-	var isNew, alerted bool
+	var isNew, dismissed, alerted bool
 	var titleID *int64
 	err = tx.QueryRow(ctx, `INSERT INTO price_observation
 			(source, external_id, price_cents, acquired_as, url, edition_id, title_id, raw)
@@ -199,8 +200,8 @@ func (s *Store) Record(ctx context.Context, l *Listing, w *Want, alert bool) (bo
 				ELSE coalesce(price_observation.edition_id, EXCLUDED.edition_id) END,
 			title_id = CASE WHEN `+movedTitle+` THEN EXCLUDED.title_id
 				ELSE coalesce(price_observation.title_id, EXCLUDED.title_id) END
-		RETURNING id, xmax = 0, `+listingTitle,
-		l.Source, l.ExternalID, l.PriceCents, l.AcquiredAs, l.URL, w.EditionID, w.TitleID, raw).Scan(&id, &isNew, &titleID)
+		RETURNING id, xmax = 0, dismissed_at IS NOT NULL, `+listingTitle,
+		l.Source, l.ExternalID, l.PriceCents, l.AcquiredAs, l.URL, w.EditionID, w.TitleID, raw).Scan(&id, &isNew, &dismissed, &titleID)
 	if err != nil {
 		return false, false, fmt.Errorf("record observation: %w", err)
 	}
@@ -212,7 +213,7 @@ func (s *Store) Record(ctx context.Context, l *Listing, w *Want, alert bool) (bo
 			return false, false, fmt.Errorf("record alert: move to title: %w", err)
 		}
 	}
-	if alert {
+	if alert && !dismissed {
 		if alerted, err = queueAlert(ctx, tx, id, w.CopyID, l.PriceCents); err != nil {
 			return false, false, err
 		}
@@ -264,11 +265,64 @@ type Alert struct {
 
 // PendingAlerts returns undelivered alerts with attempts left, oldest
 // first. Alerts for copies no longer on the wishlist, alerts above the
-// copy's current maximum price, alerts older than a week and repeat alerts
-// whose listing is no longer under the price its last sent alert named are
-// skipped.
+// copy's current maximum price, alerts for dismissed listings, alerts older
+// than a week and repeat alerts whose listing is no longer under the price
+// its last sent alert named are skipped.
 func (s *Store) PendingAlerts(ctx context.Context) ([]Alert, error) {
-	rows, err := s.pool.Query(ctx, `SELECT o.id, o.source, coalesce(o.external_id, ''), o.url, coalesce(o.raw->>'title', ''),
+	return pendingAlerts(ctx, s.pool, nil)
+}
+
+// SendAlert runs send for the alert of observationID while PendingAlerts
+// would still return it, and stores the outcome: sent, or a failed attempt
+// with send's error, at the price send was given. It holds the listing's
+// row from that check until the outcome is stored, so a dismissal or a
+// price change either lands before the check and stops or reprices the
+// alert, or waits until the message is out. The outcome is stored even when
+// ctx ends during send, so a message that went out is not sent again. It
+// reports whether send ran and succeeded.
+func (s *Store) SendAlert(ctx context.Context, observationID int64, send func(*Alert) error) (bool, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return false, fmt.Errorf("send alert: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM price_observation WHERE id = $1 FOR UPDATE`, observationID); err != nil {
+		return false, fmt.Errorf("send alert: lock listing: %w", err)
+	}
+	due, err := pendingAlerts(ctx, tx, &observationID)
+	if err != nil {
+		return false, err
+	}
+	if len(due) == 0 {
+		return false, nil
+	}
+	a := &due[0]
+	sendErr := send(a)
+	storeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), markSentTimeout)
+	defer cancel()
+	if sendErr != nil {
+		err = markFailed(storeCtx, tx, observationID, a.PriceCents, sendErr.Error())
+	} else {
+		err = markSent(storeCtx, tx, observationID, a.PriceCents)
+	}
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(storeCtx); err != nil {
+		return false, fmt.Errorf("send alert: commit: %w", err)
+	}
+	return sendErr == nil, nil
+}
+
+// querier is what the alert queries need from a pool or a transaction.
+type querier interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+// pendingAlerts is PendingAlerts limited to one listing when only is set.
+func pendingAlerts(ctx context.Context, q querier, only *int64) ([]Alert, error) {
+	rows, err := q.Query(ctx, `SELECT o.id, o.source, coalesce(o.external_id, ''), o.url, coalesce(o.raw->>'title', ''),
 			o.price_cents, o.acquired_as, t.name, e.format, c.max_price_cents, a.alerted_price_cents
 		FROM deal_alert a
 		JOIN price_observation o ON o.id = a.observation_id
@@ -276,9 +330,10 @@ func (s *Store) PendingAlerts(ctx context.Context) ([]Alert, error) {
 		JOIN edition e ON e.id = c.edition_id
 		JOIN title t ON t.id = e.title_id
 		WHERE a.sent_at IS NULL AND a.attempts < $1 AND a.created_at > now() - `+alertWindow+`
-			AND o.price_cents <= c.max_price_cents
+			AND o.price_cents <= c.max_price_cents AND o.dismissed_at IS NULL
 			AND (a.alerted_price_cents IS NULL OR o.price_cents < a.alerted_price_cents)
-		ORDER BY a.created_at, a.observation_id`, MaxAttempts)
+			AND ($2::bigint IS NULL OR a.observation_id = $2)
+		ORDER BY a.created_at, a.observation_id`, MaxAttempts, only)
 	if err != nil {
 		return nil, fmt.Errorf("pending alerts: %w", err)
 	}
@@ -292,7 +347,11 @@ func (s *Store) PendingAlerts(ctx context.Context) ([]Alert, error) {
 
 // MarkSent records a delivered alert and the price its message named.
 func (s *Store) MarkSent(ctx context.Context, observationID, priceCents int64) error {
-	_, err := s.pool.Exec(ctx, `UPDATE deal_alert SET sent_at = now(), attempts = attempts + 1,
+	return markSent(ctx, s.pool, observationID, priceCents)
+}
+
+func markSent(ctx context.Context, q querier, observationID, priceCents int64) error {
+	_, err := q.Exec(ctx, `UPDATE deal_alert SET sent_at = now(), attempts = attempts + 1,
 		last_error = '', alerted_price_cents = $2 WHERE observation_id = $1`, observationID, priceCents)
 	if err != nil {
 		return fmt.Errorf("mark sent: %w", err)
@@ -302,7 +361,11 @@ func (s *Store) MarkSent(ctx context.Context, observationID, priceCents int64) e
 
 // MarkFailed records a failed delivery attempt at priceCents.
 func (s *Store) MarkFailed(ctx context.Context, observationID, priceCents int64, reason string) error {
-	_, err := s.pool.Exec(ctx, `UPDATE deal_alert SET attempts = attempts + 1, last_error = $2,
+	return markFailed(ctx, s.pool, observationID, priceCents, reason)
+}
+
+func markFailed(ctx context.Context, q querier, observationID, priceCents int64, reason string) error {
+	_, err := q.Exec(ctx, `UPDATE deal_alert SET attempts = attempts + 1, last_error = $2,
 		queued_price_cents = least(queued_price_cents, $3) WHERE observation_id = $1`, observationID, reason, priceCents)
 	if err != nil {
 		return fmt.Errorf("mark failed: %w", err)
@@ -344,8 +407,9 @@ type Observation struct {
 // hunter recorded it for, or its alert's copy; a valuation listing of an edition that is also
 // wished for is not matched. Matched keeps the matched listings, with or without a price limit;
 // UnderLimit keeps those at or under the matched wish's limit; Sent keeps those whose alert was
-// sent for a wish that still has a limit. Filters apply before the row limit, so newer listings
-// that fail them, such as listings for owned editions, never push older ones out.
+// sent for a wish that still has a limit. Dismissed listings are always left out. Filters apply
+// before the row limit, so newer listings that fail them, such as listings for owned editions,
+// never push older ones out.
 type RecentFilter struct {
 	Limit      int
 	Matched    bool
@@ -362,10 +426,11 @@ const (
 	allListings = `SELECT o.id, o.observed_at, o.price_cents, o.source, a.sent_at, w.id AS wish_id, w.max_price_cents
 		FROM price_observation o
 		LEFT JOIN deal_alert a ON a.observation_id = o.id
-		LEFT JOIN copy w ON w.status = 'wishlist' AND w.id = coalesce(o.wishlist_copy_id, a.copy_id)`
+		LEFT JOIN copy w ON w.status = 'wishlist' AND w.id = coalesce(o.wishlist_copy_id, a.copy_id)
+		WHERE o.dismissed_at IS NULL`
 	wishedListings = `SELECT o.id, o.observed_at, o.price_cents, o.source, a.sent_at, w.id AS wish_id, w.max_price_cents
 		FROM copy w
-		JOIN price_observation o ON o.wishlist_copy_id = w.id
+		JOIN price_observation o ON o.wishlist_copy_id = w.id AND o.dismissed_at IS NULL
 		LEFT JOIN deal_alert a ON a.observation_id = o.id
 		WHERE w.status = 'wishlist'
 		UNION ALL
@@ -373,6 +438,7 @@ const (
 		FROM copy w
 		JOIN deal_alert a ON a.copy_id = w.id
 		JOIN price_observation o ON o.id = a.observation_id AND o.wishlist_copy_id IS NULL
+			AND o.dismissed_at IS NULL
 		WHERE w.status = 'wishlist'`
 )
 
@@ -413,6 +479,33 @@ func (s *Store) Recent(ctx context.Context, f RecentFilter) ([]Observation, erro
 		return nil, fmt.Errorf("recent observations: %w", err)
 	}
 	return pgx.CollectRows(rows, pgx.RowToStructByPos[Observation])
+}
+
+// Dismiss hides the deal listing id from the deals view and keeps its
+// unsent alert from going out, for every wish it matches; the observation,
+// its alert and its price for the valuation stay. A repeat keeps the first
+// dismissal. ErrNotFound when no deal listing has the id.
+func (s *Store) Dismiss(ctx context.Context, id int64) error {
+	return s.setDismissed(ctx, id, true)
+}
+
+// Undismiss brings a dismissed deal listing back; a listing that is not
+// dismissed stays as it is. ErrNotFound when no deal listing has the id.
+func (s *Store) Undismiss(ctx context.Context, id int64) error {
+	return s.setDismissed(ctx, id, false)
+}
+
+func (s *Store) setDismissed(ctx context.Context, id int64, dismissed bool) error {
+	tag, err := s.pool.Exec(ctx, `UPDATE price_observation
+		SET dismissed_at = CASE WHEN $3 THEN coalesce(dismissed_at, now()) END
+		WHERE id = $1 AND source = ANY ($2)`, id, sources, dismissed)
+	if err != nil {
+		return fmt.Errorf("set dismissed: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // WishCount returns how many copies are on the wishlist.

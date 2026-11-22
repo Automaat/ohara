@@ -15,12 +15,15 @@ import (
 )
 
 // pagedSource is an OLX double that answers every query with the same
-// page, its listings carrying the query, or with err.
+// page, its listings carrying the query, or with err. unpriced are offers
+// the page holds without a listing; during runs before each answer.
 type pagedSource struct {
 	mu       sync.Mutex
 	listings []deals.Listing
+	unpriced []string
 	complete bool
 	err      error
+	during   func()
 }
 
 func (*pagedSource) Name() string   { return SourceOLX }
@@ -34,20 +37,37 @@ func (p *pagedSource) Search(ctx context.Context, q string) ([]deals.Listing, er
 func (p *pagedSource) SearchPage(_ context.Context, q string) (deals.Page, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.during != nil {
+		p.during()
+	}
 	if p.err != nil {
 		return deals.Page{}, p.err
 	}
 	listings := slices.Clone(p.listings)
+	seen := slices.Clone(p.unpriced)
 	for i := range listings {
 		listings[i].Query = q
+		seen = append(seen, listings[i].ExternalID)
 	}
-	return deals.Page{Listings: listings, Complete: p.complete}, nil
+	return deals.Page{Listings: listings, Seen: seen, Complete: p.complete}, nil
 }
 
 func (p *pagedSource) answer(complete bool, err error, listings ...deals.Listing) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.listings, p.complete, p.err = listings, complete, err
+	p.listings, p.complete, p.err, p.unpriced, p.during = listings, complete, err, nil, nil
+}
+
+func (p *pagedSource) alsoUnpriced(ids ...string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.unpriced = ids
+}
+
+func (p *pagedSource) onAnswer(f func()) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.during = f
 }
 
 type goneState struct {
@@ -131,6 +151,25 @@ func TestListingsGone(t *testing.T) {
 		want(t)
 	})
 
+	t.Run("a listing still offered without a price is not gone", func(t *testing.T) {
+		olx.answer(true, nil, a)
+		olx.alsoUnpriced("b")
+		run(t)
+		want(t)
+	})
+
+	t.Run("a listing another run records during the valuation is not gone", func(t *testing.T) {
+		olx.answer(true, nil, a)
+		olx.onAnswer(func() {
+			exec(t, pool, `UPDATE price_observation SET last_seen_at = now() WHERE external_id = 'b'`)
+		})
+		run(t)
+		want(t)
+		exec(t, pool, `UPDATE price_observation SET last_seen_at = last_seen_at - interval '1 day'
+			WHERE external_id = 'b'`)
+		before = goneStates(t, pool)
+	})
+
 	t.Run("a listing missing from a complete answer is gone and keeps its last sighting", func(t *testing.T) {
 		olx.answer(true, nil, a)
 		run(t)
@@ -150,7 +189,18 @@ func TestListingsGone(t *testing.T) {
 		}
 	})
 
+	t.Run("a gone listing offered again but no longer matching is no longer gone", func(t *testing.T) {
+		exec(t, pool, `INSERT INTO deal_keyword (kind, phrase) VALUES ('reject', 'stan')`)
+		olx.answer(true, nil, a, b)
+		run(t)
+		exec(t, pool, `DELETE FROM deal_keyword WHERE phrase = 'stan'`)
+		want(t)
+	})
+
 	t.Run("a gone listing offered again is no longer gone", func(t *testing.T) {
+		olx.answer(true, nil, a)
+		run(t)
+		want(t, "b")
 		olx.answer(true, nil, a, b)
 		run(t)
 		want(t)

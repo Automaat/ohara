@@ -56,11 +56,14 @@ type Source interface {
 	Search(ctx context.Context, query string) ([]Listing, error)
 }
 
-// Page is a Pager's answer to one query. Complete reports that Listings
-// hold every offer the site has for the query, not just its first page,
-// so a stored listing the query found before and Listings lack is gone.
+// Page is a Pager's answer to one query. Seen holds the external ID of
+// every offer in the answer, also those Listings leave out (no price).
+// Complete reports that the answer holds every offer the site has for the
+// query, not just its first page, so a stored listing the query found
+// before and Seen lacks is gone.
 type Page struct {
 	Listings []Listing
+	Seen     []string
 	Complete bool
 }
 

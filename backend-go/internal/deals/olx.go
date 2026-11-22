@@ -49,14 +49,14 @@ func (o OLX) SearchPage(ctx context.Context, query string) (Page, error) {
 	if err != nil {
 		return Page{}, fmt.Errorf("olx: %w", err)
 	}
-	listings, offers, err := parseOLXPage(body)
+	listings, seen, offers, err := parseOLXPage(body)
 	if err != nil {
 		return Page{}, err
 	}
 	for i := range listings {
 		listings[i].Query = query
 	}
-	return Page{Listings: listings, Complete: offers < olxLimit}, nil
+	return Page{Listings: listings, Seen: seen, Complete: offers < olxLimit}, nil
 }
 
 type olxResponse struct {
@@ -92,24 +92,30 @@ type olxState struct {
 // parseOLX reads an OLX search response. Offers without a PLN price (free,
 // exchange or "price on request") are left out.
 func parseOLX(body []byte) ([]Listing, error) {
-	listings, _, err := parseOLXPage(body)
+	listings, _, _, err := parseOLXPage(body)
 	return listings, err
 }
 
-// parseOLXPage reads an OLX search response into its priced listings and
-// the number of offers it held, priced or not.
-func parseOLXPage(body []byte) ([]Listing, int, error) {
+// parseOLXPage reads an OLX search response into its priced listings, the
+// external IDs of every offer it held, priced or not, and the number of
+// offers.
+func parseOLXPage(body []byte) ([]Listing, []string, int, error) {
 	var resp olxResponse
 	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, 0, parseError{fmt.Errorf("olx: decode: %w", err)}
+		return nil, nil, 0, parseError{fmt.Errorf("olx: decode: %w", err)}
 	}
 	if resp.Data == nil {
-		return nil, 0, parseError{errors.New("olx: response has no data")}
+		return nil, nil, 0, parseError{errors.New("olx: response has no data")}
 	}
+	seen := make([]string, 0, len(resp.Data))
 	out := make([]Listing, 0, len(resp.Data))
 	for _, raw := range resp.Data {
 		var o olxOffer
-		if err := json.Unmarshal(raw, &o); err != nil || o.ID == 0 || o.Title == "" {
+		err := json.Unmarshal(raw, &o)
+		if o.ID != 0 {
+			seen = append(seen, strconv.FormatInt(o.ID, 10))
+		}
+		if err != nil || o.ID == 0 || o.Title == "" {
 			continue
 		}
 		l := Listing{
@@ -145,5 +151,5 @@ func parseOLXPage(body []byte) ([]Listing, int, error) {
 			out = append(out, l)
 		}
 	}
-	return out, len(resp.Data), nil
+	return out, seen, len(resp.Data), nil
 }

@@ -139,9 +139,9 @@ func TestOLXPageIsCompleteBelowItsLimit(t *testing.T) {
 
 	answer = string(fixture(t, "olx.json"))
 	page, err := olx.SearchPage(ctx, "Blade Runner blu-ray")
-	if err != nil || !page.Complete || len(page.Listings) != 8 {
-		t.Fatalf("fixture page = %d listings, complete %v, %v; want 8 of a complete answer",
-			len(page.Listings), page.Complete, err)
+	if err != nil || !page.Complete || len(page.Listings) != 8 || len(page.Seen) != 10 {
+		t.Fatalf("fixture page = %d listings, %d seen, complete %v, %v; want 8 of 10 offers of a complete answer",
+			len(page.Listings), len(page.Seen), page.Complete, err)
 	}
 	for i := range page.Listings {
 		if l := &page.Listings[i]; l.Query != "Blade Runner blu-ray" {
@@ -154,9 +154,9 @@ func TestOLXPageIsCompleteBelowItsLimit(t *testing.T) {
 	}{{49, true}, {50, false}} {
 		answer = olxOffers(tc.offers)
 		page, err := olx.SearchPage(ctx, "x")
-		if err != nil || page.Complete != tc.complete || len(page.Listings) != 0 {
-			t.Fatalf("%d unpriced offers: %d listings, complete %v, %v; want complete %v",
-				tc.offers, len(page.Listings), page.Complete, err, tc.complete)
+		if err != nil || page.Complete != tc.complete || len(page.Listings) != 0 || len(page.Seen) != tc.offers {
+			t.Fatalf("%d unpriced offers: %d listings, %d seen, complete %v, %v; want complete %v, all seen",
+				tc.offers, len(page.Listings), len(page.Seen), page.Complete, err, tc.complete)
 		}
 	}
 }

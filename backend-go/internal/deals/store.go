@@ -214,21 +214,37 @@ func (s *Store) Record(ctx context.Context, l *Listing, w *Want, alert bool) (bo
 	return isNew, alerted, nil
 }
 
-// MarkGone marks gone the stored listings of source that a complete
-// answer no longer offers: those last found by one of the query keys,
-// whose external ID is none of seen (every listing the source answered
-// in the run) and last seen before since (the run's start), so a listing
-// another run recorded meanwhile stays. gone_at is set once; last_seen_at
-// keeps the last time the listing was offered. It reports how many it
-// marked.
-func (s *Store) MarkGone(ctx context.Context, source string, queries, seen []string, since time.Time) (int64, error) {
-	if len(queries) == 0 {
+// Now is the database's clock, the one last_seen_at is written with.
+func (s *Store) Now(ctx context.Context) (time.Time, error) {
+	var now time.Time
+	if err := s.pool.QueryRow(ctx, `SELECT now()`).Scan(&now); err != nil {
+		return time.Time{}, fmt.Errorf("now: %w", err)
+	}
+	return now, nil
+}
+
+// UpdateGone brings the gone marks of source's stored listings up to a
+// run that answered seen (the external ID of every offer any answer held)
+// and whose answers to the query keys complete held every offer the site
+// has. A listing seen is offered, so it is no longer gone, whether or not
+// it still matches what it was stored for. A listing last found by one of
+// complete, not seen and last seen before since (the run's start on the
+// database clock, so a listing another run recorded meanwhile stays) is
+// gone. gone_at is set once; last_seen_at keeps the last time the listing
+// was offered. It reports how many listings it marked gone.
+func (s *Store) UpdateGone(ctx context.Context, source string, complete, seen []string, since time.Time) (int64, error) {
+	seen = append([]string{}, seen...)
+	if _, err := s.pool.Exec(ctx, `UPDATE price_observation SET gone_at = NULL
+		WHERE source = $1 AND gone_at IS NOT NULL AND external_id = ANY ($2)`, source, seen); err != nil {
+		return 0, fmt.Errorf("offered again: %w", err)
+	}
+	if len(complete) == 0 {
 		return 0, nil
 	}
 	tag, err := s.pool.Exec(ctx, `UPDATE price_observation SET gone_at = now()
 		WHERE source = $1 AND gone_at IS NULL AND external_id IS NOT NULL
 			AND raw->>'query' = ANY ($2) AND external_id <> ALL ($3) AND last_seen_at < $4`,
-		source, queries, append([]string{}, seen...), since)
+		source, complete, seen, since)
 	if err != nil {
 		return 0, fmt.Errorf("mark gone: %w", err)
 	}

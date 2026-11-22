@@ -209,7 +209,9 @@ type run struct {
 	titles   deals.Titles
 	res      RunResult
 	first    bool
-	started  time.Time
+	// started is the run's start on the database clock, which writes
+	// last_seen_at.
+	started time.Time
 }
 
 // Run asks every source about every owned edition, every buy-back shop
@@ -230,7 +232,11 @@ func (r *Runner) Run(ctx context.Context) (RunResult, error) {
 	if err != nil {
 		return RunResult{}, err
 	}
-	x := &run{r: r, holdings: holdings, rules: rules, titles: titles, first: true, started: time.Now()}
+	started, err := r.store.Now(ctx)
+	if err != nil {
+		return RunResult{}, err
+	}
+	x := &run{r: r, holdings: holdings, rules: rules, titles: titles, first: true, started: started}
 	x.res.Editions = len(holdings)
 	x.res.Errors = []string{}
 	queries := searchQueries(holdings)
@@ -302,8 +308,8 @@ func (x *run) report(site string, f *deals.Refused, unit string) {
 }
 
 // search asks src every query and records the listings that match a
-// holding. For a deals.Pager it then marks gone the stored listings a
-// complete answer no longer offers (gone).
+// holding. For a deals.Pager it then updates which stored listings are
+// gone (gone).
 func (x *run) search(ctx context.Context, src deals.Source, queries []string) error {
 	if !src.PerQuery() {
 		queries = []string{""}
@@ -343,9 +349,7 @@ func (x *run) search(ctx context.Context, src deals.Source, queries []string) er
 			complete = append(complete, deals.QueryKey(q))
 		}
 		x.res.Listings += len(listings)
-		for i := range listings {
-			seen = append(seen, listings[i].ExternalID)
-		}
+		seen = append(seen, page.Seen...)
 		for i := range listings {
 			l := &listings[i]
 			h := match(x.holdings, l, x.rules, x.titles)
@@ -362,16 +366,20 @@ func (x *run) search(ctx context.Context, src deals.Source, queries []string) er
 			}
 		}
 	}
+	if !paged {
+		return nil
+	}
 	return x.gone(ctx, src.Name(), complete, seen)
 }
 
-// gone marks gone the stored listings of source last found by one of the
-// complete queries that no answer of this run held. Only an answer that
-// is every offer the site has for its query tells a listing is gone: one
+// gone clears the gone mark of every stored listing of source an answer
+// of this run held, matching or not, and marks gone those last found by
+// one of the complete queries that no answer held. Only an answer that is
+// every offer the site has for its query tells a listing is gone: one
 // missing from a first page, or from a query that failed or was skipped,
 // may still be offered.
 func (x *run) gone(ctx context.Context, source string, complete, seen []string) error {
-	n, err := x.r.store.MarkGone(ctx, source, complete, seen, x.started)
+	n, err := x.r.store.UpdateGone(ctx, source, complete, seen, x.started)
 	if err != nil {
 		return err
 	}

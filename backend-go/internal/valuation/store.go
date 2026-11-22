@@ -77,11 +77,15 @@ func (s *Store) Record(ctx context.Context, l *deals.Listing, h *Holding) (bool,
 	return isNew, err
 }
 
-// MarkGone marks gone the stored listings of source the run's complete
-// answers no longer offer, through the deal hunter's store
-// (deals.Store.MarkGone).
-func (s *Store) MarkGone(ctx context.Context, source string, queries, seen []string, since time.Time) (int64, error) {
-	return s.deals.MarkGone(ctx, source, queries, seen, since)
+// Now is the database's clock (deals.Store.Now).
+func (s *Store) Now(ctx context.Context) (time.Time, error) {
+	return s.deals.Now(ctx)
+}
+
+// UpdateGone brings the gone marks of source's stored listings up to a
+// run, through the deal hunter's store (deals.Store.UpdateGone).
+func (s *Store) UpdateGone(ctx context.Context, source string, complete, seen []string, since time.Time) (int64, error) {
+	return s.deals.UpdateGone(ctx, source, complete, seen, since)
 }
 
 // Prices returns the valuation sources' observations last seen within

@@ -73,7 +73,16 @@ test('Okazje shows automatic deals and explains offers with too few comparisons'
 	await expect(deal).toContainText(/Typowa cena ofertowa 100\s*zł · stan używany · 5 ofert/);
 	await expect(insufficient).toHaveCount(0);
 
-	await page.getByRole('radio', { name: 'Wszystkie · 2' }).press('Space');
+	const allLabel = 'Wszystkie · 2';
+	const allRadio = page.getByRole('radio', { name: allLabel });
+	const picker = page.getByRole('combobox', { name: 'Oferty' });
+	await expect(allRadio.or(picker)).toBeVisible();
+	if (await picker.isVisible()) {
+		await picker.selectOption({ label: allLabel });
+	} else {
+		await allRadio.press('Space');
+	}
+	await expect(page.getByRole('list', { name: allLabel })).toBeVisible();
 	await expect(insufficient).toContainText('Brak typowej ceny ofertowej');
 	await expect(insufficient).toContainText('Stan nowy · 4 oferty do porównania');
 });

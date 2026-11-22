@@ -116,9 +116,10 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   created, never per search result, and not cached. A film in no
   collection costs the first request only. The name drops a trailing
   "kolekcja" or "Collection" TMDB adds ("Harry Potter - kolekcja" becomes
-  "Harry Potter"); an empty name is no series. Only parts with a release
-  date on or before today (UTC) are numbered, by release date and then
-  TMDB ID, and counted. Both requests count under the `tmdb` source.
+  "Harry Potter"); an empty name is no series. Only parts with a TMDB ID
+  and a release date on or before today (UTC) are numbered, by release
+  date and then TMDB ID, and counted. A movie answer without an `id`
+  counts as a parse error. Both requests count under the `tmdb` source.
 
 ## Frontend
 

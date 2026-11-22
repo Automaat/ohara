@@ -28,6 +28,7 @@ type tmdbCollectionPart struct {
 // neither numbered nor counted.
 func (t TMDB) Film(ctx context.Context, tmdbID int64) (lookup.Film, error) {
 	var film struct {
+		ID         *int64 `json:"id"`
 		PosterPath string `json:"poster_path"`
 		Collection *struct {
 			ID int64 `json:"id"`
@@ -35,6 +36,9 @@ func (t TMDB) Film(ctx context.Context, tmdbID int64) (lookup.Film, error) {
 	}
 	if err := t.getJSON(ctx, "/3/movie/"+strconv.FormatInt(tmdbID, 10), &film); err != nil {
 		return lookup.Film{}, err
+	}
+	if film.ID == nil {
+		return lookup.Film{}, parseFailed("tmdb", fmt.Errorf("movie without id"))
 	}
 	succeeded("tmdb")
 	out := lookup.Film{CoverURL: TMDBMovie{PosterPath: film.PosterPath}.Poster()}
@@ -81,12 +85,13 @@ func (t TMDB) getJSON(ctx context.Context, path string, v any) error {
 	return nil
 }
 
-// releasedParts keeps the parts released by today, a YYYY-MM-DD date, in
-// release order, earlier TMDB IDs first on the same day.
+// releasedParts keeps the parts with a TMDB ID released by today, a
+// YYYY-MM-DD date, in release order, earlier TMDB IDs first on the same
+// day.
 func releasedParts(parts []tmdbCollectionPart, today string) []tmdbCollectionPart {
 	out := make([]tmdbCollectionPart, 0, len(parts))
 	for _, p := range parts {
-		if _, err := time.Parse(time.DateOnly, p.ReleaseDate); err != nil || p.ReleaseDate > today {
+		if _, err := time.Parse(time.DateOnly, p.ReleaseDate); err != nil || p.ReleaseDate > today || p.ID <= 0 {
 			continue
 		}
 		out = append(out, p)

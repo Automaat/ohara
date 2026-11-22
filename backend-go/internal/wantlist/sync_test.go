@@ -37,6 +37,8 @@ type fakeDiscogs struct {
 	wants         []int64
 	dates         map[int64]time.Time
 	writes        []string
+	log           []string
+	beforePage    func(page int)
 	pages         []int
 	failWrite     int
 	failStatus    int
@@ -73,7 +75,14 @@ func (f *fakeDiscogs) list(w http.ResponseWriter, r *http.Request) {
 		per = 50
 	}
 	f.mu.Lock()
+	hook := f.beforePage
+	f.mu.Unlock()
+	if hook != nil {
+		hook(page)
+	}
+	f.mu.Lock()
 	f.pages = append(f.pages, page)
+	f.log = append(f.log, "GET page "+strconv.Itoa(page))
 	all := slices.Clone(f.wants)
 	dates := maps.Clone(f.dates)
 	f.mu.Unlock()
@@ -101,6 +110,7 @@ func (f *fakeDiscogs) write(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.writes = append(f.writes, r.Method+" "+strconv.FormatInt(id, 10))
+	f.log = append(f.log, r.Method+" "+strconv.FormatInt(id, 10))
 	if r.Method == http.MethodPut && f.redirectPut {
 		http.Redirect(w, r, "/oauth/identity", http.StatusFound)
 		return
@@ -752,5 +762,138 @@ func TestHandAddWhileTheAddWaitsIsNeverClaimed(t *testing.T) {
 	}
 	if writes, wants := fake.took(); len(writes) != 0 || !slices.Equal(wants, []int64{301}) {
 		t.Fatalf("a want the owner added while Ohara's add waited was removed: writes %v, wantlist %v", writes, wants)
+	}
+}
+
+// first moves release id to the top of the fake wantlist, as a list
+// sorted newest first would show it.
+func (f *fakeDiscogs) first(id int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	at := slices.Index(f.wants, id)
+	f.wants = slices.Insert(slices.Delete(f.wants, at, at+1), 0, id)
+}
+
+// requests returns the requests to the wantlist since the last call.
+func (f *fakeDiscogs) requests() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	log := f.log
+	f.log = nil
+	return log
+}
+
+func TestHandReAddWhileOtherPagesAreReadIsNeverRemoved(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	long := make([]int64, 0, 150)
+	for id := int64(10000); id < 10150; id++ {
+		long = append(long, id)
+	}
+	fake, client := newFakeDiscogs(t, long...)
+	store := NewStore(pool)
+	syncer := NewSyncer(store, client, nil)
+	copyID := wish(t, pool, "music", 777)
+	mustSync(t, syncer)
+	fake.took()
+	fake.first(777)
+	exec(t, pool, `DELETE FROM copy WHERE id = $1`, copyID)
+	fake.requests()
+
+	firstPages, done := 0, false
+	fake.mu.Lock()
+	fake.beforePage = func(page int) {
+		if page == 1 {
+			firstPages++
+			return
+		}
+		if firstPages == 2 && !done {
+			done = true
+			fake.byHand(777)
+		}
+	}
+	fake.mu.Unlock()
+	mustSync(t, syncer)
+	if writes, _ := fake.took(); done && slices.Contains(writes, "DELETE 777") {
+		t.Fatalf("a want re-added by hand while the sync read other pages was removed: %v", writes)
+	}
+}
+
+func TestRemovalReadsOnlyTheWantsPageRightBefore(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	long := make([]int64, 0, 250)
+	for id := int64(20000); id < 20245; id++ {
+		long = append(long, id)
+	}
+	fake, client := newFakeDiscogs(t, long...)
+	store := NewStore(pool)
+	syncer := NewSyncer(store, client, nil)
+	gone := make([]int64, 0, 5)
+	for release := int64(901); release <= 905; release++ {
+		gone = append(gone, wish(t, pool, "music", release))
+	}
+	mustSync(t, syncer)
+	fake.took()
+	for _, id := range gone {
+		exec(t, pool, `DELETE FROM copy WHERE id = $1`, id)
+	}
+	fake.requests()
+
+	if got, want := mustSync(t, syncer), (Result{Removed: 5}); got != want {
+		t.Fatalf("sync = %+v, want %+v", got, want)
+	}
+	log := fake.requests()
+	gets := 0
+	for i, r := range log {
+		if strings.HasPrefix(r, "GET ") {
+			gets++
+			continue
+		}
+		if i == 0 || log[i-1] != "GET page 3" {
+			t.Fatalf("%s did not follow a read of the page holding the want: %v", r, log)
+		}
+	}
+	if gets != 3+5 {
+		t.Fatalf("%d wantlist reads for 5 removals on 3 pages, want 8: %v", gets, log)
+	}
+}
+
+func TestWantMovedOffItsPageIsLeftForTheNextSync(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	long := make([]int64, 0, 150)
+	for id := int64(30000); id < 30150; id++ {
+		long = append(long, id)
+	}
+	fake, client := newFakeDiscogs(t, long...)
+	store := NewStore(pool)
+	syncer := NewSyncer(store, client, nil)
+	copyID := wish(t, pool, "music", 951)
+	mustSync(t, syncer)
+	fake.took()
+	exec(t, pool, `DELETE FROM copy WHERE id = $1`, copyID)
+
+	reads := 0
+	fake.mu.Lock()
+	fake.beforePage = func(int) {
+		reads++
+		if reads == 3 {
+			fake.first(951)
+		}
+	}
+	fake.mu.Unlock()
+	if got, want := mustSync(t, syncer), (Result{}); got != want {
+		t.Fatalf("sync = %+v, want %+v", got, want)
+	}
+	if writes, _ := fake.took(); len(writes) != 0 {
+		t.Fatalf("a want missing from its page was removed: %v", writes)
+	}
+	if got := recorded(t, store); !slices.Equal(got, []int64{951}) {
+		t.Fatalf("recorded %v, want it kept for the next sync", got)
+	}
+
+	fake.mu.Lock()
+	fake.beforePage = nil
+	fake.mu.Unlock()
+	if got, want := mustSync(t, syncer), (Result{Removed: 1}); got != want {
+		t.Fatalf("next sync = %+v, want %+v", got, want)
 	}
 }

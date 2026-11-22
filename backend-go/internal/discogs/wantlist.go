@@ -33,11 +33,13 @@ func (c *Client) Identity(ctx context.Context) (string, error) {
 	return r.Username, err
 }
 
-// Want is one release on a wantlist and when it was put there; DateAdded
-// is zero when Discogs sent none that parses.
+// Want is one release on a wantlist, when it was put there and the page
+// (of wantsPerPage wants) it was listed on; DateAdded is zero when Discogs
+// sent none that parses.
 type Want struct {
 	ID        int64
 	DateAdded time.Time
+	Page      int
 }
 
 // Wants returns the wants on the wantlist of username, every page of it.
@@ -47,37 +49,49 @@ func (c *Client) Wants(ctx context.Context, username string) ([]Want, error) {
 		if page > maxWantPages {
 			return nil, ErrWantlistTooLong
 		}
-		q := url.Values{"page": {strconv.Itoa(page)}, "per_page": {strconv.Itoa(wantsPerPage)}}
-		var r struct {
-			Pagination *struct {
-				Pages int `json:"pages"`
-			} `json:"pagination"`
-			Wants []struct {
-				ID        int64  `json:"id"`
-				DateAdded string `json:"date_added"`
-			} `json:"wants"`
-		}
-		if err := c.get(ctx, wantsPath(username)+"?"+q.Encode(), &r, func() error {
-			if r.Pagination == nil {
-				return errors.New("no pagination field")
-			}
-			return nil
-		}); err != nil {
+		listed, pages, err := c.WantsPage(ctx, username, page)
+		if err != nil {
 			return nil, err
 		}
-		for _, w := range r.Wants {
-			if w.ID > 0 {
-				added, err := time.Parse(time.RFC3339, w.DateAdded)
-				if err != nil {
-					added = time.Time{}
-				}
-				wants = append(wants, Want{ID: w.ID, DateAdded: added})
-			}
-		}
-		if page >= r.Pagination.Pages {
+		wants = append(wants, listed...)
+		if page >= pages {
 			return wants, nil
 		}
 	}
+}
+
+// WantsPage returns one page of the wantlist of username and how many
+// pages it has.
+func (c *Client) WantsPage(ctx context.Context, username string, page int) ([]Want, int, error) {
+	q := url.Values{"page": {strconv.Itoa(page)}, "per_page": {strconv.Itoa(wantsPerPage)}}
+	var r struct {
+		Pagination *struct {
+			Pages int `json:"pages"`
+		} `json:"pagination"`
+		Wants []struct {
+			ID        int64  `json:"id"`
+			DateAdded string `json:"date_added"`
+		} `json:"wants"`
+	}
+	if err := c.get(ctx, wantsPath(username)+"?"+q.Encode(), &r, func() error {
+		if r.Pagination == nil {
+			return errors.New("no pagination field")
+		}
+		return nil
+	}); err != nil {
+		return nil, 0, err
+	}
+	var wants []Want
+	for _, w := range r.Wants {
+		if w.ID > 0 {
+			added, err := time.Parse(time.RFC3339, w.DateAdded)
+			if err != nil {
+				added = time.Time{}
+			}
+			wants = append(wants, Want{ID: w.ID, DateAdded: added, Page: page})
+		}
+	}
+	return wants, r.Pagination.Pages, nil
 }
 
 // AddWant puts release id on the wantlist of username, with no notes or

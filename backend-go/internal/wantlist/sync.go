@@ -18,6 +18,7 @@ import (
 type Discogs interface {
 	Identity(ctx context.Context) (string, error)
 	Wants(ctx context.Context, username string) ([]discogs.Want, error)
+	WantsPage(ctx context.Context, username string, page int) ([]discogs.Want, int, error)
 	// AddWant returns when the request left, after any wait for the
 	// rate budget.
 	AddWant(ctx context.Context, username string, id int64) (time.Time, error)
@@ -150,8 +151,8 @@ const clockSkew = 10 * time.Second
 // sending and the confirmation (give or take clockSkew); no later sync
 // does, so a want the owner removes and re-adds by hand between syncs
 // never passes as Ohara's. A want is taken off only when the listed one
-// still has that date_added in a wantlist read right before the DELETE,
-// so a want the owner re-adds by hand while the sync runs is seen. A want
+// still has that date_added on its page, read again right before the
+// DELETE, so a want the owner re-adds by hand while the sync runs is seen. A want
 // the owner had already, re-added by hand, or whose add has no
 // confirmation (canceled, a lost answer, a server error) is never
 // removed: its record is forgotten instead. A removal is forgotten only
@@ -190,12 +191,14 @@ func (s *Syncer) Sync(ctx context.Context) (Result, error) {
 		}
 		a, err := s.add(ctx, username, id)
 		if err != nil {
-			return res, errors.Join(err, s.identify(ctx, username, adds))
+			_, ierr := s.identify(ctx, username, adds, on)
+			return res, errors.Join(err, ierr)
 		}
 		adds = append(adds, a)
 		res.Added++
 	}
-	if err := s.identify(ctx, username, adds); err != nil {
+	latest, err := s.identify(ctx, username, adds, on)
+	if err != nil {
 		return res, err
 	}
 	for _, o := range owned {
@@ -209,7 +212,7 @@ func (s *Syncer) Sync(ctx context.Context) (Result, error) {
 				return res, err
 			}
 		default:
-			removed, err := s.remove(ctx, username, o)
+			removed, err := s.remove(ctx, username, o, latest)
 			if err != nil {
 				return res, err
 			}
@@ -221,24 +224,33 @@ func (s *Syncer) Sync(ctx context.Context) (Result, error) {
 	return res, nil
 }
 
-// remove reads the wantlist again and takes o off it when the listed want
-// still has o's date_added, then forgets o; a want that changed since the
-// sync's first read is only forgotten. It says whether it sent a removal.
-func (s *Syncer) remove(ctx context.Context, username string, o Owned) (bool, error) {
-	wants, err := s.discogs.Wants(ctx, username)
+// remove takes o off the wantlist when it is still provably Ohara's. It
+// reads only the page that held o in the sync's latest full read, right
+// before the DELETE, and sends it when o is there with its recorded
+// date_added. o listed there with another date_added is the owner's now
+// and is forgotten; o missing from that page (gone, or moved as the list
+// changed) is left for the next sync's full read. It says whether it sent
+// a removal.
+func (s *Syncer) remove(ctx context.Context, username string, o Owned, latest map[int64]discogs.Want) (bool, error) {
+	at, listed := latest[o.Release]
+	if !listed {
+		return false, s.store.Forget(ctx, username, o.Release)
+	}
+	page, _, err := s.discogs.WantsPage(ctx, username, at.Page)
 	if err != nil {
 		return false, err
 	}
-	still := provable(o, listing(wants))
-	if still {
-		if err := s.discogs.RemoveWant(ctx, username, o.Release); err != nil {
-			return false, err
-		}
+	on := listing(page)
+	if _, ok := on[o.Release]; !ok {
+		return false, nil
 	}
-	if err := s.store.Forget(ctx, username, o.Release); err != nil {
+	if !provable(o, on) {
+		return false, s.store.Forget(ctx, username, o.Release)
+	}
+	if err := s.discogs.RemoveWant(ctx, username, o.Release); err != nil {
 		return false, err
 	}
-	return still, nil
+	return true, s.store.Forget(ctx, username, o.Release)
 }
 
 // added is an add Discogs accepted: the release and Ohara's clock from
@@ -248,44 +260,46 @@ type added struct {
 	sent, done time.Time
 }
 
-func listing(wants []discogs.Want) map[int64]time.Time {
-	on := make(map[int64]time.Time, len(wants))
+func listing(wants []discogs.Want) map[int64]discogs.Want {
+	on := make(map[int64]discogs.Want, len(wants))
 	for _, w := range wants {
-		on[w.ID] = w.DateAdded
+		on[w.ID] = w
 	}
 	return on
 }
 
 // identify reads the wantlist once more and records the date_added of each
-// of this sync's adds whose listed want falls within its request. An add
-// left unidentified, because this read fails or the date does not fit,
-// can never lead to a removal.
-func (s *Syncer) identify(ctx context.Context, username string, adds []added) error {
+// of this sync's adds whose listed want falls within its request, and
+// returns that read, or before when there were no adds. An add left
+// unidentified, because this read fails or the date does not fit, can
+// never lead to a removal.
+func (s *Syncer) identify(ctx context.Context, username string, adds []added, before map[int64]discogs.Want) (map[int64]discogs.Want, error) {
 	if len(adds) == 0 {
-		return nil
+		return before, nil
 	}
 	wants, err := s.discogs.Wants(ctx, username)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	on := listing(wants)
 	for _, a := range adds {
-		date, listed := on[a.release]
-		if !listed || date.IsZero() || date.Before(a.sent.Add(-clockSkew)) || date.After(a.done.Add(clockSkew)) {
+		date := on[a.release].DateAdded
+		if _, listed := on[a.release]; !listed || date.IsZero() ||
+			date.Before(a.sent.Add(-clockSkew)) || date.After(a.done.Add(clockSkew)) {
 			continue
 		}
 		if err := s.store.Identify(ctx, username, a.release, date); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return nil
+	return on, nil
 }
 
 // provable says the listed want is the one Ohara added: the record holds
 // its date_added.
-func provable(o Owned, on map[int64]time.Time) bool {
-	date, listed := on[o.Release]
-	return listed && o.DiscogsAddedAt != nil && o.DiscogsAddedAt.Equal(date)
+func provable(o Owned, on map[int64]discogs.Want) bool {
+	w, listed := on[o.Release]
+	return listed && o.DiscogsAddedAt != nil && o.DiscogsAddedAt.Equal(w.DateAdded)
 }
 
 // add records release id as pending, puts it on the wantlist and confirms

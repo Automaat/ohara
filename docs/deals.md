@@ -175,18 +175,27 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   again and keeps each confirmed want's `date_added` when it falls between
   the add leaving (after its turn in the Discogs budget, which
   `discogs.Client.AddWant` returns) and its answer, give or take 10 s of
-  clock skew; no later sync does. Before each `DELETE` the sync reads the
-  wantlist once more and sends it only when the listed want still has
-  that `date_added`, so a want the owner re-adds by hand while the sync
-  runs is only forgotten. A want that was there before, one the owner
-  re-added by hand (a new `date_added`) and one left unidentified (an add
-  with no confirmation: a canceled sync, a lost answer, a 5xx; or a
-  failed second read) is never removed; its row is forgotten instead.
+  clock skew; no later sync does. Before each `DELETE` the sync reads
+  again only the page (100 wants) that held the want in its latest full
+  read and sends the `DELETE` only when the want is there with that
+  `date_added`. Listed there with another `date_added` it is the owner's
+  and its row is forgotten; missing from that page (gone, or moved as the
+  list changed) it waits for the next sync's full read. A want that was
+  there before, one the owner re-added by hand (a new `date_added`) and
+  one left unidentified (an add with no confirmation: a canceled sync, a
+  lost answer, a 5xx; or a failed second read) is never removed; its row
+  is forgotten instead.
 - What can still pass as Ohara's: a hand add or re-add of the same release
   whose `date_added` lands within 10 s of Ohara's add request (before it
-  left or after its answer), and a hand re-add between the read before a
-  `DELETE` and the `DELETE` itself (one turn in the budget, about 1.2 s
-  when it is busy). A sync with nothing to change sends no write.
+  left or after its answer), and a hand re-add between the answer to the
+  page read before a `DELETE` and the `DELETE` leaving: one turn in the
+  Discogs budget, about 1.2 s when it is busy. Discogs has no conditional
+  delete, and no documentation found confirms a newest-first `sort` for
+  the wantlist, so the sync does not rely on one.
+- Cost on a wantlist of P pages: one full read (P requests), one more
+  after any adds (P), one request per add, and two per removal (its page
+  and the `DELETE`), all as `Background` in the shared budget. A sync
+  with nothing to change sends no write.
 - An add writes its row first, so a database failure stops the sync
   before the request; Discogs refusing it (a redirect or a 4xx, 429
   included) drops the row. A removal forgets the row only after Discogs

@@ -334,8 +334,9 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   Good, `fair` Good, `poor` Poor; `mid_grade` names it), Very Good Plus
   for a copy without a condition or whose grade has no suggestion. A
   release's prices are stored in one transaction, so a grade counts only
-  when the edition's newest suggestions answer named it; a failed request
-  keeps the last answer. The suggestion replaces the OLX mid and is never
+  when the edition's newest answer naming any middle grade named it; an
+  answer naming none (`{}`, Mint only) or a failed request keeps the last
+  answer (#411). The suggestion replaces the OLX mid and is never
   low confidence. Each run upserts today's `valuation_history` row and
   sets the `ohara_collection_*` gauges. Skupksiazek.pl (cart behind an
   app flow) and Rivendo (manual form with photos) have no automatic

@@ -23,7 +23,11 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   media word, a release year or the author, or anything right after the
   author, and a lone letter before a space ("M Fritz Lang"); the
   edition's format for movies, the author's surname in any case for
-  books ("Andrzeja Sapkowskiego", "Lalka Prusa"), the artist's words
+  books ("Andrzeja Sapkowskiego", "Lalka Prusa") and, for an audiobook
+  only, a word naming one ("audiobook", "audiobooka", "audiobuk",
+  "audioksiążka", not after "bez", "brak" or "nie", and more often than the
+  want's own name or author does; a print book skips such listings, and
+  an audiobook's queries add "audiobook"), the artist's words
   and a fitting medium for
   albums, where a listing naming no medium counts as a CD, minus the
   editable reject phrases a want's own name or artist does not contain),

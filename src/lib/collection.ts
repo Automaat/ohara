@@ -4,6 +4,7 @@ import { editionCount, orderedCount, purchaseDate, titleCount } from './polish';
 import type {
 	AcquiredAs,
 	Binding,
+	BookFormat,
 	CollectionItem,
 	Condition,
 	CopyPayload,
@@ -30,6 +31,7 @@ import type {
 export type {
 	AcquiredAs,
 	Binding,
+	BookFormat,
 	BoxSet,
 	CollectionItem,
 	CollectionView,
@@ -87,9 +89,22 @@ export const musicFormatLabels: Record<MusicFormat, string> = {
 	vinyl: 'Winyl',
 	cassette: 'Kaseta'
 };
-export const formatLabels: Record<Format, string> = { ...movieFormatLabels, ...musicFormatLabels };
+export const bookFormatLabels: Record<BookFormat, string> = { audiobook: 'Audiobook' };
+export const formatLabels: Record<Format, string> = {
+	...movieFormatLabels,
+	...musicFormatLabels,
+	...bookFormatLabels
+};
 
-/** The formats a title of kind comes in, as select options; books have none. */
+/** A book edition's format: audiobook, or none for print, which alone takes a binding. */
+export function bookFormat(format: Format | '' | null | undefined): BookFormat | null {
+	return format === 'audiobook' ? format : null;
+}
+
+/**
+ * The formats a title of kind must take one of, as select options; a book takes none, as print
+ * has no format and an audiobook is optional (bookFormat).
+ */
 export function formatOptions(kind: Kind): { value: Format; label: string }[] {
 	if (screenKind(kind)) return options(movieFormatLabels);
 	if (kind === 'music') return options(musicFormatLabels);
@@ -761,9 +776,11 @@ export function editionPayload(
 	if (!year.ok) return year;
 	const movie = screenKind(kind);
 	const music = kind === 'music';
+	const book = kind === 'book';
 	if ((movie || music) && !formatFits(kind, f.format)) {
 		return { ok: false, issue: { field: 'format', message: 'Wybierz nośnik.' } };
 	}
+	const audiobook = book ? bookFormat(f.format) : null;
 	const discogs = music
 		? parseOptInt(f.discogs_release_id, 'discogs_release_id', 'Identyfikator Discogs to liczba.')
 		: ({ ok: true, value: null } as const);
@@ -776,11 +793,11 @@ export function editionPayload(
 			label: f.label.trim(),
 			publisher: f.publisher.trim(),
 			year: year.value,
-			format: (movie || music) && f.format ? f.format : null,
+			format: (movie || music) && f.format ? f.format : audiobook,
 			pl_subtitles: movie ? f.pl_subtitles : 'unknown',
 			pl_voiceover: movie ? f.pl_voiceover : 'unknown',
 			packaging: movie ? f.packaging : [],
-			binding: kind === 'book' && f.binding ? f.binding : null,
+			binding: book && !audiobook && f.binding ? f.binding : null,
 			discogs_release_id: discogs.value,
 			cover_url: f.cover_url.trim(),
 			notes: f.notes.trim(),

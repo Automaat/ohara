@@ -12,9 +12,10 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   read, the queue count following a queued scan, its add and undo,
   Kolekcja's filters, which also run at 1440 × 900, and its sort orders
   under active filters, tags from the title form to Kolekcja's filter,
-  series from the title form and Kolekcja to the series page,
-  cover photo uploads, the collection export, Statystyki with its value
-  sections, the insurance report
+  a book edition marked as an audiobook in its form, on the shelf and in
+  the "Nośnik" filter, series from the title form and Kolekcja to the
+  series page, cover photo uploads, the collection export, Statystyki with
+  its value sections, the insurance report
   with its A4 printout, and the wishlist share link from Okazje with its
   public page, opened in a context without cookies and asking nothing
   outside `/share/`. `scripts/e2e.sh` builds

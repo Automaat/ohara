@@ -592,6 +592,57 @@ func TestEditionKindRules(t *testing.T) {
 	}
 }
 
+func TestBookAudiobookFormat(t *testing.T) {
+	a := newAPI(t)
+	book := a.title("book", "Ostatnie życzenie")
+	movie := a.title("movie", "Wiedźmin")
+	album := a.title("music", "Wiedźmin 3")
+
+	for _, f := range []string{"dvd", "bluray", "uhd", "cd", "vinyl", "cassette"} {
+		a.fails(http.MethodPost, "/api/editions", obj{"title_id": book, "format": f}, http.StatusUnprocessableEntity, "format")
+	}
+	a.fails(http.MethodPost, "/api/editions", obj{"title_id": book, "format": "mp3"}, http.StatusUnprocessableEntity, "format")
+	a.fails(http.MethodPost, "/api/editions", obj{"title_id": book, "format": "audiobook", "binding": "paperback"},
+		http.StatusUnprocessableEntity, "binding")
+	a.fails(http.MethodPost, "/api/editions", obj{"title_id": movie, "format": "audiobook"}, http.StatusUnprocessableEntity, "format")
+	a.fails(http.MethodPost, "/api/editions", obj{"title_id": album, "format": "audiobook"}, http.StatusUnprocessableEntity, "format")
+
+	var paper collection.Edition
+	a.mustDo(http.MethodPost, "/api/editions", obj{"title_id": book, "binding": "paperback"}, &paper, http.StatusCreated)
+	if paper.Format != nil || deref(paper.Binding) != "paperback" {
+		t.Fatalf("print edition = %+v", paper)
+	}
+	var audio collection.Edition
+	a.mustDo(http.MethodPost, "/api/editions", obj{"title_id": book, "barcode": "9788375780420", "format": " audiobook "}, &audio, http.StatusCreated)
+	if deref(audio.Format) != "audiobook" || audio.Binding != nil {
+		t.Fatalf("audiobook edition = %+v", audio)
+	}
+	a.fails(http.MethodPut, fmt.Sprintf("/api/editions/%d", audio.ID), obj{"title_id": book, "format": "audiobook", "binding": "hardcover"},
+		http.StatusUnprocessableEntity, "binding")
+	a.fails(http.MethodPut, fmt.Sprintf("/api/editions/%d", audio.ID), obj{"title_id": movie, "format": "audiobook"},
+		http.StatusUnprocessableEntity, "format")
+	var printed collection.Edition
+	a.mustDo(http.MethodPut, fmt.Sprintf("/api/editions/%d", audio.ID), obj{"title_id": book, "barcode": "9788375780420", "binding": "hardcover"},
+		&printed, http.StatusOK)
+	if printed.Format != nil || deref(printed.Binding) != "hardcover" {
+		t.Fatalf("edition back to print = %+v", printed)
+	}
+	a.mustDo(http.MethodPut, fmt.Sprintf("/api/editions/%d", audio.ID), obj{"title_id": book, "barcode": "9788375780420", "format": "audiobook"},
+		&audio, http.StatusOK)
+
+	a.copyOf(obj{"edition_id": audio.ID, "status": "owned"})
+	a.copyOf(obj{"edition_id": paper.ID, "status": "owned"})
+	var view collection.CollectionView
+	a.mustDo(http.MethodGet, "/api/collection?format=audiobook", nil, &view, http.StatusOK)
+	if len(view.Items) != 1 || view.Items[0].EditionID != audio.ID || deref(view.Items[0].Format) != "audiobook" {
+		t.Fatalf("audiobook view = %+v", view.Items)
+	}
+	a.mustDo(http.MethodGet, "/api/collection?kind=book", nil, &view, http.StatusOK)
+	if len(view.Items) != 2 {
+		t.Fatalf("book view = %+v", view.Items)
+	}
+}
+
 func TestMusicEdition(t *testing.T) {
 	a := newAPI(t)
 	album := a.title("music", "Kind of Blue")

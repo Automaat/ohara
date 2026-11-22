@@ -43,6 +43,7 @@ export const formatGroupLabels: Record<Format | 'book' | 'none', string> = {
 	bluray: 'Blu-ray',
 	uhd: '4K UHD',
 	book: 'Książki',
+	audiobook: 'Audiobooki',
 	cd: 'CD',
 	vinyl: 'Winyl',
 	cassette: 'Kaseta',
@@ -55,6 +56,7 @@ const formatOrder: (Format | 'book' | 'none')[] = [
 	'bluray',
 	'uhd',
 	'book',
+	'audiobook',
 	'cd',
 	'vinyl',
 	'cassette',
@@ -108,8 +110,8 @@ export function valueByKind(copies: readonly ValueItem[]): ValueGroup[] {
 }
 
 /**
- * The valued copies per format, the most valuable first, books (which have no format) as one
- * group; formats without copies are left out.
+ * The valued copies per format, the most valuable first, print books (which have no format) as
+ * one group and audiobooks as another; formats without copies are left out.
  */
 export function valueByFormat(copies: readonly ValueItem[]): ValueGroup[] {
 	return groupBy(copies, formatOrder, formatGroupLabels, (c) =>

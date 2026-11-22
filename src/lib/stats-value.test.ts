@@ -157,6 +157,18 @@ describe('valueByFormat', () => {
 		expect(byKey.get('vinyl')).toMatchObject({ lowConfidence: 0 });
 	});
 
+	it('puts audiobooks in a group apart from print books', () => {
+		const groups = valueByFormat([
+			copy({ kind: 'book', format: null, mid: olx(500) }),
+			copy({ kind: 'book', format: 'audiobook', mid: olx(1500) }),
+			copy({ kind: 'book', format: 'audiobook', mid: null })
+		]);
+		expect(groups.map((g) => [g.key, g.label, g.midCents, g.copies])).toEqual([
+			['audiobook', 'Audiobooki', 1500, 2],
+			['book', 'Książki', 500, 1]
+		]);
+	});
+
 	it('puts a movie without a format apart from books', () => {
 		const groups = valueByFormat([copy({ format: null, mid: olx(100) })]);
 		expect(groups.map((g) => [g.key, g.label])).toEqual([['none', 'Bez nośnika']]);

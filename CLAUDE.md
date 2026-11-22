@@ -263,9 +263,12 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   (Telegram keeps a callback only minutes, not the 24 hours it keeps
   other updates), and one sent again is applied once:
   `Store.DismissPress` records its callback id in `telegram_press` in the
-  dismissal's transaction, so a replay never undoes a later "Cofnij". A
-  failed poll (a webhook set on the bot answers 409) is logged and
-  retried after 30 s.
+  dismissal's transaction, so a replay never undoes a later "Cofnij"; it
+  is only answered and its button taken off again. A dismissal that fails
+  for now (a database error, or the listing's row held past the step's
+  10 s) leaves the press unanswered and unconfirmed, and the poller asks
+  for it again after 30 s. A failed poll (a webhook set on the bot
+  answers 409) is logged and retried after 30 s.
   The wish a listing was recorded for (`raw.wishlist_copy_id`) is also the
   generated, indexed column `wishlist_copy_id`, so the deals list's filters
   start from wished listings instead of reading every observation.

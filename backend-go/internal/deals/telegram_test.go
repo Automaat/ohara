@@ -488,7 +488,7 @@ func TestTelegramReplayedPressKeepsUndo(t *testing.T) {
 	stop := runPoller(poller())
 	waitUntil(t, "the press served again", func() bool {
 		calls := double.snapshot()
-		return len(calls.answers) == 1 && len(calls.polls) >= 3
+		return len(calls.answers) >= 2 && len(calls.polls) >= 3
 	})
 	stop()
 	if !isDismissed(t, pool, ids["a"]) {
@@ -504,8 +504,63 @@ func TestTelegramReplayedPressKeepsUndo(t *testing.T) {
 	if isDismissed(t, pool, ids["a"]) {
 		t.Fatal("replayed press undid Cofnij")
 	}
-	if calls := double.snapshot(); len(calls.answers) != 1 || len(calls.edits) != 1 {
-		t.Fatalf("answers %v, edits %v, want the press answered and its button removed once", calls.answers, calls.edits)
+	for _, a := range double.snapshot().answers {
+		if a["callback_query_id"] != "q10" || a["text"] != "Zignorowano" {
+			t.Fatalf("replay answered %v, want the first answer again", a)
+		}
+	}
+}
+
+func TestTelegramPressRetriedPastRowLock(t *testing.T) {
+	pool, store, ids := pressListings(t, "a")
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM price_observation WHERE id = $1 FOR UPDATE`, ids["a"]); err != nil {
+		t.Fatal(err)
+	}
+	double, srv := newBotDouble(t)
+	double.press(10, 42, pressData(ids["a"]))
+	stop := runPoller(&TelegramPoller{
+		Bot: bot(srv), Store: store, Logger: slog.New(slog.DiscardHandler),
+		Pause: 20 * time.Millisecond, pressTimeout: 50 * time.Millisecond,
+	})
+	waitUntil(t, "a poll after the failed dismissal", func() bool { return len(double.snapshot().polls) >= 2 })
+	if calls := double.snapshot(); len(calls.answers) != 0 || calls.polls[1]["offset"] != "" {
+		t.Fatalf("answers %v, second poll %v, want the press left unanswered and unconfirmed", calls.answers, calls.polls[1])
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "the press answered after the lock", func() bool { return len(double.snapshot().answers) == 1 })
+	stop()
+	if calls := double.snapshot(); calls.answers[0]["text"] != "Zignorowano" || calls.queued != 0 {
+		t.Fatalf("answers %v, %d queued, want the press applied and confirmed", calls.answers, calls.queued)
+	}
+	if !isDismissed(t, pool, ids["a"]) {
+		t.Fatal("press lost behind the row lock")
+	}
+}
+
+func TestTelegramReplayFinishesUnansweredPress(t *testing.T) {
+	pool, store, ids := pressListings(t, "a")
+	if err := store.DismissPress(context.Background(), "q10", ids["a"]); err != nil {
+		t.Fatal(err)
+	}
+	double, srv := newBotDouble(t)
+	double.press(10, 42, pressData(ids["a"]))
+	stop := runPoller(&TelegramPoller{Bot: bot(srv), Store: store, Logger: slog.New(slog.DiscardHandler)})
+	waitUntil(t, "the edit", func() bool { return len(double.snapshot().edits) == 1 })
+	stop()
+	calls := double.snapshot()
+	if len(calls.answers) != 1 || calls.answers[0]["text"] != "Zignorowano" || calls.edits[0]["message_id"] != "110" {
+		t.Fatalf("answers %v, edits %v, want the press applied before a crash answered and its button removed", calls.answers, calls.edits)
+	}
+	if !isDismissed(t, pool, ids["a"]) {
+		t.Fatal("listing not dismissed")
 	}
 }
 

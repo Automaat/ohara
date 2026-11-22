@@ -114,16 +114,8 @@ func (p *TelegramPoller) Run(ctx context.Context) {
 			continue
 		}
 		confirmed, batch = true, telegramBatch
-		for i := range updates {
-			if ctx.Err() != nil {
-				break
-			}
-			u := &updates[i]
-			offset = max(offset, u.UpdateID+1)
-			confirmed = false
-			if u.CallbackQuery != nil {
-				p.press(ctx, u.CallbackQuery)
-			}
+		if !p.handle(ctx, updates, &offset, &confirmed) && sleepCtx(ctx, pause) != nil {
+			break
 		}
 	}
 	if confirmed {
@@ -143,6 +135,26 @@ func (p *TelegramPoller) logger() *slog.Logger {
 	return p.Logger
 }
 
+// handle handles updates in order and moves offset past each one handled.
+// Once ctx ends it leaves the rest for the next start. A press whose
+// dismissal failed for now, such as a listing row locked past the step's
+// timeout, stops the batch unanswered and unconfirmed, so the next poll
+// gets it again: handle then reports false and Run waits Pause first.
+func (p *TelegramPoller) handle(ctx context.Context, updates []telegramUpdate, offset *int64, confirmed *bool) bool {
+	for i := range updates {
+		if ctx.Err() != nil {
+			return true
+		}
+		u := &updates[i]
+		if u.CallbackQuery != nil && !p.press(ctx, u.CallbackQuery) {
+			return false
+		}
+		*offset = max(*offset, u.UpdateID+1)
+		*confirmed = false
+	}
+	return true
+}
+
 // stepContext bounds one step of handling a press or confirming updates,
 // detached from ctx so shutdown does not cut it short.
 func (p *TelegramPoller) stepContext(ctx context.Context) (context.Context, context.CancelFunc) {
@@ -153,18 +165,20 @@ func (p *TelegramPoller) stepContext(ctx context.Context) (context.Context, cont
 	return context.WithTimeout(context.WithoutCancel(ctx), timeout)
 }
 
-// pressOutcome is what a press did: the answer to show, the message whose
-// button to take off, or a replay of a press already applied.
+// pressOutcome is what a press did: the answer to show and the message
+// whose button to take off, or a failure worth trying again.
 type pressOutcome struct {
 	answer string
 	edit   *telegramMessage
-	replay bool
+	retry  bool
 }
 
-// press handles one button press. It answers first, so the client stops
-// its progress bar however long the keyboard edit takes; a replayed press
-// was answered when it was applied and gets nothing more.
-func (p *TelegramPoller) press(ctx context.Context, q *callbackQuery) {
+// press handles one button press and reports false when it should be
+// tried again. It answers first, so the client stops its progress bar
+// however long the keyboard edit takes. A press applied before, whose
+// answer or edit may not have gone out, gets both again without a second
+// dismissal.
+func (p *TelegramPoller) press(ctx context.Context, q *callbackQuery) bool {
 	logger := p.logger()
 	applyCtx, cancel := p.stepContext(ctx)
 	out, err := recovery.Call(logger, "telegram press", func() (pressOutcome, error) {
@@ -174,8 +188,8 @@ func (p *TelegramPoller) press(ctx context.Context, q *callbackQuery) {
 	if err != nil {
 		out = pressOutcome{answer: "Nie udało się zignorować, spróbuj ponownie"}
 	}
-	if out.replay {
-		return
+	if out.retry {
+		return false
 	}
 	answerCtx, cancel := p.stepContext(ctx)
 	err = p.Bot.answerCallback(answerCtx, q.ID, out.answer)
@@ -184,13 +198,14 @@ func (p *TelegramPoller) press(ctx context.Context, q *callbackQuery) {
 		logger.Warn("telegram: answer press", "err", err)
 	}
 	if out.edit == nil {
-		return
+		return true
 	}
 	editCtx, cancel := p.stepContext(ctx)
 	defer cancel()
 	if err := p.Bot.removeKeyboard(editCtx, out.edit); err != nil {
 		logger.Warn("telegram: remove button", "err", err)
 	}
+	return true
 }
 
 // apply dismisses the listing a press in the bot's chat names.
@@ -207,12 +222,11 @@ func (p *TelegramPoller) apply(ctx context.Context, q *callbackQuery) pressOutco
 	switch err := p.Store.DismissPress(ctx, q.ID, id); {
 	case errors.Is(err, ErrPressReplayed):
 		logger.Info("telegram: press already applied", "observation", id)
-		return pressOutcome{replay: true}
 	case errors.Is(err, ErrNotFound):
 		return pressOutcome{answer: "Nie ma już tego ogłoszenia"}
 	case err != nil:
-		logger.Warn("telegram: dismiss listing", "observation", id, "err", err)
-		return pressOutcome{answer: "Nie udało się zignorować, spróbuj ponownie"}
+		logger.Warn("telegram: dismiss listing, trying again", "observation", id, "err", err)
+		return pressOutcome{retry: true}
 	}
 	return pressOutcome{answer: "Zignorowano", edit: q.Message}
 }

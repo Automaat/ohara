@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -152,7 +153,8 @@ func prices(ctx context.Context, q querier, window time.Duration, titleID int64)
 		ownedByTitle = ` AND owned.title_id = $5`
 	}
 	rows, err := q.Query(ctx, `SELECT o.edition_id, e.title_id, e.format, o.source,
-			o.price_cents, o.acquired_as, o.last_seen_at, o.observed_at, o.gone_at, t.kind, e.barcode
+			o.price_cents, o.acquired_as, o.last_seen_at, o.observed_at, o.gone_at, t.kind, e.barcode,
+			coalesce(o.raw->>'title', ''), t.name, t.original_title, t.polish_title, t.authors
 		FROM price_observation o JOIN edition e ON e.id = o.edition_id JOIN title t ON t.id = e.title_id
 		WHERE o.source = ANY ($1)
 			AND o.last_seen_at > now() - make_interval(secs => $2)
@@ -168,7 +170,48 @@ func prices(ctx context.Context, q querier, window time.Duration, titleID int64)
 	if err != nil {
 		return nil, fmt.Errorf("prices: %w", err)
 	}
-	return pgx.CollectRows(rows, pgx.RowToStructByPos[Price])
+	type row struct {
+		Price
+		listing string
+		want    deals.Want
+	}
+	read, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (row, error) {
+		var x row
+		p, w := &x.Price, &x.want
+		err := r.Scan(&p.EditionID, &p.TitleID, &p.Format, &p.Source, &p.Cents, &p.AcquiredAs,
+			&p.SeenAt, &p.FirstSeenAt, &p.GoneAt, &p.Kind, &p.Barcode,
+			&x.listing, &w.Name, &w.OriginalTitle, &w.PolishTitle, &w.Authors)
+		return x, err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("prices: %w", err)
+	}
+	out := make([]Price, 0, len(read))
+	wants := map[int64]*deals.Want{}
+	for i := range read {
+		x := &read[i]
+		if x.listing != "" && slices.Contains(pooledSources, x.Source) &&
+			deals.PolishBookEdition(x.Kind, x.Barcode) && !polishWant(wants, x.Price, x.want).Matches(x.listing) {
+			continue
+		}
+		out = append(out, x.Price)
+	}
+	return out, nil
+}
+
+// polishWant is the want of p's Polish book edition, with the names and
+// authors of w, kept in wants so each edition's text is split once. A
+// listing stored while the edition had another barcode was matched by
+// names a Polish edition no longer carries, so a stored price counts
+// only while its listing still matches this want.
+func polishWant(wants map[int64]*deals.Want, p Price, w deals.Want) *deals.Want {
+	if have := wants[p.EditionID]; have != nil {
+		return have
+	}
+	w.EditionID, w.TitleID, w.Kind, w.Format, w.Barcode = p.EditionID, p.TitleID, p.Kind, p.Format, p.Barcode
+	w.Prepare()
+	wants[p.EditionID] = &w
+	return &w
 }
 
 // Markets returns the used price of each title and format the valuation

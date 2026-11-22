@@ -372,7 +372,10 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   mid = median of OLX prices not marked new, outliers beyond 1.5 IQR
   dropped, pooled over every edition of the same title and format, owned,
   wished or without copies, a title's Polish book editions apart from its
-  other ones (the used market of a wish still pools both); an unowned edition's prices count only when
+  other ones (the used market of a wish still pools both), and a Polish
+  book edition's stored OLX price only while its listing title still
+  matches the edition (a barcode that turned Polish drops the foreign
+  listings matched before); an unowned edition's prices count only when
   first seen, or moved to it from another title (`moved_at`), after its
   last change. A mid from fewer than 3 prices is low
   confidence. Only a Discogs release has a ceiling. A stored OLX listing

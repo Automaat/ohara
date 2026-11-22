@@ -1758,3 +1758,44 @@ func TestPolishBookHoldings(t *testing.T) {
 		})
 	}
 }
+
+func TestPolishBookBarcodeEditDropsForeignPrices(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	ctx := context.Background()
+	exec(t, pool, `INSERT INTO title (id, kind, name, original_title, authors) OVERRIDING SYSTEM VALUE
+		VALUES (7, 'book', 'Diuna', 'Dune', '{"Frank Herbert"}')`)
+	exec(t, pool, `INSERT INTO edition (id, title_id, barcode, binding) OVERRIDING SYSTEM VALUE
+		VALUES (70, 7, '9780441013593', 'paperback')`)
+	exec(t, pool, `INSERT INTO copy (edition_id, status) VALUES (70, 'owned')`)
+	olx := &fakeSource{name: "olx", listings: []deals.Listing{
+		listing("en", "Dune Frank Herbert paperback English", 8000, used()),
+		listing("pl", "Diuna Frank Herbert Rebis", 4000, used()),
+	}}
+	store := NewStore(pool)
+	if _, err := newTestRunner(pool, &fakeBuyBack{}, olx).Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	mid := func() any {
+		t.Helper()
+		owned, _, err := store.Valued(ctx, 90*24*time.Hour)
+		if err != nil {
+			t.Fatalf("Valued: %v", err)
+		}
+		if len(owned) != 1 || owned[0].Mid == nil {
+			return nil
+		}
+		return owned[0].Mid.Cents
+	}
+	if got := mid(); got != int64(6000) {
+		t.Fatalf("English edition mid = %v, want 6000 from both listings", got)
+	}
+
+	exec(t, pool, `UPDATE edition SET barcode = '9788381880206', updated_at = now() WHERE id = 70`)
+	olx.listings = nil
+	if _, err := newTestRunner(pool, &fakeBuyBack{}, olx).Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := mid(); got != int64(4000) {
+		t.Errorf("mid after the edition turned Polish = %v, want 4000 from the Polish listing only", got)
+	}
+}

@@ -172,7 +172,7 @@ func (p *Provider) products(ctx context.Context, i int, s NameSource, code strin
 		return nil, fmt.Errorf("name source %d: %w", i, err)
 	}
 	if until, ok := p.pausedUntil(name); ok {
-		return nil, fmt.Errorf("%s: %w, skipped until %s", name, ErrQuotaExceeded, until.UTC().Format(time.RFC3339))
+		return nil, &lookup.PausedError{Err: fmt.Errorf("%s: %w, skipped until %s", name, ErrQuotaExceeded, until.UTC().Format(time.RFC3339))}
 	}
 	found, err := p.within(ctx, s, name, code)
 	if pe, ok := errors.AsType[*recovery.PanicError](err); ok {

@@ -210,6 +210,7 @@ type Service struct {
 	budget   time.Duration
 	now      func() time.Time
 	rechecks recheckLog
+	failures failureLog
 }
 
 // NewService wires the registry. A nil cache disables caching.
@@ -252,6 +253,118 @@ func (l *recheckLog) claim(provider, code string, now time.Time) bool {
 type outcome struct {
 	candidates []Candidate
 	err        error
+}
+
+// FailureRequests is how many requests a cached provider gets for one
+// barcode within FailureWindow while none of them succeeds. Past that,
+// lookups of the barcode answer with the last failure and ask the provider
+// nothing until the window ends, so taps on a code during an outage cannot
+// drain a source's quota. A failed answer is never cached, so without this
+// limit every lookup would ask again.
+const (
+	FailureRequests = 3
+	FailureWindow   = 10 * time.Minute
+)
+
+// PausedError is a failure of a provider's source that made no request:
+// the provider holds the source back until its rate limit resets. A lookup
+// failure made of nothing but pauses does not count toward
+// FailureRequests, so the first lookup after the reset asks again.
+type PausedError struct {
+	Err error
+}
+
+func (e *PausedError) Error() string { return e.Err.Error() }
+
+func (e *PausedError) Unwrap() error { return e.Err }
+
+func (*PausedError) paused() {}
+
+// onlyPaused reports whether err is a PausedError or wraps or joins
+// nothing else.
+func onlyPaused(err error) bool {
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		errs := joined.Unwrap()
+		return len(errs) > 0 && !slices.ContainsFunc(errs, func(err error) bool { return !onlyPaused(err) })
+	}
+	if _, ok := err.(interface{ paused() }); ok {
+		return true
+	}
+	if next := errors.Unwrap(err); next != nil {
+		return onlyPaused(next)
+	}
+	return false
+}
+
+// errNoRequest answers a lookup past FailureRequests whose counted requests
+// are all still in flight, so no failure is known yet.
+var errNoRequest = errors.New("not asked: earlier requests for this code are still pending")
+
+// failureLog counts, in memory, the requests a provider got for a barcode
+// since the first one in the current FailureWindow, until one succeeds.
+type failureLog struct {
+	mu sync.Mutex
+	at map[string]*failures
+}
+
+type failures struct {
+	since    time.Time
+	requests int
+	last     *outcome
+}
+
+// claim counts a request for provider and code at now. It reports false,
+// with the last failure known in the window (nil when none ended yet), when
+// FailureRequests were already counted there.
+func (l *failureLog) claim(provider, code string, now time.Time) (*outcome, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for key, f := range l.at {
+		if now.Sub(f.since) >= FailureWindow {
+			delete(l.at, key)
+		}
+	}
+	key := provider + "\x00" + code
+	f, ok := l.at[key]
+	if !ok {
+		if l.at == nil {
+			l.at = map[string]*failures{}
+		}
+		l.at[key] = &failures{since: now, requests: 1}
+		return nil, true
+	}
+	if f.requests >= FailureRequests {
+		return f.last, false
+	}
+	f.requests++
+	return nil, true
+}
+
+// failed records a counted request's failure as the answer for lookups past
+// the limit.
+func (l *failureLog) failed(provider, code string, o outcome) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if f, ok := l.at[provider+"\x00"+code]; ok {
+		f.last = &o
+	}
+}
+
+// release uncounts a request that ended with its lookup's cancellation.
+func (l *failureLog) release(provider, code string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if f, ok := l.at[provider+"\x00"+code]; ok && f.requests > 0 {
+		f.requests--
+	}
+}
+
+// succeeded forgets the provider's failures for code: its answer is
+// cached now.
+func (l *failureLog) succeeded(provider, code string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.at, provider+"\x00"+code)
 }
 
 // RecheckAfter is how old a provider's cached answer must be before Recheck
@@ -395,6 +508,39 @@ func (s *Service) query(ctx context.Context, e entry, code string, recheck bool,
 			return cands, err
 		}
 	}
+	if e.ttl <= 0 {
+		return s.request(ctx, e, code, deadline)
+	}
+	return s.limitedRequest(ctx, e, code, deadline)
+}
+
+// limitedRequest is request within the provider's FailureRequests for
+// code. A failure of a lookup the client gave up on says nothing about the
+// source, and a pause made no request, so neither counts.
+func (s *Service) limitedRequest(ctx context.Context, e entry, code string, deadline time.Time) ([]Candidate, error) {
+	name := e.provider.Name()
+	if last, ok := s.failures.claim(name, code, s.now()); !ok {
+		if last == nil {
+			return nil, errNoRequest
+		}
+		return last.candidates, last.err
+	}
+	cands, err := s.request(ctx, e, code, deadline)
+	switch {
+	case err == nil:
+		s.failures.succeeded(name, code)
+	case ctx.Err() != nil, onlyPaused(err):
+		s.failures.release(name, code)
+	default:
+		s.failures.failed(name, code, outcome{candidates: cands, err: err})
+	}
+	return cands, err
+}
+
+// request asks the provider, parses its answer and caches it when it is
+// complete.
+func (s *Service) request(ctx context.Context, e entry, code string, deadline time.Time) ([]Candidate, error) {
+	p := e.provider
 	if limit := time.Now().Add(s.timeout); limit.Before(deadline) {
 		deadline = limit
 	}

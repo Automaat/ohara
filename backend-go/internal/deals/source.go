@@ -23,7 +23,8 @@ import (
 
 // Listing is one offer a source found. AcquiredAs is "new", "used" or nil
 // when the source does not say. Raw is the source's own record of the
-// listing, kept for later valuation work.
+// listing, kept for later valuation work. Query is the search a Pager
+// found it with, empty for other sources.
 type Listing struct {
 	Source     string
 	ExternalID string
@@ -33,6 +34,7 @@ type Listing struct {
 	PriceCents int64
 	AcquiredAs *string
 	Raw        json.RawMessage
+	Query      string
 }
 
 func imageURL(value string) string {
@@ -52,6 +54,30 @@ type Source interface {
 	Name() string
 	PerQuery() bool
 	Search(ctx context.Context, query string) ([]Listing, error)
+}
+
+// Page is a Pager's answer to one query. Seen holds the external ID of
+// every offer in the answer, also those Listings leave out (no price).
+// Complete reports that the answer holds every offer the site has for the
+// query, not just its first page, so a stored listing the query found
+// before and Seen lacks is gone.
+type Page struct {
+	Listings []Listing
+	Seen     []string
+	Complete bool
+}
+
+// Pager is a query source that tells a complete answer from a first page.
+// Its listings carry the query that found them.
+type Pager interface {
+	Source
+	SearchPage(ctx context.Context, query string) (Page, error)
+}
+
+// QueryKey is the form a listing's query is stored and compared in:
+// lower case, single spaces.
+func QueryKey(query string) string {
+	return strings.Join(strings.Fields(strings.ToLower(query)), " ")
 }
 
 // maxPriceCents mirrors the price_observation cap (1 000 000 zł).

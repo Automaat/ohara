@@ -41,6 +41,7 @@ export type {
 	MovieFormat,
 	MusicFormat,
 	Packaging,
+	RatingPayload,
 	ReturnPayload,
 	Title,
 	TitleDetail,

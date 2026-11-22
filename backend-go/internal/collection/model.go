@@ -132,6 +132,12 @@ type TitleInput struct {
 	RequestKey *string `json:"request_key,omitempty"`
 }
 
+// RatingInput is the body of PUT /api/titles/{id}/rating: the title's new
+// rating, or null to clear it. It changes nothing else of the title.
+type RatingInput struct {
+	Rating *int `json:"rating"`
+}
+
 // Title is a work: a film, a book or an album.
 type Title struct {
 	ID int64 `json:"id"`

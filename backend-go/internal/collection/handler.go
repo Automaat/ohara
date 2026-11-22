@@ -40,6 +40,7 @@ func (h *Handler) Mount(r chi.Router) {
 	r.Post("/titles", h.createTitle)
 	r.Get("/titles/{id}", h.getTitle)
 	r.Put("/titles/{id}", h.updateTitle)
+	r.Put("/titles/{id}/rating", h.rateTitle)
 	r.Delete("/titles/{id}", h.deleteTitle)
 
 	r.Get("/editions", h.listEditions)
@@ -318,6 +319,40 @@ func (h *Handler) updateTitle(w http.ResponseWriter, r *http.Request) {
 	t, err := h.store.UpdateTitle(r.Context(), id, in)
 	if err != nil {
 		h.writeErr(w, r, "update title", notFound(err))
+		return
+	}
+	httpx.WriteJSON(w, h.logger, http.StatusOK, t)
+}
+
+// rateTitle sets only the rating, so a page that loaded the title earlier
+// never writes back the rest of it over another edit.
+func (h *Handler) rateTitle(w http.ResponseWriter, r *http.Request) {
+	id, ok := httpx.PathID(w, r, h.logger, "id")
+	if !ok {
+		return
+	}
+	var body struct {
+		Rating json.RawMessage `json:"rating"`
+	}
+	if !httpx.DecodeJSON(w, r, h.logger, &body) {
+		return
+	}
+	var in RatingInput
+	if body.Rating == nil {
+		httpx.WriteFieldError(w, h.logger, fieldErr("rating", "is required: "+ratingMsg+", or null"))
+		return
+	}
+	if json.Unmarshal(body.Rating, &in.Rating) != nil {
+		httpx.WriteFieldError(w, h.logger, fieldErr("rating", ratingMsg))
+		return
+	}
+	if fe := checkRating(in.Rating); fe != nil {
+		httpx.WriteFieldError(w, h.logger, fe)
+		return
+	}
+	t, err := h.store.RateTitle(r.Context(), id, in.Rating)
+	if err != nil {
+		h.writeErr(w, r, "rate title", notFound(err))
 		return
 	}
 	httpx.WriteJSON(w, h.logger, http.StatusOK, t)

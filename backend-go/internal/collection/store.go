@@ -235,6 +235,20 @@ func (s *Store) UpdateTitle(ctx context.Context, id int64, in *TitleInput) (Titl
 	return s.GetTitle(ctx, id)
 }
 
+// RateTitle sets a title's rating and nothing else, so an edit saved since
+// the caller read the title stays.
+func (s *Store) RateTitle(ctx context.Context, id int64, rating *int) (Title, error) {
+	tag, err := s.pool.Exec(ctx, `UPDATE title SET rating = $2, updated_at = now(), edited_at = now()
+		WHERE id = $1`, id, rating)
+	if err != nil {
+		return Title{}, mapErr(err, ErrTitleNotFound, "rate title")
+	}
+	if tag.RowsAffected() == 0 {
+		return Title{}, ErrTitleNotFound
+	}
+	return s.GetTitle(ctx, id)
+}
+
 // checkNoEditions runs after the title row is locked, as its own statement:
 // under READ COMMITTED a count taken in the locking statement keeps the
 // snapshot from before the wait and misses an edition committed meanwhile.

@@ -74,6 +74,10 @@ export type Title = {
 	updated_at: string;
 };
 
+export type RatingPayload = {
+	rating: number | null;
+};
+
 export type EditionPayload = {
 	title_id: number;
 	barcode: string | null;

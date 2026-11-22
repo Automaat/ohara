@@ -32,6 +32,7 @@
 		type CopyStatus,
 		type Edition,
 		type FormIssue,
+		type RatingPayload,
 		type Title,
 		type TitleDetail
 	} from '#lib/collection.js';
@@ -54,7 +55,6 @@
 		plainClick,
 		previewHero,
 		ratingOptions,
-		ratingPayload,
 		soleCopy,
 		titleHero,
 		trendHeight,
@@ -63,6 +63,7 @@
 		type Hero
 	} from '#lib/title-detail.js';
 	import { newRequestKey } from '#lib/scan.js';
+	import { RatingSaver } from '#lib/title-rating.js';
 	import { TitleMarkets } from '#lib/title-market.svelte.js';
 	import type { CopyValue, CopyValueDay, CopyValueHistory, TitleValues } from '#lib/valuation.js';
 
@@ -96,10 +97,8 @@
 	/** The title the page was last asked for; moving to another one closes this one's forms. */
 	let requested: number | undefined;
 
-	/** Saves of the rating run one after another, so the last pick is the one stored. */
-	let ratingSaves: Promise<void> = Promise.resolve();
-	/** Picks not yet stored; only the answer to the last one shows. */
-	let ratingPending = 0;
+	/** Stores the open title's rating picks; replaced when another title opens. */
+	let ratings: RatingSaver | null = null;
 	let ratingError = $state<string | null>(null);
 
 	let titleSheet = $state(false);
@@ -157,6 +156,7 @@
 			valueDays = [];
 			failure = null;
 			refreshError = null;
+			ratings = null;
 			ratingError = null;
 			titleSheet = false;
 			copySheet = false;
@@ -169,9 +169,11 @@
 		}
 		const current = ++loads;
 		busy = true;
+		const mark = ratings?.mark() ?? 0;
 		try {
 			const next = await request<TitleDetail>(fetch, 'GET', `/api/titles/${titleID}`);
 			if (current !== loads) return;
+			next.rating = ratingFrom(titleID, next.rating ?? null, mark);
 			detail = next;
 			failure = null;
 			refreshError = null;
@@ -267,9 +269,13 @@
 			return;
 		}
 		savingTitle = true;
+		const mark = ratings?.mark() ?? 0;
 		try {
 			const saved = await request<Title>(fetch, 'PUT', `/api/titles/${id}`, parsed.value);
-			if (detail?.id === saved.id) Object.assign(detail, saved);
+			if (detail?.id === saved.id) {
+				Object.assign(detail, saved);
+				detail.rating = ratingFrom(saved.id, saved.rating ?? null, mark);
+			}
 			titleSheet = false;
 			await load(id);
 		} catch (err) {
@@ -280,28 +286,37 @@
 	}
 
 	/**
-	 * Shows the picked rating at once and stores it without the edit form. A failed save says so
-	 * and loads the title again, so the page shows the rating the server holds.
+	 * The rating a read of title `titleID` begun at `mark` shows: the one it read, unless a pick
+	 * made since then, or still on its way, says otherwise.
 	 */
+	function ratingFrom(titleID: number, read: number | null, mark: number): number | null {
+		if (ratings?.titleID !== titleID) {
+			const saver = new RatingSaver(
+				titleID,
+				read,
+				async (ratedID, rating) => {
+					const body: RatingPayload = { rating };
+					const saved = await request<Title>(fetch, 'PUT', `/api/titles/${ratedID}/rating`, body);
+					return saved.rating ?? null;
+				},
+				(view) => {
+					if (ratings !== saver || detail?.id !== titleID) return;
+					detail.rating = view.rating;
+					ratingError =
+						view.failed === null
+							? null
+							: `Nie udało się zapisać oceny: ${errorMessage(view.failed)}`;
+				}
+			);
+			ratings = saver;
+			return read;
+		}
+		return ratings.loaded(read, mark);
+	}
+
+	/** Stores a picked rating without the edit form; the select shows it at once. */
 	function rate(picked: number | null) {
-		const t = detail;
-		if (!t) return;
-		const rating = picked === null || picked === noRating ? null : picked;
-		t.rating = rating;
-		ratingError = null;
-		ratingPending++;
-		const body = ratingPayload(t, rating);
-		ratingSaves = ratingSaves.then(async () => {
-			try {
-				const saved = await request<Title>(fetch, 'PUT', `/api/titles/${t.id}`, body);
-				if (--ratingPending === 0 && detail?.id === saved.id) detail.rating = saved.rating ?? null;
-			} catch (err) {
-				ratingPending--;
-				if (detail?.id !== t.id) return;
-				ratingError = `Nie udało się zapisać oceny: ${errorMessage(err)}`;
-				await load(t.id);
-			}
-		});
+		void ratings?.pick(picked === null || picked === noRating ? null : picked);
 	}
 
 	/** Shows a saved copy at once, so it stays in view even when the refresh after it fails. */

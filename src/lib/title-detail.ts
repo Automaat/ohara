@@ -9,9 +9,7 @@ import {
 	statusLabels,
 	type Copy,
 	type Kind,
-	type Title,
-	type TitleDetail,
-	type TitlePayload
+	type TitleDetail
 } from '#lib/collection.js';
 import { copyCount, editionCount, purchaseDate } from '#lib/polish.js';
 import {
@@ -40,26 +38,6 @@ export const ratingOptions = [
 	{ value: noRating, label: 'Brak oceny' },
 	...Array.from({ length: 10 }, (_, i) => ({ value: i + 1, label: `${i + 1} / 10` }))
 ];
-
-/**
- * The PUT body that changes only a title's rating. It leaves the cover out, so the server keeps
- * it, and sends the rest as the title stands.
- */
-export function ratingPayload(t: Title, rating: number | null): TitlePayload {
-	return {
-		kind: t.kind,
-		name: t.name,
-		original_title: t.original_title,
-		polish_title: t.polish_title,
-		year: t.year,
-		tmdb_id: t.tmdb_id,
-		authors: t.authors,
-		bn_id: t.bn_id,
-		openlibrary_id: t.openlibrary_id,
-		notes: t.notes,
-		rating
-	};
-}
 
 /** A link to a title or edition page that opens the form for adding a copy once it loads. */
 export function addCopyHref(path: string): string {

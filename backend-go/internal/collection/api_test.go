@@ -638,6 +638,45 @@ func TestTitleRatingRefusesValuesOffTheScale(t *testing.T) {
 	}
 }
 
+func TestRateTitleChangesOnlyTheRating(t *testing.T) {
+	a := newAPI(t)
+	cover := "https://example.com/lalka.jpg"
+	var created collection.Title
+	a.mustDo(http.MethodPost, "/api/titles", obj{"kind": "book", "name": "Lalka", "notes": "Original", "cover_url": cover, "rating": 4}, &created, http.StatusCreated)
+	path := fmt.Sprintf("/api/titles/%d", created.ID)
+	a.mustDo(http.MethodPut, path, obj{"kind": "book", "name": "Lalka", "notes": "Corrected"}, nil, http.StatusOK)
+
+	var rated collection.Title
+	a.mustDo(http.MethodPut, path+"/rating", obj{"rating": 8}, &rated, http.StatusOK)
+	if rated.Rating == nil || *rated.Rating != 8 || rated.Notes != "Corrected" {
+		t.Fatalf("rated title = %+v", rated)
+	}
+	var detail collection.TitleDetail
+	a.mustDo(http.MethodGet, path, nil, &detail, http.StatusOK)
+	if detail.Notes != "Corrected" || detail.Name != "Lalka" || detail.CoverURL == nil || *detail.CoverURL != cover {
+		t.Fatalf("title after rating = %+v", detail.Title)
+	}
+	a.wantRating(created.ID, 8)
+
+	var cleared collection.Title
+	a.mustDo(http.MethodPut, path+"/rating", obj{"rating": nil}, &cleared, http.StatusOK)
+	if cleared.Rating != nil || cleared.Notes != "Corrected" {
+		t.Fatalf("cleared title = %+v", cleared)
+	}
+	a.wantRating(created.ID, 0)
+	a.mustDo(http.MethodPut, path+"/rating", obj{"rating": 10}, nil, http.StatusOK)
+
+	for _, bad := range []any{0, 11, 7.5, "8", true, obj{}} {
+		a.fails(http.MethodPut, path+"/rating", obj{"rating": bad}, http.StatusUnprocessableEntity, "rating")
+	}
+	a.fails(http.MethodPut, path+"/rating", obj{}, http.StatusUnprocessableEntity, "rating")
+	a.fails(http.MethodPut, path+"/rating", []byte(`{"rating": 8.0}`), http.StatusUnprocessableEntity, "rating")
+	a.fails(http.MethodPut, path+"/rating", "not an object", http.StatusUnprocessableEntity, "body")
+	a.wantRating(created.ID, 10)
+
+	a.fails(http.MethodPut, fmt.Sprintf("/api/titles/%d/rating", created.ID+1000), obj{"rating": 5}, http.StatusNotFound, "")
+}
+
 func TestTitleRatingAppliesToAWishedTitle(t *testing.T) {
 	a := newAPI(t)
 	wished := a.title("movie", "Miś")

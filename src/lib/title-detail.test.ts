@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Copy, Title, TitleDetail } from './collection';
+import type { Copy, TitleDetail } from './collection';
 import {
 	addCopyHref,
 	addCopyStart,
@@ -15,7 +15,6 @@ import {
 	previewHero,
 	noRating,
 	ratingOptions,
-	ratingPayload,
 	soleCopy,
 	titleArtwork,
 	titleHero,
@@ -568,41 +567,5 @@ describe('rating', () => {
 		expect(ratingOptions[0]).toEqual({ value: noRating, label: 'Brak oceny' });
 		expect(ratingOptions.slice(1).map((o) => o.value)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
 		expect(ratingOptions.at(-1)?.label).toBe('10 / 10');
-	});
-
-	it('sends the title as it stands with the new rating and without its cover', () => {
-		const title: Title = {
-			id: 4,
-			kind: 'book',
-			name: 'Lalka',
-			original_title: null,
-			polish_title: null,
-			year: 1890,
-			tmdb_id: null,
-			authors: ['Bolesław Prus'],
-			bn_id: 'b1',
-			openlibrary_id: null,
-			notes: 'Pierwsze wydanie',
-			cover_url: 'https://example.com/lalka.jpg',
-			rating: 6,
-			edition_count: 1,
-			copy_count: 1,
-			created_at: '2024-01-01T00:00:00Z',
-			updated_at: '2024-01-01T00:00:00Z'
-		};
-		expect(ratingPayload(title, 9)).toEqual({
-			kind: 'book',
-			name: 'Lalka',
-			original_title: null,
-			polish_title: null,
-			year: 1890,
-			tmdb_id: null,
-			authors: ['Bolesław Prus'],
-			bn_id: 'b1',
-			openlibrary_id: null,
-			notes: 'Pierwsze wydanie',
-			rating: 9
-		});
-		expect(ratingPayload(title, null).rating).toBeNull();
 	});
 });

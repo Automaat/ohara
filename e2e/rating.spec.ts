@@ -25,8 +25,13 @@ test('Ocena on a title page is stored, kept across a reload and cleared', async 
 	const rating = page.getByRole('combobox', { name: 'Ocena' });
 	await expect(rating).toHaveValue('0');
 
+	const edited = await request.put(`/api/titles/${id}`, {
+		data: { kind: 'book', name, authors: ['Bolesław Prus'], notes: 'Poprawione' }
+	});
+	expect(edited.ok(), await edited.text()).toBe(true);
+
 	const rated = page.waitForResponse(
-		(res) => res.request().method() === 'PUT' && res.url().endsWith(`/api/titles/${id}`)
+		(res) => res.request().method() === 'PUT' && res.url().endsWith(`/api/titles/${id}/rating`)
 	);
 	await rating.selectOption({ label: '8 / 10' });
 	expect((await rated).status()).toBe(200);
@@ -34,10 +39,10 @@ test('Ocena on a title page is stored, kept across a reload and cleared', async 
 
 	await page.reload();
 	await expect(rating).toHaveValue('8');
-	await expect(page.getByText('Pierwsze wydanie')).toBeVisible();
+	await expect(page.getByText('Poprawione')).toBeVisible();
 
 	const cleared = page.waitForResponse(
-		(res) => res.request().method() === 'PUT' && res.url().endsWith(`/api/titles/${id}`)
+		(res) => res.request().method() === 'PUT' && res.url().endsWith(`/api/titles/${id}/rating`)
 	);
 	await rating.selectOption({ label: 'Brak oceny' });
 	expect((await cleared).status()).toBe(200);
@@ -53,7 +58,7 @@ test('Ocena on a title page is stored, kept across a reload and cleared', async 
 	};
 	expect(stored.rating ?? null).toBeNull();
 	expect(stored.authors).toEqual(['Bolesław Prus']);
-	expect(stored.notes).toBe('Pierwsze wydanie');
+	expect(stored.notes).toBe('Poprawione');
 	expect(stored.cover_url).toBe(cover);
 
 	await expectNoSourceRequests(request);

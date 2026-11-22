@@ -160,10 +160,20 @@
 		}
 	}
 
+	/**
+	 * A visible page asks for its lists again every 10 minutes, so a listing a scheduled run found
+	 * gone leaves the page, and a Discogs card never stays longer than the API terms' six hours: the
+	 * server shows one only while its seller offered it within 5 h 45 min (deals.discogsShown).
+	 */
+	const reloadEvery = 10 * 60_000;
+
 	onMount(() => {
 		void load();
 		void loadKeywords();
 		const clock = setInterval(() => (now = new Date()), 30_000);
+		const reload = setInterval(() => {
+			if (document.visibilityState === 'visible') void load();
+		}, reloadEvery);
 		const onvisibility = () => {
 			if (document.visibilityState === 'visible') void load();
 		};
@@ -172,6 +182,7 @@
 			dismissals.destroy();
 			clearTimeout(poll);
 			clearInterval(clock);
+			clearInterval(reload);
 			document.removeEventListener('visibilitychange', onvisibility);
 		};
 	});

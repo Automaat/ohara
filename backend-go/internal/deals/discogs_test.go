@@ -53,9 +53,9 @@ func TestParseDiscogsInventory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseDiscogsInventory: %v", err)
 	}
-	wantSeen := []string{"3401234501", "3401234502", "3401234503", "3401234504"}
+	wantSeen := []string{"3401234501", "3401234502", "3401234503"}
 	if !slices.Equal(seen, wantSeen) {
-		t.Fatalf("seen = %v, want every listing for sale %v", seen, wantSeen)
+		t.Fatalf("seen = %v, want the listings for sale at a price %v", seen, wantSeen)
 	}
 	if !slices.Equal(rates.asked, []string{"EUR", "PLN", "JPY"}) {
 		t.Fatalf("rates asked for %v, want each currency once", rates.asked)
@@ -90,7 +90,11 @@ func TestParseDiscogsInventory(t *testing.T) {
 }
 
 func TestParseDiscogsInventoryRejectsOtherShapes(t *testing.T) {
-	for _, body := range []string{`{}`, `<html><body>Just a moment...</body></html>`, `{"listings": 3}`} {
+	for _, body := range []string{
+		`{}`, `<html><body>Just a moment...</body></html>`, `{"listings": 3}`, `{"listings": [{}]}`,
+		`{"listings": [{"id": 7, "price": {"value": 10, "currency": "PLN"}, "release": {"description": "A"}}]}`,
+		`{"listings": [{"status": "For Sale", "price": {"value": 10, "currency": "PLN"}, "release": {"description": "A"}}]}`,
+	} {
 		_, _, err := parseDiscogsInventory(context.Background(), []byte(body), &fakeRates{})
 		if err == nil {
 			t.Errorf("parseDiscogsInventory(%s) accepted it", body)
@@ -218,8 +222,8 @@ func TestDiscogsSellerAsksItsNewestInventory(t *testing.T) {
 	d := newDiscogsDouble(t)
 	d.answer("heyjoerecords", http.StatusOK, string(fixture(t, "discogs_inventory.json")))
 	page, err := d.seller("heyjoerecords").SearchPage(context.Background(), "")
-	if err != nil || len(page.Listings) != 3 || len(page.Seen) != 4 || page.Complete {
-		t.Fatalf("page = %d listings, %d seen, complete %v, %v; want 3 of 4 listings for sale",
+	if err != nil || len(page.Listings) != 3 || len(page.Seen) != 3 || page.Complete {
+		t.Fatalf("page = %d listings, %d seen, complete %v, %v; want the 3 of 4 listings for sale at a price",
 			len(page.Listings), len(page.Seen), page.Complete, err)
 	}
 	for i := range page.Listings {
@@ -408,5 +412,119 @@ func TestStaleDiscogsListingLeavesTheDealsView(t *testing.T) {
 	}
 	if got := shown(); !slices.Equal(got, []string{"alert:olx", "view:olx"}) {
 		t.Fatalf("listings offered 7 hours ago = %v, want the Discogs one out of the view and its alert held", got)
+	}
+}
+
+func TestDiscogsListingWithoutFormatMatchesNoFilm(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	wishlist(t, pool, &Want{Kind: "movie", Name: "Blade Runner", Format: new("dvd"), MaxPriceCents: new(int64(10000))})
+	d := newDiscogsDouble(t)
+	d.answer("seller", http.StatusOK, `{"listings": [{"id": 123, "status": "For Sale",
+		"price": {"value": 50, "currency": "PLN"}, "release": {"description": "Blade Runner (DVD)"}}]}`)
+	notifier := &fakeNotifier{}
+	if res := mustRun(t, newTestHunter(pool, notifier, d.seller("seller"))); res.Matched != 0 || len(notifier.messages()) != 0 {
+		t.Fatalf("a Discogs listing without a format = %+v, %v; want no film match", res, notifier.messages())
+	}
+}
+
+func TestDiscogsRowWithoutIdentityKeepsStoredListings(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	discogsWish(t, pool)
+	d := newDiscogsDouble(t)
+	d.answer("seller", http.StatusOK, string(fixture(t, "discogs_inventory.json")))
+	h := newTestHunter(pool, nil, d.seller("seller"))
+	if res := mustRun(t, h); res.New != 1 {
+		t.Fatalf("first run = %+v, want the LP stored", res)
+	}
+	before := mustMetric(t, discogsSeries("ohara_source_requests_total", `,status="`+metrics.SourceParseError+`"`))
+	d.answer("seller", http.StatusOK, `{"listings": [{}]}`)
+	mustRun(t, h)
+	if n := count(t, pool, `SELECT count(*) FROM price_observation WHERE gone_at IS NOT NULL`); n != 0 {
+		t.Fatalf("an answer with an unreadable row marked %d stored listings gone", n)
+	}
+	if got := mustMetric(t, discogsSeries("ohara_source_requests_total", `,status="`+metrics.SourceParseError+`"`)) - before; got != 1 {
+		t.Fatalf("parse errors counted = %v, want 1", got)
+	}
+}
+
+func TestDiscogsListingWithoutRateIsNotAlertedAtItsOldPrice(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	discogsWish(t, pool)
+	d := newDiscogsDouble(t)
+	body := string(fixture(t, "discogs_inventory.json"))
+	d.answer("seller", http.StatusOK, body)
+	notifier := &fakeNotifier{fail: 1}
+	h := newTestHunter(pool, notifier, d.seller("seller"))
+	if res := mustRun(t, h); res.Alerts != 1 || res.Sent != 0 {
+		t.Fatalf("first run = %+v, want one alert left to retry", res)
+	}
+	d.answer("seller", http.StatusOK, strings.Replace(body, `"currency": "EUR"`, `"currency": "ZZZ"`, 1))
+	if res := mustRun(t, h); res.Sent != 0 || len(notifier.messages()) != 0 {
+		t.Fatalf("listing now priced in a currency without a rate = %+v, %v; want no alert at its old price",
+			res, notifier.messages())
+	}
+	recent, err := NewStore(pool).Recent(context.Background(), RecentFilter{Limit: 10})
+	if err != nil || len(recent) != 0 {
+		t.Fatalf("deals view = %+v, %v; want the listing out of it", recent, err)
+	}
+}
+
+func TestDiscogsListingLeavesAWishEditedToAnotherMedium(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	ctx := context.Background()
+	copyID := discogsWish(t, pool)
+	d := newDiscogsDouble(t)
+	d.answer("seller", http.StatusOK, `{"listings": [{"id": 123, "status": "For Sale",
+		"price": {"value": 50, "currency": "PLN"},
+		"release": {"description": "Pink Floyd - A Momentary Lapse Of Reason (LP, Album)", "format": "LP, Album"}}]}`)
+	notifier := &fakeNotifier{fail: 1}
+	h := newTestHunter(pool, notifier, d.seller("seller"))
+	if res := mustRun(t, h); res.Alerts != 1 || res.Sent != 0 {
+		t.Fatalf("first run = %+v, want one alert left to retry", res)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE edition SET format = 'cd'
+		WHERE id = (SELECT edition_id FROM copy WHERE id = $1)`, copyID); err != nil {
+		t.Fatal(err)
+	}
+	if res := mustRun(t, h); res.Sent != 0 || len(notifier.messages()) != 0 {
+		t.Fatalf("LP listing for a wish edited to CD = %+v, %v; want no alert", res, notifier.messages())
+	}
+	recent, err := NewStore(pool).Recent(ctx, RecentFilter{Limit: 10, Matched: true})
+	if err != nil || len(recent) != 0 {
+		t.Fatalf("matched deals = %+v, %v; want the LP no longer matched to the CD wish", recent, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE edition SET format = 'vinyl'
+		WHERE id = (SELECT edition_id FROM copy WHERE id = $1)`, copyID); err != nil {
+		t.Fatal(err)
+	}
+	if recent, err := NewStore(pool).Recent(ctx, RecentFilter{Limit: 10, Matched: true}); err != nil || len(recent) != 1 {
+		t.Fatalf("matched deals after the wish is vinyl again = %+v, %v; want the LP", recent, err)
+	}
+}
+
+func TestDiscogsConditionFollowsTheAnswer(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	discogsWish(t, pool)
+	d := newDiscogsDouble(t)
+	body := string(fixture(t, "discogs_inventory.json"))
+	d.answer("seller", http.StatusOK, body)
+	h := newTestHunter(pool, nil, d.seller("seller"))
+	mustRun(t, h)
+	condition := func() *string {
+		t.Helper()
+		var acquired *string
+		if err := pool.QueryRow(context.Background(), `SELECT acquired_as FROM price_observation
+			WHERE external_id = '3401234501'`).Scan(&acquired); err != nil {
+			t.Fatal(err)
+		}
+		return acquired
+	}
+	if got := condition(); got == nil || *got != "used" {
+		t.Fatalf("VG+ listing stored as %v, want used", got)
+	}
+	d.answer("seller", http.StatusOK, strings.Replace(body, "Very Good Plus (VG+)", "Mint (M)", 1))
+	mustRun(t, h)
+	if got := condition(); got != nil {
+		t.Fatalf("listing regraded Mint stored as %s, want no condition", *got)
 	}
 }

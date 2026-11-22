@@ -167,8 +167,9 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   its turn in the token's Discogs budget (background priority), and counts
   in `ohara_source_requests_total` under `discogs_inventory`, not under
   the Discogs client's `discogs`. A 429 or 403 stops only that seller
-  until the next run; a body that is no inventory (`{}`, HTML) is a
-  `parse_error`. The sellers share the canary and results gauges: the
+  until the next run; a body that is no inventory (`{}`, HTML), or one
+  with a listing that has no ID or status, is a `parse_error` and marks
+  nothing gone. The sellers share the canary and results gauges: the
   canary holds once any seller answered with listings, and results count
   them all.
 - Each listing "For Sale" becomes one listing: the Discogs listing ID,
@@ -177,29 +178,38 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   the release thumbnail. Its price turns into grosze at the NBP table A
   mid rate (`valuation.NBP`, `OHARA_VALUATION_NBP_URL`); a currency
   without a rate leaves the listing out, so a foreign amount is never
-  stored as złoty. A `Mint (M)` copy has no condition, every other grade
-  is used.
+  stored as złoty, and the answer does not count as offering it: a stored
+  listing whose currency lost its rate is gone, so its old złoty price is
+  neither shown nor alerted on. A `Mint (M)` copy has no condition, every
+  other grade is used; each answer sets the stored condition anew, so a
+  copy regraded Mint loses "used".
 - The listing's medium comes from the Discogs format, not its title
   (`Listing.Medium`, `deals.discogsMedium`): LP, vinyl and 7", 10" or 12"
   discs are vinyl, CD, CDr, SACD and HDCD a CD, Cass a cassette, the first
-  of them in a box set's parts; anything else (DVD, File) is no album
-  medium. Such a listing matches album wants only, a CD want only a CD
-  and a vinyl want only vinyl. Listings of other sources still take their
-  medium from the title.
+  of them in a box set's parts; anything else (DVD, File) or no format at
+  all is no album medium (`other`). Such a listing matches album wants
+  only, a CD want only a CD and a vinyl want only vinyl. The medium is
+  stored with the listing (`raw.data.medium`), and a pending alert and the
+  deals view check it against the wish's current edition (`mediumFits`),
+  so a wish edited from vinyl to CD no longer holds an LP. Listings of
+  other sources still take their medium from the title.
 - The Discogs API Terms of Use make seller inventory Restricted Data:
   no commercial use, no transfer to third parties, never shown more than
   six hours older than discogs.com, kept no longer than needed. So a
   stored listing of a seller whose answer no longer holds it is gone at
   once (`Store.UpdateGone`, scoped to the seller through the listing's
-  query), a listing gone or not offered by an answer for 6 hours leaves
-  Okazje and its alert is not sent (`freshListing`), and every run first
+  query), a listing gone or not offered by an answer for 5 h 45 min
+  (`discogsShown`) leaves Okazje and its alert is not sent
+  (`freshListing`), and every run first
   deletes the Discogs listings no answer has offered for 30 days, alerts,
   dismissals and purchases included (`Store.ForgetStale`). The 30 days
   keep a listing's dismissal and sent alert while its seller cannot be
   read. Every Telegram alert for one ends with "Data provided by
   Discogs." under its link, and its card in Okazje carries the same
-  notice as a followable link to the listing. The purchase happens on
-  discogs.com.
+  notice as a followable link to the listing. A visible Okazje page asks
+  for its lists again every 10 minutes, so with the 5 h 45 min window no
+  card it keeps drawing is more than 6 hours old, and one a run found gone
+  leaves within 10 minutes. The purchase happens on discogs.com.
 - The valuation never reads `discogs_inventory`, and wants are not
   matched by Discogs release ID.
 

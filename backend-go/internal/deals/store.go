@@ -55,10 +55,24 @@ var expiringSources = []string{DiscogsSource}
 
 // freshListing holds for a listing o the deals view may show and alert
 // on: one of a source that does not expire, or one an answer still holds
-// (not gone) and offered within discogsFresh.
+// (not gone) and offered within discogsShown.
 var freshListing = fmt.Sprintf(`(o.source <> ALL ('{%s}'::text[])
 	OR o.gone_at IS NULL AND o.last_offered_at > now() - make_interval(secs => %d))`,
-	strings.Join(expiringSources, ","), int(discogsFresh.Seconds()))
+	strings.Join(expiringSources, ","), int(discogsShown.Seconds()))
+
+// mediumFits is SQL that holds when listing o can be what wish w's
+// edition is now: a listing without a source-named medium
+// (Listing.Medium, kept as raw->'data'->>'medium') leaves that to the
+// matcher, one with a medium is an album's, so it fits a music wish of no
+// format or of that format. The hunter matched the listing against the
+// wish as it was, so a wish edited since (vinyl to CD, an album to a
+// film) no longer holds a listing of another medium.
+func mediumFits(w string) string {
+	return `(coalesce(o.raw->'data'->>'medium', '') = '' OR EXISTS (SELECT FROM edition me
+		JOIN title mt ON mt.id = me.title_id
+		WHERE me.id = ` + w + `.edition_id AND mt.kind = 'music'
+			AND (me.format IS NULL OR me.format = o.raw->'data'->>'medium')))`
+}
 
 // Store is the Postgres access layer for deal hunting.
 type Store struct {
@@ -418,7 +432,8 @@ func record(ctx context.Context, tx pgx.Tx, l *Listing, w *Want, alert bool, asO
 			raw = CASE WHEN `+movedTitle+` THEN coalesce(price_observation.raw, '{}'::jsonb) - 'wishlist_copy_id' || EXCLUDED.raw
 				WHEN `+otherTitle+` THEN coalesce(price_observation.raw, '{}'::jsonb) || (EXCLUDED.raw - 'wishlist_copy_id')
 				ELSE coalesce(price_observation.raw, '{}'::jsonb) || EXCLUDED.raw END,
-			acquired_as = coalesce(EXCLUDED.acquired_as, price_observation.acquired_as),
+			acquired_as = CASE WHEN price_observation.source = ANY ($12) THEN EXCLUDED.acquired_as
+				ELSE coalesce(EXCLUDED.acquired_as, price_observation.acquired_as) END,
 			edition_id = CASE WHEN `+movedTitle+` THEN EXCLUDED.edition_id
 				ELSE coalesce(price_observation.edition_id, EXCLUDED.edition_id) END,
 			title_id = CASE WHEN `+movedTitle+` THEN EXCLUDED.title_id
@@ -429,7 +444,7 @@ func record(ctx context.Context, tx pgx.Tx, l *Listing, w *Want, alert bool, asO
 				ELSE greatest(price_observation.assigned_as_of, `+matchedAsOf+`) END
 		RETURNING id, xmax = 0, dismissed_at IS NOT NULL, `+listingTitle,
 		l.Source, l.ExternalID, l.PriceCents, l.AcquiredAs, l.URL, w.EditionID, w.TitleID, raw, asOf,
-		firstPrice, namedDetails(words(l.Title))).Scan(&id, &isNew, &dismissed, &titleID)
+		firstPrice, namedDetails(words(l.Title)), expiringSources).Scan(&id, &isNew, &dismissed, &titleID)
 	if err != nil {
 		return false, false, fmt.Errorf("record observation: %w", err)
 	}
@@ -770,7 +785,8 @@ func pendingAlerts(ctx context.Context, q querier, markets marketTable, only *in
 		`+marketJoin("e", 3)+`
 		WHERE a.sent_at IS NULL AND a.attempts < $1 AND a.created_at > now() - `+alertWindow+`
 			AND (o.price_cents <= c.max_price_cents OR o.price_cents * 100 <= m.cents * c.max_market_percent)
-			AND o.dismissed_at IS NULL AND `+freshListing+` AND `+wishNamedBy("c")+` AND `+huntedWish("c")+`
+			AND o.dismissed_at IS NULL AND `+freshListing+` AND `+mediumFits("c")+`
+			AND `+wishNamedBy("c")+` AND `+huntedWish("c")+`
 			AND (a.alerted_price_cents IS NULL OR o.price_cents < a.alerted_price_cents)
 			AND ($2::bigint IS NULL OR a.observation_id = $2)
 		ORDER BY a.created_at, a.observation_id`, MaxAttempts, only, markets.titles, markets.formats, markets.cents)
@@ -881,14 +897,14 @@ var (
 		LEFT JOIN deal_alert a ON a.observation_id = o.id
 		LEFT JOIN copy w ON w.status = 'wishlist' AND w.id = coalesce(o.wishlist_copy_id, a.copy_id)
 			AND (o.wishlist_copy_id IS NOT NULL OR ` + wishOfListingTitle + `) AND ` + wishNamedBy("w") + `
-			AND ` + huntedWish("w") + `
+			AND ` + huntedWish("w") + ` AND ` + mediumFits("w") + `
 		WHERE o.dismissed_at IS NULL AND ` + freshListing
 	wishedListings = `SELECT o.id, o.observed_at, o.price_cents, o.source, a.sent_at, w.id AS wish_id, w.max_price_cents,
 			w.max_market_percent, w.edition_id AS wish_edition_id
 		FROM copy w
 		JOIN price_observation o ON o.wishlist_copy_id = w.id AND o.dismissed_at IS NULL AND ` + freshListing + `
 		LEFT JOIN deal_alert a ON a.observation_id = o.id
-		WHERE w.status = 'wishlist' AND ` + wishNamedBy("w") + ` AND ` + huntedWish("w") + `
+		WHERE w.status = 'wishlist' AND ` + wishNamedBy("w") + ` AND ` + huntedWish("w") + ` AND ` + mediumFits("w") + `
 		UNION ALL
 		SELECT o.id, o.observed_at, o.price_cents, o.source, a.sent_at, w.id, w.max_price_cents,
 			w.max_market_percent, w.edition_id
@@ -896,7 +912,8 @@ var (
 		JOIN deal_alert a ON a.copy_id = w.id
 		JOIN price_observation o ON o.id = a.observation_id AND o.wishlist_copy_id IS NULL
 			AND o.dismissed_at IS NULL AND ` + freshListing + `
-		WHERE w.status = 'wishlist' AND ` + wishOfListingTitle + ` AND ` + wishNamedBy("w") + ` AND ` + huntedWish("w")
+		WHERE w.status = 'wishlist' AND ` + wishOfListingTitle + ` AND ` + wishNamedBy("w") + ` AND ` + huntedWish("w") +
+		` AND ` + mediumFits("w")
 )
 
 // Recent returns the newest deal observations that pass f. It picks the page from the listing

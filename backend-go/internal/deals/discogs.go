@@ -21,12 +21,16 @@ const DiscogsSource = "discogs_inventory"
 // inventory is Restricted Data, which no view may show more than six hours
 // older than discogs.com and which is kept no longer than it serves. A
 // listing an answer no longer holds is gone at once; one no answer has
-// offered for discogsFresh leaves the deals view and its alert is not
+// offered for discogsShown leaves the deals view and its alert is not
 // sent; one none has offered for discogsKeep is deleted. Keeping it that
 // long keeps its dismissal and sent alert while its seller's inventory
-// cannot be read.
+// cannot be read. discogsShown is discogsFresh less the deals page's
+// reload interval (10 minutes, src/routes/deals/+page.svelte) and a
+// margin, so a card an idle page keeps drawing is never older than
+// discogsFresh.
 const (
 	discogsFresh = 6 * time.Hour
+	discogsShown = discogsFresh - 15*time.Minute
 	discogsKeep  = 30 * 24 * time.Hour
 )
 
@@ -65,9 +69,10 @@ func (d DiscogsSeller) Search(ctx context.Context, q string) ([]Listing, error) 
 	return page.Listings, err
 }
 
-// SearchPage implements Pager; the query is ignored. Seen names every
-// listing for sale in the answer, also those Listings leaves out (a
-// currency without a rate).
+// SearchPage implements Pager; the query is ignored. Seen names the
+// listings the answer offers at a price: one Listings leaves out (a
+// currency without a rate) is not seen, so the run marks it gone and its
+// stored price is neither shown nor alerted on.
 func (d DiscogsSeller) SearchPage(ctx context.Context, _ string) (Page, error) {
 	body, err := d.Client.Inventory(ctx, DiscogsSource, d.Seller)
 	if err != nil {
@@ -116,6 +121,10 @@ type discogsRaw struct {
 	Posted    string  `json:"posted,omitempty"`
 	ReleaseID int64   `json:"release_id,omitempty"`
 	Format    string  `json:"format,omitempty"`
+	// Medium is the listing's Listing.Medium, which a pending alert and
+	// the deals view check against the wish's current format
+	// (mediumFits).
+	Medium string `json:"medium"`
 }
 
 // mintGrade is the Goldmine grade of an unplayed copy, the only one that
@@ -123,9 +132,10 @@ type discogsRaw struct {
 const mintGrade = "Mint (M)"
 
 // parseDiscogsInventory reads an inventory answer into its listings for
-// sale, priced in grosze at rates, and the IDs of every listing for sale.
-// A listing whose currency has no rate is left out; a body that is not an
-// inventory is a parse error.
+// sale, priced in grosze at rates, and their IDs. A listing whose currency
+// has no rate is left out of both; a body that is not an inventory, or
+// one with a row that has no ID or status, is a parse error, so an answer
+// the run cannot read never marks a stored listing gone.
 func parseDiscogsInventory(ctx context.Context, body []byte, rates Rates) ([]Listing, []string, error) {
 	var inv discogsInventory
 	if err := json.Unmarshal(body, &inv); err != nil {
@@ -136,14 +146,16 @@ func parseDiscogsInventory(ctx context.Context, body []byte, rates Rates) ([]Lis
 	}
 	pln := map[string]float64{}
 	out := make([]Listing, 0, len(*inv.Listings))
-	var seen []string
+	seen := make([]string, 0, len(*inv.Listings))
 	for i := range *inv.Listings {
 		it := &(*inv.Listings)[i]
-		if it.ID <= 0 || it.Status != "For Sale" {
+		if it.ID <= 0 || strings.TrimSpace(it.Status) == "" {
+			return nil, nil, parseError{fmt.Errorf("discogs: listing %d of the answer has no ID or status", i)}
+		}
+		if it.Status != "For Sale" {
 			continue
 		}
 		id := strconv.FormatInt(it.ID, 10)
-		seen = append(seen, id)
 		title := strings.TrimSpace(it.Release.Description)
 		currency := strings.ToUpper(strings.TrimSpace(it.Price.Currency))
 		if title == "" || currency == "" {
@@ -164,9 +176,14 @@ func parseDiscogsInventory(ctx context.Context, body []byte, rates Rates) ([]Lis
 		if rate == 0 || !ok || cents == 0 {
 			continue
 		}
+		medium := discogsMedium(it.Release.Format)
+		if medium == "" {
+			medium = "other"
+		}
 		raw, err := json.Marshal(discogsRaw{
 			Price: it.Price.Value, Currency: currency, Condition: it.Condition, Sleeve: it.Sleeve,
 			ShipsFrom: it.ShipsFrom, Posted: it.Posted, ReleaseID: it.Release.ID, Format: it.Release.Format,
+			Medium: medium,
 		})
 		if err != nil {
 			return nil, nil, fmt.Errorf("discogs: encode: %w", err)
@@ -183,9 +200,10 @@ func parseDiscogsInventory(ctx context.Context, body []byte, rates Rates) ([]Lis
 			PhotoURL:   imageURL(it.Release.Thumbnail),
 			PriceCents: cents,
 			AcquiredAs: acquired,
-			Medium:     discogsMedium(it.Release.Format),
+			Medium:     medium,
 			Raw:        raw,
 		})
+		seen = append(seen, id)
 	}
 	return out, seen, nil
 }

@@ -60,6 +60,12 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   from older data) and queues no alert for a wish of another title than
   the listing's. Another edition of the same title keeps the
   stored one.
+  An album title that repeats its artist needs a distinct album alias
+  in the listing (such as "Space Oddity" in "David Bowie aka Space Oddity")
+  or a Discogs inventory release ID matching the edition. Deal searches
+  use distinct aliases when available. The app verifies stored matches
+  before showing them in the matched, under-limit or sent lists and before
+  sending queued alerts. It keeps the observations, dismissals and alert history.
   A wish with "Tylko to wydanie" (`copy.exact_edition`, wishes only, off
   by default, cleared when the copy becomes owned) of a movie or book
   also needs the listing to name each detail its edition has: every
@@ -294,8 +300,8 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   6 hours old, whatever requests fail, overlap or hang, the system clock
   does or the computer sleeps, and one a run found gone leaves within 10
   minutes. The purchase happens on discogs.com.
-- The valuation never reads `discogs_inventory`, and wants are not
-  matched by Discogs release ID.
+- The valuation never reads `discogs_inventory`. A Discogs inventory
+  release ID can confirm a self-titled album for the deal hunter.
 
 ## Discogs wantlist
 

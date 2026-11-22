@@ -22,8 +22,10 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   matches the edition (a barcode that turned Polish drops the foreign
   listings matched before); an unowned edition's prices count only when
   first seen, or moved to it from another title (`moved_at`), after its
-  last change. A mid from fewer than 3 prices is low
-  confidence. Only a Discogs release has a ceiling. A stored OLX listing
+  last change. For a self-titled album, the owned valuation and the wish's
+  used market use an OLX price only if the listing names a distinct album
+  alias. A mid from fewer than 3 prices is low confidence. Only a Discogs
+  release has a ceiling. A stored OLX listing
   keeps the price it was first seen at (`first_price_cents`, null for rows
   stored before migration 0021) and the query that last found it
   (`raw.query`, `deals.QueryKey`). After a valuation run asks OLX every

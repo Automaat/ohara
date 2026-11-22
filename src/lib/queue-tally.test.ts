@@ -94,6 +94,26 @@ describe('QueueTally', () => {
 		expect(tally.count).toBe(2);
 	});
 
+	it('leaves out a queue answer that arrives after its code got an edition, until the undo', async () => {
+		const tally = await loaded('5901234123457');
+		tally.resolved(31, '5907777123456');
+		tally.queued('5907777123456');
+		expect(tally.count).toBe(1);
+		await tally.requeued(31, unused);
+		expect(tally.count).toBe(2);
+		tally.queued('5907777123456');
+		expect(tally.count).toBe(2);
+	});
+
+	it('counts a code queued again once the edition that took it out is undone', async () => {
+		const tally = await loaded();
+		tally.resolved(31, '5907777123456');
+		await tally.requeued(31, unused);
+		expect(tally.count).toBe(0);
+		tally.queued('5907777123456');
+		expect(tally.count).toBe(1);
+	});
+
 	it('forgets the count when the queue read fails, and counts again on the next one', async () => {
 		const tally = await loaded('5901234123457');
 		await tally.load(async () => new Response(JSON.stringify({ error: 'boom' }), { status: 500 }));

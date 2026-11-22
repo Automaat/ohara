@@ -18,6 +18,8 @@ export class QueueTally {
 	#taken = new Map<number, string>();
 	/** Editions created while the queue was unknown, so whether they took a code out is too. */
 	#unsure = new Set<number>();
+	/** The editions this tab created for codes, by code, until an undo removes them. */
+	#editions = new Map<string, number>();
 	/** Changes made while a load is out, replayed over its answer. */
 	#changes: Change[] = [];
 	#seq = 0;
@@ -55,9 +57,15 @@ export class QueueTally {
 		}
 	}
 
-	/** A scan the queue took; a code it already held stays counted once. */
+	/**
+	 * A scan the queue took; a code it already held stays counted once. The server queues no code
+	 * that has an edition, so an answer arriving after this tab created the code's edition was
+	 * queued before it: the edition took the code out again and its undo puts it back.
+	 */
 	queued(barcode: string) {
-		this.#change(barcode, true);
+		const edition = this.#editions.get(barcode);
+		if (edition === undefined) this.#change(barcode, true);
+		else if (!this.#unsure.has(edition)) this.#taken.set(edition, barcode);
 	}
 
 	/**
@@ -66,6 +74,7 @@ export class QueueTally {
 	 * created before the queue was known is remembered as unsure.
 	 */
 	resolved(editionID: number, barcode: string) {
+		this.#editions.set(barcode, editionID);
 		if (this.#codes === null) this.#unsure.add(editionID);
 		else if (this.#codes.has(barcode)) this.#taken.set(editionID, barcode);
 		this.#change(barcode, false);
@@ -76,6 +85,7 @@ export class QueueTally {
 	 * an edition created while the queue was unknown, the queue is read again instead.
 	 */
 	requeued(editionID: number, fetchFn: typeof fetch): Promise<void> {
+		for (const [code, id] of this.#editions) if (id === editionID) this.#editions.delete(code);
 		if (this.#unsure.delete(editionID)) return this.load(fetchFn);
 		const barcode = this.#taken.get(editionID);
 		if (barcode !== undefined) {

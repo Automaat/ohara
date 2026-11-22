@@ -16,6 +16,7 @@ import {
 	formatPLN,
 	kindCounts,
 	isoDate,
+	listsOwned,
 	loanPayload,
 	loanSummary,
 	loanToForm,
@@ -39,6 +40,7 @@ import {
 	unpricedLabel,
 	wishLine,
 	withoutCopies,
+	type CollectionStatus,
 	type CopyForm,
 	type CopyPayload,
 	type Title
@@ -198,6 +200,37 @@ describe('collection search links', () => {
 			status: '',
 			q: ''
 		});
+	});
+
+	it('keeps "Do nadrobienia" in the address, as the server reads it, with the other filters', () => {
+		const filter = { kind: 'book', format: '', status: '', q: 'Lem', unfinished: true } as const;
+		expect(collectionSearch(filter)).toBe('?kind=book&unfinished=1&q=Lem');
+		expect(readCollectionFilter(new URLSearchParams(collectionSearch(filter)))).toEqual(filter);
+		const lent = { ...filter, status: 'owned', loaned: true } as const;
+		expect(collectionSearch(lent)).toBe('?kind=book&status=owned&loaned=1&unfinished=1&q=Lem');
+		expect(readCollectionFilter(new URLSearchParams(collectionSearch(lent)))).toEqual(lent);
+		expect(collectionSearch({ ...filter, unfinished: false })).toBe('?kind=book&q=Lem');
+		expect(readCollectionFilter(new URLSearchParams('status=unpriced&unfinished=1'))).toEqual({
+			kind: '',
+			format: '',
+			status: 'unpriced',
+			q: '',
+			unfinished: true
+		});
+		for (const off of [
+			'unfinished=true',
+			'unfinished=0',
+			'status=none&unfinished=1',
+			'status=wishlist&unfinished=1',
+			'status=sold&unfinished=1'
+		]) {
+			expect(readCollectionFilter(new URLSearchParams(off))).not.toHaveProperty('unfinished');
+		}
+	});
+
+	it('lets "Do nadrobienia" narrow only statuses that list owned copies', () => {
+		expect(['', 'owned', 'unpriced'].every((s) => listsOwned(s as CollectionStatus))).toBe(true);
+		expect(['wishlist', 'sold', 'none'].some((s) => listsOwned(s as CollectionStatus))).toBe(false);
 	});
 
 	it('drops the loan filter while titles without copies are listed', () => {

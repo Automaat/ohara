@@ -167,6 +167,22 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   open loan's `loan_borrower` and `loan_due_on`; `?loaned=1` lists only lent
   copies. A discard keeps a copy that was lent: it locks the copy, as a
   loan does, before it looks for loans.
+- A title records whether the owner finished it (watched, read or heard):
+  `finished` and `finished_on`, the latest day when known, on
+  `POST`/`PUT /api/titles`. `finished_on` without `finished` marks it
+  finished; with `finished: false`, or after today in Poland, it answers 422
+  on `finished_on`; `finished: true` alone is an unknown day and `false`
+  clears the day. A `PUT` without `finished` (or with null) keeps both.
+  One state per title, no log of rewatches. `GET /api/collection` items
+  carry the title's `finished` and `finished_on`; `?unfinished=1` lists
+  only owned copies of titles not finished. `PUT
+/api/titles/{id}/finished` (`finished` and `finished_on`, checked the
+  same way; `finished` required unless a day is given) writes that state
+  alone, so a page holding an older title never writes its name or notes
+  back. The title page shows "Obejrzane", "Przeczytane" or "Przesłuchane"
+  with the day, marks it finished today in Poland (`todayInPoland`,
+  whatever the browser's zone) in one tap and changes, forgets or takes
+  back the mark in a sheet, all through that endpoint.
 - Lookup providers implement `lookup.Provider` (`Fetch` returns raw JSON,
   `Parse` turns raw JSON into candidates) and register in `cmd/api` with a
   cache TTL. Candidate `title`/`edition` fields match the POST bodies of
@@ -613,6 +629,10 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   count as its toggle, hidden at 0.
   Its "Sprzedane" switch (`?status=sold`) lists the sold copies, which
   every other view, the counts and the default shelf leave out.
+  Its "Do nadrobienia" switch (`?unfinished=1`, as on the server) lists
+  owned copies of titles not finished; a status without owned copies
+  (wishes, sold, "Bez egzemplarzy") drops it, in the sheet and when
+  read from the address.
   Its "Tag" (`?tag=`) offers the tags the loaded copies and titles carry,
   "Każdy" first; a title page's tags link there, and its form's "Tagi"
   suggests `GET /api/tags`. Enter or a suggestion adds a tag; one left

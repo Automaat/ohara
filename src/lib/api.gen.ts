@@ -216,6 +216,27 @@ export type EditionDetail = {
 	copies: Copy[];
 };
 
+export type LoanPayload = {
+	borrower: string;
+	lent_on: string | null;
+	due_on: string | null;
+};
+
+export type ReturnPayload = {
+	returned_on: string | null;
+};
+
+export type Loan = {
+	id: number;
+	copy_id: number;
+	borrower: string;
+	lent_on: string;
+	due_on: string | null;
+	returned_on: string | null;
+	created_at: string;
+	updated_at: string;
+};
+
 export type CopyDetail = {
 	id: number;
 	edition_id: number;
@@ -236,6 +257,7 @@ export type CopyDetail = {
 	updated_at: string;
 	edition: Edition;
 	title: Title;
+	loans: Loan[];
 };
 
 export type CollectionItem = {
@@ -264,6 +286,8 @@ export type CollectionItem = {
 	year: number | null;
 	cover_url?: string;
 	authors?: string[];
+	loan_borrower?: string;
+	loan_due_on?: string;
 };
 
 export type Totals = {

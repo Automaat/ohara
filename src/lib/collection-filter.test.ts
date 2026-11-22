@@ -191,6 +191,35 @@ describe('the unpriced status', () => {
 	});
 });
 
+describe('the loan filter', () => {
+	/** Lent copies of each kind, one without a due date, and copies on the shelf or wished. */
+	const lent: CollectionItem[] = [
+		item({ copy_id: 1, kind: 'movie', format: 'dvd', name: 'Rejs', loan_borrower: 'Ania' }),
+		item({
+			copy_id: 2,
+			kind: 'book',
+			name: 'Solaris',
+			loan_borrower: 'Bartek',
+			loan_due_on: '2026-05-01'
+		}),
+		item({ copy_id: 3, kind: 'book', name: 'Eden' }),
+		item({ copy_id: 4, kind: 'movie', format: 'dvd', name: 'Miś', status: 'wishlist' })
+	];
+
+	it.each([
+		['lists copies out on loan only', {}, [1, 2]],
+		['with a kind', { kind: 'book' }, [2]],
+		['with a medium', { format: 'dvd' }, [1]],
+		['with a search', { q: 'rejs' }, [1]],
+		['with a status', { status: 'owned' }, [1, 2]],
+		['with the wishlist, which is never lent', { status: 'wishlist' }, []],
+		['a borrower is not searched, as on the server', { q: 'ania' }, []]
+	] as [string, Partial<CollectionFilter>, number[]][])('%s', (_name, filter, copies) => {
+		const listed = filterCollection(lent, { ...none, loaned: true, ...filter });
+		expect(listed.map((i) => i.copy_id)).toEqual(copies);
+	});
+});
+
 describe('the location filter', () => {
 	/** Copies on two shelves spelled in different cases, one in a box, one nowhere and a wish. */
 	const placed: CollectionItem[] = [

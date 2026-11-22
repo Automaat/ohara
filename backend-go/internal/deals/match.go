@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 )
 
 // Want is a wishlist copy the hunter searches for, with its edition and
@@ -61,6 +62,7 @@ type wantText struct {
 	names    []nameText // the titles the want is sold under
 	ownWords [][]string // the words of each name, then of each author
 	surname  string     // the last word of the first author
+	ownName  string     // surname in the author's own letters, for queries
 	artist   []string   // the required words of the first author
 	set      bool       // a name says the want is a set ("Trylogia")
 }
@@ -90,8 +92,8 @@ func newWantText(w *Want) *wantText {
 			continue
 		}
 		ws := words(*n)
-		key := strings.Join(ws, " ")
-		if key == "" || seen[key] {
+		key := spelledKey(*n)
+		if len(ws) == 0 || seen[key] {
 			continue
 		}
 		seen[key] = true
@@ -105,6 +107,9 @@ func newWantText(w *Want) *wantText {
 	if len(w.Authors) > 0 {
 		if ws := words(w.Authors[0]); len(ws) > 0 {
 			p.surname = ws[len(ws)-1]
+		}
+		if ws := spelledWords(w.Authors[0]); len(ws) > 0 {
+			p.ownName = ws[len(ws)-1]
 		}
 		p.artist = required(w.Authors[0])
 	}
@@ -141,17 +146,81 @@ type Rules struct {
 	Accept []string
 }
 
-var polishFold = strings.NewReplacer(
-	"ą", "a", "ć", "c", "ę", "e", "ł", "l", "ń", "n", "ó", "o", "ś", "s", "ź", "z", "ż", "z",
+// Surname forms: the endings a surname takes after its stem in the Polish
+// cases, by how the surname ends. A surname ending in a consonant takes
+// noun endings ("Prusa", "Mickiewiczowi", "Lemem"); one in -i or -y
+// adjective endings ("Sapkowskiego", "Sapkowskim"); one in -a drops it
+// ("Szymborskiej", "Orzeszkowej", "Zagłoby"); one in -o drops it ("Fredry",
+// "Hłaski"); one in -e keeps it ("Goethego"). No ending makes the surname
+// another one: "Greene" is no case of "Green".
+var (
+	consonantEndings = []string{"a", "owi", "em", "iem", "ie", "u", "owie"}
+	adjectiveEndings = []string{"ego", "emu", "m"}
+	aEndings         = []string{"y", "i", "ie", "ej", "iej"}
+	oEndings         = []string{"a", "y", "i", "owi", "em", "ie", "u"}
+	eEndings         = []string{"go", "mu", "m"}
 )
 
-// words lowercases s, folds Polish diacritics and splits it into runs of
-// letters and digits.
-func words(s string) []string {
-	folded := polishFold.Replace(strings.ToLower(s))
-	return strings.FieldsFunc(folded, func(r rune) bool {
-		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
-	})
+// minSurnameStem is the shortest stem a surname is declined from, so a
+// short one does not match every word that starts with it: "Eco" matches
+// only itself.
+const minSurnameStem = 3
+
+// surnameForm is a stem and the endings that follow it in a surname's
+// declined forms.
+type surnameForm struct {
+	stem    string
+	endings []string
+}
+
+// surnameForms are the stems surname is declined from, with their
+// endings. A surname ending in -ek or -ec also loses its e ("Čapek",
+// "Čapka"; "Mrożek", "Mrożka").
+func surnameForms(surname string) []surnameForm {
+	n := len(surname)
+	if n == 0 {
+		return nil
+	}
+	var forms []surnameForm
+	add := func(stem string, endings []string) {
+		if utf8.RuneCountInString(stem) >= minSurnameStem {
+			forms = append(forms, surnameForm{stem, endings})
+		}
+	}
+	switch last := surname[n-1]; last {
+	case 'i', 'y':
+		add(surname, adjectiveEndings)
+	case 'a':
+		add(surname[:n-1], aEndings)
+	case 'o':
+		add(surname[:n-1], oEndings)
+	case 'e':
+		add(surname, eEndings)
+	case 'u':
+	default:
+		add(surname, consonantEndings)
+		if n > 2 && surname[n-2] == 'e' && (last == 'k' || last == 'c') {
+			add(surname[:n-2]+surname[n-1:], consonantEndings)
+		}
+	}
+	return forms
+}
+
+// namesSurname reports whether text holds surname in some case:
+// "Sapkowski" in "Ostatnie życzenie Andrzeja Sapkowskiego".
+func namesSurname(text []string, surname string) bool {
+	forms := surnameForms(surname)
+	for _, w := range text {
+		if w == surname {
+			return true
+		}
+		for _, f := range forms {
+			if rest, ok := strings.CutPrefix(w, f.stem); ok && slices.Contains(f.endings, rest) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // findPhrase returns where phrase starts in text, or -1. Each phrase word
@@ -327,20 +396,22 @@ var formatKeyword = map[string]string{"dvd": "dvd", "bluray": "blu-ray", "uhd": 
 // generic. An album query names no medium: CD listings often do not.
 func (w *Want) Queries() []string {
 	p := w.text()
-	suffix := ""
+	// suffix is added unless q already has the word key.
+	suffix, key := "", ""
 	switch {
 	case w.Kind == "movie" && w.Format != nil:
 		suffix = formatKeyword[*w.Format]
+		key = suffix
 	case w.Kind == "book":
 		// Book listings carry the author's surname far more often than
 		// first names.
-		suffix = p.surname
+		suffix, key = p.ownName, p.surname
 	}
 	artist := strings.TrimSpace(w.artist())
 	var out []string
 	for _, n := range p.names {
 		q := strings.TrimSpace(n.name)
-		if suffix != "" && !slices.Contains(words(q), suffix) {
+		if suffix != "" && !slices.Contains(words(q), key) {
 			q += " " + suffix
 		}
 		if artist != "" && !containsAll(words(q), required(artist)) {
@@ -633,7 +704,7 @@ func qualifies(w *Want, p *wantText, l *ListingText) bool {
 	if w.Kind == "movie" && w.Format != nil && l.format != *w.Format {
 		return false
 	}
-	if w.Kind == "book" && p.surname != "" && !slices.Contains(text, p.surname) {
+	if w.Kind == "book" && p.surname != "" && !namesSurname(text, p.surname) {
 		return false
 	}
 	if w.Kind == "music" {

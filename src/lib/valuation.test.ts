@@ -26,6 +26,7 @@ import {
 	offers,
 	pageSummary,
 	rangeMarks,
+	realizedLine,
 	recentHistory,
 	sparkline,
 	type CopyValue,
@@ -169,7 +170,8 @@ const point = (day: string, base: number): HistoryPoint => ({
 	floor: { cents: base, copies: 1 },
 	mid: { cents: base * 4, copies: 3 },
 	ceiling: { cents: base * 8, copies: 2 },
-	low_confidence: 1
+	low_confidence: 1,
+	realized: { copies: 0, gain_cents: 0, unpriced: 0 }
 });
 
 /**
@@ -184,6 +186,7 @@ const summary = (patch: Partial<Summary> = {}): Summary => {
 		mid: { cents: 84800, copies: 20 },
 		ceiling: { cents: 137500, copies: 18 },
 		low_confidence: 3,
+		realized: { copies: 0, gain_cents: 0, unpriced: 0 },
 		...patch
 	};
 	return {
@@ -350,6 +353,33 @@ describe('value hero', () => {
 		expect(nbsp(boundLine('ceiling', { cents: 137500, copies: 18 }))).toBe('Nowe 1375 zł');
 		expect(boundLine('floor', { cents: 0, copies: 0 })).toBe('Skup —');
 		expect(boundLine('floor', { cents: 0, copies: 2 })).toBe('Skup 0 zł');
+	});
+});
+
+describe('realized gain', () => {
+	const line = (realized: Summary['realized']) => realizedLine(summary({ realized }));
+
+	it.each([
+		[{ copies: 2, gain_cents: 3000, unpriced: 0 }, 'Zysk ze sprzedaży: +30,00 zł · 2 egzemplarze'],
+		[{ copies: 1, gain_cents: -2550, unpriced: 0 }, 'Zysk ze sprzedaży: −25,50 zł · 1 egzemplarz'],
+		[{ copies: 2, gain_cents: 0, unpriced: 0 }, 'Zysk ze sprzedaży: 0,00 zł · 2 egzemplarze'],
+		[
+			{ copies: 5, gain_cents: 123456, unpriced: 1 },
+			'Zysk ze sprzedaży: +1234,56 zł · 5 egzemplarzy · 1 bez ceny'
+		],
+		[{ copies: 0, gain_cents: 0, unpriced: 2 }, 'Zysk ze sprzedaży: 2 egzemplarze bez ceny']
+	])('states %o as %s', (realized, want) => {
+		expect(nbsp(line(realized) ?? '')).toBe(want);
+	});
+
+	it('shows no line without a sold copy', () => {
+		expect(line({ copies: 0, gain_cents: 0, unpriced: 0 })).toBeNull();
+	});
+
+	it('shows no line for a response without a realized gain', () => {
+		// An open app reading a server rolled back to before the realized gain existed.
+		const { realized: _, ...older } = summary();
+		expect(realizedLine(older as Summary)).toBeNull();
 	});
 });
 

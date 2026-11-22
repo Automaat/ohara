@@ -37,6 +37,7 @@ func Ohara() API {
 			{Name: "AlertState", Values: []string{deals.AlertNone, deals.AlertPending, deals.AlertSent, deals.AlertFailed}},
 			{Name: "KeywordKind", Values: []string{deals.KeywordReject, deals.KeywordAccept}},
 			{Name: "ValueSource", Values: []string{valuation.SourceOLX, valuation.SourceSkupSzop, valuation.SourceDiscogs}},
+			{Name: "DiscogsGrade", Values: valuation.Grades},
 			{Name: "ServiceState", Values: []string{server.ServiceOK, server.ServiceDegraded}},
 			{Name: "DatabaseState", Values: []string{server.DatabaseOK, server.DatabaseUnavailable, server.DatabaseUnconfigured}},
 		},

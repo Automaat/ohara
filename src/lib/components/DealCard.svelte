@@ -5,9 +5,9 @@
 		alertLabels,
 		dealPrice,
 		isUnderLimit,
-		limitComparison,
 		marketLabel,
 		sourceLabels,
+		wishComparison,
 		wishLimit,
 		type MarketPrice,
 		type Observation
@@ -61,7 +61,7 @@
 			<p class="price">
 				<span class="amount">{dealPrice(deal.price_cents)}</span>
 				<Pill tone={under ? 'success' : 'neutral'}>
-					{limitComparison(deal.price_cents, deal.max_price_cents)}
+					{wishComparison(deal)}
 				</Pill>
 			</p>
 		</div>
@@ -74,7 +74,7 @@
 				{:else}
 					Usunięty tytuł
 				{/if}
-				· {wishLimit(deal.max_price_cents)}
+				· {wishLimit(deal.max_price_cents, deal.max_market_percent, deal.market_cents)}
 			</span>
 			{#if marketLine}
 				<span class="market">{marketLine}</span>

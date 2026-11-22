@@ -69,7 +69,10 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   startup in version order, each in its own transaction, under an advisory
   lock. Never edit an applied migration. Applied versions the binary has
   no file for (a rollback to an older release) log one error at startup
-  and set `ohara_db_unknown_migrations`; the app still starts.
+  and set `ohara_db_unknown_migrations`; the app still starts. A new
+  migration takes a version above the current `main`'s highest:
+  `scripts/check-migrations.sh origin/main` fails on one `main` already
+  uses (see Git and CI).
 - Linters: `golangci-lint` (`.golangci.yml`) and `nilaway`. Never add
   suppression directives; fix the root cause.
 - Errors are `{"error": "...", "field": "..."}`: 422 for validation (field
@@ -229,7 +232,8 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   and more ("Alien: Covenant" for an "Alien" want), stores
   each listing once in `price_observation` (`source`, `external_id`) and
   queues one `deal_alert` per listing at or below the copy's
-  `max_price_cents`; a listing seen again keeps its row, takes the new
+  `max_price_cents` or its `max_market_percent` (1 to 100) of the
+  title and format's used market price, when either holds; a listing seen again keeps its row, takes the new
   price and `last_seen_at`, and alerts if it has no alert yet. Alerts are retried up to 5 times within a week.
   A hunt or valuation that matches a stored listing to another title (its
   edition's) moves it to that title and the matched edition and sets
@@ -339,9 +343,16 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   with a `discogs_release_id` is
   priced on Discogs (marketplace stats in EUR, price suggestions in the
   seller-settings currency, converted to PLN at the NBP table A rate): its
-  floor is the cheapest copy for sale, its mid and ceiling the suggested
-  Very Good Plus and Mint prices; the suggestion replaces the OLX mid and
-  is never low confidence. Each run upserts today's `valuation_history` row and
+  floor is the cheapest copy for sale, its ceiling the suggested Mint
+  price and each copy's mid the suggestion for the grade its condition
+  maps to (`mint` Near Mint, `very_good` Very Good Plus, `good` Very
+  Good, `fair` Good, `poor` Poor; `mid_grade` names it), Very Good Plus
+  for a copy without a condition or whose grade has no suggestion. A
+  release's prices are stored in one transaction, so a grade counts only
+  when the edition's newest answer naming any middle grade named it; an
+  answer naming none (`{}`, Mint only) or a failed request keeps the last
+  answer (#411). The suggestion replaces the OLX mid and is never
+  low confidence. Each run upserts today's `valuation_history` row and
   sets the `ohara_collection_*` gauges. Skupksiazek.pl (cart behind an
   app flow) and Rivendo (manual form with photos) have no automatic
   quote, so movie discs have no floor. A title page reads
@@ -356,6 +367,15 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   or not (`?title_id=`: every format of one title), and sends no request
   out: Okazje's deal cards and a wish form's "Cena maksymalna" show it as
   "Rynek ok. 42,50 zł (4 oferty)", with "mało danych" under 3 listings.
+  A wish's market percent reads that price from a 3-listing market up
+  (`valuation.Runner.DealMarkets`, given to `deals.Store.UseMarkets` in
+  `cmd/api`, since `deals` cannot import `valuation`), at queue time, at
+  send time (read once the listing's row is held) and for "Pod limitem",
+  the badge and "Wysłane"; the alert message and deal card name it ("70%
+  ceny rynkowej 50,00 zł"). A run reads it again after each answer while
+  a listing it stored met no rule, and queues the alerts of those that now
+  meet it, so a listing counts in the market that judges it, as on later
+  runs.
 - A barcode no provider resolves goes to `scan_queue`; a trigger on `edition`
   removes it once an edition carries that barcode. `ohara_scan_queue_size`
   counts it on each scrape. The trigger keeps the entry it removes in
@@ -592,6 +612,16 @@ and cuts the GitHub release, in that order. `:latest` comes only from CI on
   Postgres, golangci-lint, nilaway), browser smoke flows (`e2e`), image
   build; `main` pushes `:latest` and `:<sha>` only after all of them pass. Pushed images (`main` and `release.yml`)
   carry BuildKit's SBOM and max-mode provenance attestations.
+- CI's `migrations` job (`scripts/check-migrations.sh`) fails when two
+  migrations share a version: a PR's merge commit, or a migration the PR
+  adds to its base branch whose version the current `main` already uses
+  (both files named), and `main` itself after a merge. A PR stacked on
+  another answers only for its own migrations. Nothing reruns a PR's CI
+  when `main` moves, so each push to `main` checks every open PR that adds
+  a migration against the `main` of that moment and sets the
+  `migrations against main` commit status on its head
+  (`migrations-open-prs`); a PR without migrations gets none. A red status
+  means renumbering above `main`'s highest.
 - CI fails on known vulnerabilities (`scripts/check-vulnerabilities.sh`),
   on every push and PR and nightly: `govulncheck` for Go code the backend
   calls, under the go.mod toolchain; `npm audit` for high and critical

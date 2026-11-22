@@ -2,6 +2,7 @@ import { formatLabels, formatPLN, kindLabels } from '#lib/collection.js';
 import type {
 	Bound,
 	CopyValue,
+	DiscogsGrade,
 	Estimate,
 	Gain,
 	HistoryPoint,
@@ -15,6 +16,7 @@ import type {
 export type {
 	Bound,
 	CopyValue,
+	DiscogsGrade,
 	Estimate,
 	Gain,
 	HistoryPoint,
@@ -63,12 +65,22 @@ export function estimateValue(e: Estimate | null): string {
 	return e ? formatPLN(e.cents) : '—';
 }
 
-/** Where one bound of a copy comes from, as "OLX · 5 ofert (2 odrzucone)". */
-export function estimateSource(bound: BoundKey, e: Estimate | null): string {
+/** The grade of a Discogs used value when the server names none. */
+const defaultGrade: DiscogsGrade = 'VG+';
+
+/**
+ * Where one bound of a copy comes from, as "OLX · 5 ofert (2 odrzucone)". A Discogs middle names
+ * the grade of its suggestion, VG+ when the server names none.
+ */
+export function estimateSource(
+	bound: BoundKey,
+	e: Estimate | null,
+	grade: DiscogsGrade = defaultGrade
+): string {
 	if (!e) return 'brak danych';
 	if (e.source === 'discogs') {
 		if (bound === 'floor') return 'Discogs · najtańsza oferta';
-		return bound === 'mid' ? 'Discogs · sugestia VG+' : 'Discogs · sugestia Mint';
+		return bound === 'mid' ? `Discogs · sugestia ${grade}` : 'Discogs · sugestia Mint';
 	}
 	if (bound === 'floor') {
 		return e.cents === 0 ? `${sourceLabels[e.source]} nie skupuje` : sourceLabels[e.source];
@@ -410,9 +422,14 @@ export function missingCeiling(c: CopyValue): string | null {
 		: null;
 }
 
-/** The line under a copy's value: its range, else where its used value comes from. */
+/**
+ * The line under a copy's value: its range, with the grade of a Discogs used value, as
+ * "40–160 zł · sugestia G", else where its used value comes from.
+ */
 export function copyNote(c: CopyValue): string {
-	return copyRange(c) ?? estimateSource('mid', c.mid);
+	const range = copyRange(c);
+	if (range === null) return estimateSource('mid', c.mid, c.mid_grade);
+	return c.mid?.source === 'discogs' ? `${range} · sugestia ${c.mid_grade ?? defaultGrade}` : range;
 }
 
 /** The Discogs release a copy's shown prices come from, or null when none is from Discogs. */

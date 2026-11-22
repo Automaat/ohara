@@ -108,6 +108,23 @@ func (r *Runner) Window() time.Duration { return r.cfg.Window }
 // 0 keeps every listing.
 func (r *Runner) Retention() time.Duration { return r.cfg.Retention }
 
+// DealMarkets is the market price a wish's market percent applies to: the
+// used price GET /api/valuation/market gives every wished title and
+// format, kept only where it rests on at least MinObservations prices.
+func (r *Runner) DealMarkets(ctx context.Context) ([]deals.Market, error) {
+	markets, err := r.store.Markets(ctx, r.cfg.Window, 0)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]deals.Market, 0, len(markets))
+	for _, m := range markets {
+		if m.Count >= MinObservations {
+			out = append(out, deals.Market{TitleID: m.TitleID, Format: m.Format, Cents: m.Cents})
+		}
+	}
+	return out, nil
+}
+
 // Pricer prices the owned album releases; nil without one.
 func (r *Runner) Pricer() ReleasePricer { return r.pricer }
 
@@ -545,7 +562,9 @@ type releaseRaw struct {
 
 // recordRelease stores each known price of release id as an observation
 // of h's edition, keyed by release and edition so two editions naming the
-// same release both get it.
+// same release both get it. They are stored in one transaction, so the
+// suggestions of one answer share their last seen time and a grade the
+// answer left out is older than the rest.
 func (x *run) recordRelease(ctx context.Context, h *Holding, id int64, p ReleasePrice) (bool, error) {
 	raw, err := json.Marshal(releaseRaw{ReleaseID: id, NumForSale: p.NumForSale})
 	if err != nil {
@@ -553,29 +572,33 @@ func (x *run) recordRelease(ctx context.Context, h *Holding, id int64, p Release
 	}
 	key := strconv.FormatInt(id, 10) + "/" + strconv.FormatInt(h.Want.EditionID, 10)
 	release := "https://www.discogs.com/release/" + strconv.FormatInt(id, 10)
-	prices := []struct {
+	type price struct {
 		source string
 		cents  *int64
 		url    string
-	}{
-		{SourceDiscogsLowest, p.LowestCents, "https://www.discogs.com/sell/release/" + strconv.FormatInt(id, 10)},
-		{SourceDiscogsVGPlus, p.VGPlusCents, release},
-		{SourceDiscogsMint, p.MintCents, release},
 	}
-	recorded := false
+	prices := []price{
+		{SourceDiscogsLowest, p.LowestCents, "https://www.discogs.com/sell/release/" + strconv.FormatInt(id, 10)},
+	}
+	for _, s := range p.suggested() {
+		prices = append(prices, price{s.source, *s.cents, release})
+	}
+	var ls []deals.Listing
 	for _, pr := range prices {
 		if pr.cents == nil {
 			continue
 		}
-		l := deals.Listing{
+		ls = append(ls, deals.Listing{
 			Source: pr.source, ExternalID: key, Title: h.Want.Name, URL: pr.url, PriceCents: *pr.cents, Raw: raw,
-		}
-		if _, err := x.r.store.RecordAsOf(ctx, &l, h, x.asOf); err != nil {
-			return false, err
-		}
-		recorded = true
+		})
 	}
-	return recorded, nil
+	if len(ls) == 0 {
+		return false, nil
+	}
+	if err := x.r.store.RecordAllAsOf(ctx, ls, h, x.asOf); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // publish exports a stored day as the collection value gauges.

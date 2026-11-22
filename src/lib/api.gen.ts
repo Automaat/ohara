@@ -31,6 +31,8 @@ export type KeywordKind = 'reject' | 'accept';
 
 export type ValueSource = 'olx' | 'skupszop' | 'discogs';
 
+export type DiscogsGrade = 'NM' | 'VG+' | 'VG' | 'G' | 'P';
+
 export type ServiceState = 'ok' | 'degraded';
 
 export type DatabaseState = 'ok' | 'unavailable' | 'unconfigured';
@@ -119,6 +121,7 @@ export type CopyPayload = {
 	condition: Condition | null;
 	notes: string;
 	max_price_cents: number | null;
+	max_market_percent?: number | null;
 	request_key?: string;
 };
 
@@ -133,6 +136,7 @@ export type Copy = {
 	condition: Condition | null;
 	notes: string;
 	max_price_cents: number | null;
+	max_market_percent?: number | null;
 	request_key?: string;
 	created_at: string;
 	updated_at: string;
@@ -217,6 +221,7 @@ export type CopyDetail = {
 	condition: Condition | null;
 	notes: string;
 	max_price_cents: number | null;
+	max_market_percent?: number | null;
 	request_key?: string;
 	created_at: string;
 	updated_at: string;
@@ -345,6 +350,8 @@ export type Observation = {
 	listing_photo_url: string | null;
 	cover_url: string | null;
 	max_price_cents: number | null;
+	max_market_percent?: number | null;
+	market_cents?: number | null;
 	alert: AlertState;
 	alert_error: string;
 	alert_attempts: number;
@@ -411,6 +418,7 @@ export type CopyValue = {
 	floor: Estimate | null;
 	mid: Estimate | null;
 	ceiling: Estimate | null;
+	mid_grade?: DiscogsGrade;
 	low_confidence: boolean;
 };
 

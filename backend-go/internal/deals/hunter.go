@@ -6,6 +6,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log/slog"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -267,6 +269,12 @@ type run struct {
 	asOf  time.Time
 	res   RunResult
 	first bool
+	// percent is whether a want has a market percent, whose market price
+	// the listings this run stores may move.
+	percent bool
+	// missed holds the listings this run stored that met no rule, by
+	// listingKey, to judge again once a later answer moves the market.
+	missed map[string]Listing
 	// tried holds the observations whose alert this run sent or failed to
 	// send; a failed one waits for the next run.
 	tried map[int64]bool
@@ -296,10 +304,14 @@ func (h *Hunter) Run(ctx context.Context) (RunResult, error) {
 	if err != nil {
 		return RunResult{}, err
 	}
+	r := &run{
+		h: h, wants: wants, rules: rules, titles: titles, asOf: asOf, first: true, tried: map[int64]bool{},
+		missed: map[string]Listing{},
+	}
 	for i := range wants {
 		wants[i].Prepare()
+		r.percent = r.percent || wants[i].MaxMarketPercent != nil
 	}
-	r := &run{h: h, wants: wants, rules: rules, titles: titles, asOf: asOf, first: true, tried: map[int64]bool{}}
 	r.res.Wants = len(wants)
 	r.res.Errors = []string{}
 	var queries []string
@@ -470,8 +482,10 @@ func (r *run) offered(ctx context.Context, listings []Listing) error {
 
 // record stores the matching listings of one answer, then sends their
 // pending alerts before the run asks a source again. PendingAlerts checks
-// the refreshed price against the wish's current limit, which may have
-// changed since the run read the wishlist.
+// the refreshed price against the wish's current limit and market share,
+// which may have changed since the run read the wishlist. A listing of
+// this run that met no rule is judged again against the market prices read
+// once the answer is stored, since its listings may have moved them.
 func (r *run) record(ctx context.Context, listings []Listing) error {
 	if err := r.offered(ctx, listings); err != nil {
 		return err
@@ -485,7 +499,7 @@ func (r *run) record(ctx context.Context, listings []Listing) error {
 			continue
 		}
 		r.res.Matched++
-		alert := r.h.notifier != nil && w.MaxPriceCents != nil && l.PriceCents <= *w.MaxPriceCents
+		alert := r.h.notifier != nil && w.Meets(l.PriceCents)
 		isNew, alerted, err := r.h.store.RecordAsOf(ctx, l, w, alert, r.asOf)
 		if err != nil {
 			return err
@@ -496,12 +510,50 @@ func (r *run) record(ctx context.Context, listings []Listing) error {
 		if alerted {
 			r.res.Alerts++
 		}
-		refreshed[listingKey(l.Source, l.ExternalID)] = true
+		key := listingKey(l.Source, l.ExternalID)
+		if r.h.notifier != nil && r.percent && !alert {
+			r.missed[key] = *l
+		} else {
+			delete(r.missed, key)
+		}
+		refreshed[key] = true
 	}
 	if len(refreshed) == 0 {
 		return nil
 	}
+	if len(r.missed) > 0 {
+		if err := r.remeasure(ctx, refreshed); err != nil {
+			return err
+		}
+	}
 	return r.deliver(ctx, refreshed)
+}
+
+// remeasure reads the market prices again and queues the alerts of the
+// missed listings that now meet a want's share of them, adding them to
+// refreshed so they go out before the run asks a source again. The new
+// prices also judge the rest of the run's answers.
+func (r *run) remeasure(ctx context.Context, refreshed map[string]bool) error {
+	if err := r.h.store.RefreshMarkets(ctx, r.wants); err != nil {
+		return err
+	}
+	for _, key := range slices.Sorted(maps.Keys(r.missed)) {
+		l := r.missed[key]
+		w := pick(r.wants, &l, r.rules, r.titles)
+		if w == nil || !w.Meets(l.PriceCents) {
+			continue
+		}
+		_, alerted, err := r.h.store.RecordAsOf(ctx, &l, w, true, r.asOf)
+		if err != nil {
+			return err
+		}
+		if alerted {
+			r.res.Alerts++
+		}
+		delete(r.missed, key)
+		refreshed[key] = true
+	}
+	return nil
 }
 
 func listingKey(source, externalID string) string { return source + "\x00" + externalID }
@@ -601,6 +653,9 @@ func alertText(a *Alert) string {
 	}
 	if a.MaxPriceCents != nil {
 		notes = append(notes, "limit "+formatPLN(*a.MaxPriceCents))
+	}
+	if a.MaxMarketPercent != nil && a.MarketCents != nil {
+		notes = append(notes, fmt.Sprintf("%d%% ceny rynkowej %s", *a.MaxMarketPercent, formatPLN(*a.MarketCents)))
 	}
 	if len(notes) > 0 {
 		price += " (" + strings.Join(notes, ", ") + ")"

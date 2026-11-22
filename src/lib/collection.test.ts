@@ -430,6 +430,38 @@ describe('copy form', () => {
 		});
 	});
 
+	it('round-trips a wish with a market percent', () => {
+		const form = copyToForm({
+			edition_id: 3,
+			status: 'wishlist',
+			price_cents: null,
+			purchased_on: null,
+			shop: '',
+			acquired_as: null,
+			condition: null,
+			notes: '',
+			max_price_cents: null,
+			max_market_percent: 70
+		});
+		expect(form.market_percent).toBe('70');
+		const wish = copyPayload(form, 3);
+		expect(wish.ok && wish.value.max_market_percent).toBe(70);
+		const typed = copyPayload({ ...form, market_percent: ' 80 % ' }, 3);
+		expect(typed.ok && typed.value.max_market_percent).toBe(80);
+		const blank = copyPayload({ ...form, market_percent: ' ' }, 3);
+		expect(blank.ok && 'max_market_percent' in blank.value).toBe(false);
+		const owned = copyPayload({ ...form, status: 'owned' }, 3);
+		expect(owned.ok && 'max_market_percent' in owned.value).toBe(false);
+	});
+
+	it.each(['0', '101', '70,5', 'dużo', '-5'])('rejects market percent %j', (percent) => {
+		const parsed = copyPayload(
+			{ ...copyToForm(null), status: 'wishlist', market_percent: percent },
+			3
+		);
+		expect(!parsed.ok && parsed.issue.field).toBe('max_market_percent');
+	});
+
 	it.each([
 		[{ price: 'dużo' }, 'price_cents'],
 		[{ purchased_on: '1.11.2026' }, 'purchased_on'],

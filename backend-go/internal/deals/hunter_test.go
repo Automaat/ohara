@@ -845,6 +845,35 @@ func TestAlertTextNamesTheMedium(t *testing.T) {
 	}
 }
 
+func TestAlertTextNamesTheMarketPrice(t *testing.T) {
+	tests := []struct {
+		name   string
+		limit  *int64
+		market *int64
+		price  string
+	}{
+		{"percent only", nil, new(int64(5000)), "35,00 zł (70% ceny rynkowej 50,00 zł)"},
+		{"percent beside a limit", new(int64(3000)), new(int64(5000)), "35,00 zł (limit 30,00 zł, 70% ceny rynkowej 50,00 zł)"},
+		{"percent without a trusted price", new(int64(4000)), nil, "35,00 zł (limit 40,00 zł)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := alertText(&Alert{
+				Source: "olx", URL: "https://www.olx.pl/d/oferta/x", ListingTitle: "Łowca androidów Blu-ray",
+				PriceCents: 3500, TitleName: "Blade Runner", Format: new("bluray"),
+				MaxPriceCents: tt.limit, MaxMarketPercent: new(70), MarketCents: tt.market,
+			})
+			want := strings.Join([]string{
+				"🎯 Okazja: Blade Runner · Blu-ray", tt.price + " · OLX",
+				"Łowca androidów Blu-ray", "https://www.olx.pl/d/oferta/x",
+			}, "\n")
+			if got != want {
+				t.Errorf("alertText = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 // panickingSource trips an index past the end of a slice on every search,
 // like a parser meeting a malformed answer.
 type panickingSource struct{ calls atomic.Int32 }

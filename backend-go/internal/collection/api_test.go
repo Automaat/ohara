@@ -475,6 +475,37 @@ func TestWishlistMaxPrice(t *testing.T) {
 	}
 }
 
+func TestWishlistMarketPercent(t *testing.T) {
+	a := newAPI(t)
+	movie := a.title("movie", "Rejs")
+	edition := a.edition(obj{"title_id": movie, "format": "dvd"})
+
+	var c collection.Copy
+	a.mustDo(http.MethodPost, "/api/copies", obj{"edition_id": edition, "status": "wishlist", "max_market_percent": 70}, &c, http.StatusCreated)
+	if c.MaxMarketPercent == nil || *c.MaxMarketPercent != 70 || c.MaxPriceCents != nil {
+		t.Fatalf("created copy = %+v", c)
+	}
+	path := fmt.Sprintf("/api/copies/%d", c.ID)
+	a.mustDo(http.MethodPut, path, obj{"edition_id": edition, "status": "wishlist", "max_price_cents": 3000, "max_market_percent": 80}, &c, http.StatusOK)
+	if *c.MaxMarketPercent != 80 || *c.MaxPriceCents != 3000 {
+		t.Fatalf("updated copy = %+v", c)
+	}
+	for _, percent := range []int{0, 101} {
+		a.fails(http.MethodPut, path, obj{"edition_id": edition, "status": "wishlist", "max_market_percent": percent}, http.StatusUnprocessableEntity, "max_market_percent")
+	}
+	a.fails(http.MethodPut, path, obj{"edition_id": edition, "status": "owned", "max_market_percent": 80}, http.StatusUnprocessableEntity, "max_market_percent")
+	var kept collection.Copy
+	a.mustDo(http.MethodGet, path, nil, &kept, http.StatusOK)
+	if kept.MaxMarketPercent == nil || *kept.MaxMarketPercent != 80 {
+		t.Fatalf("refused updates changed the copy to %+v", kept)
+	}
+	var bought collection.Copy
+	a.mustDo(http.MethodPut, path, obj{"edition_id": edition, "status": "owned", "price_cents": 2000}, &bought, http.StatusOK)
+	if bought.MaxMarketPercent != nil {
+		t.Fatalf("bought copy kept market percent %d", *bought.MaxMarketPercent)
+	}
+}
+
 func TestEditionKindRules(t *testing.T) {
 	a := newAPI(t)
 	movie := a.title("movie", "Miś")

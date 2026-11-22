@@ -45,6 +45,30 @@ test('a wedge scan adds the stub film and Cofnij takes it all back', async ({ pa
 	await expectNoSourceRequests(request);
 });
 
+test('Back then Forward at once leaves the reopened sheet open (#128)', async ({
+	page,
+	request
+}) => {
+	const code = uniqueEAN();
+
+	await page.goto('/scan');
+	await page.getByRole('button', { name: 'Wpisz kod' }).click();
+	const field = page.getByLabel('Kod kreskowy');
+	await field.pressSequentially(code);
+	await field.press('Enter');
+
+	const sheet = page.getByRole('dialog', { name: 'Znaleziono' });
+	await expect(sheet.getByRole('button', { name: `Film ${code}` })).toBeVisible();
+
+	await page.goBack();
+	await page.goForward();
+	await page.waitForTimeout(300);
+	await expect(sheet).toBeVisible();
+	await expect(sheet.getByRole('button', { name: `Film ${code}` })).toBeVisible();
+
+	await expectNoSourceRequests(request);
+});
+
 /** The collection's item for the title named `name`, if any. */
 async function collectionItem(
 	request: Parameters<typeof expectNoSourceRequests>[0],

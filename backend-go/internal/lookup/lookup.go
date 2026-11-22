@@ -22,13 +22,13 @@ import (
 // send a picked candidate's title as is.
 type TitleFields struct {
 	Name          string   `json:"name"`
-	OriginalTitle *string  `json:"original_title,omitempty"`
-	PolishTitle   *string  `json:"polish_title,omitempty"`
-	Year          *int     `json:"year,omitempty"`
-	TMDBID        *int64   `json:"tmdb_id,omitempty"`
+	OriginalTitle *string  `json:"original_title,omitempty" ts:",null"`
+	PolishTitle   *string  `json:"polish_title,omitempty" ts:",null"`
+	Year          *int     `json:"year,omitempty" ts:",null"`
+	TMDBID        *int64   `json:"tmdb_id,omitempty" ts:",null"`
 	Authors       []string `json:"authors,omitempty"`
-	BNID          *string  `json:"bn_id,omitempty"`
-	OpenLibraryID *string  `json:"openlibrary_id,omitempty"`
+	BNID          *string  `json:"bn_id,omitempty" ts:",null"`
+	OpenLibraryID *string  `json:"openlibrary_id,omitempty" ts:",null"`
 }
 
 // EditionFields mirrors the edition body of POST /api/editions without
@@ -37,14 +37,14 @@ type EditionFields struct {
 	Barcode     string   `json:"barcode"`
 	Label       string   `json:"label,omitempty"`
 	Publisher   string   `json:"publisher,omitempty"`
-	Year        *int     `json:"year,omitempty"`
-	Format      *string  `json:"format,omitempty"`
-	PLSubtitles string   `json:"pl_subtitles,omitempty"`
-	PLVoiceover string   `json:"pl_voiceover,omitempty"`
-	Packaging   []string `json:"packaging,omitempty"`
-	Binding     *string  `json:"binding,omitempty"`
+	Year        *int     `json:"year,omitempty" ts:",null"`
+	Format      *string  `json:"format,omitempty" ts:"Format,null"`
+	PLSubtitles string   `json:"pl_subtitles,omitempty" ts:"TriState"`
+	PLVoiceover string   `json:"pl_voiceover,omitempty" ts:"TriState"`
+	Packaging   []string `json:"packaging,omitempty" ts:"Packaging"`
+	Binding     *string  `json:"binding,omitempty" ts:"Binding,null"`
 	// DiscogsReleaseID names the Discogs release an album candidate is.
-	DiscogsReleaseID *int64 `json:"discogs_release_id,omitempty"`
+	DiscogsReleaseID *int64 `json:"discogs_release_id,omitempty" ts:",null"`
 }
 
 // Candidate is one possible match for a barcode. Type is "movie", "book" or
@@ -52,13 +52,13 @@ type EditionFields struct {
 // lists every provider whose fields went into the candidate. CoverURL and
 // Description are for display only; they are not stored.
 type Candidate struct {
-	Type        string        `json:"type"`
+	Type        string        `json:"type" ts:"Kind"`
 	Title       TitleFields   `json:"title"`
 	Edition     EditionFields `json:"edition"`
 	CoverURL    string        `json:"cover_url,omitempty"`
 	Description string        `json:"description,omitempty"`
 	Provider    string        `json:"provider"`
-	Sources     []string      `json:"sources"`
+	Sources     []string      `json:"sources" ts:",null"`
 	Confidence  float64       `json:"confidence"`
 }
 

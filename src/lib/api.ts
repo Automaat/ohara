@@ -1,3 +1,4 @@
+import type { ErrorBody as GeneratedErrorBody } from './api.gen';
 import type { FormIssue } from './collection';
 
 /** An API failure with a Polish message and, for validation errors, the field it names. */
@@ -11,13 +12,18 @@ export class ApiError extends Error {
 	}
 }
 
-type ErrorBody = { error?: unknown; field?: unknown };
+/** The server's error body, read without trusting its value types. */
+type ErrorBody = { [K in keyof GeneratedErrorBody]?: unknown };
 
 /** What the server's 422 for a barcode means: the shape fits, the check digit does not. */
 export const invalidBarcodeMessage = 'Nieprawidłowy kod kreskowy: sprawdź cyfry.';
 
 /** What the server's 413 for a cover photo means. */
 export const coverTooLargeMessage = 'Wybierz plik o rozmiarze do 8 MiB.';
+
+/** What the server's 422 for a cover photo means, and what a photo the browser cannot read says. */
+export const invalidCoverMessage =
+	'Wybierz prawidłowe zdjęcie JPEG lub PNG o rozdzielczości do 16 megapikseli.';
 
 /** What a request that never got an answer says. */
 export const noAnswerMessage = 'Serwer nie odpowiada.';
@@ -41,7 +47,7 @@ const fieldMessages: Record<string, Record<number, string>> = {
 	cover_photo: {
 		400: 'Przesyłanie zdjęcia zostało przerwane. Spróbuj ponownie.',
 		413: coverTooLargeMessage,
-		422: 'Wybierz prawidłowe zdjęcie JPEG lub PNG o rozdzielczości do 16 megapikseli.'
+		422: invalidCoverMessage
 	}
 };
 

@@ -1,7 +1,14 @@
 <script lang="ts">
 	import { Button, Modal } from '@smykla-skalski/sui';
+	import { onDestroy } from 'svelte';
 	import { errorMessage, request } from '#lib/api.js';
-	import { coverDeadlineMs, photoProblem, type CoverUndo } from '#lib/edition-cover.js';
+	import {
+		browserCodec,
+		coverDeadlineMs,
+		PhotoError,
+		shrinkPhoto,
+		type CoverUndo
+	} from '#lib/edition-cover.js';
 
 	let {
 		open = $bindable(false),
@@ -23,23 +30,36 @@
 	let library = $state<HTMLInputElement>();
 	let pending = $state<Action | null>(null);
 	let failure = $state<string>();
+	/** Counts the moments after which a photo still being shrunk is no longer sent, since a newer
+	 * cover may have been saved meanwhile: the sheet going away, such as after leaving the edition,
+	 * and the page being hidden, after which the browser may restore it from its back-forward cache.
+	 * A photo chosen after that is sent as usual. */
+	let invalidations = 0;
+	const invalidate = () => {
+		invalidations++;
+	};
+	onDestroy(invalidate);
 
 	/** Sends one change at a time: a second one started while the first is unanswered could land
-	 * first and be overwritten by it. */
+	 * first and be overwritten by it. A photo is shrunk first; one the browser cannot read sends
+	 * nothing. */
 	async function save(action: Action, photo?: File) {
 		if (pending) return;
 		pending = action;
 		failure = undefined;
+		const started = invalidations;
 		try {
+			const body = photo ? await shrinkPhoto(photo, browserCodec) : undefined;
+			if (started !== invalidations) return;
 			await request(
 				fetch,
-				photo ? 'PUT' : 'DELETE',
+				body ? 'PUT' : 'DELETE',
 				`/api/editions/${editionID}/cover`,
-				photo,
+				body,
 				coverDeadlineMs
 			);
 		} catch (err) {
-			failure = errorMessage(err);
+			failure = err instanceof PhotoError ? err.message : errorMessage(err);
 			return;
 		} finally {
 			pending = null;
@@ -53,10 +73,7 @@
 	function picked(action: Action, input: HTMLInputElement) {
 		const photo = input.files?.[0];
 		input.value = '';
-		if (!photo || pending) return;
-		const problem = photoProblem(photo);
-		if (problem) failure = problem;
-		else void save(action, photo);
+		if (photo && !pending) void save(action, photo);
 	}
 
 	function choose(input: HTMLInputElement | undefined) {
@@ -64,10 +81,12 @@
 	}
 </script>
 
+<svelte:window onpagehide={invalidate} />
+
 <Modal
 	bind:open
 	title="Zmień okładkę"
-	description="JPEG lub PNG, do 8 MiB i 16 megapikseli."
+	description="JPEG lub PNG. Duże zdjęcia zostaną zmniejszone."
 	closeLabel="Zamknij"
 	busy={pending !== null}
 	error={failure}

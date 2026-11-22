@@ -74,7 +74,7 @@ func (s *Store) Titles(ctx context.Context) (Titles, error) {
 // Keyword is one editable matcher phrase; Kind is "reject" or "accept".
 type Keyword struct {
 	ID        int64     `json:"id"`
-	Kind      string    `json:"kind"`
+	Kind      string    `json:"kind" ts:"KeywordKind"`
 	Phrase    string    `json:"phrase"`
 	CreatedAt time.Time `json:"created_at"`
 }
@@ -261,21 +261,21 @@ const (
 // Observation is one stored listing in the deals view.
 type Observation struct {
 	ID              int64     `json:"id"`
-	Source          string    `json:"source"`
+	Source          string    `json:"source" ts:"DealSource"`
 	ExternalID      string    `json:"external_id"`
 	ObservedAt      time.Time `json:"observed_at"`
 	PriceCents      int64     `json:"price_cents"`
-	AcquiredAs      *string   `json:"acquired_as"`
+	AcquiredAs      *string   `json:"acquired_as" ts:"AcquiredAs"`
 	URL             string    `json:"url"`
 	ListingTitle    string    `json:"listing_title"`
 	TitleID         *int64    `json:"title_id"`
 	TitleName       *string   `json:"title_name"`
 	EditionID       *int64    `json:"edition_id"`
-	Format          *string   `json:"format"`
+	Format          *string   `json:"format" ts:"Format"`
 	ListingPhotoURL *string   `json:"listing_photo_url"`
 	CoverURL        *string   `json:"cover_url"`
 	MaxPriceCents   *int64    `json:"max_price_cents"`
-	Alert           string    `json:"alert"`
+	Alert           string    `json:"alert" ts:"AlertState"`
 	AlertError      string    `json:"alert_error"`
 	AlertAttempts   int       `json:"alert_attempts"`
 }

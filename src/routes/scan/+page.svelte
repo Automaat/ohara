@@ -1,8 +1,3 @@
-<script module lang="ts">
-	/** Numbers each sheet, so a barcode read again opens a fresh one. */
-	let sheetSeq = 0;
-</script>
-
 <script lang="ts">
 	import {
 		Button,
@@ -35,7 +30,8 @@
 	import { queueTally } from '#lib/queue-tally.svelte.js';
 	import { outcomeLabels, outcomeTones, recentScans } from '#lib/recent.svelte.js';
 	import { ScanFlow, phaseTitle, type Added } from '#lib/scan-flow.svelte.js';
-	import { addLine, session, sessionSpent, undoAdd, type SessionAdd } from '#lib/session.svelte.js';
+	import { SheetHistory } from '#lib/scan-sheet.js';
+	import { addLine, session, sessionSpent, undoAdd } from '#lib/session.svelte.js';
 	import {
 		RepeatGuard,
 		barcodeInputError,
@@ -44,8 +40,6 @@
 		looksLikeBarcode
 	} from '#lib/scan.js';
 	import { toastHeld } from '#lib/toast-hold.js';
-
-	type Sheet = NonNullable<App.PageState['scanSheet']>;
 
 	/** The phone layout, where the camera fills the screen and manual entry opens over it. */
 	const phone = new MediaQuery(phoneLayout);
@@ -79,14 +73,6 @@
 	let bandFoot = $state<number | null>(null);
 	let keyboard = $state(0);
 	let viewport = $state<number | null>(null);
-	let shown: Sheet | null = null;
-	/** Every code the open sheet has shown, a wedge scan's next codes included. */
-	let handled: string[] = [];
-	/** Where to go once the sheet's history entry is gone, as the add page for a code by hand. */
-	let afterClose: string | null = null;
-	let closing = 0;
-	/** An add whose toast waits for the sheet to close, so the page's toasts announce it. */
-	let addedOnClose: SessionAdd | null = null;
 	let listOpen = $state(false);
 	/** Codes waiting on the device when last seen, to recount the queue once some went in. */
 	let waitingBefore = 0;
@@ -102,6 +88,22 @@
 		},
 		(add) => undoAdd(fetch, add)
 	);
+	const sheets = new SheetHistory({
+		sheet: () => page.state.scanSheet ?? null,
+		show: (scanSheet, replace) =>
+			void goto(page.url.href, { shallow: true, replace, state: { scanSheet } }),
+		back: () => history.back(),
+		load: (barcode) => void flow.load(barcode),
+		closed: (codes) => {
+			const now = performance.now();
+			for (const barcode of codes) guard.remember(barcode, now);
+			flow.dismiss();
+			sheetTop = null;
+		},
+		goto: (href) => void goto(href),
+		toast: (add) => addToasts.show(add),
+		tick
+	});
 
 	const sheet = $derived(page.state.scanSheet);
 	const trayShown = $derived(session.adds.length > 0);
@@ -139,12 +141,7 @@
 		code = '';
 		typing = false;
 		placeSheet();
-		const scanSheet: Sheet = { barcode, id: ++sheetSeq, typed };
-		void goto(page.url.href, {
-			shallow: true,
-			replace: !!page.state.scanSheet,
-			state: { scanSheet }
-		});
+		sheets.open(barcode, typed);
 		return true;
 	}
 
@@ -162,19 +159,12 @@
 	}
 
 	function closeSheet() {
-		const s = page.state.scanSheet;
-		if (!s || closing === s.id) return;
-		closing = s.id;
-		history.back();
+		sheets.close();
 	}
 
-	/**
-	 * A dialog's `close` event comes a moment after it closed. When Back and then Forward, or the
-	 * next code, has opened the sheet again by then, the event belongs to the earlier close, so it
-	 * never reaches the sheet's Modal, which would close the reopened sheet and go back from it.
-	 */
+	/** Keeps a dialog's late `close` event from the sheet it no longer belongs to. */
 	function stopLateClose(event: Event) {
-		if (event.target === sheetDialog && sheetDialog?.open) event.stopImmediatePropagation();
+		sheets.stopLateClose(event, sheetDialog);
 	}
 
 	function fromCamera(barcode: string): boolean {
@@ -197,20 +187,7 @@
 	 * keeps the sheet open, so its toast shows in the sheet.
 	 */
 	function added(a: Added) {
-		if (!page.state.scanSheet) return;
-		if (a.next) {
-			open(a.next, true);
-			addToasts.show(a.add);
-		} else {
-			addedOnClose = a.add;
-			closeSheet();
-		}
-	}
-
-	/** Shows an add's toast once the closed sheet no longer hosts the page's toasts. */
-	async function toastAfterClose(add: SessionAdd) {
-		await tick();
-		if (!page.state.scanSheet) addToasts.show(add);
+		sheets.added(a.add, a.next, (next) => open(next, true));
 	}
 
 	/**
@@ -222,39 +199,12 @@
 		const s = page.state.scanSheet;
 		if (!s) return;
 		flow.dismiss();
-		afterClose = `/scan/${encodeURIComponent(flow.item?.barcode ?? s.barcode)}?manual=1`;
-		closeSheet();
-	}
-
-	function sheetOpened(s: Sheet) {
-		if (shown?.id === s.id) return;
-		shown = s;
-		if (!handled.includes(s.barcode)) handled.push(s.barcode);
-		void flow.load(s.barcode);
-	}
-
-	function sheetClosed() {
-		const now = performance.now();
-		for (const barcode of handled) guard.remember(barcode, now);
-		handled = [];
-		flow.dismiss();
-		shown = null;
-		closing = 0;
-		sheetTop = null;
-		const next = afterClose;
-		afterClose = null;
-		const add = addedOnClose;
-		addedOnClose = null;
-		if (add) void toastAfterClose(add);
-		if (next) void goto(next);
+		sheets.leaveTo(`/scan/${encodeURIComponent(flow.item?.barcode ?? s.barcode)}?manual=1`);
 	}
 
 	$effect(() => {
 		const s = sheet;
-		untrack(() => {
-			if (s) sheetOpened(s);
-			else if (shown) sheetClosed();
-		});
+		untrack(() => sheets.sync(s ?? null));
 	});
 
 	$effect(() => {

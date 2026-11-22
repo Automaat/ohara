@@ -14,10 +14,12 @@ Same layout and tooling as `../baratie`. `package.json` and
 ```
 /backend-go/
   /cmd/api/            # main: env, migrations, HTTP server, `healthcheck` subcommand
+  /cmd/apitypes/       # writes src/lib/api.gen.ts (`npm run generate:api`)
   /internal/
     /db/               # pgx pool + forward-only migrations (migrations/NNNN_name.sql)
     /dbtest/           # per-test Postgres schema for DB tests
     /httpx/            # JSON request/response and error helpers
+    /apitypes/         # Go structs → TypeScript types: generator and the list of API types and enums
     /barcode/          # EAN/UPC/ISBN normalization (ISBN-10 → ISBN-13)
     /collection/       # titles, editions, copies, collection view
     /lookup/           # GET /api/lookup/{barcode}: provider registry + lookup_cache
@@ -37,7 +39,7 @@ Same layout and tooling as `../baratie`. `package.json` and
     /reqlog/           # slog handler adding a request's request_id, method and path to *Context log lines
 /src/                  # SvelteKit SPA (adapter-static, ssr off)
   /routes/             # pages; /scan is the scanner, /scan/queue the unresolved barcodes
-  /lib/                # nav table, API client, collection types, form helpers, scan flow (pure TS, unit tested)
+  /lib/                # nav table, API client, generated API types (api.gen.ts), form helpers, scan flow (pure TS, unit tested)
   /lib/components/     # forms shared by create and edit pages, camera and quick confirm
   /service-worker/     # SUI service worker (index.ts): precache, update only on the reader's consent
 /static/               # icons, web app manifest, robots.txt
@@ -286,6 +288,16 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
 ### Frontend
 
 - Svelte 5 runes only. Data comes from `/api` on the same origin.
+- The API's JSON types are generated from the Go structs into
+  `src/lib/api.gen.ts` (`npm run generate:api`, committed, never edited by
+  hand); `collection.ts`, `scan.ts`, `deals.ts`, `valuation.ts` and
+  `status.ts` re-export them. `internal/apitypes.Ohara` lists each struct
+  under its TypeScript name and each enum with its values, taken from the
+  Go constants or validation lists. A pointer field is `T | null`, an
+  omitempty or omitzero one optional, a string field tagged `ts:"Kind"`
+  takes the enum's union, and `ts:",null"` (or `ts:"Kind,null"`) also
+  admits null; any other json tag option fails the generator. CI's `go-tests` job regenerates the file and fails on any
+  difference, so change a JSON struct, then regenerate and commit.
 - Build UI from SUI components; import `@smykla-skalski/sui/styles.css` once in
   the root layout. `build.cssTarget` in `vite.config.ts` keeps SUI's
   `:dir(rtl)` selectors intact.
@@ -337,6 +349,14 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   (`?status=none`) lists titles without one instead, filtered in the client
   from `GET /api/titles`; `/titles` redirects to `/`. `?add=copy` on a title
   or edition page opens the form for its next copy.
+- "Zmień okładkę" shrinks the chosen photo in the browser before upload
+  (`shrinkPhoto` in `src/lib/edition-cover.ts`): `createImageBitmap` turns
+  it upright from its EXIF orientation, a canvas at most 1600 px on the
+  long edge draws it on white and sends it as JPEG, lowering the quality
+  until it fits under 1 MB. A file that is no JPEG or PNG, or one the
+  browser cannot decode, sends nothing, and a photo still shrinking when
+  its sheet is gone is never sent. The server's 8 MiB and 16 megapixel
+  limits stay as a backstop.
 - Discogs data carries `DiscogsCredit`: "Data provided by Discogs." linked
   to its release page, never `nofollow`, under a quick confirm candidate
   with a `discogs_release_id` and a copy priced from Discogs on Wartość.
@@ -357,10 +377,11 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
 - The smoke suite (`e2e/`, `npm run test:e2e`) drives the production image
   in Chromium at 390 × 844 with touch: a wedge scan, quick confirm and
   "Cofnij", "Dodaj tytuł" by hand, the scan sheet sending no deals or queue
-  read, the queue count following a queued scan, its add and undo, and
+  read, the queue count following a queued scan, its add and undo,
   Kolekcja's filters, which also run at 1440 × 900, and its sort orders
-  under active filters. `scripts/e2e.sh` builds the image (or takes one as
-  its first argument), starts it from `e2e/compose.yaml`
+  under active filters, and cover photo uploads. `scripts/e2e.sh` builds
+  the image (or takes one as its first argument), starts it from
+  `e2e/compose.yaml`
   with Postgres, `OHARA_LOOKUP_STUB=true`, `OHARA_MUSICBRAINZ=false` and no
   provider keys, and removes it afterwards. App and Postgres sit on an
   internal network, so no public provider is reachable; each test also
@@ -436,6 +457,7 @@ npm run lint && npm run check        # oxlint + prettier, svelte-check
 npm run test:coverage                # vitest
 npm run test:e2e                     # Playwright smoke flows against the built image (Docker)
 npm run build                        # SPA into build/
+npm run generate:api                 # src/lib/api.gen.ts from the Go structs (needs Go only)
 cd backend-go && go test ./...       # DB tests skip unless OHARA_TEST_DATABASE_URL is set
 cd backend-go && golangci-lint run ./...
 ./scripts/run-nilaway.sh backend-go github.com/Automaat/ohara/backend-go

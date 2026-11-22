@@ -1,12 +1,7 @@
 import type { PillTone } from '@smykla-skalski/sui';
+import type { DatabaseState, Status } from './api.gen';
 
-export type DatabaseState = 'ok' | 'unavailable' | 'unconfigured';
-
-export type Status = {
-	status: 'ok' | 'degraded';
-	version: string;
-	database: DatabaseState;
-};
+export type { DatabaseState, Status } from './api.gen';
 
 export class StatusError extends Error {}
 

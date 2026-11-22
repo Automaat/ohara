@@ -7,7 +7,9 @@
 // takes the cheapest Discogs copy for sale as its floor, the suggested
 // price of the grade its condition maps to (Very Good Plus without one) as
 // its middle and the suggested Mint price as its ceiling; other copies
-// have no ceiling.
+// have no ceiling. Beside the range, each copy shows a likely-sold price:
+// the median last price of its title and format's used OLX listings that
+// were gone soon after they were first seen.
 package valuation
 
 import (
@@ -83,6 +85,12 @@ var conditionGrades = map[string]string{
 // is trusted; a copy with fewer is low confidence.
 const MinObservations = 3
 
+// LikelySoldWithin is how soon after it was first seen a used OLX listing
+// must be gone to count as likely sold. An OLX listing runs 30 days unless
+// renewed, so one gone well before that was most likely taken down by its
+// seller after a sale rather than left to expire.
+const LikelySoldWithin = 21 * 24 * time.Hour
+
 // Estimate is one bound of a value range: the amount, the source it comes
 // from, how many prices it rests on and how many outliers were left out.
 type Estimate struct {
@@ -108,15 +116,25 @@ func (r Range) LowConfidence() bool {
 }
 
 // Price is one observation the valuation window holds, with the title and
-// format of the edition it was recorded for.
+// format of the edition it was recorded for. Cents is the listing's latest
+// price, FirstSeenAt when it was first stored and GoneAt when the valuation
+// found it no longer offered, nil while it still is.
 type Price struct {
-	EditionID  int64
-	TitleID    int64
-	Format     *string
-	Source     string
-	Cents      int64
-	AcquiredAs *string
-	SeenAt     time.Time
+	EditionID   int64
+	TitleID     int64
+	Format      *string
+	Source      string
+	Cents       int64
+	AcquiredAs  *string
+	SeenAt      time.Time
+	FirstSeenAt time.Time
+	GoneAt      *time.Time
+}
+
+// likelySold reports a used listing gone within LikelySoldWithin of being
+// first seen.
+func (p *Price) likelySold() bool {
+	return p.GoneAt != nil && p.GoneAt.Sub(p.FirstSeenAt) <= LikelySoldWithin
 }
 
 // group is the set of editions whose listings price each other: one title
@@ -144,9 +162,13 @@ func groupOf(titleID int64, format *string) group {
 // Discogs release is one pressing. A middle grade counts only when the
 // edition's newest suggestions answer named it: one run stores an answer
 // at one instant, so a grade it left out is older and does not count.
+// Apart from the range, the likely-sold price of a title and format is the
+// trimmed median last price of the used listings among those prices that
+// were gone within LikelySoldWithin of being first seen.
 type Ranges struct {
 	floors       map[int64]*Estimate
 	mids         map[group]*Estimate
+	sold         map[group]*Estimate
 	discogsMids  map[int64]map[string]*Estimate
 	discogsCeils map[int64]*Estimate
 }
@@ -175,6 +197,7 @@ var estimateSources = map[string]string{
 func NewRanges(prices []Price) Ranges {
 	latest := map[editionPrice]*Price{}
 	used := map[group][]int64{}
+	sold := map[group][]int64{}
 	for i := range prices {
 		p := &prices[i]
 		g := groupOf(p.TitleID, p.Format)
@@ -182,6 +205,9 @@ func NewRanges(prices []Price) Ranges {
 		case SourceOLX:
 			if p.AcquiredAs == nil || *p.AcquiredAs != "new" {
 				used[g] = append(used[g], p.Cents)
+				if p.likelySold() {
+					sold[g] = append(sold[g], p.Cents)
+				}
 			}
 		default:
 			if _, ok := estimateSources[p.Source]; !ok {
@@ -202,6 +228,7 @@ func NewRanges(prices []Price) Ranges {
 	r := Ranges{
 		floors:       map[int64]*Estimate{},
 		mids:         make(map[group]*Estimate, len(used)),
+		sold:         make(map[group]*Estimate, len(sold)),
 		discogsMids:  map[int64]map[string]*Estimate{},
 		discogsCeils: map[int64]*Estimate{},
 	}
@@ -225,7 +252,16 @@ func NewRanges(prices []Price) Ranges {
 	for g, v := range used {
 		r.mids[g] = trimmedMedian(v, SourceOLX)
 	}
+	for g, v := range sold {
+		r.sold[g] = trimmedMedian(v, SourceOLX)
+	}
 	return r
+}
+
+// LikelySold is the likely-sold price of titleID in format, nil when no
+// used listing of it was gone soon enough.
+func (r Ranges) LikelySold(titleID int64, format *string) *Estimate {
+	return r.sold[groupOf(titleID, format)]
 }
 
 // For is the range of one edition of titleID in format, for a copy
@@ -347,6 +383,10 @@ type CopyValue struct {
 	// absent when the middle is no suggestion.
 	MidGrade      string `json:"mid_grade,omitempty" ts:"DiscogsGrade"`
 	LowConfidence bool   `json:"low_confidence"`
+	// LikelySold is the median last price of the title and format's used
+	// OLX listings gone within LikelySoldWithin of being first seen: a
+	// guess at what a copy fetches, apart from the range and the totals.
+	LikelySold *Estimate `json:"likely_sold"`
 	// Condition is the copy's condition, which picks its Discogs grade.
 	Condition *string `json:"-"`
 }
@@ -383,7 +423,8 @@ type Summary struct {
 	Gain Gain `json:"gain"`
 }
 
-// Value fills each copy's range from ranges, at the copy's condition.
+// Value fills each copy's range from ranges, at the copy's condition, and
+// its likely-sold price.
 func Value(copies []CopyValue, ranges Ranges) {
 	for i := range copies {
 		c := &copies[i]
@@ -391,6 +432,7 @@ func Value(copies []CopyValue, ranges Ranges) {
 		c.Floor, c.Mid, c.Ceiling = r.Floor, r.Mid, r.Ceiling
 		c.MidGrade = grade
 		c.LowConfidence = r.LowConfidence()
+		c.LikelySold = ranges.LikelySold(c.TitleID, c.Format)
 	}
 }
 

@@ -379,3 +379,44 @@ func TestNumberParsesAsAtoi(t *testing.T) {
 		}
 	}
 }
+
+func TestLotsDoNotMatch(t *testing.T) {
+	wall := album("The Wall", "Pink Floyd", "cd")
+	trylogia := Want{Kind: "movie", Name: "Władca Pierścieni: Trylogia", Format: new("dvd")}
+	tests := []struct {
+		name  string
+		want  Want
+		title string
+		match bool
+	}{
+		{"film set", bladeRunner("dvd"), "Zestaw 3 filmy DVD: Blade Runner, Gladiator, Obcy", false},
+		{"film package", bladeRunner("dvd"), "Pakiet 10 płyt DVD Ridley Scott Blade Runner Gladiator Prometeusz", false},
+		{"film collection", bladeRunner("dvd"), "Kolekcja filmów DVD 20 szt. Blade Runner, Matrix, Terminator", false},
+		{"book volumes", wiedzmin(), "Wiedźmin komplet 8 tomów Sapkowski Ostatnie życzenie Miecz przeznaczenia", false},
+		{"album discs", wall, "Pink Floyd 5 płyt CD The Wall Animals Meddle Wish You Were Here", false},
+		{"one film on five discs", bladeRunner("dvd"), "Blade Runner Metalbox 5xDVD z PL", true},
+		{"one film on two discs", bladeRunner("dvd"), "Blade Runner DVD 2 płyty", true},
+		{"newspaper collection", bladeRunner("dvd"), "Blade Runner DVD Kolekcja Gazety Wyborczej", true},
+		{"collector's edition", bladeRunner("bluray"), "Łowca Androidów Blu-Ray PL Edycja kolekcjonerska 30 rocznica", true},
+		{"wished set", trylogia, "Władca Pierścieni Trylogia 3 filmy DVD", true},
+		{"package holding the wished set", trylogia, "Pakiet DVD: Władca Pierścieni Trylogia 3 filmy + Hobbit Trylogia", false},
+		{"set of two films", bladeRunner("dvd"), "Komplet DVD: Blade Runner + Gladiator", false},
+		{"album discs past the name", album("White Album", "The Beatles", "cd"), "The Beatles White Album Super Deluxe – 6 płyt CD", true},
+		{"book volumes past the name", Want{Kind: "book", Name: "Nędznicy", Authors: []string{"Victor Hugo"}}, "Nędznicy Victor Hugo – 5 tomów", true},
+		{"formats of one film", bladeRunner("uhd"), "Blade Runner 4K UHD – zestaw 4K + Blu-ray", true},
+		{"wished set word", Want{Kind: "book", Name: "Wiedźmin komplet", Authors: []string{"Andrzej Sapkowski"}}, "Komplet Wiedźmin Sapkowski 8 tomów", true},
+		{"sequel on discs", Want{Kind: "movie", Name: "Diuna", Format: new("bluray")}, "Diuna część 2 – płyty Blu-ray", false},
+		{"sequel before a disc word", bladeRunner("dvd"), "Blade Runner 2049 — płyty DVD", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := NewListingText(tt.title, defaultRules).Belongs(&tt.want, Titles{}); got != tt.match {
+				t.Fatalf("Belongs(%q) = %v, want %v", tt.title, got, tt.match)
+			}
+			got := tt.want.Matches(tt.title) && !defaultRules.RejectedFor(tt.title, &tt.want)
+			if got != tt.match {
+				t.Fatalf("Matches(%q) && !RejectedFor = %v, want %v", tt.title, got, tt.match)
+			}
+		})
+	}
+}

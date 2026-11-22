@@ -12,7 +12,8 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   read, the queue count following a queued scan, its add and undo,
   Kolekcja's filters, which also run at 1440 × 900, and its sort orders
   under active filters, tags from the title form to Kolekcja's filter,
-  cover photo uploads, the collection export, and the insurance report
+  cover photo uploads, the collection export, Statystyki with its value
+  sections, and the insurance report
   with its A4 printout. `scripts/e2e.sh` builds
   the image (or takes one as its first argument), starts it from
   `e2e/compose.yaml`

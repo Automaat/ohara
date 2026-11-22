@@ -72,6 +72,7 @@ type bnBib struct {
 	Deleted              bool   `json:"deleted"`
 	PublicationYear      string `json:"publicationYear"`
 	TimePeriodOfCreation string `json:"timePeriodOfCreation"`
+	Kind                 string `json:"kind"` // "książka" for print, "audiobook" for a recording
 	Marc                 struct {
 		Fields []map[string]json.RawMessage `json:"fields"`
 	} `json:"marc"`
@@ -183,6 +184,17 @@ func bnCandidate(code, isbn10 string, bib bnBib) (lookup.Candidate, bool) {
 	if publisher == "" {
 		publisher = imprint
 	}
+	edition := lookup.EditionFields{
+		Barcode:   code,
+		Label:     label,
+		Publisher: publisher,
+		Year:      year(bib.PublicationYear),
+	}
+	if strings.EqualFold(strings.TrimSpace(bib.Kind), lookup.FormatAudiobook) {
+		edition.Format = new(lookup.FormatAudiobook)
+	} else {
+		edition.Binding = binding(strings.Join(isbnField.sub("q"), " "))
+	}
 	title := lookup.TitleFields{
 		Name:    name,
 		Authors: dedupe(authors),
@@ -195,15 +207,9 @@ func bnCandidate(code, isbn10 string, bib bnBib) (lookup.Candidate, bool) {
 		title.Year = &y
 	}
 	return lookup.Candidate{
-		Type:  "book",
-		Title: title,
-		Edition: lookup.EditionFields{
-			Barcode:   code,
-			Label:     label,
-			Publisher: publisher,
-			Year:      year(bib.PublicationYear),
-			Binding:   binding(strings.Join(isbnField.sub("q"), " ")),
-		},
+		Type:       "book",
+		Title:      title,
+		Edition:    edition,
 		Confidence: 0.9,
 	}, true
 }

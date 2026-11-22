@@ -35,6 +35,10 @@ const (
 	// expected. It turns owned, keeping all of that, once it arrives.
 	StatusOrdered = "ordered"
 
+	// FormatAudiobook is a book edition that is a recording, such as an
+	// audiobook on CD; a print book has no format.
+	FormatAudiobook = "audiobook"
+
 	maxText    = 500
 	maxNotes   = 10000
 	maxAuthors = 20
@@ -71,7 +75,8 @@ var (
 	kinds        = []string{KindMovie, KindBook, KindMusic, KindTV}
 	movieFormats = []string{"dvd", "bluray", "uhd"}
 	musicFormats = []string{"cd", "vinyl", "cassette"}
-	formats      = slices.Concat(movieFormats, musicFormats)
+	bookFormats  = []string{FormatAudiobook}
+	formats      = slices.Concat(movieFormats, musicFormats, bookFormats)
 	bindings     = []string{"hardcover", "paperback", "other"}
 	triStates    = []string{"yes", "no", "unknown"}
 	packagings   = []string{"steelbook", "slipcover", "digipak", "mediabook"}
@@ -88,6 +93,7 @@ func Enums() map[string][]string {
 		"Kind":        slices.Clone(kinds),
 		"MovieFormat": slices.Clone(movieFormats),
 		"MusicFormat": slices.Clone(musicFormats),
+		"BookFormat":  slices.Clone(bookFormats),
 		"Format":      slices.Clone(formats),
 		"Binding":     slices.Clone(bindings),
 		"TriState":    slices.Clone(triStates),
@@ -221,8 +227,8 @@ type Title struct {
 // fields: pl_subtitles, pl_voiceover, packaging. Book-only: binding.
 // Music-only: discogs_release_id. Movie, TV and music: disc_count. Vinyl
 // only: color. Every kind: limited_to. Format is required for movies and
-// TV series (dvd, bluray, uhd) and music (cd, vinyl, cassette) and absent
-// for books.
+// TV series (dvd, bluray, uhd) and music (cd, vinyl, cassette); a book's
+// is audiobook or absent for print, and only print takes a binding.
 type EditionInput struct {
 	TitleID     int64    `json:"title_id"`
 	Barcode     *string  `json:"barcode"`
@@ -756,8 +762,7 @@ func (in *EditionInput) CheckKind(kind string) *httpx.FieldError {
 		}
 		return nil
 	}
-	switch {
-	case kind == KindMusic:
+	if kind == KindMusic {
 		if e := checkFormat(in.Format, musicFormats, "music"); e != nil {
 			return e
 		}
@@ -767,10 +772,13 @@ func (in *EditionInput) CheckKind(kind string) *httpx.FieldError {
 		if in.Color != nil && (in.Format == nil || *in.Format != "vinyl") {
 			return colorNotVinyl()
 		}
-	case in.Format != nil:
-		return fieldErr("format", "applies only to movies, TV series and music")
-	case in.Color != nil:
-		return colorNotVinyl()
+	} else {
+		if e := checkBookFormat(in.Format, in.Binding); e != nil {
+			return e
+		}
+		if in.Color != nil {
+			return colorNotVinyl()
+		}
 	}
 	switch {
 	case in.PLSubtitles != "unknown":
@@ -786,6 +794,21 @@ func (in *EditionInput) CheckKind(kind string) *httpx.FieldError {
 // colorNotVinyl refuses a color on an edition that is no vinyl.
 func colorNotVinyl() *httpx.FieldError {
 	return fieldErr("color", "applies only to vinyl")
+}
+
+// checkBookFormat allows a book no format or bookFormats, and a binding
+// only on print.
+func checkBookFormat(format, binding *string) *httpx.FieldError {
+	if format == nil {
+		return nil
+	}
+	if !slices.Contains(bookFormats, *format) {
+		return fieldErr("format", "must be one of: "+strings.Join(bookFormats, ", ")+" or empty for books")
+	}
+	if binding != nil {
+		return fieldErr("binding", "applies only to print books")
+	}
+	return nil
 }
 
 // checkFormat requires a format from allowed, the formats of kind.

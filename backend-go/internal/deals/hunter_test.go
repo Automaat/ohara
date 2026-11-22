@@ -847,6 +847,7 @@ func TestAlertTextNamesTheMedium(t *testing.T) {
 		{"vinyl", new("vinyl"), "🎯 Okazja: The Wall · Winyl"},
 		{"cassette", new("cassette"), "🎯 Okazja: The Wall · Kaseta"},
 		{"movie", new("bluray"), "🎯 Okazja: The Wall · Blu-ray"},
+		{"audiobook", new("audiobook"), "🎯 Okazja: The Wall · Audiobook"},
 		{"no format", nil, "🎯 Okazja: The Wall"},
 		{"unknown format", new("laserdisc"), "🎯 Okazja: The Wall"},
 	}

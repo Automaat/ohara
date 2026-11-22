@@ -84,6 +84,10 @@ func fillCandidate(dst, src *Candidate) {
 	fill(&dst.Edition.PLVoiceover, src.Edition.PLVoiceover)
 	fillSlice(&dst.Edition.Packaging, src.Edition.Packaging)
 	fillPtr(&dst.Edition.Binding, src.Edition.Binding)
+	if dst.Edition.Format != nil && *dst.Edition.Format == FormatAudiobook {
+		// A recording has no binding, whichever catalog named one.
+		dst.Edition.Binding = nil
+	}
 	fillPtr(&dst.Edition.DiscogsReleaseID, src.Edition.DiscogsReleaseID)
 
 	fill(&dst.CoverURL, src.CoverURL)

@@ -450,6 +450,7 @@ export type CopyForm = {
 	condition: Condition | '';
 	notes: string;
 	max_price: string;
+	market_percent: string;
 };
 
 /** The editable form of a copy, or an empty owned one. */
@@ -462,13 +463,24 @@ export function copyToForm(c: CopyPayload | null): CopyForm {
 		acquired_as: c?.acquired_as ?? '',
 		condition: c?.condition ?? '',
 		notes: c?.notes ?? '',
-		max_price: centsToInput(c?.max_price_cents ?? null)
+		max_price: centsToInput(c?.max_price_cents ?? null),
+		market_percent: c?.max_market_percent == null ? '' : String(c.max_market_percent)
 	};
+}
+
+/** A share of the market price as typed, "70" or "70 %": a whole 1 to 100, null when blank. */
+export function parsePercent(input: string): number | null | undefined {
+	const cleaned = input.trim().replace(/\s*%$/, '');
+	if (cleaned === '') return null;
+	if (!/^\d{1,3}$/.test(cleaned)) return undefined;
+	const percent = Number(cleaned);
+	return percent >= 1 && percent <= 100 ? percent : undefined;
 }
 
 /**
  * The request body for a copy. A wishlist copy carries no price or purchase date, and an owned
- * copy no maximum price.
+ * copy no maximum price or market percent. A copy without a market percent leaves the field out,
+ * which the server reads as none.
  */
 export function copyPayload(f: CopyForm, editionID: number): Parsed<CopyPayload> {
 	const owned = f.status === 'owned';
@@ -489,6 +501,16 @@ export function copyPayload(f: CopyForm, editionID: number): Parsed<CopyPayload>
 			}
 		};
 	}
+	const marketPercent = owned ? null : parsePercent(f.market_percent);
+	if (marketPercent === undefined) {
+		return {
+			ok: false,
+			issue: {
+				field: 'max_market_percent',
+				message: 'Procent ceny rynkowej to liczba od 1 do 100, np. 70.'
+			}
+		};
+	}
 	const date = owned ? f.purchased_on.trim() : '';
 	if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
 		return { ok: false, issue: { field: 'purchased_on', message: 'Data w formacie RRRR-MM-DD.' } };
@@ -504,7 +526,8 @@ export function copyPayload(f: CopyForm, editionID: number): Parsed<CopyPayload>
 			acquired_as: f.acquired_as || null,
 			condition: f.condition || null,
 			notes: f.notes.trim(),
-			max_price_cents: maxPrice
+			max_price_cents: maxPrice,
+			...(marketPercent == null ? {} : { max_market_percent: marketPercent })
 		}
 	};
 }

@@ -431,8 +431,8 @@ func (r *run) fail(msg string) {
 
 // record stores the matching listings of one answer, then sends their
 // pending alerts before the run asks a source again. PendingAlerts checks
-// the refreshed price against the wish's current limit, which may have
-// changed since the run read the wishlist.
+// the refreshed price against the wish's current limit and market share,
+// which may have changed since the run read the wishlist.
 func (r *run) record(ctx context.Context, listings []Listing) error {
 	r.res.Listings += len(listings)
 	refreshed := map[string]bool{}
@@ -443,7 +443,7 @@ func (r *run) record(ctx context.Context, listings []Listing) error {
 			continue
 		}
 		r.res.Matched++
-		alert := r.h.notifier != nil && w.MaxPriceCents != nil && l.PriceCents <= *w.MaxPriceCents
+		alert := r.h.notifier != nil && w.Meets(l.PriceCents)
 		isNew, alerted, err := r.h.store.Record(ctx, l, w, alert)
 		if err != nil {
 			return err
@@ -550,6 +550,9 @@ func alertText(a *Alert) string {
 	}
 	if a.MaxPriceCents != nil {
 		notes = append(notes, "limit "+formatPLN(*a.MaxPriceCents))
+	}
+	if a.MaxMarketPercent != nil && a.MarketCents != nil {
+		notes = append(notes, fmt.Sprintf("%d%% ceny rynkowej %s", *a.MaxMarketPercent, formatPLN(*a.MarketCents)))
 	}
 	if len(notes) > 0 {
 		price += " (" + strings.Join(notes, ", ") + ")"

@@ -9,19 +9,34 @@ import (
 )
 
 // Want is a wishlist copy the hunter searches for, with its edition and
-// title. MaxPriceCents is nil when the owner set no limit: its listings are
+// title. MaxPriceCents is nil when the owner set no limit and
+// MaxMarketPercent when they set no share of the market price;
+// MarketCents is the trusted used market price of the wished title and
+// format, nil without one. A want with neither rule has its listings
 // recorded but never alerted.
 type Want struct {
-	CopyID        int64
-	EditionID     int64
-	TitleID       int64
-	Kind          string
-	Name          string
-	OriginalTitle *string
-	PolishTitle   *string
-	Authors       []string
-	Format        *string
-	MaxPriceCents *int64
+	CopyID           int64
+	EditionID        int64
+	TitleID          int64
+	Kind             string
+	Name             string
+	OriginalTitle    *string
+	PolishTitle      *string
+	Authors          []string
+	Format           *string
+	MaxPriceCents    *int64
+	MaxMarketPercent *int
+	MarketCents      *int64
+}
+
+// Meets reports whether a listing at priceCents alerts for w: at or under
+// its limit, or at or under its percent of the market price.
+func (w *Want) Meets(priceCents int64) bool {
+	if w.MaxPriceCents != nil && priceCents <= *w.MaxPriceCents {
+		return true
+	}
+	return w.MaxMarketPercent != nil && w.MarketCents != nil &&
+		priceCents*100 <= *w.MarketCents*int64(*w.MaxMarketPercent)
 }
 
 // Rules are the editable reject and accept phrases.
@@ -402,7 +417,8 @@ type knownName struct {
 // NewTitles readies titles, each a Want without an edition, for Outranks.
 func NewTitles(titles []Want) Titles {
 	t := Titles{byKind: map[string][]knownTitle{}}
-	for _, w := range titles {
+	for i := range titles {
+		w := titles[i]
 		w.Format = nil
 		k := knownTitle{title: w}
 		for _, n := range w.titleNames() {
@@ -530,9 +546,9 @@ func hasRun(text, phrase []string) bool {
 
 // pick returns the want a listing belongs to, or nil. A want loses a
 // listing that names another known title more specifically (Outranks).
-// Among the remaining matching wants it prefers one whose maximum price
-// the listing meets, so a cheap listing alerts even when an earlier want
-// for the same title has a lower limit.
+// Among the remaining matching wants it prefers one whose limit or market
+// share the listing meets, so a cheap listing alerts even when an earlier
+// want for the same title has a lower limit.
 func pick(wants []Want, l *Listing, rules Rules, titles Titles) *Want {
 	var first *Want
 	for i := range wants {
@@ -540,7 +556,7 @@ func pick(wants []Want, l *Listing, rules Rules, titles Titles) *Want {
 		if !w.Matches(l.Title) || rules.RejectedFor(l.Title, w) || titles.Outranks(w, l.Title) {
 			continue
 		}
-		if w.MaxPriceCents != nil && l.PriceCents <= *w.MaxPriceCents {
+		if w.Meets(l.PriceCents) {
 			return w
 		}
 		if first == nil {

@@ -443,6 +443,7 @@ func seedDB(ctx context.Context, dsn string) (seed.Counts, error) {
 // newRuns configures the deal hunter and the valuation. One pacer spaces
 // the requests they send to a site they share while their runs overlap:
 // at least half the source delay apart, the shortest pause one run makes.
+// The deals read the valuation's market prices for a wish's market percent.
 func newRuns(pool *pgxpool.Pool, logger *slog.Logger) (*deals.Hunter, *deals.Store, *valuation.Runner, *valuation.Store, error) {
 	delay, err := sourceDelay()
 	if err != nil {
@@ -457,6 +458,7 @@ func newRuns(pool *pgxpool.Pool, logger *slog.Logger) (*deals.Hunter, *deals.Sto
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("valuation: %w", err)
 	}
+	dealStore.UseMarkets(valuer.DealMarkets)
 	return hunter, dealStore, valuer, valueStore, nil
 }
 

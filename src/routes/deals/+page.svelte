@@ -27,6 +27,7 @@
 		type FormIssue
 	} from '#lib/collection.js';
 	import { sortCopies } from '#lib/collection-sort.js';
+	import CollectionCover from '#lib/components/CollectionCover.svelte';
 	import DealCard from '#lib/components/DealCard.svelte';
 	import { WantlistSync } from '#lib/wantlist-sync.svelte.js';
 	import WishlistShare from '#lib/components/WishlistShare.svelte';
@@ -496,6 +497,7 @@
 										Edytuj
 									</Button>
 								{/snippet}
+								<CollectionCover kind={wish.kind} url={wish.cover_url} />
 								{#snippet footer()}
 									{#if allegroURL}
 										<Button

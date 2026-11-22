@@ -678,3 +678,56 @@ func TestDismissDuringDeliveryStopsAlert(t *testing.T) {
 		t.Fatalf("pending = %+v, %v", pending, err)
 	}
 }
+
+// dismissingNotifier dismisses the listing it is sending, as a collector
+// pressing "Ignoruj" while the message is on its way does, and reports
+// whether that dismissal finished before the message went out.
+type dismissingNotifier struct {
+	store         *Store
+	observationID func() int64
+	dismissed     chan error
+	early         bool
+}
+
+func (n *dismissingNotifier) Send(ctx context.Context, _ string) error {
+	go func() { n.dismissed <- n.store.Dismiss(context.WithoutCancel(ctx), n.observationID()) }()
+	select {
+	case <-n.dismissed:
+		n.early = true
+	case <-time.After(300 * time.Millisecond):
+	}
+	return nil
+}
+
+func TestDismissWaitsForAlertBeingSent(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	wishlist(t, pool, wantBluray(new(int64(5000))))
+	src := &fakeSource{name: "olx", listings: []Listing{
+		{Source: "olx", ExternalID: "a", Title: "Blade Runner Blu-ray", URL: "https://www.olx.pl/d/oferta/a", PriceCents: 4000},
+	}}
+	notifier := &dismissingNotifier{store: store, dismissed: make(chan error, 1), observationID: func() int64 {
+		var id int64
+		if err := pool.QueryRow(ctx, `SELECT id FROM price_observation`).Scan(&id); err != nil {
+			t.Error(err)
+		}
+		return id
+	}}
+	h := newTestHunter(pool, notifier, src)
+	if res := mustRun(t, h); res.Sent != 1 {
+		t.Fatalf("run = %+v, want the alert sent", res)
+	}
+	if notifier.early {
+		t.Fatal("a dismissal committed while its listing's alert was being sent")
+	}
+	if err := <-notifier.dismissed; err != nil {
+		t.Fatalf("dismiss after the send: %v", err)
+	}
+	if n := count(t, pool, `SELECT count(*) FROM deal_alert WHERE sent_at IS NOT NULL`); n != 1 {
+		t.Fatalf("sent alerts = %d, want the message that went out recorded", n)
+	}
+	if n := count(t, pool, `SELECT count(*) FROM price_observation WHERE dismissed_at IS NOT NULL`); n != 1 {
+		t.Fatalf("dismissed listings = %d, want the dismissal applied after the send", n)
+	}
+}

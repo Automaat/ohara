@@ -193,23 +193,58 @@ type Alert struct {
 // copy's current maximum price, alerts for dismissed listings and alerts
 // older than a week are skipped.
 func (s *Store) PendingAlerts(ctx context.Context) ([]Alert, error) {
-	return s.pendingAlerts(ctx, nil)
+	return pendingAlerts(ctx, s.pool, nil)
 }
 
-// AlertDue reports whether the alert of observationID is still one
-// PendingAlerts returns, so a listing dismissed or a limit lowered while
-// earlier alerts were being sent is not sent.
-func (s *Store) AlertDue(ctx context.Context, observationID int64) (bool, error) {
-	alerts, err := s.pendingAlerts(ctx, &observationID)
+// SendAlert runs send for the alert of observationID while PendingAlerts
+// would still return it, and stores the outcome: sent, or a failed attempt
+// with send's error. It holds the listing's row from that check until the
+// outcome is stored, so a dismissal or a price change either lands before
+// the check and stops the alert, or waits until the message is out. The
+// outcome is stored even when ctx ends during send, so a message that went
+// out is not sent again. It reports whether send ran and succeeded.
+func (s *Store) SendAlert(ctx context.Context, observationID int64, send func() error) (bool, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return false, fmt.Errorf("send alert: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM price_observation WHERE id = $1 FOR UPDATE`, observationID); err != nil {
+		return false, fmt.Errorf("send alert: lock listing: %w", err)
+	}
+	due, err := pendingAlerts(ctx, tx, &observationID)
 	if err != nil {
 		return false, err
 	}
-	return len(alerts) > 0, nil
+	if len(due) == 0 {
+		return false, nil
+	}
+	sendErr := send()
+	storeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), markSentTimeout)
+	defer cancel()
+	if sendErr != nil {
+		err = markFailed(storeCtx, tx, observationID, sendErr.Error())
+	} else {
+		err = markSent(storeCtx, tx, observationID)
+	}
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(storeCtx); err != nil {
+		return false, fmt.Errorf("send alert: commit: %w", err)
+	}
+	return sendErr == nil, nil
+}
+
+// querier is what the alert queries need from a pool or a transaction.
+type querier interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
 // pendingAlerts is PendingAlerts limited to one listing when only is set.
-func (s *Store) pendingAlerts(ctx context.Context, only *int64) ([]Alert, error) {
-	rows, err := s.pool.Query(ctx, `SELECT o.id, o.source, coalesce(o.external_id, ''), o.url, coalesce(o.raw->>'title', ''),
+func pendingAlerts(ctx context.Context, q querier, only *int64) ([]Alert, error) {
+	rows, err := q.Query(ctx, `SELECT o.id, o.source, coalesce(o.external_id, ''), o.url, coalesce(o.raw->>'title', ''),
 			o.price_cents, o.acquired_as, t.name, e.format, c.max_price_cents
 		FROM deal_alert a
 		JOIN price_observation o ON o.id = a.observation_id
@@ -233,7 +268,11 @@ func (s *Store) pendingAlerts(ctx context.Context, only *int64) ([]Alert, error)
 
 // MarkSent records a delivered alert.
 func (s *Store) MarkSent(ctx context.Context, observationID int64) error {
-	_, err := s.pool.Exec(ctx, `UPDATE deal_alert SET sent_at = now(), attempts = attempts + 1,
+	return markSent(ctx, s.pool, observationID)
+}
+
+func markSent(ctx context.Context, q querier, observationID int64) error {
+	_, err := q.Exec(ctx, `UPDATE deal_alert SET sent_at = now(), attempts = attempts + 1,
 		last_error = '' WHERE observation_id = $1`, observationID)
 	if err != nil {
 		return fmt.Errorf("mark sent: %w", err)
@@ -243,7 +282,11 @@ func (s *Store) MarkSent(ctx context.Context, observationID int64) error {
 
 // MarkFailed records a failed delivery attempt.
 func (s *Store) MarkFailed(ctx context.Context, observationID int64, reason string) error {
-	_, err := s.pool.Exec(ctx, `UPDATE deal_alert SET attempts = attempts + 1, last_error = $2
+	return markFailed(ctx, s.pool, observationID, reason)
+}
+
+func markFailed(ctx context.Context, q querier, observationID int64, reason string) error {
+	_, err := q.Exec(ctx, `UPDATE deal_alert SET attempts = attempts + 1, last_error = $2
 		WHERE observation_id = $1`, observationID, reason)
 	if err != nil {
 		return fmt.Errorf("mark failed: %w", err)

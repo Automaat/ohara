@@ -12,14 +12,15 @@
 		Section,
 		SegmentedControl,
 		Toaster,
+		dismiss,
 		toast
 	} from '@smykla-skalski/sui';
 	import { onMount, tick } from 'svelte';
-	import { SvelteSet } from 'svelte/reactivity';
 	import { ApiError, errorMessage, request } from '#lib/api.js';
 	import { dealBadge, forgetDealListing, loadUnderLimit } from '#lib/deal-badge.svelte.js';
 	import { options, type FormIssue } from '#lib/collection.js';
 	import DealCard from '#lib/components/DealCard.svelte';
+	import { DealDismissals } from '#lib/deal-dismissals.svelte.js';
 	import {
 		dealsSummary,
 		dismissalPath,
@@ -55,9 +56,6 @@
 	let loading = $state(true);
 	let runError = $state<string | null>(null);
 	let starting = $state(false);
-	let dismissError = $state<string | null>(null);
-	/** Listings dismissed here, hidden until undone, before the server's next answer leaves them out. */
-	const dismissed = new SvelteSet<number>();
 
 	let keywords = $state<Keyword[]>([]);
 	let keywordFailure = $state<string | null>(null);
@@ -102,47 +100,28 @@
 		if (deals?.status.running) poll = setTimeout(load, 3000);
 	}
 
+	const dismissals = new DealDismissals({
+		toast,
+		dismiss,
+		send: (method, id) => request(fetch, method, dismissalPath(id)),
+		forget: forgetDealListing,
+		reload: load
+	});
+
 	/**
-	 * "Ignoruj" hides the listing at once and dismisses it on the server, then offers "Cofnij".
-	 * The card's button goes with it, so focus moves to the next card's "Ignoruj", or the previous
-	 * one's, or the segments when the list is empty.
+	 * The card's "Ignoruj" goes with its card, so focus moves to the next card's "Ignoruj", or the
+	 * previous one's, or the segments when the list is empty.
 	 */
 	async function dismissDeal(deal: Observation) {
 		const at = shown.findIndex((o) => o.id === deal.id);
 		const next = shown[at + 1] ?? shown[at - 1];
-		dismissed.add(deal.id);
-		forgetDealListing(deal.id);
-		dismissError = null;
+		const done = dismissals.dismiss(deal);
 		await tick();
 		const target = next
 			? document.querySelector<HTMLElement>(`[data-dismiss="${next.id}"]`)
 			: document.querySelector<HTMLElement>('.content input[type="radio"]:checked');
 		target?.focus();
-		try {
-			await request(fetch, 'POST', dismissalPath(deal.id));
-		} catch (err) {
-			dismissed.delete(deal.id);
-			dismissError = `Nie udało się zignorować oferty: ${errorMessage(err)}`;
-			await load();
-			return;
-		}
-		toast({
-			title: 'Zignorowano ofertę',
-			description: deal.listing_title || undefined,
-			action: { label: 'Cofnij', run: () => void restoreDeal(deal) }
-		});
-		await load();
-	}
-
-	async function restoreDeal(deal: Observation) {
-		try {
-			await request(fetch, 'DELETE', dismissalPath(deal.id));
-			dismissed.delete(deal.id);
-			dismissError = null;
-		} catch (err) {
-			dismissError = `Nie udało się przywrócić oferty: ${errorMessage(err)}`;
-		}
-		await load();
+		await done;
 	}
 
 	async function loadKeywords() {
@@ -163,6 +142,7 @@
 		};
 		document.addEventListener('visibilitychange', onvisibility);
 		return () => {
+			dismissals.destroy();
 			clearTimeout(poll);
 			clearInterval(clock);
 			document.removeEventListener('visibilitychange', onvisibility);
@@ -215,9 +195,9 @@
 
 	const status = $derived(deals?.status);
 	const lists = $derived<Record<DealSegment, Observation[]>>({
-		under: withoutDismissed(deals ? (dealBadge.listings ?? []) : [], dismissed),
-		all: withoutDismissed(deals?.all ?? [], dismissed),
-		sent: withoutDismissed(deals?.sent ?? [], dismissed)
+		under: withoutDismissed(deals ? (dealBadge.listings ?? []) : [], dismissals.hidden),
+		all: withoutDismissed(deals?.all ?? [], dismissals.hidden),
+		sent: withoutDismissed(deals?.sent ?? [], dismissals.hidden)
 	});
 	const segments = $derived(
 		(['under', 'all', 'sent'] as const).map((value) => ({
@@ -258,7 +238,6 @@
 
 <div class="content">
 	<FormError message={runError} />
-	<FormError message={dismissError} />
 	{#if !deals}
 		{#if failure}
 			<ErrorState

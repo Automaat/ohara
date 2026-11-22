@@ -480,34 +480,22 @@ func (r *run) deliver(ctx context.Context, only map[string]bool) error {
 				return err
 			}
 		}
-		// The wait may have let the listing be dismissed or its wish change.
-		due, err := r.h.store.AlertDue(ctx, a.ObservationID)
-		if err != nil {
-			return err
-		}
-		if !due {
-			continue
-		}
 		r.tried[a.ObservationID] = true
-		err = r.h.notifier.Send(ctx, alertText(a))
-		r.h.sent()
-		metrics.ObserveDealAlert(err)
-		if err != nil {
-			r.h.logger.Warn("telegram alert failed", "observation", a.ObservationID, "err", err)
-			if err := r.h.store.MarkFailed(ctx, a.ObservationID, err.Error()); err != nil {
-				return err
+		delivered, err := r.h.store.SendAlert(ctx, a.ObservationID, func() error {
+			err := r.h.notifier.Send(ctx, alertText(a))
+			r.h.sent()
+			metrics.ObserveDealAlert(err)
+			if err != nil {
+				r.h.logger.Warn("telegram alert failed", "observation", a.ObservationID, "err", err)
 			}
-			continue
-		}
-		// The message is out: record it even when ctx was canceled during
-		// the send, or the next run sends it again.
-		markCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), markSentTimeout)
-		err = r.h.store.MarkSent(markCtx, a.ObservationID)
-		cancel()
+			return err
+		})
 		if err != nil {
 			return err
 		}
-		r.res.Sent++
+		if delivered {
+			r.res.Sent++
+		}
 	}
 	return nil
 }

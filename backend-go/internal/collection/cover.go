@@ -8,6 +8,8 @@ import (
 	_ "image/png"
 	"io"
 	"net/http"
+	"net/url"
+	"slices"
 
 	"github.com/Automaat/ohara/backend-go/internal/httpx"
 )
@@ -28,10 +30,11 @@ func validCover(photo []byte) bool {
 	return err == nil
 }
 
-// getEditionCover answers the edition's photo. A URL whose `v` names the
+// getEditionCover answers the edition's photo. A URL whose one `v` names the
 // photo's current version, as the API hands it out, never changes content:
 // a new photo or any other edit of the edition gets a new `v`. The browser
-// may keep that answer; any other request, and every error, is no-store.
+// may keep that answer; any other request (a query that does not parse, a
+// second `v`), and every error, is no-store.
 func (h *Handler) getEditionCover(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	id, ok := httpx.PathID(w, r, h.logger, "id")
@@ -43,7 +46,7 @@ func (h *Handler) getEditionCover(w http.ResponseWriter, r *http.Request) {
 		h.writeErr(w, r, "get edition cover", notFound(err))
 		return
 	}
-	if r.URL.Query().Get("v") == version {
+	if query, err := url.ParseQuery(r.URL.RawQuery); err == nil && slices.Equal(query["v"], []string{version}) {
 		w.Header().Set("Cache-Control", coverCacheControl)
 	}
 	w.Header().Set("X-Content-Type-Options", "nosniff")

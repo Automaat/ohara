@@ -260,9 +260,10 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   it undoes an add that created the edition.
 - An edition's own cover photo is served at the `cover_override_url` the API
   hands out, `/api/editions/{id}/cover?v=` plus the edition's `updated_at`,
-  which a new photo or any edit changes. A request whose `v` is the current
-  one answers `Cache-Control: private, max-age=31536000, immutable`; any
-  other `v`, none or an error answers `no-store`.
+  which a new photo or any edit changes. A request whose query parses and
+  holds one `v`, the current one, answers
+  `Cache-Control: private, max-age=31536000, immutable`; any other `v`, a
+  second one, none or an error answers `no-store`.
 
 ### Frontend
 

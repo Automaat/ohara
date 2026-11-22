@@ -304,6 +304,10 @@ func TestEditionCoverCaching(t *testing.T) {
 		{name: "empty version", path: coverPath + "?v=", status: http.StatusOK, cache: noStore},
 		{name: "replaced version", path: first, status: http.StatusOK, cache: noStore},
 		{name: "unknown version", path: coverPath + "?v=1", status: http.StatusOK, cache: noStore},
+		{name: "current then replaced version", path: current + "&" + first[strings.Index(first, "?")+1:], status: http.StatusOK, cache: noStore},
+		{name: "current version twice", path: current + "&" + current[strings.Index(current, "?")+1:], status: http.StatusOK, cache: noStore},
+		{name: "malformed query before current version", path: coverPath + "?v=%ZZ&" + current[strings.Index(current, "?")+1:], status: http.StatusOK, cache: noStore},
+		{name: "current version with another parameter", path: current + "&size=large", status: http.StatusOK, cache: immutable},
 		{name: "missing edition", path: fmt.Sprintf("/api/editions/%d/cover?v=1", edition+1000), status: http.StatusNotFound, cache: noStore},
 	}
 	for _, tt := range tests {

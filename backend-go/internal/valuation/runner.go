@@ -509,7 +509,7 @@ func (x *run) quote(ctx context.Context, b BuyBack) error {
 	defer x.report(b.Name(), &f, "quotes")
 	for i := range x.holdings {
 		h := &x.holdings[i]
-		if h.Want.Kind != "book" || !isISBN(h.Barcode) {
+		if h.Want.Kind != "book" || !isISBN(h.Want.Barcode) {
 			continue
 		}
 		if f.Skip() {
@@ -518,7 +518,7 @@ func (x *run) quote(ctx context.Context, b BuyBack) error {
 		if err := x.pause(ctx); err != nil {
 			return err
 		}
-		isbn := *h.Barcode
+		isbn := *h.Want.Barcode
 		q, err := b.Quote(ctx, isbn)
 		if err != nil {
 			if ctx.Err() != nil {

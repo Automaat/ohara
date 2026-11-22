@@ -242,7 +242,11 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
 - Deal sources implement `deals.Source`. Matching folds every Latin
   letter with a diacritic to its base letter ("Bjork" for "Björk") in
   names, listing titles and phrases; search queries keep the want's
-  spelling. A run matches listing titles to wishlist copies (all title
+  spelling. A want's names are its Polish title, original title and
+  name; a Polish book edition (an ISBN starting `97883`, or no barcode)
+  drops the original title, which names foreign editions, from both its
+  matching and its queries, in hunts and valuations alike. A run
+  matches listing titles to wishlist copies (all title
   words; a name of words of at most two letters ("M", "Up", "It") only
   where it stands as the title: at the start, after a separator, a media
   word or the author (in any case), and before the end, a separator, a

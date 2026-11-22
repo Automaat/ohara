@@ -2,6 +2,7 @@ package deals
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -372,4 +373,29 @@ func dbNow(t *testing.T, store *Store) time.Time {
 		t.Fatal(err)
 	}
 	return at
+}
+
+func TestWantsCarryEditionBarcode(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	polish := wished(t, pool, diuna(new("9788381880206")))
+	none := wished(t, pool, diuna(nil))
+	wants, err := NewStore(pool).Wants(context.Background())
+	if err != nil {
+		t.Fatalf("Wants: %v", err)
+	}
+	got := map[int64]*string{}
+	for _, w := range wants {
+		got[w.CopyID] = w.Barcode
+	}
+	if b := got[polish.CopyID]; b == nil || *b != "9788381880206" {
+		t.Errorf("Polish wish barcode = %v, want 9788381880206", b)
+	}
+	if b, ok := got[none.CopyID]; !ok || b != nil {
+		t.Errorf("barcode-less wish barcode = %v (listed %v), want nil", b, ok)
+	}
+	for _, w := range wants {
+		if w.CopyID == polish.CopyID && !slices.Equal(w.Queries(), []string{"Diuna herbert"}) {
+			t.Errorf("stored Polish wish queries = %q, want [Diuna herbert]", w.Queries())
+		}
+	}
 }

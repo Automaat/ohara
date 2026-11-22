@@ -1557,3 +1557,43 @@ func TestRunSkipsLots(t *testing.T) {
 		t.Fatalf("priced the owned DVD from %v, want only [one]", priced)
 	}
 }
+
+func TestPolishBookHoldings(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		barcode  string
+		priced   []string
+		original bool
+	}{
+		{"Polish ISBN", "'9788381880206'", []string{"pl"}, false},
+		{"no barcode", "NULL", []string{"pl"}, false},
+		{"English ISBN", "'9780441013593'", []string{"en", "pl"}, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			pool := dbtest.Migrated(t)
+			exec(t, pool, `INSERT INTO title (id, kind, name, original_title, authors) OVERRIDING SYSTEM VALUE
+				VALUES (7, 'book', 'Diuna', 'Dune', '{"Frank Herbert"}')`)
+			exec(t, pool, `INSERT INTO edition (id, title_id, barcode, binding) OVERRIDING SYSTEM VALUE
+				VALUES (70, 7, `+tt.barcode+`, 'paperback')`)
+			exec(t, pool, `INSERT INTO copy (edition_id, status) VALUES (70, 'owned')`)
+			olx := &fakeSource{name: "olx", listings: []deals.Listing{
+				listing("en", "Dune Frank Herbert paperback English", 3000, used()),
+				listing("pl", "Diuna Frank Herbert Rebis", 4000, used()),
+			}}
+			if _, err := newTestRunner(pool, &fakeBuyBack{}, olx).Run(context.Background()); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			var priced []string
+			if err := pool.QueryRow(context.Background(), `SELECT coalesce(array_agg(external_id ORDER BY external_id), '{}')
+				FROM price_observation WHERE edition_id = 70`).Scan(&priced); err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(priced, tt.priced) {
+				t.Errorf("priced the owned Diuna from %v, want %v", priced, tt.priced)
+			}
+			if got := slices.Contains(olx.queries, "Dune herbert"); got != tt.original {
+				t.Errorf("asked %q; asked the original title = %v, want %v", olx.queries, got, tt.original)
+			}
+		})
+	}
+}

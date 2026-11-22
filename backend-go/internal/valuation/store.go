@@ -33,10 +33,10 @@ func NewStore(pool *pgxpool.Pool) *Store {
 }
 
 // Holding is an edition with at least one owned copy, in the shape the
-// deal matcher reads, with the Discogs release of an album edition.
+// deal matcher reads, its barcode included, with the Discogs release of
+// an album edition.
 type Holding struct {
 	Want             deals.Want
-	Barcode          *string
 	DiscogsReleaseID *int64
 }
 
@@ -54,7 +54,7 @@ func (s *Store) Holdings(ctx context.Context) ([]Holding, error) {
 		var h Holding
 		w := &h.Want
 		err := row.Scan(&w.EditionID, &w.TitleID, &w.Kind, &w.Name, &w.OriginalTitle,
-			&w.PolishTitle, &w.Authors, &w.Format, &h.Barcode, &h.DiscogsReleaseID)
+			&w.PolishTitle, &w.Authors, &w.Format, &w.Barcode, &h.DiscogsReleaseID)
 		return h, err
 	})
 }

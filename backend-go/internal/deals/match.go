@@ -14,7 +14,8 @@ import (
 // MaxMarketPercent when they set no share of the market price;
 // MarketCents is the trusted used market price of the wished title and
 // format, nil without one. A want with neither rule has its listings
-// recorded but never alerted.
+// recorded but never alerted. Barcode is the edition's normalized
+// barcode, nil when it has none.
 type Want struct {
 	CopyID           int64
 	EditionID        int64
@@ -25,6 +26,7 @@ type Want struct {
 	PolishTitle      *string
 	Authors          []string
 	Format           *string
+	Barcode          *string
 	MaxPriceCents    *int64
 	MaxMarketPercent *int
 	MarketCents      *int64
@@ -58,6 +60,7 @@ type wantText struct {
 	name, polish, original string
 	hasPolish, hasOriginal bool
 	authors                []string
+	polishBook             bool
 
 	names    []nameText // the titles the want is sold under
 	ownWords [][]string // the words of each name, then of each author
@@ -96,19 +99,38 @@ func newNameText(name string) *nameText {
 	return n
 }
 
+// polishISBNPrefix starts every ISBN-13 of a book published in Poland.
+const polishISBNPrefix = "97883"
+
+// polishBook reports whether w is a Polish book edition: one whose
+// barcode is a Polish ISBN or that has none. A title without an edition
+// (NewTitles) is none.
+func (w *Want) polishBook() bool {
+	if w.Kind != "book" || w.EditionID == 0 {
+		return false
+	}
+	return w.Barcode == nil || *w.Barcode == "" || strings.HasPrefix(*w.Barcode, polishISBNPrefix)
+}
+
 // newWantText splits w's names and authors. Its names are the titles a
 // want is sold under: Polish, original and the name it was entered with,
-// without duplicates.
+// without duplicates. A Polish book edition is not sold under its
+// original title, which names the foreign editions, so it keeps only its
+// Polish title and name.
 func newWantText(w *Want) *wantText {
-	p := &wantText{name: w.Name, authors: slices.Clone(w.Authors)}
+	p := &wantText{name: w.Name, authors: slices.Clone(w.Authors), polishBook: w.polishBook()}
 	if w.PolishTitle != nil {
 		p.polish, p.hasPolish = *w.PolishTitle, true
 	}
 	if w.OriginalTitle != nil {
 		p.original, p.hasOriginal = *w.OriginalTitle, true
 	}
+	original := w.OriginalTitle
+	if p.polishBook {
+		original = nil
+	}
 	seen := map[string]bool{}
-	for _, n := range []*string{w.PolishTitle, w.OriginalTitle, &w.Name} {
+	for _, n := range []*string{w.PolishTitle, original, &w.Name} {
 		if n == nil {
 			continue
 		}
@@ -144,7 +166,8 @@ func (p *wantText) from(w *Want) bool {
 	return p.name == w.Name &&
 		sameText(p.hasPolish, p.polish, w.PolishTitle) &&
 		sameText(p.hasOriginal, p.original, w.OriginalTitle) &&
-		slices.Equal(p.authors, w.Authors)
+		slices.Equal(p.authors, w.Authors) &&
+		p.polishBook == w.polishBook()
 }
 
 func sameText(has bool, s string, p *string) bool {

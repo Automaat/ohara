@@ -1,0 +1,53 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { LocalDay } from './local-day.svelte';
+
+describe('LocalDay', () => {
+	beforeEach(() => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date(2026, 11, 14, 23, 59));
+	});
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	function page() {
+		return { win: new EventTarget(), doc: new EventTarget() };
+	}
+
+	it('moves on at local midnight while started', () => {
+		const day = new LocalDay();
+		const stop = day.start(page());
+		expect(day.current).toBe('2026-12-14');
+		vi.advanceTimersByTime(60_000);
+		expect(day.current).toBe('2026-12-15');
+		vi.advanceTimersByTime(24 * 60 * 60_000);
+		expect(day.current).toBe('2026-12-16');
+		stop();
+		vi.advanceTimersByTime(24 * 60 * 60_000);
+		expect(day.current).toBe('2026-12-16');
+	});
+
+	it.each(['pageshow', 'visibilitychange'])(
+		'reads the day again on %s when the clock moved on while no timer ran',
+		(event) => {
+			const day = new LocalDay();
+			const events = page();
+			const stop = day.start(events);
+			vi.setSystemTime(new Date(2026, 11, 16, 8, 0));
+			expect(day.current).toBe('2026-12-14');
+			(event === 'pageshow' ? events.win : events.doc).dispatchEvent(new Event(event));
+			expect(day.current).toBe('2026-12-16');
+			stop();
+		}
+	);
+
+	it('stops listening once stopped', () => {
+		const day = new LocalDay();
+		const events = page();
+		day.start(events)();
+		vi.setSystemTime(new Date(2026, 11, 20, 8, 0));
+		events.win.dispatchEvent(new Event('pageshow'));
+		events.doc.dispatchEvent(new Event('visibilitychange'));
+		expect(day.current).toBe('2026-12-14');
+	});
+});

@@ -970,6 +970,43 @@ func TestOrderedCopy(t *testing.T) {
 	}
 }
 
+// TestReceiveOrderedCopy receives a copy whose price and shop changed after
+// the receiving page read it: the receipt keeps the stored values, so a stale
+// page cannot put the old ones back.
+func TestReceiveOrderedCopy(t *testing.T) {
+	a := newAPI(t)
+	movie := a.title("movie", "Diuna")
+	edition := a.edition(obj{"title_id": movie, "format": "uhd"})
+	ordered := obj{
+		"edition_id": edition, "status": "ordered", "price_cents": 12999, "purchased_on": "2026-11-02",
+		"shop": "Allegro", "condition": "mint", "expected_on": "2026-12-15",
+	}
+	id := a.copyOf(ordered)
+	path := fmt.Sprintf("/api/copies/%d", id)
+	edited := maps.Clone(ordered)
+	edited["price_cents"] = 9999
+	edited["shop"] = "Empik"
+	a.mustDo(http.MethodPut, path, edited, nil, http.StatusOK)
+
+	var got collection.Copy
+	a.mustDo(http.MethodPost, path+"/receipt", nil, &got, http.StatusOK)
+	if got.Status != "owned" || got.ExpectedOn != nil || got.PriceCents == nil || *got.PriceCents != 9999 ||
+		got.Shop != "Empik" || got.PurchasedOn == nil || got.PurchasedOn.Format("2006-01-02") != "2026-11-02" ||
+		got.Condition == nil || *got.Condition != "mint" {
+		t.Fatalf("received copy = %+v", got)
+	}
+	var stored collection.Copy
+	a.mustDo(http.MethodGet, path, nil, &stored, http.StatusOK)
+	if stored.Status != "owned" || stored.ExpectedOn != nil || *stored.PriceCents != 9999 || stored.Shop != "Empik" {
+		t.Fatalf("stored copy = %+v", stored)
+	}
+
+	a.fails(http.MethodPost, path+"/receipt", nil, http.StatusConflict, "status")
+	wish := a.copyOf(obj{"edition_id": edition, "status": "wishlist"})
+	a.fails(http.MethodPost, fmt.Sprintf("/api/copies/%d/receipt", wish), nil, http.StatusConflict, "status")
+	a.fails(http.MethodPost, "/api/copies/999999/receipt", nil, http.StatusNotFound, "")
+}
+
 func TestCollectionViewCountsOrderedCopiesApart(t *testing.T) {
 	a := newAPI(t)
 	movie := a.title("movie", "Diuna")

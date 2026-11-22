@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { ErrorState, Link } from '@smykla-skalski/sui';
 	import { tick, type Snippet } from 'svelte';
-	import { displayName, isoDate, shelfLine, type CollectionItem } from '#lib/collection.js';
+	import { displayName, shelfLine, type CollectionItem } from '#lib/collection.js';
+	import { LocalDay } from '#lib/local-day.svelte.js';
 	import { drawnCount, firstTiles, tilesPerStep, type ShelfPlace } from '#lib/shelf-drawing.js';
 	import CollectionCover from './CollectionCover.svelte';
 	import ShelfSkeleton from './ShelfSkeleton.svelte';
@@ -20,8 +21,9 @@
 		empty: Snippet;
 	} = $props();
 
-	/** Today in local time, which tells an ordered copy's late delivery, read once per shelf. */
-	const today = isoDate(new Date());
+	/** Today in local time, which tells a late delivery or loan, kept current past midnight. */
+	const today = new LocalDay();
+	$effect(() => today.start());
 
 	/** The copies whose tiles the last draw left in the page. */
 	let drawnKeys: ReadonlySet<number> = new Set();
@@ -230,7 +232,7 @@
 				</div>
 				<Link href={`/titles/${row.title_id}`}>{name}</Link>
 				<span class="meta" class:wish class:sold class:lent class:ordered>
-					{shelfLine(row, today)}
+					{shelfLine(row, today.current)}
 				</span>
 			</li>
 		{/each}

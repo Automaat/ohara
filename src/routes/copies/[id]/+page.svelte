@@ -114,11 +114,8 @@
 		if (detail && form.status === 'wishlist') void markets.load(detail.title.id);
 	});
 
-	/** Saves the form, or with `received` puts the ordered copy as stored on the shelf. */
-	async function save(d: CopyDetail, received = false) {
-		const parsed = received
-			? copyPayload({ ...copyToForm(d), status: 'owned' }, d.edition_id)
-			: copyPayload(form, d.edition_id);
+	async function save(d: CopyDetail) {
+		const parsed = copyPayload(form, d.edition_id);
 		if (!parsed.ok) {
 			issue = parsed.issue;
 			return;
@@ -135,6 +132,30 @@
 		} catch (err) {
 			if (d.id !== requested) return;
 			issue = issueFrom(err);
+		} finally {
+			pendingSaves.delete(d.id);
+		}
+	}
+
+	/**
+	 * "Odebrano": the server puts the ordered copy on the shelf as it is stored, so a page read
+	 * before another save cannot put old values back. A copy received meanwhile, elsewhere, is
+	 * shown as it now is.
+	 */
+	async function receive(d: CopyDetail) {
+		if (pendingSaves.has(d.id)) return;
+		pendingSaves.add(d.id);
+		saved = false;
+		try {
+			await request<Copy>(fetch, 'POST', `/api/copies/${d.id}/receipt`);
+			if (d.id !== requested) return;
+			issue = null;
+			saved = true;
+			await load(d.id);
+		} catch (err) {
+			if (d.id !== requested) return;
+			if (err instanceof ApiError && err.status === 409) await load(d.id);
+			else issue = issueFrom(err);
 		} finally {
 			pendingSaves.delete(d.id);
 		}
@@ -240,8 +261,7 @@
 			{:else if d.status === 'owned'}
 				<Button onclick={startLoan}>Wypożycz</Button>
 			{:else if d.status === 'ordered'}
-				<!-- Receiving keeps the price, order date and shop; only the status changes. -->
-				<Button tone="signal" loading={saving} onclick={() => save(d, true)}>Odebrano</Button>
+				<Button tone="signal" loading={saving} onclick={() => receive(d)}>Odebrano</Button>
 			{/if}
 			<Button tone="stop-quiet" onclick={() => ((deleteError = null), (confirmDelete = true))}>
 				Usuń

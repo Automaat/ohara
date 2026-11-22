@@ -84,6 +84,8 @@ var (
 	ErrAlreadyLent      = errors.New("this copy is already lent")
 	ErrLentCopyStays    = errors.New("a lent copy stays owned until it comes back")
 	ErrReturned         = errors.New("this loan is already returned")
+	// ErrNotOrdered refuses to receive a copy that is not on order.
+	ErrNotOrdered = errors.New("only ordered copies can be received")
 )
 
 // Date is a calendar day carried as YYYY-MM-DD in JSON.

@@ -580,6 +580,32 @@ func (s *Store) UpdateCopy(ctx context.Context, id int64, in *CopyInput) (Copy, 
 	return c, nil
 }
 
+// ReceiveCopy puts ordered copy id on the shelf: it becomes owned and drops
+// its expected delivery, and keeps every other field as stored, whatever an
+// edit saved since the caller read it. Errors: ErrNotFound, ErrNotOrdered.
+func (s *Store) ReceiveCopy(ctx context.Context, id int64) (Copy, error) {
+	var c Copy
+	err := s.inTx(ctx, func(tx pgx.Tx) error {
+		status, err := lockCopy(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if status != StatusOrdered {
+			return ErrNotOrdered
+		}
+		c, err = scanCopy(tx.QueryRow(ctx, `UPDATE copy c SET status = 'owned', expected_on = NULL,
+			updated_at = now() WHERE c.id = $1 RETURNING `+copyColumns, id))
+		if err != nil {
+			return fmt.Errorf("receive copy: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return Copy{}, err
+	}
+	return c, nil
+}
+
 // lockCopy locks copy id against a concurrent loan or status change and
 // returns its status; ErrNotFound when there is none.
 func lockCopy(ctx context.Context, tx pgx.Tx, id int64) (string, error) {

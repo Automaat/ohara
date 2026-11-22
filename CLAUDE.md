@@ -115,9 +115,15 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   and the deal hunter never read it. Kolekcja's default shelf keeps it,
   with a parcel on the cover and "Dostawa <date>" ("po terminie" once the
   day has passed, local time) or "Zamówiony"; the filter sheet's
-  "Zamówione" switch (`?status=ordered`) lists them alone. The copy page's
-  "Odebrano" saves it as `owned`, keeping its price, date and shop and
-  dropping `expected_on`. No reminder goes out for a late delivery.
+  "Zamówione" switch (`?status=ordered`) lists them alone. The shelf's day
+  (`src/lib/local-day.svelte.ts`) moves on at local midnight and when the
+  page is shown again, for late deliveries and loans alike. The copy
+  form marks an order with a "Zamówiony" switch under "Na półce". The copy
+  page's "Odebrano" sends `POST /api/copies/{id}/receipt`, which turns the
+  stored ordered copy `owned` and drops `expected_on`, keeping every other
+  field as stored (409 on `status` for a copy not on order), so a page read
+  before another save cannot put old values back. No reminder goes out for
+  a late delivery.
 - `POST /api/titles`, `/api/editions` and `/api/copies` take an optional
   `request_key`: a repeat with the same key answers 200 with the row the
   first request created. The scanner sends one key per add, so a retry

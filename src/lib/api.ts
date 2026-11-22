@@ -44,6 +44,7 @@ const fieldMessages: Record<string, Record<number, string>> = {
 	title_id: { 422: 'Wybrany tytuł nie istnieje.' },
 	edition_id: { 422: 'Wybrane wydanie nie istnieje.' },
 	phrase: { 409: 'Ta fraza już jest na liście.' },
+	status: { 409: 'Wypożyczony egzemplarz zostaje na półce, dopóki nie wróci.' },
 	cover_photo: {
 		400: 'Przesyłanie zdjęcia zostało przerwane. Spróbuj ponownie.',
 		413: coverTooLargeMessage,

@@ -40,13 +40,18 @@ test('Wypożycz and Zwrócono on a copy page, with the shelf line and the filter
 	await seedCopy(request, kept);
 
 	await page.goto(`/copies/${lentCopy}`);
+	// A copy edit not yet saved survives lending and the return.
+	const notes = page.getByRole('textbox', { name: 'Notatki' });
+	await notes.fill('Szkic notatki');
 	await page.getByRole('button', { name: 'Wypożycz' }).tap();
 	const sheet = page.getByRole('dialog', { name: 'Wypożycz egzemplarz' });
 	await sheet.getByRole('textbox', { name: /^Komu/ }).fill('Ania');
 	await sheet.getByRole('textbox', { name: 'Data wypożyczenia' }).fill('2026-01-01');
 	await sheet.getByRole('textbox', { name: 'Termin zwrotu' }).fill('2025-12-31');
 	await sheet.getByRole('button', { name: 'Wypożycz' }).tap();
-	await expect(sheet.getByText('Termin zwrotu nie może być przed wypożyczeniem.')).toBeVisible();
+	await expect(sheet.getByRole('textbox', { name: 'Termin zwrotu' })).toHaveAccessibleDescription(
+		/Termin zwrotu nie może być przed wypożyczeniem\./
+	);
 	await sheet.getByRole('textbox', { name: 'Termin zwrotu' }).fill('2026-01-15');
 	await sheet.getByRole('button', { name: 'Wypożycz' }).tap();
 	await expect(sheet).toBeHidden();
@@ -54,25 +59,32 @@ test('Wypożycz and Zwrócono on a copy page, with the shelf line and the filter
 	const loans = page.getByRole('region', { name: 'Wypożyczenia' });
 	await expect(loans.getByRole('listitem')).toHaveText([/^Ania · od .* · po terminie$/]);
 	await expect(page.getByRole('button', { name: 'Wypożycz' })).toHaveCount(0);
+	await expect(notes).toHaveValue('Szkic notatki');
 
 	await page.goto(`/?q=${t}`);
 	await expect(tile(page, lent)).toContainText('Wypożyczony: Ania · po terminie');
+	const line = tile(page, lent).getByText(/^Wypożyczony: Ania/);
+	expect(await line.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
 	await expect(tile(page, kept)).not.toContainText('Wypożyczony');
 
 	await page.getByRole('button', { name: /^Sortowanie i filtry/ }).tap();
 	const filters = page.getByRole('dialog', { name: 'Sortowanie i filtry' });
-	await filters.getByRole('combobox', { name: 'Status' }).selectOption('loaned');
+	// The switch's native input sits under its track; its label takes the tap.
+	await filters.getByText('Wypożyczone', { exact: true }).tap();
+	await expect(filters.getByRole('switch', { name: 'Wypożyczone' })).toBeChecked();
 	await filters.getByRole('button', { name: 'Gotowe' }).tap();
-	await expect(page).toHaveURL(new RegExp(`\\?status=loaned&q=${t}$`));
+	await expect(page).toHaveURL(new RegExp(`\\?loaned=1&q=${t}$`));
 	await expect(tile(page, lent)).toBeVisible();
 	await expect(tile(page, kept)).toHaveCount(0);
 
 	await page.goto(`/copies/${lentCopy}`);
+	await notes.fill('Szkic notatki');
 	await page.getByRole('button', { name: 'Zwrócono' }).tap();
 	await expect(page.getByRole('button', { name: 'Wypożycz' })).toBeVisible();
 	await expect(loans.getByRole('listitem')).toHaveText([/^Ania · .+ – .+$/]);
+	await expect(notes).toHaveValue('Szkic notatki');
 
-	await page.goto(`/?status=loaned&q=${t}`);
+	await page.goto(`/?loaned=1&q=${t}`);
 	await expect(page.getByText('Nic nie pasuje', { exact: true })).toBeVisible();
 	await page.goto(`/?q=${t}`);
 	await expect(tile(page, lent)).not.toContainText('Wypożyczony');

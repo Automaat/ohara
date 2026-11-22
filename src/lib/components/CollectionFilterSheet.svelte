@@ -1,8 +1,9 @@
 <script lang="ts">
-	import { Button, Field, Modal, SegmentedControl, Select } from '@smykla-skalski/sui';
+	import { Button, Field, Modal, SegmentedControl, Select, Switch } from '@smykla-skalski/sui';
 	import {
 		collectionStatusLabels,
 		formatLabels,
+		loanedLabel,
 		options,
 		type CollectionFilter
 	} from '#lib/collection.js';
@@ -13,17 +14,21 @@
 		sort,
 		format,
 		status,
+		loaned,
 		onsort,
 		onformat,
-		onstatus
+		onstatus,
+		onloaned
 	}: {
 		open?: boolean;
 		sort: CollectionSort;
 		format: CollectionFilter['format'];
 		status: CollectionFilter['status'];
+		loaned: boolean;
 		onsort: (sort: CollectionSort) => void;
 		onformat: (format: CollectionFilter['format']) => void;
 		onstatus: (status: CollectionFilter['status']) => void;
+		onloaned: (loaned: boolean) => void;
 	} = $props();
 
 	const all = 'all';
@@ -67,6 +72,12 @@
 				() => status || all,
 				(v) => onstatus(v === all || v === null ? '' : (v as CollectionFilter['status']))
 			}
+		/>
+		<Switch
+			label={loanedLabel}
+			disabled={status === 'none'}
+			checked={loaned}
+			onchange={(e) => onloaned(e.currentTarget.checked)}
 		/>
 	</div>
 	{#snippet footer()}

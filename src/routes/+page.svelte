@@ -28,6 +28,7 @@
 		formatLabels,
 		formatPLN,
 		kindLabels,
+		loanedLabel,
 		readCollectionFilter,
 		shelfSummary,
 		spentLabel,
@@ -148,7 +149,7 @@
 	});
 
 	function set<K extends keyof CollectionFilter>(key: K, value: CollectionFilter[K]) {
-		if (key === 'q') query = value;
+		if (key === 'q' && typeof value === 'string') query = value;
 		updateFilter({ ...filter, [key]: value });
 	}
 
@@ -197,8 +198,14 @@
 	}
 
 	function setStatus(status: CollectionFilter['status']) {
-		// A title has no format, so listing titles without copies drops the format filter.
-		updateFilter({ ...filter, status, format: status === 'none' ? '' : filter.format });
+		// A title has no format or loan, so listing titles without copies drops those filters.
+		const titles = status === 'none';
+		updateFilter({
+			...filter,
+			status,
+			format: titles ? '' : filter.format,
+			loaned: titles ? false : filter.loaned
+		});
 	}
 
 	// A no-break space keeps the line's height until the counts arrive, so nothing below moves.
@@ -249,7 +256,8 @@
 				{ key: 'q', label: filter.q.trim() },
 				{ key: 'kind', label: filter.kind && kindLabels[filter.kind] },
 				{ key: 'format', label: filter.format && formatLabels[filter.format] },
-				{ key: 'status', label: filter.status && collectionStatusLabels[filter.status] }
+				{ key: 'status', label: filter.status && collectionStatusLabels[filter.status] },
+				{ key: 'loaned', label: filter.loaned ? loanedLabel : '' }
 			] as const
 		).filter((entry) => entry.label)
 	);
@@ -277,7 +285,12 @@
 					key: 'status',
 					label: collectionStatusLabels[filter.status],
 					remove: () => set('status', '')
-				}
+				},
+			filter.loaned === true && {
+				key: 'loaned',
+				label: loanedLabel,
+				remove: () => set('loaned', false)
+			}
 		].filter((choice) => choice !== false && choice !== '')
 	);
 </script>
@@ -341,9 +354,11 @@
 		{sort}
 		format={filter.format}
 		status={filter.status}
+		loaned={filter.loaned ?? false}
 		onsort={setSort}
 		onformat={(format) => set('format', format)}
 		onstatus={setStatus}
+		onloaned={(loaned) => set('loaned', loaned)}
 	/>
 </div>
 

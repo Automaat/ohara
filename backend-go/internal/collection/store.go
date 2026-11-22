@@ -681,16 +681,26 @@ func (s *Store) LendCopy(ctx context.Context, copyID int64, in *LoanInput) (Loan
 	return l, nil
 }
 
-// ReturnLoan records the day loan id came back; a returned loan takes the
-// corrected day. Errors: ErrNotFound or a *httpx.FieldError for a day before
-// the loan began.
+// ReturnLoan records the day loan id came back. A loan already back keeps
+// its day: the same day again answers it unchanged, another one is
+// ErrReturned, so a stale "Zwrócono" cannot move it. Errors: ErrNotFound,
+// ErrReturned or a *httpx.FieldError for a day before the loan began.
 func (s *Store) ReturnLoan(ctx context.Context, id int64, returnedOn time.Time) (Loan, error) {
 	var l Loan
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
 		var lentOn time.Time
-		err := tx.QueryRow(ctx, `SELECT lent_on FROM loan WHERE id = $1 FOR UPDATE`, id).Scan(&lentOn)
+		var returned *time.Time
+		err := tx.QueryRow(ctx, `SELECT lent_on, returned_on FROM loan WHERE id = $1 FOR UPDATE`, id).
+			Scan(&lentOn, &returned)
 		if err != nil {
 			return mapErr(err, ErrNotFound, "lock loan")
+		}
+		if returned != nil {
+			if !returned.Equal(returnedOn) {
+				return ErrReturned
+			}
+			l, err = getLoan(ctx, tx, id)
+			return err
 		}
 		if returnedOn.Before(lentOn) {
 			return fieldErr("returned_on", "cannot be before lent_on")
@@ -737,12 +747,16 @@ func (s *Store) DiscardRequest(ctx context.Context, key string) error {
 			ON CONFLICT DO NOTHING`, key); err != nil {
 			return fmt.Errorf("record discarded key: %w", err)
 		}
-		// A copy someone edited or lent since the add made it is theirs now.
-		if _, err := tx.Exec(ctx, `DELETE FROM copy WHERE request_key = $1 AND updated_at = created_at
-			AND NOT EXISTS (SELECT 1 FROM loan WHERE loan.copy_id = copy.id)`, key); err != nil {
+		// A copy someone edited or lent since the add made it is theirs now. Its row is locked
+		// before the loan check, as LendCopy locks it, so a loan committed meanwhile is seen.
+		err := discardUnused(ctx, tx, key,
+			`SELECT id FROM copy WHERE request_key = $1 AND updated_at = created_at FOR UPDATE`,
+			`SELECT EXISTS (SELECT 1 FROM loan WHERE copy_id = $1)`,
+			`DELETE FROM copy WHERE id = $1`)
+		if err != nil {
 			return fmt.Errorf("discard copy: %w", err)
 		}
-		err := discardUnused(ctx, tx, key,
+		err = discardUnused(ctx, tx, key,
 			`SELECT id FROM edition WHERE request_key = $1 AND barcode IS NULL AND edited_at IS NULL FOR UPDATE`,
 			`SELECT EXISTS (SELECT 1 FROM copy WHERE edition_id = $1)`,
 			`DELETE FROM edition WHERE id = $1`)

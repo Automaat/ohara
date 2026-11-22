@@ -80,7 +80,7 @@ func (h *Handler) writeErr(w http.ResponseWriter, r *http.Request, op string, er
 	case errors.Is(err, ErrLentCopyStays):
 		httpx.WriteJSON(w, h.logger, http.StatusConflict, httpx.Error{Error: err.Error(), Field: "status"})
 	case errors.Is(err, ErrHasEditions), errors.Is(err, ErrHasCopies), errors.Is(err, ErrNotOwned),
-		errors.Is(err, ErrAlreadyLent):
+		errors.Is(err, ErrAlreadyLent), errors.Is(err, ErrReturned):
 		httpx.WriteError(w, h.logger, http.StatusConflict, err.Error())
 	default:
 		httpx.WriteInternal(w, r, h.logger, op, err)

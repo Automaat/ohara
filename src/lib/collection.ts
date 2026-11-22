@@ -260,24 +260,30 @@ export function shelfLine(
 
 /**
  * What the collection lists: copies of a status, `unpriced`, the owned copies without a purchase
- * price, `loaned`, the copies out on loan, or `none`, the titles that have no copy yet.
+ * price, or `none`, the titles that have no copy yet.
  */
-export type CollectionStatus = CopyStatus | 'unpriced' | 'loaned' | 'none';
+export type CollectionStatus = CopyStatus | 'unpriced' | 'none';
 export const collectionStatusLabels: Record<CollectionStatus, string> = {
 	...statusLabels,
 	unpriced: 'Bez ceny',
-	loaned: 'Wypożyczone',
 	none: 'Bez egzemplarzy'
 };
+
+/** The filter that keeps only copies out on loan, the server's `?loaned=1`. */
+export const loanedLabel = 'Wypożyczone';
 
 export type CollectionFilter = {
 	kind: Kind | '';
 	format: Format | '';
 	status: CollectionStatus | '';
 	q: string;
+	/** Only copies with an open loan; left out when off. */
+	loaned?: boolean;
 };
 
-/** The filter a collection address names. A title has no format, so `none` drops it. */
+/**
+ * The filter a collection address names. A title has no format or loan, so `none` drops both.
+ */
 export function readCollectionFilter(params: Pick<URLSearchParams, 'get'>): CollectionFilter {
 	function read<K extends string>(key: string, labels: Record<K, string>): K | '' {
 		const value = params.get(key);
@@ -289,7 +295,8 @@ export function readCollectionFilter(params: Pick<URLSearchParams, 'get'>): Coll
 		kind: read('kind', kindLabels),
 		format: status === 'none' ? '' : read('format', formatLabels),
 		status,
-		q: params.get('q') ?? ''
+		q: params.get('q') ?? '',
+		...(status !== 'none' && params.get('loaned') === '1' ? { loaned: true } : {})
 	};
 }
 
@@ -298,6 +305,7 @@ export function collectionSearch(f: CollectionFilter): string {
 	if (f.kind) params.set('kind', f.kind);
 	if (f.format) params.set('format', f.format);
 	if (f.status) params.set('status', f.status);
+	if (f.loaned) params.set('loaned', '1');
 	if (f.q.trim()) params.set('q', f.q.trim());
 	const qs = params.toString();
 	return qs ? `?${qs}` : '';

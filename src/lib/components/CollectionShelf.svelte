@@ -216,7 +216,7 @@
 					<CollectionCover kind={row.kind} url={row.cover_url} large {name} {wish} {lent} />
 				</div>
 				<Link href={`/titles/${row.title_id}`}>{name}</Link>
-				<span class="meta" class:wish>{shelfLine(row)}</span>
+				<span class="meta" class:wish class:lent>{shelfLine(row)}</span>
 			</li>
 		{/each}
 	</ul>
@@ -307,7 +307,9 @@
 			white-space: nowrap;
 		}
 
-		.meta.wish {
+		/* A wish's limit and a loan's "po terminie" wrap rather than vanish past the edge. */
+		.meta.wish,
+		.meta.lent {
 			white-space: normal;
 			overflow-wrap: anywhere;
 		}

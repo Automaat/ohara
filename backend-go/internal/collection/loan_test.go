@@ -1,13 +1,18 @@
 package collection_test
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/Automaat/ohara/backend-go/internal/collection"
+	"github.com/Automaat/ohara/backend-go/internal/dbtest"
 )
 
 // todayInPoland is the calendar day a loan without lent_on starts on.
@@ -58,6 +63,17 @@ func TestLendAndReturnCopy(t *testing.T) {
 	a.mustDo(http.MethodPut, loan, obj{"returned_on": "2999-02-01"}, &returned, http.StatusOK)
 	if returned.ID != first.ID || day(returned.ReturnedOn) != "2999-02-01" || returned.Borrower != "Ania" {
 		t.Fatalf("returned loan = %+v, want Ania's loan back on 2999-02-01", returned)
+	}
+
+	a.mustDo(http.MethodPut, loan, obj{"returned_on": "2999-02-01"}, &returned, http.StatusOK)
+	if day(returned.ReturnedOn) != "2999-02-01" {
+		t.Fatalf("repeated return = %+v, want the day kept", returned)
+	}
+	a.fails(http.MethodPut, loan, obj{"returned_on": "2999-02-02"}, http.StatusConflict, "")
+	var kept collection.CopyDetail
+	a.mustDo(http.MethodGet, fmt.Sprintf("/api/copies/%d", owned), nil, &kept, http.StatusOK)
+	if len(kept.Loans) != 1 || day(kept.Loans[0].ReturnedOn) != "2999-02-01" {
+		t.Fatalf("loans after a stale return = %+v, want the first return day kept", kept.Loans)
 	}
 
 	var second collection.Loan
@@ -132,4 +148,124 @@ func TestDiscardRequestKeepsALentCopy(t *testing.T) {
 
 	a.mustDo(http.MethodDelete, "/api/requests/k-lent", nil, nil, http.StatusNoContent)
 	a.mustDo(http.MethodGet, fmt.Sprintf("/api/copies/%d", c.ID), nil, nil, http.StatusOK)
+}
+
+// lendInTx opens a loan of copyID in a transaction that holds the copy's row
+// lock, as LendCopy does, and leaves it uncommitted.
+func lendInTx(ctx context.Context, t *testing.T, pool *pgxpool.Pool, copyID int64) func() {
+	t.Helper()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback(ctx) })
+	if _, err := tx.Exec(ctx, `SELECT status FROM copy WHERE id = $1 FOR UPDATE`, copyID); err != nil {
+		t.Fatalf("lock copy: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO loan (copy_id, borrower, lent_on) VALUES ($1, 'Ania', '2026-05-10')`,
+		copyID); err != nil {
+		t.Fatalf("insert loan: %v", err)
+	}
+	return func() {
+		if err := tx.Commit(ctx); err != nil {
+			t.Fatalf("commit loan: %v", err)
+		}
+	}
+}
+
+// awaitLockWait returns once a statement containing fragment waits on a lock.
+func awaitLockWait(ctx context.Context, t *testing.T, pool *pgxpool.Pool, fragment string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var waiting bool
+		err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity
+			WHERE wait_event_type = 'Lock' AND strpos(query, $1) > 0)`, fragment).Scan(&waiting)
+		if err != nil {
+			t.Fatalf("poll locks: %v", err)
+		}
+		if waiting {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no statement with %q waited on a lock", fragment)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func ownedCopy(ctx context.Context, t *testing.T, store *collection.Store, key *string) collection.Copy {
+	t.Helper()
+	title := collection.TitleInput{Kind: "movie", Name: "Race"}
+	if fe := title.Normalize(); fe != nil {
+		t.Fatalf("normalize title: %v", fe)
+	}
+	created, _, err := store.CreateTitle(ctx, &title)
+	if err != nil {
+		t.Fatalf("create title: %v", err)
+	}
+	format := "dvd"
+	edition := collection.EditionInput{TitleID: created.ID, Format: &format}
+	if fe := edition.Normalize(); fe != nil {
+		t.Fatalf("normalize edition: %v", fe)
+	}
+	e, _, err := store.CreateEdition(ctx, &edition)
+	if err != nil {
+		t.Fatalf("create edition: %v", err)
+	}
+	in := collection.CopyInput{EditionID: e.ID, Status: collection.StatusOwned, RequestKey: key}
+	if fe := in.Normalize(); fe != nil {
+		t.Fatalf("normalize copy: %v", fe)
+	}
+	c, _, err := store.CreateCopy(ctx, &in)
+	if err != nil {
+		t.Fatalf("create copy: %v", err)
+	}
+	return c
+}
+
+func TestDiscardWaitingOnALoanKeepsTheCopy(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	store := collection.NewStore(pool)
+	ctx := context.Background()
+	key := "race-lend"
+	c := ownedCopy(ctx, t, store, &key)
+	commit := lendInTx(ctx, t, pool, c.ID)
+
+	done := make(chan error, 1)
+	go func() { done <- store.DiscardRequest(ctx, key) }()
+	awaitLockWait(ctx, t, pool, "updated_at = created_at FOR UPDATE")
+	commit()
+
+	if err := <-done; err != nil {
+		t.Fatalf("discard: %v", err)
+	}
+	loans, err := store.ListLoans(ctx, c.ID)
+	if _, getErr := store.GetCopy(ctx, c.ID); getErr != nil || err != nil || len(loans) != 1 {
+		t.Fatalf("after the race: copy err %v, loans %v (%v); want the lent copy and its loan", getErr, loans, err)
+	}
+}
+
+func TestWishChangeWaitingOnALoanIsRefused(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	store := collection.NewStore(pool)
+	ctx := context.Background()
+	c := ownedCopy(ctx, t, store, nil)
+	commit := lendInTx(ctx, t, pool, c.ID)
+
+	done := make(chan error, 1)
+	go func() {
+		wish := collection.CopyInput{EditionID: c.EditionID, Status: collection.StatusWishlist}
+		_, err := store.UpdateCopy(ctx, c.ID, &wish)
+		done <- err
+	}()
+	awaitLockWait(ctx, t, pool, "SELECT status FROM copy WHERE id = $1 FOR UPDATE")
+	commit()
+
+	if err := <-done; !errors.Is(err, collection.ErrLentCopyStays) {
+		t.Fatalf("wish change err = %v, want ErrLentCopyStays", err)
+	}
+	if got, err := store.GetCopy(ctx, c.ID); err != nil || got.Status != collection.StatusOwned {
+		t.Fatalf("copy after the race = %+v, %v; want it owned", got, err)
+	}
 }

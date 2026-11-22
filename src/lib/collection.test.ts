@@ -136,10 +136,26 @@ describe('collection search links', () => {
 		expect(readCollectionFilter(new URLSearchParams(collectionSearch(filter)))).toEqual(filter);
 	});
 
-	it('keeps the lent copies in the address, with kind and search', () => {
-		const filter = { kind: 'book', format: '', status: 'loaned', q: 'Lem' } as const;
-		expect(collectionSearch(filter)).toBe('?kind=book&status=loaned&q=Lem');
+	it('keeps the lent copies in the address, as the server reads them, with the other filters', () => {
+		const filter = { kind: 'book', format: '', status: 'owned', q: 'Lem', loaned: true } as const;
+		expect(collectionSearch(filter)).toBe('?kind=book&status=owned&loaned=1&q=Lem');
 		expect(readCollectionFilter(new URLSearchParams(collectionSearch(filter)))).toEqual(filter);
+		expect(collectionSearch({ ...filter, loaned: false })).toBe('?kind=book&status=owned&q=Lem');
+		expect(readCollectionFilter(new URLSearchParams('loaned=true'))).toEqual({
+			kind: '',
+			format: '',
+			status: '',
+			q: ''
+		});
+	});
+
+	it('drops the loan filter while titles without copies are listed', () => {
+		expect(readCollectionFilter(new URLSearchParams('status=none&loaned=1'))).toEqual({
+			kind: '',
+			format: '',
+			status: 'none',
+			q: ''
+		});
 	});
 
 	it('keeps titles without copies in the address, with no format', () => {

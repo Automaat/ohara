@@ -13,7 +13,7 @@
 	import { SvelteSet } from 'svelte/reactivity';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { errorMessage, issueFrom, request } from '#lib/api.js';
+	import { ApiError, errorMessage, issueFrom, request } from '#lib/api.js';
 	import {
 		copyPayload,
 		copyToForm,
@@ -69,7 +69,11 @@
 	/** A slower answer for an earlier load never replaces a newer one. */
 	const loads = new LatestLoad();
 
-	async function load(copyID: number) {
+	/**
+	 * Reads the copy. A refresh after a loan keeps the form, so an edit not yet saved stays; a
+	 * load of another copy or a retry fills it from the answer.
+	 */
+	async function load(copyID: number, keepForm = false) {
 		if (copyID !== requested) {
 			requested = copyID;
 			detail = null;
@@ -89,7 +93,7 @@
 			const next = await request<CopyDetail>(fetch, 'GET', `/api/copies/${copyID}`);
 			if (!isLatest()) return;
 			detail = next;
-			form = copyToForm(next);
+			if (!keepForm) form = copyToForm(next);
 			failure = null;
 		} catch (err) {
 			if (!isLatest()) return;
@@ -151,9 +155,16 @@
 			await request<Loan>(fetch, 'POST', `/api/copies/${d.id}/loans`, parsed.value);
 			if (d.id !== requested) return;
 			lending = false;
-			await load(d.id);
+			await load(d.id, true);
 		} catch (err) {
-			if (d.id === requested) loanIssue = issueFrom(err);
+			if (d.id !== requested) return;
+			if (err instanceof ApiError && err.status === 409) {
+				// Another tab lent it meanwhile, or it is no longer on the shelf.
+				loanIssue = { field: '', message: 'Tego egzemplarza nie można teraz wypożyczyć.' };
+				await load(d.id, true);
+			} else {
+				loanIssue = issueFrom(err);
+			}
 		} finally {
 			loanBusy = false;
 		}
@@ -167,9 +178,16 @@
 			await request<Loan>(fetch, 'PUT', `/api/loans/${loan.id}`, {
 				returned_on: isoDate(new Date())
 			});
-			if (d.id === requested) await load(d.id);
+			if (d.id === requested) await load(d.id, true);
 		} catch (err) {
-			if (d.id === requested) loanError = errorMessage(err);
+			if (d.id !== requested) return;
+			if (err instanceof ApiError && err.status === 409) {
+				// Another tab recorded the return first; its day stays.
+				loanError = 'Ten egzemplarz już wrócił.';
+				await load(d.id, true);
+			} else {
+				loanError = errorMessage(err);
+			}
 		} finally {
 			loanBusy = false;
 		}

@@ -75,6 +75,7 @@ var (
 	ErrNotOwned         = errors.New("only owned copies can be lent")
 	ErrAlreadyLent      = errors.New("this copy is already lent")
 	ErrLentCopyStays    = errors.New("a lent copy stays owned until it comes back")
+	ErrReturned         = errors.New("this loan is already returned")
 )
 
 // Date is a calendar day carried as YYYY-MM-DD in JSON.

@@ -121,12 +121,14 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   (`borrower` trimmed, at most 500 bytes; `lent_on` today in Poland when
   null; optional `due_on`, not before it) answers 201, 409 for a wish or a
   copy already lent; `PUT /api/loans/{id}` sets `returned_on`, not before
-  `lent_on`. A copy has at most one open loan and keeps its returned ones,
+  `lent_on`, once: the same day again answers 200, another day 409, so a
+  stale "Zwrócono" keeps the first. A copy has at most one open loan and keeps its returned ones,
   newest first in `GET /api/copies/{id}`; they go with the copy. A lent copy
   stays owned (turning it into a wish answers 409 on `status`) and counts as
   before in spend, valuation and deals. `GET /api/collection` items carry the
   open loan's `loan_borrower` and `loan_due_on`; `?loaned=1` lists only lent
-  copies. A discard keeps a copy that was lent.
+  copies. A discard keeps a copy that was lent: it locks the copy, as a
+  loan does, before it looks for loans.
 - Lookup providers implement `lookup.Provider` (`Fetch` returns raw JSON,
   `Parse` turns raw JSON into candidates) and register in `cmd/api` with a
   cache TTL. Candidate `title`/`edition` fields match the POST bodies of
@@ -481,8 +483,8 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   (`?status=none`) lists titles without one instead, filtered in the client
   from `GET /api/titles`; `/titles` redirects to `/`. Its "Bez ceny"
   (`?status=unpriced`, client only) lists owned copies without a purchase
-  price, and "Wypożyczone" (`?status=loaned`, the server's `?loaned=1`) the
-  lent ones, whose shelf line reads "Wypożyczony: <borrower>", with "po
+  price, and its "Wypożyczone" switch (`?loaned=1`, as on the server) the lent
+  ones, whose shelf line reads "Wypożyczony: <borrower>", with "po
   terminie" once the due date has passed; a phone's header shows their count as its toggle, hidden at 0.
   `?add=copy` on a title
   or edition page opens the form for its next copy. The shelf draws its

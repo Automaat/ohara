@@ -77,6 +77,7 @@ type Hunter struct {
 	store    *Store
 	sources  []Source
 	notifier Notifier
+	poller   *TelegramPoller
 	logger   *slog.Logger
 	cfg      Config
 	sleep    func(ctx context.Context, d time.Duration) error
@@ -136,12 +137,20 @@ func jitter(d time.Duration, spread float64) time.Duration {
 	return time.Duration(float64(d) * (1 - spread + 2*spread*u))
 }
 
+// PollTelegram makes Start run p, which turns presses of an alert's
+// "Ignoruj" button into dismissals, until Start's context ends.
+func (h *Hunter) PollTelegram(p *TelegramPoller) { h.poller = p }
+
 // Start restores the last stored run, then runs the schedule until ctx
-// ends; manual runs also stop with ctx. The first scheduled run comes one
-// interval after the last run started, or about five minutes after start
-// without one, and never sooner than firstRunDelay.
+// ends; manual runs and the Telegram poller also stop with ctx. The first
+// scheduled run comes one interval after the last run started, or about
+// five minutes after start without one, and never sooner than
+// firstRunDelay.
 func (h *Hunter) Start(ctx context.Context) {
 	h.base = ctx
+	if h.poller != nil {
+		h.wg.Go(func() { h.poller.Run(ctx) })
+	}
 	last, ok := h.restore(ctx)
 	if h.cfg.Interval <= 0 {
 		return
@@ -254,8 +263,10 @@ type run struct {
 	wants  []Want
 	rules  Rules
 	titles Titles
-	res    RunResult
-	first  bool
+	// asOf is when the run read wants and titles, for RecordAsOf.
+	asOf  time.Time
+	res   RunResult
+	first bool
 	// tried holds the observations whose alert this run sent or failed to
 	// send; a failed one waits for the next run.
 	tried map[int64]bool
@@ -269,6 +280,10 @@ type run struct {
 // Source failures are collected in the result; a database failure or
 // cancellation stops the run.
 func (h *Hunter) Run(ctx context.Context) (RunResult, error) {
+	asOf, err := h.store.Now(ctx)
+	if err != nil {
+		return RunResult{}, err
+	}
 	wants, err := h.store.Wants(ctx)
 	if err != nil {
 		return RunResult{}, err
@@ -284,7 +299,7 @@ func (h *Hunter) Run(ctx context.Context) (RunResult, error) {
 	for i := range wants {
 		wants[i].Prepare()
 	}
-	r := &run{h: h, wants: wants, rules: rules, titles: titles, first: true, tried: map[int64]bool{}}
+	r := &run{h: h, wants: wants, rules: rules, titles: titles, asOf: asOf, first: true, tried: map[int64]bool{}}
 	r.res.Wants = len(wants)
 	r.res.Errors = []string{}
 	var queries []string
@@ -447,7 +462,7 @@ func (r *run) record(ctx context.Context, listings []Listing) error {
 		}
 		r.res.Matched++
 		alert := r.h.notifier != nil && w.MaxPriceCents != nil && l.PriceCents <= *w.MaxPriceCents
-		isNew, alerted, err := r.h.store.Record(ctx, l, w, alert)
+		isNew, alerted, err := r.h.store.RecordAsOf(ctx, l, w, alert, r.asOf)
 		if err != nil {
 			return err
 		}
@@ -490,7 +505,7 @@ func (r *run) deliver(ctx context.Context, only map[string]bool) error {
 		}
 		r.tried[a.ObservationID] = true
 		delivered, err := r.h.store.SendAlert(ctx, a.ObservationID, func(due *Alert) error {
-			err := r.h.notifier.Send(ctx, alertText(due))
+			err := r.h.notify(ctx, due)
 			r.h.sent()
 			metrics.ObserveDealAlert(err)
 			if err != nil {
@@ -508,6 +523,15 @@ func (r *run) deliver(ctx context.Context, only map[string]bool) error {
 		}
 	}
 	return nil
+}
+
+// notify sends the message for a, with its "Ignoruj" button when the
+// notifier can attach one.
+func (h *Hunter) notify(ctx context.Context, a *Alert) error {
+	if n, ok := h.notifier.(AlertNotifier); ok {
+		return n.SendAlert(ctx, alertText(a), a.ObservationID)
+	}
+	return h.notifier.Send(ctx, alertText(a))
 }
 
 // sendWait is what is left of telegramPause since the notifier last

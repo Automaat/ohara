@@ -6,6 +6,7 @@
 		musicFormatLabels,
 		options,
 		packagingLabels,
+		screenKind,
 		triStateLabels,
 		type EditionForm,
 		type FormIssue,
@@ -65,7 +66,7 @@
 		bind:value={form.barcode}
 		error={errorFor('barcode')}
 	/>
-	{#if kind === 'movie'}
+	{#if screenKind(kind)}
 		<Field label="Nośnik" required requiredLabel="Wymagane" error={errorFor('format')}>
 			{#snippet control(c)}
 				<Select

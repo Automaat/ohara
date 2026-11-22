@@ -99,3 +99,43 @@ func TestTitleSearch(t *testing.T) {
 		})
 	}
 }
+
+func TestTVTitleSearch(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		searcher *fakeSearcher
+		status   int
+		results  int
+	}{
+		{name: "without a TMDB key", status: http.StatusServiceUnavailable},
+		{name: "every season of the shows found", searcher: &fakeSearcher{n: 25}, status: http.StatusOK, results: 25},
+		{name: "capped at forty seasons", searcher: &fakeSearcher{n: 60}, status: http.StatusOK, results: 40},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			h := &lookup.SearchHandler{Searchers: map[string]lookup.TextSearcher{"movie": &fakeSearcher{n: 1}}}
+			if tt.searcher != nil {
+				h.Searchers["tv"] = tt.searcher
+			}
+			r := chi.NewRouter()
+			h.Mount(r)
+			rec := httptest.NewRecorder()
+			q := url.Values{"kind": {"tv"}, "q": {"Dark"}}
+			r.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/search?"+q.Encode(), http.NoBody))
+			if rec.Code != tt.status {
+				t.Fatalf("status %d, want %d: %s", rec.Code, tt.status, rec.Body)
+			}
+			if tt.status != http.StatusOK {
+				return
+			}
+			var res lookup.SearchResult
+			if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil || len(res.Candidates) != tt.results {
+				t.Fatalf("body %s, err %v", rec.Body, err)
+			}
+			for _, c := range res.Candidates {
+				if c.Type != "tv" {
+					t.Fatalf("candidate = %+v", c)
+				}
+			}
+		})
+	}
+}

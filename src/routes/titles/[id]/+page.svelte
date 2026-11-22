@@ -55,7 +55,7 @@
 		editionName,
 		finishAction,
 		finishDay,
-		finishedLabels,
+		finishedLabel,
 		finishedLine,
 		finishPayload,
 		noRating,
@@ -740,7 +740,7 @@
 
 	<Modal
 		bind:open={finishSheet}
-		title={finishedLabels[t.kind]}
+		title={finishedLabel(t.kind)}
 		closeLabel="Zamknij"
 		busy={finishing}
 	>

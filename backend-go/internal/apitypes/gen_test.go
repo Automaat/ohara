@@ -194,7 +194,7 @@ func TestOharaKeepsTheSPAsUnionsAndNullability(t *testing.T) {
 	}
 	for _, want := range []string{
 		"export type CopyStatus = 'owned' | 'wishlist' | 'sold' | 'ordered';\n",
-		"export type Kind = 'movie' | 'book' | 'music';\n",
+		"export type Kind = 'movie' | 'book' | 'music' | 'tv';\n",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("output lacks %q", want)

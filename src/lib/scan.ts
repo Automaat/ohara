@@ -12,6 +12,9 @@ import {
 	copyPayload,
 	displayName,
 	formatFits,
+	parseSeason,
+	screenKind,
+	seasonName,
 	bindingLabels,
 	formatLabels,
 	packagingLabels,
@@ -58,9 +61,10 @@ export function candidateParts(c: Candidate): { name: string; details: string[] 
 	let name = displayName({
 		name: t.name,
 		polish_title: t.polish_title ?? null,
-		original_title: t.original_title ?? null
+		original_title: t.original_title ?? null,
+		season: t.season
 	});
-	if (c.type !== 'movie' && t.authors?.length) name = `${t.authors.join(', ')} – ${name}`;
+	if (!screenKind(c.type) && t.authors?.length) name = `${t.authors.join(', ')} – ${name}`;
 	const details: string[] = [];
 	if (c.type !== 'music') {
 		const year = t.year ?? c.edition.year;
@@ -92,7 +96,9 @@ export function candidateLabel(c: Candidate): string {
 export const searchHints: Record<Kind, string> = {
 	movie: 'Tytuł filmu, np. Łowca androidów. Wybrany film uzupełni pozycję.',
 	book: 'Tytuł i autor, np. Solaris Lem. Wybrana książka uzupełni pozycję.',
-	music: 'Wykonawca i tytuł, np. Taco Hemingway 1-800-Oświecenie. Wybrane wydanie uzupełni pozycję.'
+	music:
+		'Wykonawca i tytuł, np. Taco Hemingway 1-800-Oświecenie. Wybrane wydanie uzupełni pozycję.',
+	tv: 'Tytuł serialu, np. Dark. Wybrany sezon uzupełni pozycję.'
 };
 
 /** What the search tells the user when its source is off or down. */
@@ -367,6 +373,8 @@ export async function resolveScan(
 export type QuickForm = {
 	kind: Kind;
 	name: string;
+	/** A TV title's season, 0 for specials; empty or absent for other kinds. */
+	season?: string;
 	format: Format | '';
 	binding: Binding | '';
 	packaging: Packaging[];
@@ -424,6 +432,7 @@ export function quickForm(
 	return {
 		kind: candidate?.type ?? (isBookBarcode(barcode) ? 'book' : 'movie'),
 		name: candidate?.title.name ?? '',
+		season: candidate?.title.season?.toString(),
 		format: candidate?.edition.format ?? '',
 		binding: candidate?.edition.binding ?? '',
 		packaging: [...(candidate?.edition.packaging ?? [])],
@@ -508,8 +517,10 @@ export function scanTitlePayload(f: QuickForm, candidate: Candidate | null): Par
 	const name = trimSpace(f.name.replaceAll('\0', ''));
 	if (!name) return { ok: false, issue: { field: 'name', message: 'Podaj tytuł.' } };
 	const t = candidate?.type === f.kind ? candidate.title : null;
-	const movie = f.kind === 'movie';
+	const movie = screenKind(f.kind);
 	const book = f.kind === 'book';
+	const season = parseSeason(f.kind, f.season ?? '');
+	if (!season.ok) return season;
 	return {
 		ok: true,
 		value: {
@@ -519,6 +530,7 @@ export function scanTitlePayload(f: QuickForm, candidate: Candidate | null): Par
 			polish_title: fitText(t?.polish_title),
 			year: fitYear(t?.year),
 			tmdb_id: movie ? fitID(t?.tmdb_id) : null,
+			season: season.value ?? undefined,
 			authors: movie ? [] : fitAuthors(t?.authors),
 			bn_id: book ? fitText(t?.bn_id) : null,
 			openlibrary_id: book ? fitText(t?.openlibrary_id) : null,
@@ -537,7 +549,7 @@ export function scanEditionPayload(
 	barcode: string,
 	titleID: number
 ): Parsed<EditionPayload> {
-	const movie = f.kind === 'movie';
+	const movie = screenKind(f.kind);
 	const music = f.kind === 'music';
 	if ((movie || music) && !formatFits(f.kind, f.format)) {
 		return { ok: false, issue: { field: 'format', message: 'Wybierz nośnik.' } };
@@ -662,10 +674,15 @@ export type SaveTarget =
 	| { kind: 'owned'; edition: EditionDetail }
 	| { kind: 'new'; barcode: string; candidate: Candidate | null };
 
-async function existingTitle(fetchFn: typeof fetch, tmdbID: number | null): Promise<Title | null> {
-	if (tmdbID === null) return null;
-	const found = await request<Title[]>(fetchFn, 'GET', `/api/titles?tmdb_id=${tmdbID}`);
-	return found[0] ?? null;
+/** The title of body's kind with its TMDB ID and, for a TV title, its season. */
+async function existingTitle(fetchFn: typeof fetch, body: TitlePayload): Promise<Title | null> {
+	if (body.tmdb_id == null) return null;
+	const found = await request<Title[]>(fetchFn, 'GET', `/api/titles?tmdb_id=${body.tmdb_id}`);
+	return (
+		found.find(
+			(t) => (t.kind ?? body.kind) === body.kind && (t.season ?? null) === (body.season ?? null)
+		) ?? null
+	);
 }
 
 async function editionByBarcode(fetchFn: typeof fetch, barcode: string): Promise<Edition | null> {
@@ -718,7 +735,7 @@ async function titleFor(
 	made: Made
 ): Promise<Title> {
 	if (!made.titleUnanswered) {
-		const reused = await existingTitle(fetchFn, body.tmdb_id);
+		const reused = await existingTitle(fetchFn, body);
 		if (reused) return reused;
 	}
 	made.titleUnanswered = true;
@@ -732,7 +749,7 @@ async function titleFor(
 		return title;
 	} catch (err) {
 		const taken = err instanceof ApiError && err.status === 409 && err.field === 'tmdb_id';
-		const reused = taken ? await existingTitle(fetchFn, body.tmdb_id) : null;
+		const reused = taken ? await existingTitle(fetchFn, body) : null;
 		if (!reused) throw err;
 		made.titleUnanswered = false;
 		return reused;
@@ -766,14 +783,14 @@ export async function saveScan(
 	made: Made = newMade()
 ): Promise<Saved> {
 	const saved = (
-		title: Pick<Title, 'id' | 'name' | 'kind' | 'cover_url'>,
+		title: Pick<Title, 'id' | 'name' | 'kind' | 'cover_url' | 'season'>,
 		edition: Edition,
 		copy: Copy
 	): Saved => {
 		const createdEdition = made.editions.includes(edition.id);
 		return {
 			titleID: title.id,
-			titleName: title.name,
+			titleName: seasonName(title.name, title.season),
 			kind: title.kind,
 			editionID: edition.id,
 			edition,

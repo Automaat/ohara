@@ -41,12 +41,14 @@ type Holding struct {
 	DiscogsReleaseID *int64
 }
 
-// Holdings returns every edition the collection owns, oldest first.
+// Holdings returns every edition the collection owns, oldest first, but
+// those of TV series, which no source is asked to price.
 func (s *Store) Holdings(ctx context.Context) ([]Holding, error) {
 	rows, err := s.pool.Query(ctx, `SELECT e.id, t.id, t.kind, t.name, t.original_title,
 			t.polish_title, t.authors, e.format, e.barcode, e.discogs_release_id
 		FROM edition e JOIN title t ON t.id = e.title_id
 		WHERE EXISTS (SELECT 1 FROM copy c WHERE c.edition_id = e.id AND c.status = 'owned')
+		  AND t.kind <> 'tv'
 		ORDER BY e.id`)
 	if err != nil {
 		return nil, fmt.Errorf("holdings: %w", err)
@@ -263,7 +265,7 @@ func copies(ctx context.Context, q querier, titleID int64) ([]CopyValue, error) 
 		args = append(args, titleID)
 		byTitle = ` AND t.id = $1`
 	}
-	rows, err := q.Query(ctx, `SELECT c.id, e.id, t.id, t.name, t.kind, e.format, e.barcode,
+	rows, err := q.Query(ctx, `SELECT c.id, e.id, t.id, t.name, t.season, t.kind, e.format, e.barcode,
 			c.price_cents, `+collection.CoverURL+`, e.discogs_release_id, c.condition
 		FROM copy c JOIN edition e ON e.id = c.edition_id JOIN title t ON t.id = e.title_id
 		WHERE c.status = 'owned'`+byTitle+`
@@ -273,7 +275,7 @@ func copies(ctx context.Context, q querier, titleID int64) ([]CopyValue, error) 
 	}
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (CopyValue, error) {
 		var c CopyValue
-		err := row.Scan(&c.CopyID, &c.EditionID, &c.TitleID, &c.TitleName, &c.Kind, &c.Format,
+		err := row.Scan(&c.CopyID, &c.EditionID, &c.TitleID, &c.TitleName, &c.Season, &c.Kind, &c.Format,
 			&c.Barcode, &c.PriceCents, &c.CoverURL, &c.DiscogsReleaseID, &c.Condition)
 		return c, err
 	})

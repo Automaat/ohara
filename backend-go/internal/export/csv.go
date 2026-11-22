@@ -17,6 +17,7 @@ import (
 var (
 	kindLabels = map[string]string{
 		collection.KindMovie: "Film", collection.KindBook: "Książka", collection.KindMusic: "Muzyka",
+		collection.KindTV: "Serial",
 	}
 	formatLabels = map[string]string{
 		"dvd": "DVD", "bluray": "Blu-ray", "uhd": "4K UHD", "cd": "CD", "vinyl": "Winyl", "cassette": "Kaseta",
@@ -93,10 +94,19 @@ func writeCSV(w io.Writer, titles []Title) error {
 // titleCells are the cells of the title's columns.
 func titleCells(t *Title) []string {
 	return []string{
-		label(kindLabels, t.Kind), t.Name, deref(t.OriginalTitle), deref(t.PolishTitle),
+		label(kindLabels, t.Kind), titleName(t), deref(t.OriginalTitle), deref(t.PolishTitle),
 		strings.Join(t.Authors, ", "), intText(t.Year), strings.Join(t.Tags, ", "),
 		intText(t.Rating),
 	}
+}
+
+// titleName is a title's name as the app shows it: a TV season's with
+// its number, "Dark · sezon 2".
+func titleName(t *Title) string {
+	if t.Season == nil {
+		return t.Name
+	}
+	return t.Name + " · sezon " + strconv.Itoa(*t.Season)
 }
 
 // titleRow is the line of a title without copies: the rest is blank.

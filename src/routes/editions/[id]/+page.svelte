@@ -26,6 +26,7 @@
 		editionSummary,
 		editionToForm,
 		formatPLN,
+		screenKind,
 		statusLabels,
 		triStateLabels,
 		type Copy,
@@ -319,7 +320,7 @@
 			<p class="notes">{d.notes}</p>
 		{/if}
 
-		{#if d.barcode || d.discogs_release_id || d.title.kind === 'movie'}
+		{#if d.barcode || d.discogs_release_id || screenKind(d.title.kind)}
 			<Section title="Szczegóły wydania">
 				{#if d.barcode}
 					<div class="barcode">
@@ -337,7 +338,7 @@
 						{/key}
 					</div>
 				{/if}
-				{#if d.title.kind === 'movie'}
+				{#if screenKind(d.title.kind)}
 					<FactList
 						layout="inline"
 						facts={[

@@ -148,7 +148,7 @@ func (s *Store) RefreshMarkets(ctx context.Context, wants []Want) error {
 }
 
 // Wants returns every wishlist copy with its edition and title, oldest
-// first, and the market price of its title and format when it has a
+// first, but those of TV series, which the hunter does not look for, and the market price of its title and format when it has a
 // market percent.
 func (s *Store) Wants(ctx context.Context) ([]Want, error) {
 	markets, err := s.marketTable(ctx)
@@ -161,7 +161,7 @@ func (s *Store) Wants(ctx context.Context) ([]Want, error) {
 			e.packaging, e.pl_voiceover, e.pl_subtitles, e.binding
 		FROM copy c JOIN edition e ON e.id = c.edition_id JOIN title t ON t.id = e.title_id
 		`+marketJoin("e", 1)+`
-		WHERE c.status = 'wishlist' ORDER BY c.id`, markets.titles, markets.formats, markets.cents)
+		WHERE c.status = 'wishlist' AND t.kind <> 'tv' ORDER BY c.id`, markets.titles, markets.formats, markets.cents)
 	if err != nil {
 		return nil, fmt.Errorf("wants: %w", err)
 	}

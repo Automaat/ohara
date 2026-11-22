@@ -108,7 +108,8 @@ func matchesEdition(edition *EditionInput, candidate *lookup.EditionFields) bool
 
 func matchesTitle(title *TitleInput, candidate *lookup.TitleFields) bool {
 	if title.TMDBID != nil {
-		return candidate.TMDBID != nil && *title.TMDBID == *candidate.TMDBID
+		return candidate.TMDBID != nil && *title.TMDBID == *candidate.TMDBID &&
+			(title.Season == nil || candidate.Season != nil && *title.Season == *candidate.Season)
 	}
 	if title.Year != nil && candidate.Year != nil && *title.Year != *candidate.Year {
 		return false

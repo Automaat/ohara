@@ -17,9 +17,33 @@ export function searchBarcode(raw: string): string | null {
 	return checkDigitMatches(code) ? canonicalBarcode(code) : null;
 }
 
-/** What the server searches for: the normalized barcode, else the trimmed text. */
+/** The white space Go's strings.TrimSpace drops: unicode.IsSpace, U+0085 included, U+FEFF not. */
+const goSpace =
+	'[\\t\\n\\v\\f\\r \\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]';
+const goTrim = new RegExp(`^${goSpace}+|${goSpace}+$`, 'g');
+
+/**
+ * What the server searches for when the address carries the search: `collectionSearch` sends
+ * it trimmed, the handler normalizes a barcode, and the store trims anything else again by
+ * Go's rules.
+ */
 export function searchTerm(q: string): string {
-	return searchBarcode(q) ?? q.trim();
+	const sent = q.trim();
+	return searchBarcode(sent) ?? sent.replace(goTrim, '');
+}
+
+/**
+ * Lower case one character at a time, as PostgreSQL's `lower` maps each character on its own:
+ * a final capital sigma becomes σ, not ς, and a character whose lower case is longer keeps only
+ * its first.
+ */
+export function lowerCase(text: string): string {
+	let out = '';
+	for (const char of text) {
+		const lower = char.toLowerCase();
+		out += [...lower][0] ?? lower;
+	}
+	return out;
 }
 
 /**
@@ -27,17 +51,18 @@ export function searchTerm(q: string): string {
  * space apart, as `concat_ws` joins them; a missing title is left out, an empty field is not.
  */
 function searchedText(item: CollectionItem): string {
-	return [
-		item.name,
-		item.original_title,
-		item.polish_title,
-		(item.authors ?? []).join(' '),
-		item.label,
-		item.shop
-	]
-		.filter((field) => field !== null)
-		.join(' ')
-		.toLowerCase();
+	return lowerCase(
+		[
+			item.name,
+			item.original_title,
+			item.polish_title,
+			(item.authors ?? []).join(' '),
+			item.label,
+			item.shop
+		]
+			.filter((field) => field !== null)
+			.join(' ')
+	);
 }
 
 /**
@@ -49,7 +74,7 @@ export function filterCollection(
 	f: CollectionFilter
 ): CollectionItem[] {
 	const term = searchTerm(f.q);
-	const words = term.toLowerCase();
+	const words = lowerCase(term);
 	return items.filter(
 		(item) =>
 			(!f.kind || item.kind === f.kind) &&

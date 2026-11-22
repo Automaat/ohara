@@ -98,6 +98,15 @@ function tile(page: Page, name: string): Locator {
 		.filter({ has: page.getByRole('link', { name, exact: true }) });
 }
 
+/**
+ * Picks a status in the filter sheet: a phone's narrow sheet shows the segmented control as a
+ * select, a wide screen as radios.
+ */
+async function pickStatus(sheet: Locator, narrow: boolean, value: string, label: string) {
+	if (narrow) await sheet.getByRole('combobox', { name: 'Status' }).selectOption(value);
+	else await sheet.getByRole('radio', { name: label }).check();
+}
+
 function chip(page: Page, name: RegExp): Locator {
 	return page.getByRole('group', { name: 'Typ' }).getByRole('button', { name });
 }
@@ -276,6 +285,37 @@ for (const viewport of viewports) {
 			expect(Math.abs((await page.evaluate(() => window.scrollY)) - scrolled)).toBeLessThan(2);
 			await page.waitForLoadState('networkidle');
 			expect(sent.length, 'one refresh of the collection').toBeLessThanOrEqual(1);
+		});
+
+		test('a refresh outlives a switch to Bez egzemplarzy and back', async ({ page, request }) => {
+			const t = tag();
+			const first = `Pierwszy ${t}`;
+			const second = `Drugi ${t}`;
+			const opened = await seed(request, { kind: 'book', name: first });
+			await page.goto(`/?q=${t}`);
+			await press(tile(page, first).getByRole('link'));
+			await expect(page).toHaveURL(new RegExp(`/titles/${opened.titleID}$`));
+			await seed(request, { kind: 'book', name: second });
+
+			let release: () => void = () => undefined;
+			const held = new Promise<void>((resolve) => (release = resolve));
+			await page.route('**/api/collection', async (route) => {
+				await held;
+				await route.continue();
+			});
+			await page.goBack();
+			await expect(tile(page, first)).toBeVisible();
+			await expect(tile(page, second)).toHaveCount(0);
+
+			await press(page.getByRole('button', { name: /^Sortowanie i filtry/ }));
+			const sheet = page.getByRole('dialog', { name: 'Sortowanie i filtry' });
+			await pickStatus(sheet, viewport.touch, 'none', 'Bez egzemplarzy');
+			await expect(page).toHaveURL(/status=none/);
+			await pickStatus(sheet, viewport.touch, 'all', 'Każdy');
+			await expect(page).not.toHaveURL(/status=/);
+			await press(sheet.getByRole('button', { name: 'Gotowe' }));
+			release();
+			await expect(tile(page, second)).toBeVisible();
 		});
 
 		test('empty and failed loads keep their states', async ({ page }) => {

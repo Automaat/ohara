@@ -110,8 +110,8 @@
 	let loading = $state(true);
 	let sheetOpen = $state(false);
 	let seq = 0;
-	/** Counts the collections shown, so an answer asked for before a newer one never replaces it. */
-	let overviews = 0;
+	/** Set once the reader leaves, so an answer that arrives later changes nothing kept. */
+	let left = false;
 	let restoreScroll: [number, number] | undefined;
 	let pendingCollection: Promise<CollectionView> | undefined;
 	let pendingQueue: Promise<void> | undefined;
@@ -137,15 +137,23 @@
 	function showCollection(full: CollectionView) {
 		collection = full;
 		overview = overviewOf(full);
-		overviews += 1;
 		keepOverview(overview);
 	}
 
-	/** Asks for the whole collection; an ask while one is on its way shares its answer. */
+	/**
+	 * Asks for the whole collection and shows the answer whatever the filter lists by then, so a
+	 * refresh that a switch to "Bez egzemplarzy" and back outlived still lands. An ask while one
+	 * is on its way shares its answer.
+	 */
 	function askCollection(): Promise<CollectionView> {
-		pendingCollection ??= request<CollectionView>(fetch, 'GET', '/api/collection').finally(() => {
-			pendingCollection = undefined;
-		});
+		pendingCollection ??= request<CollectionView>(fetch, 'GET', '/api/collection')
+			.then((full) => {
+				if (!left) showCollection(full);
+				return full;
+			})
+			.finally(() => {
+				pendingCollection = undefined;
+			});
 		return pendingCollection;
 	}
 
@@ -155,11 +163,8 @@
 	 */
 	function loadOverview(again = false) {
 		if (overview && !again) return;
-		const asked = overviews;
 		return askCollection().then(
-			(full) => {
-				if (overviews === asked) showCollection(full);
-			},
+			() => undefined,
 			() => undefined
 		);
 	}
@@ -174,7 +179,7 @@
 	// newer visit kept.
 	onDestroy(() => {
 		seq += 1;
-		overviews += 1;
+		left = true;
 		if (listsTitles) {
 			if (uncopied) keepListing({ url: '/api/titles', titles: uncopied, pending: loading });
 		} else if (collection) {
@@ -287,7 +292,7 @@
 			} else {
 				const got = await askCollection();
 				if (mine !== seq) return;
-				show({ url: '/api/collection', view: got });
+				keepListing({ url: '/api/collection', view: got });
 			}
 			failure = null;
 		} catch (err) {

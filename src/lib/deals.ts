@@ -225,6 +225,7 @@ export const sourceLabels: Record<DealSource, string> = {
 	olx: 'OLX',
 	bluedvd: 'BlueDVD',
 	winylownia: 'Winylownia',
+	swiatksiazki: 'Świat Książki',
 	pepper: 'Pepper',
 	tezeusz: 'Tezeusz'
 };

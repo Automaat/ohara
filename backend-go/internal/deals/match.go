@@ -1182,13 +1182,13 @@ func pick(wants []Want, l *Listing, rules Rules, titles Titles) *Want {
 }
 
 // pickOf is pick among the wants of kinds, or among every want when kinds
-// is nil.
+// is nil. A listing with Kinds also goes to no want of another kind.
 func pickOf(wants []Want, kinds []string, l *Listing, rules Rules, titles Titles) *Want {
 	text := NewListingText(l.Title, rules)
 	var first *Want
 	for i := range wants {
 		w := &wants[i]
-		if kinds != nil && !slices.Contains(kinds, w.Kind) {
+		if kinds != nil && !slices.Contains(kinds, w.Kind) || l.Kinds != nil && !slices.Contains(l.Kinds, w.Kind) {
 			continue
 		}
 		if !text.Belongs(w, titles) {

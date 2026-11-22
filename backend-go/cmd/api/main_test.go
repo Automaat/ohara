@@ -34,12 +34,13 @@ type upstreams struct {
 func newUpstreams(t *testing.T) *upstreams {
 	t.Helper()
 	fixtures := map[string]string{
-		"/olx/":        "../../internal/deals/testdata/olx.json",
-		"/bluedvd/":    "../../internal/deals/testdata/bluedvd.json",
-		"/winylownia/": "../../internal/deals/testdata/winylownia.html",
-		"/pepper":      "../../internal/deals/testdata/pepper.xml",
-		"/tezeusz/":    "../../internal/deals/testdata/tezeusz.html",
-		"/skupszop":    "",
+		"/olx/":          "../../internal/deals/testdata/olx.json",
+		"/bluedvd/":      "../../internal/deals/testdata/bluedvd.json",
+		"/winylownia/":   "../../internal/deals/testdata/winylownia.html",
+		"/swiatksiazki/": "../../internal/deals/testdata/swiatksiazki.json",
+		"/pepper":        "../../internal/deals/testdata/pepper.xml",
+		"/tezeusz/":      "../../internal/deals/testdata/tezeusz.html",
+		"/skupszop":      "",
 	}
 	u := &upstreams{}
 	u.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -69,6 +70,8 @@ func newUpstreams(t *testing.T) *upstreams {
 	t.Setenv("OHARA_BLUEDVD", "true")
 	t.Setenv("OHARA_DEALS_WINYLOWNIA_URL", u.srv.URL+"/winylownia/search.php")
 	t.Setenv("OHARA_WINYLOWNIA", "true")
+	t.Setenv("OHARA_DEALS_SWIATKSIAZKI_URL", u.srv.URL+"/swiatksiazki/graphql")
+	t.Setenv("OHARA_SWIATKSIAZKI", "true")
 	t.Setenv("OHARA_DEALS_PEPPER_URL", u.srv.URL+"/pepper")
 	t.Setenv("OHARA_DEALS_TEZEUSZ_URL", u.srv.URL+"/tezeusz")
 	t.Setenv("OHARA_TEZEUSZ", "")
@@ -139,7 +142,7 @@ func sample(body, series string) (float64, bool) {
 func checkSources(t *testing.T) {
 	t.Helper()
 	for _, s := range metricSources(t, "ohara_source_") {
-		if !slices.Contains([]string{"bluedvd", "olx", "pepper", "tezeusz", "winylownia", "skupszop"}, s) {
+		if !slices.Contains([]string{"bluedvd", "olx", "pepper", "swiatksiazki", "tezeusz", "winylownia", "skupszop"}, s) {
 			t.Errorf("metrics name source %q", s)
 		}
 	}
@@ -156,23 +159,26 @@ func TestHunterAsksOnlyItsSources(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if got, paths := u.asked(); !slices.Equal(got, []string{"olx", "bluedvd", "winylownia", "pepper", "tezeusz"}) {
-		t.Fatalf("asked %v (paths %v), want olx, bluedvd, winylownia, pepper and tezeusz only", got, paths)
+	if got, paths := u.asked(); !slices.Equal(got, []string{"olx", "bluedvd", "winylownia", "swiatksiazki", "pepper", "tezeusz"}) {
+		t.Fatalf("asked %v (paths %v), want olx, bluedvd, winylownia, swiatksiazki, pepper and tezeusz only", got, paths)
 	}
 	if len(res.Errors) != 0 {
 		t.Fatalf("errors = %q", res.Errors)
 	}
-	if got := metricSources(t, "ohara_source_canary_ok"); !slices.Equal(got, []string{"bluedvd", "olx", "pepper", "tezeusz", "winylownia"}) {
-		t.Fatalf("canary series for %v, want bluedvd, olx, pepper, tezeusz and winylownia only", got)
+	if got := metricSources(t, "ohara_source_canary_ok"); !slices.Equal(got, []string{"bluedvd", "olx", "pepper", "swiatksiazki", "tezeusz", "winylownia"}) {
+		t.Fatalf("canary series for %v, want bluedvd, olx, pepper, swiatksiazki, tezeusz and winylownia only", got)
+	}
+	if got, ok := sample(scrape(t), `ohara_source_canary_ok{source="swiatksiazki"}`); !ok || got != 1 {
+		t.Fatalf("swiatksiazki canary = %v (exported %v), want 1", got, ok)
+	}
+	if got, ok := sample(scrape(t), `ohara_source_canary_ok{source="winylownia"}`); !ok || got != 1 {
+		t.Fatalf("winylownia canary = %v (exported %v), want 1", got, ok)
 	}
 	if got, ok := sample(scrape(t), `ohara_source_canary_ok{source="bluedvd"}`); !ok || got != 1 {
 		t.Fatalf("bluedvd canary = %v (exported %v), want 1", got, ok)
 	}
 	if v, _ := sample(scrape(t), `ohara_source_canary_ok{source="tezeusz"}`); v != 1 {
 		t.Fatalf("tezeusz canary = %v, want 1", v)
-	}
-	if v, _ := sample(scrape(t), `ohara_source_canary_ok{source="winylownia"}`); v != 1 {
-		t.Fatalf("winylownia canary = %v, want 1", v)
 	}
 	checkSources(t)
 }
@@ -188,8 +194,8 @@ func TestHunterWithoutTezeusz(t *testing.T) {
 	if _, err := h.Run(context.Background()); err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if got, paths := u.asked(); !slices.Equal(got, []string{"olx", "bluedvd", "winylownia", "pepper"}) {
-		t.Fatalf("asked %v (paths %v), want olx, bluedvd, winylownia and pepper only", got, paths)
+	if got, paths := u.asked(); !slices.Equal(got, []string{"olx", "bluedvd", "winylownia", "swiatksiazki", "pepper"}) {
+		t.Fatalf("asked %v (paths %v), want olx, bluedvd, winylownia, swiatksiazki and pepper only", got, paths)
 	}
 }
 
@@ -204,8 +210,24 @@ func TestHunterLeavesBlueDVDOutWhenTurnedOff(t *testing.T) {
 	if _, err := h.Run(context.Background()); err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if got, paths := u.asked(); !slices.Equal(got, []string{"olx", "winylownia", "pepper", "tezeusz"}) {
-		t.Fatalf("asked %v (paths %v), want olx, winylownia, pepper and tezeusz only", got, paths)
+	if got, paths := u.asked(); !slices.Equal(got, []string{"olx", "winylownia", "swiatksiazki", "pepper", "tezeusz"}) {
+		t.Fatalf("asked %v (paths %v), want olx, winylownia, swiatksiazki, pepper and tezeusz only", got, paths)
+	}
+}
+
+func TestHunterLeavesSwiatKsiazkiOutWhenTurnedOff(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	u := newUpstreams(t)
+	t.Setenv("OHARA_SWIATKSIAZKI", "false")
+	h, _, err := newHunter(pool, deals.NewPacer(0).Lane(), slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatalf("newHunter: %v", err)
+	}
+	if _, err := h.Run(context.Background()); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got, paths := u.asked(); !slices.Equal(got, []string{"olx", "bluedvd", "winylownia", "pepper", "tezeusz"}) {
+		t.Fatalf("asked %v (paths %v), want olx, bluedvd, winylownia, pepper and tezeusz only", got, paths)
 	}
 }
 
@@ -220,8 +242,8 @@ func TestHunterLeavesWinylowniaOutWhenTurnedOff(t *testing.T) {
 	if _, err := h.Run(context.Background()); err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if got, paths := u.asked(); !slices.Equal(got, []string{"olx", "bluedvd", "pepper", "tezeusz"}) {
-		t.Fatalf("asked %v (paths %v), want olx, bluedvd, pepper and tezeusz only", got, paths)
+	if got, paths := u.asked(); !slices.Equal(got, []string{"olx", "bluedvd", "swiatksiazki", "pepper", "tezeusz"}) {
+		t.Fatalf("asked %v (paths %v), want olx, bluedvd, swiatksiazki, pepper and tezeusz only", got, paths)
 	}
 }
 

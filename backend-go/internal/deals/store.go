@@ -45,7 +45,7 @@ const MaxAttempts = 5
 const alertWindow = `interval '7 days'`
 
 // sources are the price_observation sources this package writes.
-var sources = []string{"olx", "bluedvd", "winylownia", "pepper", "tezeusz"}
+var sources = []string{"olx", "bluedvd", "winylownia", "swiatksiazki", "pepper", "tezeusz"}
 
 // Store is the Postgres access layer for deal hunting.
 type Store struct {

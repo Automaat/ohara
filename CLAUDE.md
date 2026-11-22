@@ -184,7 +184,8 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   scanner's add forwards when the API would take them; the title form sends
   the two fields only when the reader changed them, so a form opened
   before another save gave the title its series keeps it. Kolekcja's
-  header links to `/series`, the list; a
+  desktop header links to `/series`, the list, and a phone's summary line
+  does ("Serie"), since a third header control would cover the heading; a
   series page (`/series/{id}`) shows the volumes, "Brakujące tomy" and the
   "Liczba tomów" field; the title form has "Seria" (suggesting the series
   of the title's kind) and "Tom"; the title page shows "<series> · tom <n>"

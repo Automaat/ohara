@@ -211,7 +211,7 @@
 	}
 	.volumes li {
 		display: grid;
-		grid-template-columns: 3rem minmax(0, 1fr);
+		grid-template-columns: auto minmax(0, 1fr);
 		gap: 0.75rem;
 		align-items: center;
 	}

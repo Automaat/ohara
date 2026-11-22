@@ -50,6 +50,16 @@ test('the series page lists the volumes and the missing ones, reached from Kolek
 	expect(total.ok(), await total.text()).toBe(true);
 
 	await page.goto('/');
+	await expect(page.getByRole('link', { name: 'Serie', exact: true })).toBeVisible();
+	const heading = page.getByRole('heading', { name: 'Kolekcja', level: 1 });
+	const headingBox = await heading.evaluate((h) => {
+		const range = document.createRange();
+		range.selectNodeContents(h);
+		return range.getBoundingClientRect().right;
+	});
+	const controls = await page.locator('.phone-add a, .phone-add button').all();
+	const boxes = await Promise.all(controls.map((control) => control.boundingBox()));
+	for (const box of boxes) if (box) expect(box.x).toBeGreaterThanOrEqual(headingBox);
 	await page.getByRole('link', { name: 'Serie', exact: true }).tap();
 	await expect(page).toHaveURL(/\/series$/);
 	const entry = page.getByRole('list', { name: 'Serie' }).getByRole('link', { name: saga });
@@ -82,6 +92,11 @@ test('the series page lists the volumes and the missing ones, reached from Kolek
 	);
 	await expect(missing.nth(1).getByRole('link', { name: `Tom piąty ${run}` })).toBeVisible();
 
+	const firstVolume = volumes.nth(0);
+	const cover = (await firstVolume.locator('.cover').boundingBox()) ?? { x: 0, width: 0 };
+	const label = (await firstVolume.getByText('Tom 1', { exact: true }).boundingBox()) ?? { x: 0 };
+	expect(cover.x + cover.width).toBeLessThanOrEqual(label.x);
+
 	const field = page.getByRole('textbox', { name: 'Liczba tomów' });
 	await expect(field).toHaveValue('6');
 	await field.fill('7');
@@ -113,6 +128,14 @@ test('the title form joins a series it suggests and the title page links to it',
 	await expect(series).toHaveValue(witcher);
 	await form.getByRole('textbox', { name: 'Tom' }).fill('2');
 	await form.getByRole('button', { name: 'Zapisz zmiany' }).tap();
+	await expect(form).toBeHidden();
+
+	await page.getByRole('button', { name: 'Więcej działań' }).tap();
+	await page.getByRole('menuitem', { name: 'Edytuj tytuł' }).tap();
+	await form.getByRole('textbox', { name: 'Tom' }).fill('1');
+	await form.getByRole('button', { name: 'Zapisz zmiany' }).tap();
+	await expect(form.getByText('Inny tytuł tej serii ma już ten numer tomu.')).toBeVisible();
+	await form.getByRole('button', { name: 'Anuluj' }).tap();
 	await expect(form).toBeHidden();
 
 	const link = page.getByRole('link', { name: `${witcher} · tom 2` });

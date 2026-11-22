@@ -67,6 +67,28 @@ func TestParseWooStoreAnswers(t *testing.T) {
 	}
 }
 
+func TestParseWooStoreLeavesOutProductsNotForSale(t *testing.T) {
+	body := `[
+		{"id": 1, "name": "Diuna", "prices": {"price": "4999", "currency_code": "PLN"}, "stock_availability": {}, "is_in_stock": false, "is_on_backorder": false},
+		{"id": 2, "name": "Diuna", "prices": {"price": "4999", "currency_code": "PLN"}, "stock_availability": {}, "is_in_stock": false},
+		{"id": 3, "name": "Diuna", "prices": {"price": "4999", "currency_code": "PLN"}, "stock_availability": {}, "is_in_stock": false, "is_on_backorder": true},
+		{"id": 4, "name": "Diuna", "prices": {"price": "4999", "currency_code": "PLN"}, "stock_availability": {}, "is_in_stock": true},
+		{"id": 5, "name": "Diuna", "prices": {"price": "4999", "currency_code": "PLN"}},
+		{"id": 6, "name": "Diuna", "prices": {"price": "4999", "currency_code": "PLN"}, "stock_availability": {"class": "out-of-stock"}, "is_in_stock": true}
+	]`
+	listings, err := parseWooStore("bluedvd", []byte(body))
+	if err != nil {
+		t.Fatalf("parseWooStore: %v", err)
+	}
+	var ids []string
+	for i := range listings {
+		ids = append(ids, listings[i].ExternalID)
+	}
+	if strings.Join(ids, ",") != "3,4,5" {
+		t.Fatalf("listed %v, want only the backorder, the in-stock and the unflagged products 3,4,5", ids)
+	}
+}
+
 func TestParseWooStoreLeavesOutOtherCurrencies(t *testing.T) {
 	body := `[
 		{"id": 1, "name": "Diuna &#8211; Blu-ray", "permalink": "https://shop.test/1", "prices": {"price": "4999", "currency_code": "EUR", "currency_minor_unit": 2}, "stock_availability": {"class": "in-stock"}},

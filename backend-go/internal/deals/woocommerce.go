@@ -49,7 +49,9 @@ type wooProduct struct {
 	Stock struct {
 		Class string `json:"class"`
 	} `json:"stock_availability"`
-	Categories []struct {
+	InStock     *bool `json:"is_in_stock"`
+	OnBackorder *bool `json:"is_on_backorder"`
+	Categories  []struct {
 		Slug string `json:"slug"`
 	} `json:"categories"`
 }
@@ -97,7 +99,7 @@ func parseWooStore(source string, body []byte) ([]Listing, error) {
 		}
 		products++
 		title := strings.TrimSpace(html.UnescapeString(p.Name))
-		if title == "" || p.Stock.Class == wooOutOfStock || p.Prices.CurrencyCode != "PLN" {
+		if title == "" || p.outOfStock() || p.Prices.CurrencyCode != "PLN" {
 			continue
 		}
 		cents, ok := wooCents(p.Prices)
@@ -133,6 +135,15 @@ func parseWooStore(source string, body []byte) ([]Listing, error) {
 		return nil, parseError{errors.New(source + ": response holds no product")}
 	}
 	return out, nil
+}
+
+// outOfStock reports whether the shop cannot sell p now: its stock class
+// says so, or it is neither in stock nor on backorder.
+func (p *wooProduct) outOfStock() bool {
+	if p.Stock.Class == wooOutOfStock {
+		return true
+	}
+	return p.InStock != nil && !*p.InStock && (p.OnBackorder == nil || !*p.OnBackorder)
 }
 
 // wooCents reads a Store API price, an integer string in the currency's

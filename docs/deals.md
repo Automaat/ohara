@@ -161,8 +161,9 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   search does not cover EANs. Each product becomes a listing: its ID, its
   name with HTML entities decoded, `permalink`, first image and
   `prices.price` (an integer in `prices.currency_minor_unit`, "14990" is
-  149,90 zł), condition new. Out-of-stock products and prices in another
-  currency than PLN are left out; preorders (`available-on-backorder`)
+  149,90 zł), condition new. Out-of-stock products (stock class
+  `out-of-stock`, or neither `is_in_stock` nor `is_on_backorder`) and prices
+  in another currency than PLN are left out; preorders (`available-on-backorder`)
   stay. An empty array is an answer without listings; any other body
   that holds no product (an object with an ID), `["maintenance"]` too,
   counts as `parse_error`. The reader (`deals.wooStore`) takes the source

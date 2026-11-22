@@ -138,29 +138,48 @@ jobs:
           # must not turn a PR green that a newer main made red.
           git fetch --no-tags --depth=1 origin +refs/heads/main:refs/remotes/origin/main
           main="$(git rev-parse --short origin/main)"
-          gh pr list --state open --limit 1000 --json number,baseRefName --jq '.[] | "\(.number) \(.baseRefName)"' |
-            while read -r number base; do
-              ref="refs/remotes/pr/$number"
-              base_ref="refs/remotes/pr-base/$number"
-              git fetch --no-tags --depth=1 origin "+refs/pull/$number/head:$ref" "+refs/heads/$base:$base_ref"
-              # Only what the PR adds to its base branch: a PR stacked on
-              # another one does not answer for its parent's migrations.
-              if git diff --quiet --diff-filter=A "$base_ref" "$ref" -- 'backend-go/internal/db/migrations/*.sql'; then
+          prs="$(gh pr list --state open --limit 1000 --json number,baseRefName --jq '.[] | "\(.number) \(.baseRefName)"')"
+          # Two PRs can share a head commit and so the status: a failure for
+          # either one must stay, whatever order they come in.
+          failed=" "
+          unchecked=0
+          while read -r number base; do
+            [[ -n "$number" ]] || continue
+            ref="refs/remotes/pr/$number"
+            base_ref="refs/remotes/pr-base/$number"
+            # A PR whose base branch is gone must not stop the others.
+            if ! git fetch --no-tags --depth=1 origin "+refs/pull/$number/head:$ref" "+refs/heads/$base:$base_ref"; then
+              echo "::warning::#$number: cannot fetch its head or its base branch $base; not checked"
+              unchecked=1
+              continue
+            fi
+            # Only what the PR adds to its base branch: a PR stacked on
+            # another one does not answer for its parent's migrations.
+            # No rename detection: a new migration whose SQL matches one the
+            # base has must still count as added.
+            if git diff --quiet --no-renames --diff-filter=A "$base_ref" "$ref" -- 'backend-go/internal/db/migrations/*.sql'; then
+              continue
+            fi
+            sha="$(git rev-parse "$ref")"
+            # Plain error lines: an annotation would mark main's run, not the PR.
+            if out="$(GITHUB_ACTIONS=false ./scripts/check-migrations.sh --since "$base_ref" origin/main "$ref" 2>&1)"; then
+              if [[ "$failed" == *" $sha "* ]]; then
+                echo "#$number: passes, but another PR on $sha failed; its status stays"
                 continue
               fi
-              # Plain error lines: an annotation would mark main's run, not the PR.
-              if out="$(GITHUB_ACTIONS=false ./scripts/check-migrations.sh --since "$base_ref" origin/main "$ref" 2>&1)"; then
-                state=success
-                description="No migration version taken on main $main"
-              else
-                state=failure
-                description="$(printf '%s\n' "$out" | sed -n '1s/^error: //p')"
-              fi
-              echo "#$number: $state: $out"
-              gh api --silent "repos/$GITHUB_REPOSITORY/statuses/$(git rev-parse "$ref")" \
-                -f state="$state" -f context="migrations against main" \
-                -f description="${description:0:140}" -f target_url="$run_url"
-            done
+              state=success
+              description="No migration version taken on main $main"
+            else
+              state=failure
+              failed+="$sha "
+              description="$(printf '%s\n' "$out" | sed -n '1s/^error: //p')"
+            fi
+            echo "#$number: $state: $out"
+            gh api --silent "repos/$GITHUB_REPOSITORY/statuses/$sha" \
+              -f state="$state" -f context="migrations against main" \
+              -f description="${description:0:140}" -f target_url="$run_url"
+          done <<<"$prs"
+          exit "$unchecked"
 
   lint-go:
     runs-on: ubuntu-26.04

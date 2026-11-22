@@ -118,6 +118,7 @@
 
 	.details {
 		display: grid;
+		flex: 1 1 auto;
 		gap: 0.0625rem;
 		min-inline-size: 0;
 	}
@@ -134,13 +135,17 @@
 		font-variant-numeric: tabular-nums;
 	}
 
+	/* A long change wraps at its spaces, or anywhere, within half the row, never widening it. */
 	.change {
+		flex: 0 1 auto;
+		min-inline-size: 0;
+		max-inline-size: 50%;
 		margin-inline-start: auto;
-		flex: none;
 		font-size: 0.875rem;
 		font-weight: 800;
 		font-variant-numeric: tabular-nums;
-		white-space: nowrap;
+		text-align: end;
+		overflow-wrap: anywhere;
 	}
 
 	.up {

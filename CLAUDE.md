@@ -326,7 +326,7 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   Gone listings stay stored and price as before; no request is sent per
   listing. Every hunt or valuation answer that holds a stored listing,
   priced or not, matching or not, moves its `last_offered_at` (null for
-  rows not offered since migration 0022); `last_seen_at` moves only with a
+  rows not offered since migration 0023); `last_seen_at` moves only with a
   recorded price. Stored listings stay forever unless
   `OHARA_PRICE_RETENTION_DAYS` is set (never below the valuation window):
   then the valuation runner, scheduled or not, deletes in batches of 1000

@@ -256,106 +256,119 @@ type outcome struct {
 }
 
 // FailureRequests is how many requests a cached provider gets for one
-// barcode within FailureWindow while none of them succeeds. Past that,
+// barcode within any FailureWindow while none of them succeeds. Past that,
 // lookups of the barcode answer with the last failure and ask the provider
-// nothing until the window ends, so taps on a code during an outage cannot
-// drain a source's quota. A failed answer is never cached, so without this
-// limit every lookup would ask again.
+// nothing until the oldest of those requests is a window old, so taps on a
+// code during an outage cannot drain a source's quota. A failed answer is
+// never cached, so without this limit every lookup would ask again.
 const (
 	FailureRequests = 3
 	FailureWindow   = 10 * time.Minute
 )
 
-// PausedError is a failure of a provider's source that made no request:
-// the provider holds the source back until its rate limit resets. A lookup
-// failure made of nothing but pauses does not count toward
-// FailureRequests, so the first lookup after the reset asks again.
+// PausedError is a failure of a provider's source that holds back its
+// requests for a rate limit. Resumed, the provider's own check, reports
+// whether the source takes requests again. Past FailureRequests, a lookup
+// whose last failure names a pause that was on when it failed asks the
+// provider once more when Resumed reports true, so a source is asked as
+// soon as its limit resets.
 type PausedError struct {
-	Err error
+	Err     error
+	Resumed func() bool
 }
 
 func (e *PausedError) Error() string { return e.Err.Error() }
 
 func (e *PausedError) Unwrap() error { return e.Err }
 
-func (*PausedError) paused() {}
+func (e *PausedError) resumed() bool { return e.Resumed != nil && e.Resumed() }
 
-// onlyPaused reports whether err is a PausedError or wraps or joins
-// nothing else.
-func onlyPaused(err error) bool {
-	if joined, ok := err.(interface{ Unwrap() []error }); ok {
-		errs := joined.Unwrap()
-		return len(errs) > 0 && !slices.ContainsFunc(errs, func(err error) bool { return !onlyPaused(err) })
+// anyResumed reports whether a pause err wraps or joins has resumed.
+func anyResumed(err error) bool {
+	if paused, ok := err.(interface{ resumed() bool }); ok {
+		return paused.resumed()
 	}
-	if _, ok := err.(interface{ paused() }); ok {
-		return true
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		return slices.ContainsFunc(joined.Unwrap(), anyResumed)
 	}
 	if next := errors.Unwrap(err); next != nil {
-		return onlyPaused(next)
+		return anyResumed(next)
 	}
 	return false
 }
 
+// pauseState reports whether err names a pause and whether one has
+// resumed. A Resumed that panics counts as not resumed.
+func (s *Service) pauseState(provider string, err error) (bool, bool) {
+	if _, ok := errors.AsType[*PausedError](err); !ok {
+		return false, false
+	}
+	resumed, perr := recovery.Call(s.logger, "lookup provider panicked", func() (bool, error) {
+		return anyResumed(err), nil
+	}, "provider", provider, "call", "resumed")
+	return true, perr == nil && resumed
+}
+
 // errNoRequest answers a lookup past FailureRequests whose counted requests
-// are all still in flight, so no failure is known yet.
-var errNoRequest = errors.New("not asked: earlier requests for this code are still pending")
+// are all still in flight or were given up on, so no failure is known.
+var errNoRequest = errors.New("not asked: earlier requests for this code are pending or were canceled")
 
 // failureLog counts, in memory, the requests a provider got for a barcode
-// since the first one in the current FailureWindow, until one succeeds.
+// in the last FailureWindow, until one succeeds.
 type failureLog struct {
 	mu sync.Mutex
 	at map[string]*failures
 }
 
 type failures struct {
-	since    time.Time
-	requests int
+	requests []time.Time
 	last     *outcome
+	// retry lets one request past the limit once a pause the last failure
+	// named resumes.
+	retry bool
 }
 
 // claim counts a request for provider and code at now. It reports false,
-// with the last failure known in the window (nil when none ended yet), when
-// FailureRequests were already counted there.
-func (l *failureLog) claim(provider, code string, now time.Time) (*outcome, bool) {
+// with the last failure known (nil when none ended yet), when
+// FailureRequests were counted in the last FailureWindow and no pause the
+// last failure named has resumed, as resumed reports.
+func (l *failureLog) claim(provider, code string, now time.Time, resumed func(error) bool) (*outcome, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	for key, f := range l.at {
-		if now.Sub(f.since) >= FailureWindow {
+		f.requests = slices.DeleteFunc(f.requests, func(at time.Time) bool { return now.Sub(at) >= FailureWindow })
+		if len(f.requests) == 0 {
 			delete(l.at, key)
 		}
 	}
 	key := provider + "\x00" + code
 	f, ok := l.at[key]
-	if !ok {
+	switch {
+	case !ok:
 		if l.at == nil {
 			l.at = map[string]*failures{}
 		}
-		l.at[key] = &failures{since: now, requests: 1}
+		l.at[key] = &failures{requests: []time.Time{now}}
 		return nil, true
-	}
-	if f.requests >= FailureRequests {
+	case len(f.requests) < FailureRequests:
+	case f.retry && f.last != nil && resumed(f.last.err):
+		f.retry = false
+	default:
 		return f.last, false
 	}
-	f.requests++
+	f.requests = append(f.requests, now)
 	return nil, true
 }
 
-// failed records a counted request's failure as the answer for lookups past
-// the limit.
-func (l *failureLog) failed(provider, code string, o outcome) {
+// failed records a counted request's failure as the answer for lookups
+// past the limit. retry is whether it names a pause still on, so a source
+// whose pause already ended when it failed lets nothing past the limit.
+func (l *failureLog) failed(provider, code string, o outcome, retry bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if f, ok := l.at[provider+"\x00"+code]; ok {
 		f.last = &o
-	}
-}
-
-// release uncounts a request that ended with its lookup's cancellation.
-func (l *failureLog) release(provider, code string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if f, ok := l.at[provider+"\x00"+code]; ok && f.requests > 0 {
-		f.requests--
+		f.retry = retry
 	}
 }
 
@@ -515,11 +528,19 @@ func (s *Service) query(ctx context.Context, e entry, code string, recheck bool,
 }
 
 // limitedRequest is request within the provider's FailureRequests for
-// code. A failure of a lookup the client gave up on says nothing about the
-// source, and a pause made no request, so neither counts.
+// code. A lookup already given up on asks nothing. One given up on after
+// its request went out counts, but its failure says nothing about the
+// source, so the last failure stays the one past the limit answers with.
 func (s *Service) limitedRequest(ctx context.Context, e entry, code string, deadline time.Time) ([]Candidate, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("fetch: %w", err)
+	}
 	name := e.provider.Name()
-	if last, ok := s.failures.claim(name, code, s.now()); !ok {
+	resumed := func(err error) bool {
+		_, ok := s.pauseState(name, err)
+		return ok
+	}
+	if last, ok := s.failures.claim(name, code, s.now(), resumed); !ok {
 		if last == nil {
 			return nil, errNoRequest
 		}
@@ -529,10 +550,9 @@ func (s *Service) limitedRequest(ctx context.Context, e entry, code string, dead
 	switch {
 	case err == nil:
 		s.failures.succeeded(name, code)
-	case ctx.Err() != nil, onlyPaused(err):
-		s.failures.release(name, code)
-	default:
-		s.failures.failed(name, code, outcome{candidates: cands, err: err})
+	case ctx.Err() == nil:
+		paused, ended := s.pauseState(name, err)
+		s.failures.failed(name, code, outcome{candidates: cands, err: err}, paused && !ended)
 	}
 	return cands, err
 }

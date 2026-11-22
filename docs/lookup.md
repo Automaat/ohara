@@ -115,16 +115,19 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   from the address once used, so a reload reads the cache.
 - A failed answer is never cached, so a cached provider (one with a
   TTL) gets at most `lookup.FailureRequests` (3) requests per code within
-  `lookup.FailureWindow` (10 minutes) while none succeeds, for every
+  any `lookup.FailureWindow` (10 minutes) while none succeeds, for every
   lookup path: a scan, a typed code, "Spróbuj ponownie" and "Szukaj
-  ponownie". Requests still in flight count. Past the limit the lookup
-  answers with that provider's last failure, partial candidates included,
-  without a request; the first lookup after the window asks again, and a
-  success clears the count. The count lives in memory, so a restart
-  clears it. A lookup the client gave up on does not count, and neither
-  does a failure made only of sources the provider skipped for their rate
-  limit (`lookup.PausedError`, the movie chain's paused UPCitemdb): the
-  provider already holds those back until their reset.
+  ponownie". Each request frees its slot a whole window after it was
+  made; requests still in flight count, and so does one whose lookup the
+  client gave up on after it went out (a lookup given up on before asks
+  nothing). Past the limit the lookup answers with that provider's last
+  failure, partial candidates included, without a request, and a success
+  clears the count. The count lives in memory, so a restart clears it.
+  A failure that names a source paused for its rate limit
+  (`lookup.PausedError`, the movie chain's UPCitemdb after a 429) lets
+  one more request past the limit once the provider reports the pause
+  over, so the first lookup after the reset asks again; a pause already
+  over when the request failed lets nothing past.
 - A music barcode no source knows falls back to a Discogs text search for
   Allegro's product name.
 - `GET /api/search?kind=&q=&barcode=&format=` searches by the title the

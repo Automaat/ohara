@@ -172,7 +172,7 @@ func (p *Provider) products(ctx context.Context, i int, s NameSource, code strin
 		return nil, fmt.Errorf("name source %d: %w", i, err)
 	}
 	if until, ok := p.pausedUntil(name); ok {
-		return nil, &lookup.PausedError{Err: fmt.Errorf("%s: %w, skipped until %s", name, ErrQuotaExceeded, until.UTC().Format(time.RFC3339))}
+		return nil, &lookup.PausedError{Err: fmt.Errorf("%s: %w, skipped until %s", name, ErrQuotaExceeded, until.UTC().Format(time.RFC3339)), Resumed: p.resumed(name)}
 	}
 	found, err := p.within(ctx, s, name, code)
 	if pe, ok := errors.AsType[*recovery.PanicError](err); ok {
@@ -198,6 +198,7 @@ func (p *Provider) within(ctx context.Context, s NameSource, name, code string) 
 		}, "source", name, "barcode", code)
 		if rl, ok := errors.AsType[*RateLimitError](err); ok {
 			p.pause(name, rl.Reset)
+			err = &lookup.PausedError{Err: err, Resumed: p.resumed(name)}
 		}
 		done <- answer{found, err}
 	}()
@@ -235,6 +236,15 @@ func (p *Provider) pause(name string, reset time.Time) {
 	}
 	if until.After(p.paused[name]) {
 		p.paused[name] = until
+	}
+}
+
+// resumed returns a check, for lookup.PausedError, of whether the source
+// is no longer paused.
+func (p *Provider) resumed(name string) func() bool {
+	return func() bool {
+		_, paused := p.pausedUntil(name)
+		return !paused
 	}
 }
 

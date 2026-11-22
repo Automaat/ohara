@@ -53,6 +53,24 @@ func (s *Store) Wants(ctx context.Context) ([]Want, error) {
 	})
 }
 
+// Titles returns every title, wished, owned or neither, for Outranks.
+func (s *Store) Titles(ctx context.Context) (Titles, error) {
+	rows, err := s.pool.Query(ctx, `SELECT id, kind, name, original_title, polish_title, authors
+		FROM title ORDER BY id`)
+	if err != nil {
+		return Titles{}, fmt.Errorf("titles: %w", err)
+	}
+	titles, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Want, error) {
+		var w Want
+		err := row.Scan(&w.TitleID, &w.Kind, &w.Name, &w.OriginalTitle, &w.PolishTitle, &w.Authors)
+		return w, err
+	})
+	if err != nil {
+		return Titles{}, fmt.Errorf("titles: %w", err)
+	}
+	return NewTitles(titles), nil
+}
+
 // Keyword is one editable matcher phrase; Kind is "reject" or "accept".
 type Keyword struct {
 	ID        int64     `json:"id"`

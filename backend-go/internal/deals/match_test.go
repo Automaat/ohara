@@ -69,14 +69,14 @@ func TestSoundtrackAlbumSurvivesTheRejectPhrase(t *testing.T) {
 	score := album("Interstellar Original Motion Picture Soundtrack", "Hans Zimmer", "cd")
 	film := Want{Kind: "movie", Name: "Interstellar", Format: new("dvd")}
 	l := &Listing{Title: "Hans Zimmer Interstellar Original Motion Picture Soundtrack CD", PriceCents: 2000}
-	if got := pick([]Want{film, score}, l, defaultRules); got == nil || got.Kind != "music" {
+	if got := pick([]Want{film, score}, l, defaultRules, Titles{}); got == nil || got.Kind != "music" {
 		t.Fatalf("pick = %+v, want the soundtrack album", got)
 	}
-	if got := pick([]Want{film}, &Listing{Title: "Interstellar soundtrack DVD"}, defaultRules); got != nil {
+	if got := pick([]Want{film}, &Listing{Title: "Interstellar soundtrack DVD"}, defaultRules, Titles{}); got != nil {
 		t.Fatalf("soundtrack listing matched the film: %+v", got)
 	}
 	kupie := &Listing{Title: "Kupię Hans Zimmer Interstellar Original Motion Picture Soundtrack CD"}
-	if got := pick([]Want{score}, kupie, defaultRules); got != nil {
+	if got := pick([]Want{score}, kupie, defaultRules, Titles{}); got != nil {
 		t.Fatalf("other reject phrases still apply: %+v", got)
 	}
 }
@@ -84,7 +84,7 @@ func TestSoundtrackAlbumSurvivesTheRejectPhrase(t *testing.T) {
 func TestPickSkipsOtherSequel(t *testing.T) {
 	wants := []Want{rocky("2"), rocky("3")}
 	wants[1].CopyID = 4
-	got := pick(wants, &Listing{Title: "Rocky 3 DVD", PriceCents: 1000}, Rules{})
+	got := pick(wants, &Listing{Title: "Rocky 3 DVD", PriceCents: 1000}, Rules{}, Titles{})
 	if got == nil || got.CopyID != 4 {
 		t.Fatalf("pick(Rocky 3 DVD) = %+v, want the Rocky 3 copy", got)
 	}
@@ -192,15 +192,15 @@ func TestPickPrefersAffordableWant(t *testing.T) {
 	wants := []Want{cheap, generous}
 
 	l := Listing{Title: "Blade Runner Blu-ray", PriceCents: 4500}
-	if got := pick(wants, &l, defaultRules); got == nil || got.CopyID != 2 {
+	if got := pick(wants, &l, defaultRules, Titles{}); got == nil || got.CopyID != 2 {
 		t.Fatalf("pick = %+v, want copy 2", got)
 	}
 	l.PriceCents = 9000
-	if got := pick(wants, &l, defaultRules); got == nil || got.CopyID != 1 {
+	if got := pick(wants, &l, defaultRules, Titles{}); got == nil || got.CopyID != 1 {
 		t.Fatalf("pick over every limit = %+v, want the first match", got)
 	}
 	l.Title = "Kupię Blade Runner Blu-ray"
-	if got := pick(wants, &l, defaultRules); got != nil {
+	if got := pick(wants, &l, defaultRules, Titles{}); got != nil {
 		t.Fatalf("pick rejected listing = %+v, want nil", got)
 	}
 }
@@ -241,5 +241,62 @@ func TestParsePrice(t *testing.T) {
 		if cents != tt.cents || ok != tt.ok {
 			t.Errorf("parsePrice(%q) = %d, %v; want %d, %v", tt.in, cents, ok, tt.cents, tt.ok)
 		}
+	}
+}
+
+func obcy() Want {
+	return Want{
+		CopyID: 11, EditionID: 110, TitleID: 1100, Kind: "movie", Name: "Obcy - 8. pasażer Nostromo",
+		OriginalTitle: new("Alien"), Format: new("dvd"),
+	}
+}
+
+func covenant() Want {
+	return Want{CopyID: 12, EditionID: 120, TitleID: 1200, Kind: "movie", Name: "Alien: Covenant", Format: new("dvd")}
+}
+
+func TestPickMostSpecific(t *testing.T) {
+	limited := obcy()
+	limited.MaxPriceCents = new(int64(2500))
+	gladiator := Want{CopyID: 13, TitleID: 1300, Kind: "movie", Name: "Gladiator", Format: new("dvd")}
+	gladiator2 := Want{TitleID: 1301, Kind: "movie", Name: "Gladiator 2"}
+	twin := obcy()
+	twin.CopyID, twin.TitleID, twin.MaxPriceCents = 14, 1400, new(int64(3000))
+	wall := album("The Wall", "Pink Floyd", "cd")
+	wallLive := Want{TitleID: 501, Kind: "music", Name: "The Wall Live", Authors: []string{"Roger Waters"}}
+	both := NewTitles([]Want{obcy(), covenant()})
+
+	tests := []struct {
+		name     string
+		wants    []Want
+		titles   Titles
+		title    string
+		cents    int64
+		wantCopy int64
+	}{
+		{"sequel goes to its own wish", []Want{obcy(), covenant()}, both, "Alien Covenant DVD", 2000, 12},
+		{"in either wish order", []Want{covenant(), obcy()}, both, "Alien: Covenant DVD", 2000, 12},
+		{"over an affordable limit", []Want{limited, covenant()}, both, "Alien Covenant DVD", 2000, 12},
+		{"over an affordable limit listed later", []Want{covenant(), limited}, both, "Alien Covenant DVD", 2000, 12},
+		{"known title without a wish", []Want{obcy()}, both, "Alien Covenant DVD", 2000, 0},
+		{"Polish name of the wanted film", []Want{obcy(), covenant()}, both, "Obcy 8. pasażer Nostromo DVD", 2000, 11},
+		{"original name of the wanted film", []Want{obcy(), covenant()}, both, "Alien DVD Ridley Scott 1979", 2000, 11},
+		{"without known titles", []Want{obcy()}, Titles{}, "Alien Covenant DVD", 2000, 11},
+		{"scattered words of a longer title", []Want{gladiator}, NewTitles([]Want{gladiator, gladiator2}), "Gladiator DVD 2 płyty", 2000, 13},
+		{"longer title as a phrase", []Want{gladiator}, NewTitles([]Want{gladiator, gladiator2}), "Gladiator 2 DVD", 2000, 0},
+		{"equally specific titles keep the affordable want", []Want{limited, twin}, NewTitles([]Want{limited, twin}), "Alien DVD", 2800, 14},
+		{"another artist's album", []Want{wall}, NewTitles([]Want{wall, wallLive}), "Pink Floyd The Wall Live CD", 2000, 5},
+		{"another artist's album it names", []Want{wall}, NewTitles([]Want{wall, wallLive}), "Pink Floyd Roger Waters The Wall Live CD", 2000, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := pick(tt.wants, &Listing{Title: tt.title, PriceCents: tt.cents}, defaultRules, tt.titles)
+			switch {
+			case tt.wantCopy == 0 && got != nil:
+				t.Fatalf("pick(%q) = copy %d, want none", tt.title, got.CopyID)
+			case tt.wantCopy != 0 && (got == nil || got.CopyID != tt.wantCopy):
+				t.Fatalf("pick(%q) = %+v, want copy %d", tt.title, got, tt.wantCopy)
+			}
+		})
 	}
 }

@@ -247,19 +247,11 @@ func TestRecordAsOfKeepsANewerMove(t *testing.T) {
 	}
 	covenant.CopyID = 0
 	l := Listing{Source: "olx", ExternalID: "1", Title: "Alien Covenant DVD", URL: "https://example.test/1", PriceCents: 3000}
-	now := func() time.Time {
-		t.Helper()
-		at, err := store.Now(ctx)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return at
-	}
-	if _, alerted, err := store.RecordAsOf(ctx, &l, &alien, true, now()); err != nil || !alerted {
+	if _, alerted, err := store.RecordAsOf(ctx, &l, &alien, true, dbNow(t, store)); err != nil || !alerted {
 		t.Fatalf("first hunt = %v, %v; want an alert", alerted, err)
 	}
-	staleHunt := now()
-	if _, _, err := store.RecordAsOf(ctx, &l, &covenant, false, now()); err != nil {
+	staleHunt := dbNow(t, store)
+	if _, _, err := store.RecordAsOf(ctx, &l, &covenant, false, dbNow(t, store)); err != nil {
 		t.Fatal(err)
 	}
 	if _, alerted, err := store.RecordAsOf(ctx, &l, &alien, true, staleHunt); err != nil || alerted {
@@ -274,7 +266,7 @@ func TestRecordAsOfKeepsANewerMove(t *testing.T) {
 		t.Fatalf("pending alerts = %+v, %v; want none", pending, err)
 	}
 
-	if _, _, err := store.RecordAsOf(ctx, &l, &alien, true, now()); err != nil {
+	if _, _, err := store.RecordAsOf(ctx, &l, &alien, true, dbNow(t, store)); err != nil {
 		t.Fatal(err)
 	}
 	got = stored(t, pool)
@@ -284,4 +276,100 @@ func TestRecordAsOfKeepsANewerMove(t *testing.T) {
 	if pending, err := store.PendingAlerts(ctx); err != nil || len(pending) != 1 || pending[0].TitleName != "Alien" {
 		t.Fatalf("pending alerts = %+v, %v; want the Alien alert", pending, err)
 	}
+}
+
+// TestRecordAsOfMovesAStaleRunsInsert has a hunt that read the wishlist
+// before an owned "Alien: Covenant" existed store a listing for the
+// "Alien" wish, whose alert then fails to send. A valuation run that read
+// its holdings after "Alien: Covenant" was added moves the listing there,
+// and the "Alien" alert no longer waits.
+func TestRecordAsOfMovesAStaleRunsInsert(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	ctx := context.Background()
+	store := NewStore(pool)
+	alien := wished(t, pool, Want{Kind: "movie", Name: "Alien", Format: new("dvd"), MaxPriceCents: new(int64(5000))})
+	staleHunt := dbNow(t, store)
+	covenant := wished(t, pool, Want{Kind: "movie", Name: "Alien: Covenant", Format: new("dvd")})
+	if _, err := pool.Exec(ctx, `UPDATE copy SET status = 'owned' WHERE id = $1`, covenant.CopyID); err != nil {
+		t.Fatal(err)
+	}
+	covenant.CopyID = 0
+	newerValuation := dbNow(t, store)
+	l := Listing{Source: "olx", ExternalID: "1", Title: "Alien Covenant DVD", URL: "https://example.test/1", PriceCents: 3000}
+	if _, alerted, err := store.RecordAsOf(ctx, &l, &alien, true, staleHunt); err != nil || !alerted {
+		t.Fatalf("stale hunt = %v, %v; want an alert", alerted, err)
+	}
+	if err := store.MarkFailed(ctx, stored(t, pool).ID, l.PriceCents, "telegram down"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.RecordAsOf(ctx, &l, &covenant, false, newerValuation); err != nil {
+		t.Fatal(err)
+	}
+	if got := stored(t, pool); !is(got.TitleID, covenant.TitleID) || got.AlertCopyID != nil {
+		t.Fatalf("listing = %+v, want it on title %d with no alert wish", got, covenant.TitleID)
+	}
+	if pending, err := store.PendingAlerts(ctx); err != nil || len(pending) != 0 {
+		t.Fatalf("pending alerts = %+v, %v; want none", pending, err)
+	}
+}
+
+// TestRecordAsOfAlertsAfterAStaleRunsInsert has a valuation run that read
+// its holdings before "Alien: Covenant" was wished for store a listing for
+// the owned "Alien". A hunt that read the wishlist after that moves it to
+// the "Alien: Covenant" wish and queues its alert at once.
+func TestRecordAsOfAlertsAfterAStaleRunsInsert(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	ctx := context.Background()
+	store := NewStore(pool)
+	alien := wished(t, pool, Want{Kind: "movie", Name: "Alien", Format: new("dvd")})
+	if _, err := pool.Exec(ctx, `UPDATE copy SET status = 'owned' WHERE id = $1`, alien.CopyID); err != nil {
+		t.Fatal(err)
+	}
+	alien.CopyID = 0
+	staleValuation := dbNow(t, store)
+	covenant := wished(t, pool, Want{Kind: "movie", Name: "Alien: Covenant", Format: new("dvd"), MaxPriceCents: new(int64(5000))})
+	newerHunt := dbNow(t, store)
+	l := Listing{Source: "olx", ExternalID: "1", Title: "Alien Covenant DVD", URL: "https://example.test/1", PriceCents: 3000}
+	if _, _, err := store.RecordAsOf(ctx, &l, &alien, false, staleValuation); err != nil {
+		t.Fatal(err)
+	}
+	if _, alerted, err := store.RecordAsOf(ctx, &l, &covenant, true, newerHunt); err != nil || !alerted {
+		t.Fatalf("newer hunt = %v, %v; want an alert", alerted, err)
+	}
+	if got := stored(t, pool); !is(got.TitleID, covenant.TitleID) || !is(got.WishlistCopyID, covenant.CopyID) {
+		t.Fatalf("listing = %+v, want it recorded for wish %d", got, covenant.CopyID)
+	}
+}
+
+// TestRecordAsOfMovesARunsOwnInsert has one run store a listing for
+// "Alien" and, after the seller renamed it, match it to "Alien: Covenant"
+// in a later query: the run moves its own listing.
+func TestRecordAsOfMovesARunsOwnInsert(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	ctx := context.Background()
+	store := NewStore(pool)
+	alien := wished(t, pool, Want{Kind: "movie", Name: "Alien", Format: new("dvd")})
+	covenant := wished(t, pool, Want{Kind: "movie", Name: "Alien: Covenant", Format: new("dvd")})
+	hunt := dbNow(t, store)
+	l := Listing{Source: "olx", ExternalID: "1", Title: "Alien DVD", URL: "https://example.test/1", PriceCents: 3000}
+	if _, _, err := store.RecordAsOf(ctx, &l, &alien, false, hunt); err != nil {
+		t.Fatal(err)
+	}
+	l.Title = "Alien Covenant DVD"
+	if _, _, err := store.RecordAsOf(ctx, &l, &covenant, false, hunt); err != nil {
+		t.Fatal(err)
+	}
+	if got := stored(t, pool); !is(got.TitleID, covenant.TitleID) || !is(got.WishlistCopyID, covenant.CopyID) {
+		t.Fatalf("listing = %+v, want it moved to wish %d", got, covenant.CopyID)
+	}
+}
+
+// dbNow is the database's time, as a run reads it before its data.
+func dbNow(t *testing.T, store *Store) time.Time {
+	t.Helper()
+	at, err := store.Now(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return at
 }

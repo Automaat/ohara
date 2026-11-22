@@ -154,15 +154,19 @@ const listingTitle = `coalesce((SELECT e.title_id FROM edition e WHERE e.id = pr
 // listing to another title than the one it belongs to.
 const otherTitle = listingTitle + ` <> EXCLUDED.title_id`
 
-// assignedLater holds in Record's upsert when another run stored or moved
-// the listing after the recording run read the wishlist and titles it
-// matched with ($9); never without that time.
-const assignedLater = `coalesce(price_observation.moved_at, price_observation.observed_at) > $9::timestamptz`
+// matchedAsOf is when the recording run read the wishlist and titles it
+// matched with: $9, or now for Record.
+const matchedAsOf = `coalesce($9::timestamptz, now())`
+
+// assignedFromNewer holds in Record's upsert when a run that read its data
+// after the recording run gave the listing its current title; never for a
+// listing stored before assigned_as_of.
+const assignedFromNewer = `price_observation.assigned_as_of > ` + matchedAsOf
 
 // movedTitle holds in Record's upsert when the listing moves to the
 // matched title: another title, matched from data at least as new as the
-// listing's current title.
-const movedTitle = `(` + otherTitle + ` AND NOT coalesce(` + assignedLater + `, false))`
+// data its current title was matched from.
+const movedTitle = `(` + otherTitle + ` AND NOT coalesce(` + assignedFromNewer + `, false))`
 
 // Now returns the database's current time, the time a run reads its
 // wishlist and titles at for RecordAsOf.
@@ -200,10 +204,12 @@ func (s *Store) Record(ctx context.Context, l *Listing, w *Want, alert bool) (bo
 }
 
 // RecordAsOf is Record for a run that matched l to w from the wishlist and
-// titles it read at asOf. A listing another run stored or moved after asOf
-// keeps its title and edition when w belongs to another title, since that
-// run matched it from newer data; it is then not recorded for w, and no
-// alert is queued for w.
+// titles it read at asOf; Record counts as a match from data read now. The
+// listing keeps, in assigned_as_of, the newest such time of a match to its
+// current title. A listing whose current title was matched from data read
+// after asOf keeps its title and edition when w belongs to another title,
+// since that match is newer; it is then not recorded for w, and no alert
+// is queued for w.
 func (s *Store) RecordAsOf(ctx context.Context, l *Listing, w *Want, alert bool, asOf time.Time) (bool, bool, error) {
 	return s.record(ctx, l, w, alert, &asOf)
 }
@@ -222,8 +228,8 @@ func (s *Store) record(ctx context.Context, l *Listing, w *Want, alert bool, asO
 	var isNew, dismissed, alerted bool
 	var titleID *int64
 	err = tx.QueryRow(ctx, `INSERT INTO price_observation
-			(source, external_id, price_cents, acquired_as, url, edition_id, title_id, raw)
-		VALUES ($1, $2, $3, $4, $5, nullif($6::bigint, 0), nullif($7::bigint, 0), $8)
+			(source, external_id, price_cents, acquired_as, url, edition_id, title_id, raw, assigned_as_of)
+		VALUES ($1, $2, $3, $4, $5, nullif($6::bigint, 0), nullif($7::bigint, 0), $8, `+matchedAsOf+`)
 		ON CONFLICT (source, external_id) WHERE external_id IS NOT NULL DO UPDATE SET
 			price_cents = EXCLUDED.price_cents,
 			last_seen_at = now(),
@@ -236,7 +242,10 @@ func (s *Store) record(ctx context.Context, l *Listing, w *Want, alert bool, asO
 				ELSE coalesce(price_observation.edition_id, EXCLUDED.edition_id) END,
 			title_id = CASE WHEN `+movedTitle+` THEN EXCLUDED.title_id
 				ELSE coalesce(price_observation.title_id, EXCLUDED.title_id) END,
-			moved_at = CASE WHEN `+movedTitle+` THEN now() ELSE price_observation.moved_at END
+			moved_at = CASE WHEN `+movedTitle+` THEN now() ELSE price_observation.moved_at END,
+			assigned_as_of = CASE WHEN `+movedTitle+` THEN `+matchedAsOf+`
+				WHEN `+otherTitle+` THEN price_observation.assigned_as_of
+				ELSE greatest(price_observation.assigned_as_of, `+matchedAsOf+`) END
 		RETURNING id, xmax = 0, dismissed_at IS NOT NULL, `+listingTitle,
 		l.Source, l.ExternalID, l.PriceCents, l.AcquiredAs, l.URL, w.EditionID, w.TitleID, raw, asOf).Scan(&id, &isNew, &dismissed, &titleID)
 	if err != nil {

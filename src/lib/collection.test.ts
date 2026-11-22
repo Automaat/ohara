@@ -791,6 +791,17 @@ describe('edition form', () => {
 		expect(asMovie.ok && asMovie.value.discogs_release_id).toBeNull();
 	});
 
+	it("keeps an audiobook's format when its run changes", () => {
+		const form = { ...editionToForm(edition), format: 'audiobook' as const, limited_to: '500' };
+		const parsed = editionPayload(form, 2, 'book');
+		expect(parsed.ok && parsed.value).toMatchObject({
+			format: 'audiobook',
+			binding: null,
+			limited_to: 500
+		});
+		expect(parsed.ok && ('disc_count' in parsed.value || 'color' in parsed.value)).toBe(false);
+	});
+
 	it('sends disc count, run and vinyl color only where they apply', () => {
 		const form = {
 			...editionToForm(edition),

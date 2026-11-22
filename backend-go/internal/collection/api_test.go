@@ -635,6 +635,13 @@ func TestEditionDetailRules(t *testing.T) {
 	}
 	a.copyOf(obj{"edition_id": vinyl.ID, "status": "owned"})
 	a.edition(obj{"title_id": book, "limited_to": 1_000_000})
+	var audiobook collection.Edition
+	a.mustDo(http.MethodPost, "/api/editions", obj{"title_id": book, "format": "audiobook", "limited_to": 300}, &audiobook, http.StatusCreated)
+	if deref(audiobook.Format) != "audiobook" || audiobook.LimitedTo == nil || *audiobook.LimitedTo != 300 {
+		t.Fatalf("limited audiobook edition = %+v", audiobook)
+	}
+	a.fails(http.MethodPost, "/api/editions", obj{"title_id": book, "format": "audiobook", "disc_count": 2}, http.StatusUnprocessableEntity, "disc_count")
+	a.fails(http.MethodPost, "/api/editions", obj{"title_id": book, "format": "audiobook", "color": "czerwony"}, http.StatusUnprocessableEntity, "color")
 	a.edition(obj{"title_id": movie, "format": "uhd", "disc_count": 99, "packaging": []string{"steelbook"}})
 	a.edition(obj{"title_id": show.ID, "format": "bluray", "disc_count": 3})
 	a.edition(obj{"title_id": album, "format": "cd", "color": "  "})

@@ -401,14 +401,14 @@ describe('valueCard', () => {
 			copy(),
 			[valued()],
 			[
-				day('2026-09-01', 6000),
-				day('2026-09-01', 99999, 99),
-				day('2026-10-01', 6000),
+				day('2026-11-18', 6000),
+				day('2026-11-18', 99999, 99),
+				day('2026-11-19', 6000),
 				day('2026-11-20', 7400),
 				day('2026-11-20', 1, 99)
 			]
 		);
-		expect(card?.trend).toEqual({ path: 'M4 32 L35.5 32 L88 4', end: { x: 88, y: 4 } });
+		expect(card?.trend).toEqual({ path: 'M4 32 L46 32 L88 4', end: { x: 88, y: 4 } });
 	});
 
 	it('leaves a gap on a day without a used value and ends on the last one', () => {
@@ -416,8 +416,8 @@ describe('valueCard', () => {
 			copy(),
 			[valued()],
 			[
-				day('2026-09-01', 6000),
-				day('2026-10-01', null),
+				day('2026-11-18', 6000),
+				day('2026-11-19', null),
 				day('2026-11-20', 7400),
 				day('2026-11-21', null)
 			]
@@ -426,6 +426,34 @@ describe('valueCard', () => {
 			path: 'M4 32 L4 32 M88 4 L88 4',
 			end: { x: 88, y: 4 }
 		});
+	});
+
+	it('leaves a gap on a day with no stored value', () => {
+		const card = valueCard(
+			copy(),
+			[valued()],
+			[day('2026-11-18', 6000), day('2026-11-19', 6000), day('2026-11-21', 7400)]
+		);
+		expect(card?.trend).toEqual({
+			path: 'M4 32 L32 32 M88 4 L88 4',
+			end: { x: 88, y: 4 }
+		});
+	});
+
+	it('keeps the trend of a copy whose prices left the window', () => {
+		const days = [day('2026-11-18', 6000), day('2026-11-19', 7400)];
+		const expired = valueCard(copy(), [valued({ floor: null, mid: null, ceiling: null })], days);
+		expect(expired).toEqual({
+			used: '—',
+			floor: '—',
+			ceiling: '—',
+			usedAt: null,
+			paidAt: null,
+			delta: null,
+			trend: { path: 'M4 32 L88 4', end: { x: 88, y: 4 } }
+		});
+		expect(valueCard(copy(), [], days)?.trend).toEqual(expired?.trend);
+		expect(valueCard(copy({ status: 'wishlist' }), [], days)).toBeNull();
 	});
 
 	it('shows no trend under two days with a used value', () => {

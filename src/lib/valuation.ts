@@ -394,7 +394,8 @@ export function sparkline(history: HistoryPoint[], width: number, height: number
 
 /**
  * A sparkline of one copy's used value over its stored days, drawn as `sparkline` draws the
- * collection's: days without a used value leave a gap. Null under two days with one.
+ * collection's. A day without a used value leaves a gap, and so does a day with no stored value
+ * at all, such as one the valuation did not run on. Null under two days with a used value.
  */
 export function copySparkline(
 	days: readonly CopyValueDay[],
@@ -405,10 +406,13 @@ export function copySparkline(
 ) {
 	const own = days.filter((d) => d.copy_id === copyID);
 	const start = own[0] ? dayTimestamp(own[0].day) : 0;
-	const rows = own.map((d) => ({
-		x: (dayTimestamp(d.day) - start) / dayMilliseconds,
-		mid: d.mid_cents === null ? null : d.mid_cents / 100
-	}));
+	const rows: { x: number; mid: number | null }[] = [];
+	for (const d of own) {
+		const x = Math.round((dayTimestamp(d.day) - start) / dayMilliseconds);
+		const previous = rows.at(-1);
+		if (previous && x > previous.x + 1) rows.push({ x: previous.x + 1, mid: null });
+		rows.push({ x, mid: d.mid_cents === null ? null : d.mid_cents / 100 });
+	}
 	return usedSparkline(rows, width, height, inset);
 }
 

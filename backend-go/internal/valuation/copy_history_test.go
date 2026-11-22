@@ -47,10 +47,10 @@ func copyDays(t *testing.T, pool *pgxpool.Pool) []CopyDay {
 }
 
 // TestSaveCopyDays stores one row per copy and day: a second save of the
-// same day replaces that day's rows (here after the book was sold, with a
-// new Blu-ray price and a copy deleted since it was valued), other days
-// stay, a copy no longer owned keeps its rows and deleting a copy deletes
-// them.
+// same day replaces the rows of the copies it values (here after the book
+// was sold, with a new Blu-ray price and a copy deleted since it was
+// valued), other days stay, a copy no longer owned keeps its rows, today's
+// included, and deleting a copy deletes them.
 func TestSaveCopyDays(t *testing.T) {
 	pool := dbtest.Migrated(t)
 	seed(t, pool)
@@ -61,10 +61,10 @@ func TestSaveCopyDays(t *testing.T) {
 	book := CopyValue{CopyID: 1, Floor: &Estimate{Cents: 537}, Mid: &Estimate{Cents: 2500}}
 	bluray := CopyValue{CopyID: 2, Mid: &Estimate{Cents: 4000}, Ceiling: &Estimate{Cents: 9000}}
 	unpriced := CopyValue{CopyID: 3}
-	if err := store.SaveCopyDays(ctx, yesterday, []CopyValue{book, bluray, unpriced}); err != nil {
+	if err := store.saveCopyDays(ctx, yesterday, []CopyValue{book, bluray, unpriced}); err != nil {
 		t.Fatalf("SaveCopyDays yesterday: %v", err)
 	}
-	if err := store.SaveCopyDays(ctx, today, []CopyValue{book, bluray, unpriced}); err != nil {
+	if err := store.saveCopyDays(ctx, today, []CopyValue{book, bluray, unpriced}); err != nil {
 		t.Fatalf("SaveCopyDays today: %v", err)
 	}
 	want := []CopyDay{
@@ -82,11 +82,12 @@ func TestSaveCopyDays(t *testing.T) {
 	exec(t, pool, `UPDATE copy SET status = 'wishlist', price_cents = NULL WHERE id = 1`)
 	gone := CopyValue{CopyID: 999, Mid: &Estimate{Cents: 100}}
 	bluray.Mid = &Estimate{Cents: 4200}
-	if err := store.SaveCopyDays(ctx, today, []CopyValue{bluray, unpriced, gone}); err != nil {
+	if err := store.saveCopyDays(ctx, today, []CopyValue{bluray, unpriced, gone}); err != nil {
 		t.Fatalf("second SaveCopyDays today: %v", err)
 	}
 	want = []CopyDay{
 		{CopyID: 1, Day: yesterday, FloorCents: grosze(537), MidCents: grosze(2500)},
+		{CopyID: 1, Day: today, FloorCents: grosze(537), MidCents: grosze(2500)},
 		{CopyID: 2, Day: yesterday, MidCents: grosze(4000), CeilingCents: grosze(9000)},
 		{CopyID: 2, Day: today, MidCents: grosze(4200), CeilingCents: grosze(9000)},
 		{CopyID: 3, Day: yesterday},
@@ -97,7 +98,7 @@ func TestSaveCopyDays(t *testing.T) {
 	}
 
 	exec(t, pool, `DELETE FROM copy WHERE id = 3`)
-	want = want[:3]
+	want = want[:4]
 	if got := copyDays(t, pool); !reflect.DeepEqual(got, want) {
 		t.Fatalf("after deleting copy 3 = %+v, want %+v", got, want)
 	}
@@ -137,6 +138,50 @@ func TestRunSavesCopyDays(t *testing.T) {
 	}
 }
 
+// TestSaveDayStoresCopiesWithTheDay stores the collection's day only with
+// its copies' days: when the copies cannot be stored, here because another
+// transaction holds a copy past the run's deadline, neither is.
+func TestSaveDayStoresCopiesWithTheDay(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	seed(t, pool)
+	store := NewStore(pool)
+	owned, sum, err := store.Valued(context.Background(), 90*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	holder, err := pool.Begin(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = holder.Rollback(context.Background()) }()
+	if _, err := holder.Exec(context.Background(), `SELECT id FROM copy WHERE id = 2 FOR UPDATE`); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if _, err := store.SaveDay(ctx, &sum, owned); err == nil {
+		t.Fatal("SaveDay with a held copy succeeded, want the deadline's error")
+	}
+	if err := holder.Rollback(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var days int
+	if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM valuation_history`).Scan(&days); err != nil {
+		t.Fatal(err)
+	}
+	if days != 0 || len(copyDays(t, pool)) != 0 {
+		t.Fatalf("after a failed save: %d collection days, copy days %+v, want none", days, copyDays(t, pool))
+	}
+
+	point, err := store.SaveDay(context.Background(), &sum, owned)
+	if err != nil {
+		t.Fatalf("SaveDay: %v", err)
+	}
+	if got := copyDays(t, pool); len(got) != len(owned) || got[0].Day != point.Day {
+		t.Fatalf("copy days = %+v, want one per owned copy on %s", got, point.Day)
+	}
+}
+
 // TestCopyHistoryAPI answers a title's copy days of the last 90 days,
 // owned copies or not, and none of another title's.
 func TestCopyHistoryAPI(t *testing.T) {
@@ -155,7 +200,7 @@ func TestCopyHistoryAPI(t *testing.T) {
 			{CopyID: 1, Mid: &Estimate{Cents: 2500 + int64(ago)}},
 			{CopyID: 2, Mid: &Estimate{Cents: 4000 + int64(ago)}},
 		}
-		if err := store.SaveCopyDays(ctx, dbDay(t, pool, ago), values); err != nil {
+		if err := store.saveCopyDays(ctx, dbDay(t, pool, ago), values); err != nil {
 			t.Fatal(err)
 		}
 	}

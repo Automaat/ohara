@@ -241,7 +241,8 @@ export const trendWidth = 92;
 export const trendHeight = 36;
 
 /**
- * The "Wartość dziś" card of an owned copy, or null when the valuation has no price for it. The
+ * The "Wartość dziś" card of an owned copy, or null when the valuation has no price for it and
+ * no trend. A copy whose prices ran out of the window keeps a card with dashes and its trend. The
  * bar runs from the buy-back offer (0 without one) to the new price, or to the higher of the used
  * value and the price paid when no shop sells it new; marks outside it sit at its ends. Without a
  * used value there is no used mark and no difference from the price paid. The trend follows the
@@ -253,8 +254,12 @@ export function valueCard(
 	history: readonly CopyValueDay[] = []
 ): ValueCard | null {
 	if (c.status !== 'owned') return null;
+	const trend = copySparkline(history, c.id, trendWidth, trendHeight);
 	const v = values.find((value) => value.copy_id === c.id);
-	if (!v || (!v.floor && !v.mid && !v.ceiling)) return null;
+	if (!v || (!v.floor && !v.mid && !v.ceiling)) {
+		if (!trend) return null;
+		return { used: '—', floor: '—', ceiling: '—', usedAt: null, paidAt: null, delta: null, trend };
+	}
 	const mid = v.mid?.cents ?? null;
 	const paid = c.price_cents;
 	const start = v.floor?.cents ?? 0;
@@ -268,7 +273,7 @@ export function valueCard(
 		usedAt: mid == null ? null : at(mid),
 		paidAt: paid == null ? null : at(paid),
 		delta: paid == null || mid == null ? null : `${signedZl(mid - paid)} względem zakupu`,
-		trend: copySparkline(history, c.id, trendWidth, trendHeight)
+		trend
 	};
 }
 

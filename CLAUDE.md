@@ -373,13 +373,15 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   as `GET /api/valuation` values them, from that title's prices only,
   with no summary or history. Each run also stores every owned copy's
   buy-back, used and new value of the day in `copy_value_history`, one
-  row per copy and day (null for a bound without prices); a later run
-  that day replaces the day's rows, a copy keeps its rows once no longer
-  owned and deleting it deletes them. No past days are filled in.
-  `GET /api/valuation/copies/history?title_id=` gives a title's copy
-  days of the last 90 days, and the title page's "Wartość dziś" draws
-  the copy's used value as a trend once two days have one, a day without
-  one leaving a gap. The summary's `gain` sums the used value
+  row per copy and day (null for a bound without prices), in one
+  transaction with the day's `valuation_history` row; a later run that
+  day replaces the rows of the copies it values, a copy keeps its rows,
+  today's too, once no longer owned and deleting it deletes them. No past
+  days are filled in. `GET /api/valuation/copies/history?title_id=` gives
+  a title's copy days of the last 90 days, and the title page's "Wartość
+  dziś" draws the copy's used value as a trend once two days have one, a
+  day without one or without a stored row leaving a gap; the card stays
+  with its trend when the copy's prices left the window. The summary's `gain` sums the used value
   and the price paid over the copies that have both; the Wartość hero's
   difference reads only that, and names its coverage when it counts
   fewer copies than the collection. History keeps no gain.

@@ -271,31 +271,75 @@ const historyColumns = `to_char(day, 'YYYY-MM-DD'), computed_at, copies, spent_c
 
 func scanHistory(row pgx.CollectableRow) (HistoryPoint, error) {
 	var p HistoryPoint
-	err := row.Scan(&p.Day, &p.ComputedAt, &p.Copies, &p.SpentCents,
-		&p.Floor.Cents, &p.Floor.Copies, &p.Mid.Cents, &p.Mid.Copies,
-		&p.Ceiling.Cents, &p.Ceiling.Copies, &p.LowConfidence)
+	err := row.Scan(historyFields(&p)...)
 	return p, err
 }
 
-// SaveDay stores s as today's value, replacing an earlier run's.
-func (s *Store) SaveDay(ctx context.Context, sum *Summary) (HistoryPoint, error) {
-	rows, err := s.pool.Query(ctx, `INSERT INTO valuation_history (day, copies, spent_cents,
-			floor_cents, floor_copies, mid_cents, mid_copies, ceiling_cents, ceiling_copies,
-			low_confidence)
-		VALUES (current_date, $1, $2, $3, $4, $5, $6, $7, $8, $9)
-		ON CONFLICT (day) DO UPDATE SET copies = EXCLUDED.copies, spent_cents = EXCLUDED.spent_cents,
-			floor_cents = EXCLUDED.floor_cents, floor_copies = EXCLUDED.floor_copies,
-			mid_cents = EXCLUDED.mid_cents, mid_copies = EXCLUDED.mid_copies,
-			ceiling_cents = EXCLUDED.ceiling_cents, ceiling_copies = EXCLUDED.ceiling_copies,
-			low_confidence = EXCLUDED.low_confidence, computed_at = now()
-		RETURNING `+historyColumns,
-		sum.Copies, sum.SpentCents, sum.Floor.Cents, sum.Floor.Copies, sum.Mid.Cents, sum.Mid.Copies,
-		sum.Ceiling.Cents, sum.Ceiling.Copies, sum.LowConfidence)
-	if err != nil {
-		return HistoryPoint{}, fmt.Errorf("save day: %w", err)
+// historyFields are the scan targets of p for historyColumns.
+func historyFields(p *HistoryPoint) []any {
+	return []any{
+		&p.Day, &p.ComputedAt, &p.Copies, &p.SpentCents,
+		&p.Floor.Cents, &p.Floor.Copies, &p.Mid.Cents, &p.Mid.Copies,
+		&p.Ceiling.Cents, &p.Ceiling.Copies, &p.LowConfidence,
 	}
-	p, err := pgx.CollectExactlyOneRow(rows, scanHistory)
-	if err != nil {
+}
+
+const saveDaySQL = `INSERT INTO valuation_history (day, copies, spent_cents,
+		floor_cents, floor_copies, mid_cents, mid_copies, ceiling_cents, ceiling_copies,
+		low_confidence)
+	VALUES (current_date, $1, $2, $3, $4, $5, $6, $7, $8, $9)
+	ON CONFLICT (day) DO UPDATE SET copies = EXCLUDED.copies, spent_cents = EXCLUDED.spent_cents,
+		floor_cents = EXCLUDED.floor_cents, floor_copies = EXCLUDED.floor_copies,
+		mid_cents = EXCLUDED.mid_cents, mid_copies = EXCLUDED.mid_copies,
+		ceiling_cents = EXCLUDED.ceiling_cents, ceiling_copies = EXCLUDED.ceiling_copies,
+		low_confidence = EXCLUDED.low_confidence, computed_at = now()
+	RETURNING ` + historyColumns
+
+// saveCopyDaysSQL upserts each copy's value of the day $1, today when
+// null. Each copy is held (FOR KEY SHARE) until the commit, so a copy
+// deleted since it was valued is left out instead of failing the foreign
+// key.
+const saveCopyDaysSQL = `INSERT INTO copy_value_history (copy_id, day, floor_cents, mid_cents, ceiling_cents)
+	SELECT c.id, coalesce($1::date, current_date), v.floor_cents, v.mid_cents, v.ceiling_cents
+	FROM unnest($2::bigint[], $3::bigint[], $4::bigint[], $5::bigint[])
+		AS v (copy_id, floor_cents, mid_cents, ceiling_cents)
+	JOIN copy c ON c.id = v.copy_id
+	FOR KEY SHARE OF c
+	ON CONFLICT (copy_id, day) DO UPDATE SET floor_cents = EXCLUDED.floor_cents,
+		mid_cents = EXCLUDED.mid_cents, ceiling_cents = EXCLUDED.ceiling_cents,
+		computed_at = now()`
+
+// copyDayArgs are saveCopyDaysSQL's arguments for owned on day, nil for
+// today.
+func copyDayArgs(day *string, owned []CopyValue) []any {
+	ids := make([]int64, len(owned))
+	floors := make([]*int64, len(owned))
+	mids := make([]*int64, len(owned))
+	ceilings := make([]*int64, len(owned))
+	for i := range owned {
+		c := &owned[i]
+		ids[i] = c.CopyID
+		floors[i] = estimateCents(c.Floor)
+		mids[i] = estimateCents(c.Mid)
+		ceilings[i] = estimateCents(c.Ceiling)
+	}
+	return []any{day, ids, floors, mids, ceilings}
+}
+
+// SaveDay stores sum as today's value and each copy in owned as that
+// copy's value today, replacing what an earlier run stored today for the
+// collection and for those copies. A copy valued earlier today but not in
+// owned, such as one sold since, keeps its row. Both go in one batch,
+// which Postgres runs as one implicit transaction, so the day is stored
+// with its copies or not at all.
+func (s *Store) SaveDay(ctx context.Context, sum *Summary, owned []CopyValue) (HistoryPoint, error) {
+	var p HistoryPoint
+	batch := &pgx.Batch{}
+	batch.Queue(saveDaySQL, sum.Copies, sum.SpentCents, sum.Floor.Cents, sum.Floor.Copies,
+		sum.Mid.Cents, sum.Mid.Copies, sum.Ceiling.Cents, sum.Ceiling.Copies, sum.LowConfidence).
+		QueryRow(func(row pgx.Row) error { return row.Scan(historyFields(&p)...) })
+	batch.Queue(saveCopyDaysSQL, copyDayArgs(nil, owned)...)
+	if err := s.pool.SendBatch(ctx, batch).Close(); err != nil {
 		return HistoryPoint{}, fmt.Errorf("save day: %w", err)
 	}
 	return p, nil
@@ -311,38 +355,10 @@ type CopyDay struct {
 	CeilingCents *int64 `json:"ceiling_cents"`
 }
 
-// SaveCopyDays stores each copy's value as of day (YYYY-MM-DD), replacing
-// every row an earlier run stored for that day. Rows of other days stay,
-// also those of a copy no longer owned. Each copy is held (FOR KEY SHARE)
-// until the commit, so a copy deleted since it was valued is left out
-// instead of failing the foreign key.
-func (s *Store) SaveCopyDays(ctx context.Context, day string, copies []CopyValue) error {
-	ids := make([]int64, len(copies))
-	floors := make([]*int64, len(copies))
-	mids := make([]*int64, len(copies))
-	ceilings := make([]*int64, len(copies))
-	for i := range copies {
-		c := &copies[i]
-		ids[i] = c.CopyID
-		floors[i] = estimateCents(c.Floor)
-		mids[i] = estimateCents(c.Mid)
-		ceilings[i] = estimateCents(c.Ceiling)
-	}
-	_, err := s.pool.Exec(ctx, `WITH valued AS (
-			SELECT c.id, v.floor_cents, v.mid_cents, v.ceiling_cents
-			FROM unnest($2::bigint[], $3::bigint[], $4::bigint[], $5::bigint[])
-				AS v (copy_id, floor_cents, mid_cents, ceiling_cents)
-			JOIN copy c ON c.id = v.copy_id
-			FOR KEY SHARE OF c
-		), dropped AS (
-			DELETE FROM copy_value_history WHERE day = $1::date AND copy_id <> ALL ($2::bigint[])
-		)
-		INSERT INTO copy_value_history (copy_id, day, floor_cents, mid_cents, ceiling_cents)
-		SELECT id, $1::date, floor_cents, mid_cents, ceiling_cents FROM valued
-		ON CONFLICT (copy_id, day) DO UPDATE SET floor_cents = EXCLUDED.floor_cents,
-			mid_cents = EXCLUDED.mid_cents, ceiling_cents = EXCLUDED.ceiling_cents,
-			computed_at = now()`, day, ids, floors, mids, ceilings)
-	if err != nil {
+// saveCopyDays stores each copy in owned as its value on day
+// (YYYY-MM-DD), as SaveDay does for today.
+func (s *Store) saveCopyDays(ctx context.Context, day string, owned []CopyValue) error {
+	if _, err := s.pool.Exec(ctx, saveCopyDaysSQL, copyDayArgs(&day, owned)...); err != nil {
 		return fmt.Errorf("save copy days: %w", err)
 	}
 	return nil

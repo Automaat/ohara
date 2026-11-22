@@ -281,11 +281,8 @@ func (r *Runner) Run(ctx context.Context) (RunResult, error) {
 	if err != nil {
 		return x.res, err
 	}
-	point, err := r.store.SaveDay(ctx, &sum)
+	point, err := r.store.SaveDay(ctx, &sum, owned)
 	if err != nil {
-		return x.res, err
-	}
-	if err := r.store.SaveCopyDays(ctx, point.Day, owned); err != nil {
 		return x.res, err
 	}
 	publish(point)

@@ -1,0 +1,309 @@
+{
+ "data": {
+  "products": {
+   "items": [
+    {
+     "sku": "7614225",
+     "name": "Wiedźmin. Adaptacje opowiadań Andrzeja Sapkowskiego. Ostatnie życzenie ",
+     "url_key": "wiedzmin-adaptacje-opowiadan-andrzeja-sapkowskiego-ostatnie-zyczenie-7614225-ksiazka",
+     "stock_status": "IN_STOCK",
+     "small_image": {
+      "url": "https://cdn.swiatksiazki.pl/media/catalog/product/2/5/2599907614225.jpg?width=350&height=350&store=default&image-type=small_image"
+     },
+     "price_range": {
+      "minimum_price": {
+       "final_price": {
+        "value": 21,
+        "currency": "PLN"
+       }
+      }
+     },
+     "dictionary": {
+      "authors": [
+       {
+        "name": "Marcin Zwierzchowski"
+       },
+       {
+        "name": "Guillermo Fajardo"
+       },
+       {
+        "name": "Andrzej Sapkowski"
+       }
+      ],
+      "performers": [],
+      "composers": []
+     }
+    },
+    {
+     "sku": "5387986",
+     "name": "Wiedźmin. Tom 1. Ostatnie życzenie (Wydanie poprawione i uzupełnione) ",
+     "url_key": "wiedzmin-tom-1-ostatnie-zyczenie-wydanie-poprawione-i-uzupelnione-5387986-ksiazka",
+     "stock_status": "IN_STOCK",
+     "small_image": {
+      "url": "https://cdn.swiatksiazki.pl/media/catalog/product/8/6/8699905387986.jpg?width=350&height=350&store=default&image-type=small_image"
+     },
+     "price_range": {
+      "minimum_price": {
+       "final_price": {
+        "value": 37.87,
+        "currency": "PLN"
+       }
+      }
+     },
+     "dictionary": {
+      "authors": [
+       {
+        "name": "Andrzej Sapkowski"
+       }
+      ],
+      "performers": [],
+      "composers": []
+     }
+    },
+    {
+     "sku": "6655764",
+     "name": "Wiedźmin. Ostatnie życzenie (plik audio)",
+     "url_key": "wiedzmin-ostatnie-zyczenie-6655764-audiobook",
+     "stock_status": "IN_STOCK",
+     "small_image": {
+      "url": "https://cdn.swiatksiazki.pl/media/catalog/product/6/4/6499906655764.jpg?width=350&height=350&store=default&image-type=small_image"
+     },
+     "price_range": {
+      "minimum_price": {
+       "final_price": {
+        "value": 50,
+        "currency": "PLN"
+       }
+      }
+     },
+     "dictionary": {
+      "authors": [
+       {
+        "name": "Andrzej Sapkowski"
+       }
+      ],
+      "performers": [],
+      "composers": []
+     }
+    },
+    {
+     "sku": "6367582",
+     "name": "Wiedźmin. Ostatnie życzenie (e-book)",
+     "url_key": "wiedzmin-ostatnie-zyczenie-6367582-e-book",
+     "stock_status": "IN_STOCK",
+     "small_image": {
+      "url": "https://cdn.swiatksiazki.pl/media/catalog/product/8/2/8299906367582.jpg?width=350&height=350&store=default&image-type=small_image"
+     },
+     "price_range": {
+      "minimum_price": {
+       "final_price": {
+        "value": 35.51,
+        "currency": "PLN"
+       }
+      }
+     },
+     "dictionary": {
+      "authors": [
+       {
+        "name": "Andrzej Sapkowski"
+       }
+      ],
+      "performers": [],
+      "composers": []
+     }
+    },
+    {
+     "sku": "7631418",
+     "name": "Wiedźmin. Adaptacje opowiadań Andrzeja Sapkowskiego. Ostatnie życzenie. Wydanie zbiorcze ",
+     "url_key": "wiedzmin-adaptacje-opowiadan-andrzeja-sapkowskiego-ostatnie-zyczenie-wydanie-zbiorcze-7631418-ksiazka",
+     "stock_status": "OUT_OF_STOCK",
+     "small_image": {
+      "url": "https://cdn.swiatksiazki.pl/media/catalog/product/1/8/1899907631418.jpg?width=350&height=350&store=default&image-type=small_image"
+     },
+     "price_range": {
+      "minimum_price": {
+       "final_price": {
+        "value": 132.97,
+        "currency": "PLN"
+       }
+      }
+     },
+     "dictionary": {
+      "authors": [
+       {
+        "name": "Adam Gorham"
+       },
+       {
+        "name": "Marta Krajewska"
+       },
+       {
+        "name": "Jacek Rembiś"
+       },
+       {
+        "name": "Fabiana Mascolo"
+       },
+       {
+        "name": "Tommaso Bennato"
+       },
+       {
+        "name": "Jonas Scharf"
+       },
+       {
+        "name": "Michael Dowling"
+       },
+       {
+        "name": "Marcin Zwierzchowski"
+       },
+       {
+        "name": "Milena Zając"
+       },
+       {
+        "name": "Matteo Bellisario"
+       },
+       {
+        "name": "Guillermo Fajardo"
+       },
+       {
+        "name": "Andrzej Sapkowski"
+       },
+       {
+        "name": "Aleksandra Zielińska"
+       },
+       {
+        "name": "Magdalena Salik"
+       }
+      ],
+      "performers": [],
+      "composers": []
+     }
+    },
+    {
+     "sku": "7420295",
+     "name": "The Dark Side of the Moon (50th Anniversary Remaster) (Digipack) ",
+     "url_key": "the-dark-side-of-the-moon-50th-anniversary-remaster-digipack-7420295-muzyka",
+     "stock_status": "IN_STOCK",
+     "small_image": {
+      "url": "https://cdn.swiatksiazki.pl/media/catalog/product/9/5/9599907420295.jpg?width=350&height=350&store=default&image-type=small_image"
+     },
+     "price_range": {
+      "minimum_price": {
+       "final_price": {
+        "value": 60,
+        "currency": "PLN"
+       }
+      }
+     },
+     "dictionary": {
+      "authors": [],
+      "performers": [
+       {
+        "name": "Pink Floyd"
+       }
+      ],
+      "composers": []
+     }
+    },
+    {
+     "sku": "7420294",
+     "name": "The Dark Side of the Moon (50th Anniversary Remaster) (Vinyl) ",
+     "url_key": "the-dark-side-of-the-moon-50th-anniversary-remaster-vinyl-7420294-muzyka",
+     "stock_status": "IN_STOCK",
+     "small_image": {
+      "url": "https://cdn.swiatksiazki.pl/media/catalog/product/9/4/9499907420294-1.jpg?width=350&height=350&store=default&image-type=small_image"
+     },
+     "price_range": {
+      "minimum_price": {
+       "final_price": {
+        "value": 133,
+        "currency": "PLN"
+       }
+      }
+     },
+     "dictionary": {
+      "authors": [],
+      "performers": [
+       {
+        "name": "Pink Floyd"
+       }
+      ],
+      "composers": []
+     }
+    },
+    {
+     "sku": "6989579",
+     "name": "Pink Floyd and The Dark Side of the Moon: 50 Years ",
+     "url_key": "pink-floyd-and-the-dark-side-of-the-moon-50-years-6989579-ksiazka",
+     "stock_status": "IN_STOCK",
+     "small_image": {
+      "url": "https://cdn.swiatksiazki.pl/media/catalog/product/7/9/7999906989579.jpg?width=350&height=350&store=default&image-type=small_image"
+     },
+     "price_range": {
+      "minimum_price": {
+       "final_price": {
+        "value": 167.81,
+        "currency": "PLN"
+       }
+      }
+     },
+     "dictionary": {
+      "authors": [
+       {
+        "name": "Martin Popoff"
+       }
+      ],
+      "performers": [],
+      "composers": []
+     }
+    },
+    {
+     "sku": "6976474",
+     "name": "Pink Floyd: The Dark Side Of The Moon: The Official 50th Anniversary Book ",
+     "url_key": "pink-floyd-the-dark-side-of-the-moon-the-official-50th-anniversary-book-6976474-ksiazka",
+     "stock_status": "IN_STOCK",
+     "small_image": {
+      "url": "https://cdn.swiatksiazki.pl/media/catalog/product/7/4/7499906976474.jpg?width=350&height=350&store=default&image-type=small_image"
+     },
+     "price_range": {
+      "minimum_price": {
+       "final_price": {
+        "value": 192.28,
+        "currency": "PLN"
+       }
+      }
+     },
+     "dictionary": {
+      "authors": [
+       {
+        "name": "Pink Floyd"
+       }
+      ],
+      "performers": [],
+      "composers": []
+     }
+    },
+    {
+     "sku": "7634092",
+     "name": "Shogun (5 DVD) ",
+     "url_key": "shogun-5-dvd-7634092-film",
+     "stock_status": "IN_STOCK",
+     "small_image": {
+      "url": "https://cdn.swiatksiazki.pl/media/catalog/product/9/2/9299907634092.jpg?width=350&height=350&store=default&image-type=small_image"
+     },
+     "price_range": {
+      "minimum_price": {
+       "final_price": {
+        "value": 112.2,
+        "currency": "PLN"
+       }
+      }
+     },
+     "dictionary": {
+      "authors": [],
+      "performers": [],
+      "composers": []
+     }
+    }
+   ]
+  }
+ }
+}

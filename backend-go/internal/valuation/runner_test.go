@@ -1534,3 +1534,26 @@ func TestRunPricesMostSpecificTitle(t *testing.T) {
 		})
 	}
 }
+
+func TestRunSkipsLots(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	exec(t, pool, `INSERT INTO title (id, kind, name, original_title, polish_title) OVERRIDING SYSTEM VALUE
+		VALUES (5, 'movie', 'Blade Runner', 'Blade Runner', 'Łowca androidów')`)
+	exec(t, pool, `INSERT INTO edition (id, title_id, format) OVERRIDING SYSTEM VALUE VALUES (50, 5, 'dvd')`)
+	exec(t, pool, `INSERT INTO copy (edition_id, status) VALUES (50, 'owned')`)
+	olx := &fakeSource{name: "olx", listings: []deals.Listing{
+		listing("lot", "Zestaw 3 filmy DVD: Blade Runner, Gladiator, Obcy", 1500, used()),
+		listing("one", "Blade Runner DVD 2 płyty", 2500, used()),
+	}}
+	if _, err := newTestRunner(pool, &fakeBuyBack{}, olx).Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	var priced []string
+	if err := pool.QueryRow(context.Background(), `SELECT coalesce(array_agg(external_id ORDER BY external_id), '{}')
+		FROM price_observation WHERE edition_id = 50`).Scan(&priced); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(priced, []string{"one"}) {
+		t.Fatalf("priced the owned DVD from %v, want only [one]", priced)
+	}
+}

@@ -232,6 +232,12 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   author's surname for books, the artist's words and a fitting medium for
   albums, where a listing naming no medium counts as a CD, minus the
   editable reject phrases a want's own name or artist does not contain),
+  skips lots of several titles: a count of titles ("3 filmy", "20 szt.",
+  "kolekcja filmów") unless a want's name makes it a set ("Trylogia"),
+  and, before the wanted name, a set word ("zestaw", "pakiet", "komplet")
+  or five discs or volumes or more ("5 płyt", "8 tomów"); past the name
+  those describe one title's edition ("6 płyt CD"), and one title on a
+  few discs ("2 płyty", "5xDVD") still matches,
   skips a want for a listing that names another title of its kind
   (wished, owned or neither) more specifically: one phrase, past media
   words and disc counts, holding every word of a want's name it carries
@@ -273,8 +279,26 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   for the valuation stay. The page's toasts (`src/lib/deal-dismissals.svelte.ts`)
   offer "Cofnij", or "Spróbuj ponownie" after a failed request, and are
   taken back when the page goes away.
-  Every Telegram alert carries an inline "Ignoruj" button (callback data
-  `ignore:<observation id>`). With Telegram configured, the hunter's
+  Every Telegram alert carries inline "Ignoruj" and "Kupione" buttons
+  (callback data `ignore:<observation id>` and
+  `bought:<observation id>:<copy id>`, the wish the message was sent
+  for, even after its alert moves to another wish). A "Kupione" press
+  (`Store.BuyPress`) turns that wish into an owned copy, with no
+  confirmation: the listing's price, bought today in Poland, the source's
+  label as the shop, new or used from the listing (the wish's own value
+  when it says nothing), both limits cleared; the copy keeps its id,
+  edition, condition and notes and the listing is dismissed. The message
+  then gets a "Kupione" line (its text cut short with "…" when the line
+  would pass Telegram's 4096 characters) and loses its buttons. A button
+  buys once, and only on a press's first delivery: every "Kupione" press
+  is recorded in `telegram_press`, refused ones too, and every purchase in
+  `telegram_purchase` (listing and wish), so a press sent again or pressed
+  again only reads the state. A copy already owned whose listing is
+  dismissed is answered "Już zapisano jako kupione" and its message is
+  edited again, so a message whose edits failed is fixed by the next
+  press; a purchase the collector changed back ("Ten zakup był już
+  zapisany") or a wish no longer on the wishlist changes nothing and is
+  only answered. With Telegram configured, the hunter's
   `TelegramPoller` long-polls `getUpdates` (no webhook: Telegram cannot
   reach the LAN) for callback queries only, 20 per call (halved after a
   reply over 1 MiB); a press in the alert chat dismisses the listing as
@@ -334,7 +358,12 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   sighting. A first page, a failed or skipped query tells nothing, and a
   gone listing any answer holds again, matching or not, is no longer gone.
   Gone listings stay stored and price as before; no request is sent per
-  listing. An owned album edition
+  listing. Beside its range each copy gets `likely_sold`: the trimmed
+  median latest price of the same pool's used OLX listings whose `gone_at`
+  is at most `valuation.LikelySoldWithin` (21 days, under OLX's 30-day
+  listing run) after `observed_at`. Wartość shows it as "Prawdopodobnie
+  sprzedane", "mało danych" under 3 listings, nothing without one; it
+  never enters the range, the summary or the history. An owned album edition
   with a `discogs_release_id` is
   priced on Discogs (marketplace stats in EUR, price suggestions in the
   seller-settings currency, converted to PLN at the NBP table A rate): its

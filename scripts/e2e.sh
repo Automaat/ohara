@@ -35,8 +35,9 @@ if ! docker network create --label "ohara.e2e.pid=$$" "$lock" >/dev/null 2>&1; t
 fi
 
 cleanup() {
+    trap '' INT TERM
+    trap - EXIT
     local status=$1
-    trap - EXIT INT TERM
     if [[ $status -ne 0 ]]; then
         "${compose[@]}" logs --no-color app app-discogs >&2 || true
     fi

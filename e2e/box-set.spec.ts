@@ -1,4 +1,4 @@
-import type { APIRequestContext } from '@playwright/test';
+import type { APIRequestContext, Page } from '@playwright/test';
 import { expect, expectNoSourceRequests, test } from './fixtures.js';
 
 /** A box set's edition lists the titles it holds, and their pages name the box set (#251). */
@@ -63,4 +63,42 @@ test('the edition form lists the titles a box set holds and their pages name it'
 	await boxSets.getByRole('link', { name: trilogy }).tap();
 	await expect(page.getByRole('heading', { name: trilogy, level: 1 })).toBeVisible();
 	await expectNoSourceRequests(request);
+});
+
+/** Whether the page scrolls sideways: wider content than the viewport. */
+async function overflows(page: Page): Promise<boolean> {
+	return page.evaluate(
+		() => document.documentElement.scrollWidth > document.documentElement.clientWidth
+	);
+}
+
+test('a box set and its contents with long unbroken names keep the pages within the screen', async ({
+	page,
+	request
+}) => {
+	const run = String(Date.now());
+	const long = (prefix: string) => `${prefix}${run}${'x'.repeat(220)}`;
+	const boxID = await created(
+		await request.post('/api/editions', {
+			data: { title_id: await movie(request, long('Zestaw')), format: 'dvd' }
+		})
+	);
+	const innerID = await movie(request, long('Film'));
+	const put = await request.put(`/api/editions/${boxID}`, {
+		data: {
+			title_id: (await (await request.get(`/api/editions/${boxID}`)).json()).title_id,
+			format: 'dvd',
+			contents: [innerID]
+		}
+	});
+	expect(put.ok(), await put.text()).toBe(true);
+
+	await page.goto(`/editions/${boxID}`);
+	await expect(
+		page.getByRole('list', { name: 'Tytuły w zestawie' }).getByRole('link')
+	).toBeVisible();
+	expect(await overflows(page)).toBe(false);
+	await page.goto(`/titles/${innerID}`);
+	await expect(page.getByRole('list', { name: 'Zestawy z tym tytułem' })).toBeVisible();
+	expect(await overflows(page)).toBe(false);
 });

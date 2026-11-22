@@ -477,5 +477,10 @@
 		flex-wrap: wrap;
 		align-items: baseline;
 		gap: 0.5rem;
+		min-inline-size: 0;
+		overflow-wrap: anywhere;
+	}
+	.contents a {
+		min-inline-size: 0;
 	}
 </style>

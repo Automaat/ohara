@@ -1636,24 +1636,87 @@ func TestRunsDoNotWaitForEachOther(t *testing.T) {
 	}
 }
 
+// TestBackToBackRunsKeepTheirPacing runs two valuations in a row without
+// their own pauses and checks that no OLX request waited in the pacer: a
+// lane never waits for its own requests. It times the wait in the lane
+// alone, not the runs, whose database work takes as long as it takes. The
+// pacer's gap is far longer than a run's work between two requests, so a
+// lane that waited for itself would wait most of it.
 func TestBackToBackRunsKeepTheirPacing(t *testing.T) {
 	pool := dbtest.Migrated(t)
 	seed(t, pool)
 	log := &requestLog{}
 	olxURL, _ := olxSite(t, log, "")
-	_, runner := pacedRuns(pool, olxURL, log)
+	const gap = 10 * runDelay
+	waits := &pacingWaits{}
+	runner := NewRunner(NewStore(pool),
+		[]deals.Source{deals.OLX{Client: waits.client(deals.NewPacer(gap).Lane()), BaseURL: olxURL}},
+		[]BuyBack{&timedBuyBack{log: log}}, nil, Config{Delay: runDelay, Window: 90 * 24 * time.Hour},
+		slog.New(slog.DiscardHandler))
 	runner.sleep = func(ctx context.Context, _ time.Duration) error { return ctx.Err() }
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	start := time.Now()
 	for i := range 2 {
-		if _, err := runner.Run(ctx); err != nil {
+		before := len(waits.all())
+		res, err := runner.Run(ctx)
+		if err != nil {
 			t.Fatalf("run %d: %v", i, err)
 		}
+		if res.Queries < 2 {
+			t.Fatalf("run %d searched %d queries, want the owned book's and Blu-ray's", i, res.Queries)
+		}
+		if n := len(waits.all()) - before; n < res.Queries {
+			t.Fatalf("run %d sent OLX %d requests for %d queries", i, n, res.Queries)
+		}
 	}
-	if d := time.Since(start); d >= runDelay/2 {
-		t.Fatalf("two valuations without their own pauses took %v, want them not to wait for each other's requests", d)
+	got := waits.all()
+	if n := log.count(SourceOLX); n != len(got) {
+		t.Fatalf("OLX received %d requests, want the %d the runs sent", n, len(got))
 	}
+	for i, w := range got {
+		if w >= gap/2 {
+			t.Errorf("OLX request %d waited %v in its own lane, want no wait for the run's own requests", i, w)
+		}
+	}
+}
+
+// pacingWaits times how long each request of a client waited in its pacer
+// lane: from entering the lane's transport until the lane let it go on.
+type pacingWaits struct {
+	mu    sync.Mutex
+	waits []time.Duration
+}
+
+// laneEntered is the context key of the time a request entered the lane.
+type laneEntered struct{}
+
+// roundTripFunc is a function as an http.RoundTripper.
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// client is an HTTP client whose requests go through lane, each one's
+// wait there recorded.
+func (p *pacingWaits) client(lane *deals.Lane) *http.Client {
+	paced := lane.Transport(roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if entered, ok := r.Context().Value(laneEntered{}).(time.Time); ok {
+			p.mu.Lock()
+			p.waits = append(p.waits, time.Since(entered))
+			p.mu.Unlock()
+		}
+		return http.DefaultTransport.RoundTrip(r)
+	}))
+	c := deals.NewHTTPClient()
+	c.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return paced.RoundTrip(r.WithContext(context.WithValue(r.Context(), laneEntered{}, time.Now())))
+	})
+	return c
+}
+
+func (p *pacingWaits) all() []time.Duration {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return slices.Clone(p.waits)
 }
 
 func TestRunPricesMostSpecificTitle(t *testing.T) {

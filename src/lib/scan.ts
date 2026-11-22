@@ -842,7 +842,7 @@ export async function saveScan(
 			request_key: requestKey
 		});
 		remember(made.editions, edition.id);
-		if (edition.barcode) queueTally.resolved(edition.id, edition.barcode);
+		queueTally.resolved(edition.id, edition.barcode);
 	} catch (err) {
 		const raced = err instanceof ApiError && err.status === 409 && err.field === 'barcode';
 		const existing = raced ? await editionByBarcode(fetchFn, target.barcode) : null;

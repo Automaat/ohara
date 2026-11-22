@@ -84,24 +84,39 @@ func (s *Store) Record(ctx context.Context, l *deals.Listing, h *Holding) (bool,
 // names now: its external ID is "<release>/<edition>", so a changed or
 // cleared release stops valuing the edition at once.
 func (s *Store) Prices(ctx context.Context, window time.Duration) ([]Price, error) {
-	return prices(ctx, s.pool, window)
+	return prices(ctx, s.pool, window, 0)
 }
 
-func prices(ctx context.Context, q querier, window time.Duration) ([]Price, error) {
+// prices reads the prices Prices describes, only those of titleID's
+// editions when it is not 0. Every bound of a copy comes from prices of
+// its own title, so filtering by title leaves that title's ranges as
+// they are. The ownership checks then read only that title's copies too,
+// so the cost follows the title, not the collection.
+func prices(ctx context.Context, q querier, window time.Duration, titleID int64) ([]Price, error) {
+	args := []any{valuationSources, window.Seconds(), discogsSources, pooledSources}
+	ownedEditions := `SELECT edition_id FROM copy WHERE status = 'owned'`
+	var byTitle, ownedByTitle string
+	if titleID != 0 {
+		args = append(args, titleID)
+		ownedEditions = `SELECT c.edition_id FROM copy c JOIN edition owned ON owned.id = c.edition_id
+			WHERE c.status = 'owned' AND owned.title_id = $5`
+		byTitle = ` AND e.title_id = $5`
+		ownedByTitle = ` AND owned.title_id = $5`
+	}
 	rows, err := q.Query(ctx, `SELECT o.edition_id, e.title_id, e.format, o.source,
 			o.price_cents, o.acquired_as, o.last_seen_at
 		FROM price_observation o JOIN edition e ON e.id = o.edition_id
 		WHERE o.source = ANY ($1)
 			AND o.last_seen_at > now() - make_interval(secs => $2)
-			AND (o.edition_id IN (SELECT edition_id FROM copy WHERE status = 'owned')
+			AND (o.edition_id IN (`+ownedEditions+`)
 				OR o.source = ANY ($4) AND o.observed_at > e.updated_at
 					AND (e.title_id, coalesce(e.format, '')) IN (
 						SELECT owned.title_id, coalesce(owned.format, '')
 						FROM copy c JOIN edition owned ON owned.id = c.edition_id
-						WHERE c.status = 'owned'))
+						WHERE c.status = 'owned'`+ownedByTitle+`))
 			AND (o.source <> ALL ($3)
-				OR o.external_id = e.discogs_release_id::text || '/' || e.id::text)`,
-		valuationSources, window.Seconds(), discogsSources, pooledSources)
+				OR o.external_id = e.discogs_release_id::text || '/' || e.id::text)`+byTitle,
+		args...)
 	if err != nil {
 		return nil, fmt.Errorf("prices: %w", err)
 	}
@@ -110,15 +125,23 @@ func prices(ctx context.Context, q querier, window time.Duration) ([]Price, erro
 
 // Copies returns every owned copy with its edition and title, by title.
 func (s *Store) Copies(ctx context.Context) ([]CopyValue, error) {
-	return copies(ctx, s.pool)
+	return copies(ctx, s.pool, 0)
 }
 
-func copies(ctx context.Context, q querier) ([]CopyValue, error) {
+// copies reads the owned copies Copies describes, only titleID's when it
+// is not 0.
+func copies(ctx context.Context, q querier, titleID int64) ([]CopyValue, error) {
+	var args []any
+	var byTitle string
+	if titleID != 0 {
+		args = append(args, titleID)
+		byTitle = ` AND t.id = $1`
+	}
 	rows, err := q.Query(ctx, `SELECT c.id, e.id, t.id, t.name, t.kind, e.format, e.barcode,
 			c.price_cents, `+collection.CoverURL+`, e.discogs_release_id
 		FROM copy c JOIN edition e ON e.id = c.edition_id JOIN title t ON t.id = e.title_id
-		WHERE c.status = 'owned'
-		ORDER BY lower(t.name), c.id`)
+		WHERE c.status = 'owned'`+byTitle+`
+		ORDER BY lower(t.name), c.id`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("copies: %w", err)
 	}
@@ -135,24 +158,40 @@ func copies(ctx context.Context, q querier) ([]CopyValue, error) {
 // come from one snapshot, so a copy's Discogs release is the one its
 // Discogs prices were read for.
 func (s *Store) Valued(ctx context.Context, window time.Duration) ([]CopyValue, Summary, error) {
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
-	if err != nil {
-		return nil, Summary{}, fmt.Errorf("valued: %w", err)
-	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
-	owned, err := copies(ctx, tx)
+	owned, err := s.valued(ctx, window, 0)
 	if err != nil {
 		return nil, Summary{}, err
+	}
+	return owned, Summarize(owned), nil
+}
+
+// TitleValued returns titleID's owned copies with the ranges Valued gives
+// them, reading only that title's copies and prices.
+func (s *Store) TitleValued(ctx context.Context, window time.Duration, titleID int64) ([]CopyValue, error) {
+	return s.valued(ctx, window, titleID)
+}
+
+// valued values the owned copies of titleID, or of every title when it
+// is 0, from one snapshot.
+func (s *Store) valued(ctx context.Context, window time.Duration, titleID int64) ([]CopyValue, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return nil, fmt.Errorf("valued: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	owned, err := copies(ctx, tx, titleID)
+	if err != nil {
+		return nil, err
 	}
 	if s.betweenReads != nil {
 		s.betweenReads()
 	}
-	seen, err := prices(ctx, tx, window)
+	seen, err := prices(ctx, tx, window, titleID)
 	if err != nil {
-		return nil, Summary{}, err
+		return nil, err
 	}
 	Value(owned, NewRanges(seen))
-	return owned, Summarize(owned), nil
+	return owned, nil
 }
 
 // HistoryPoint is one day of the collection's value.

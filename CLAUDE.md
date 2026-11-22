@@ -81,6 +81,18 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   with the request's context adds `request_id`, `method` and `path`;
   `httpx.WriteInternal` takes the request for that. Lines logged outside a
   request keep their form.
+- The router, not Traefik, compresses: `compressibleTypes` in
+  `internal/server/compress.go` lists the types (HTML, JS, CSS, JSON, SVG,
+  the manifest, `.wasm`) gzipped at the best level for a client whose
+  `Accept-Encoding` allows gzip (quality values count; no deflate). Every
+  answer carries `Vary: Accept-Encoding`. Other images go out as they are and
+  a response that already has a `Content-Encoding` (`/metrics`) is left
+  alone. A client that accepts gzip gets the whole resource for a `Range`
+  request unless the path's extension names a type never compressed (a
+  PNG keeps its range). A compressed answer drops `Accept-Ranges` and
+  weakens its `ETag` (a 304 for that weak `ETag` keeps it weak) and a
+  compressed HEAD sends no `Content-Length`; a client without gzip keeps
+  its ranges.
 - Money is integer grosze (`price_cents`). Barcodes are stored normalized
   (`barcode.Normalize`: EAN-8, EAN-13 or GTIN-14; a UPC-A becomes its
   EAN-13 with a leading 0, ISBN-10 becomes ISBN-13), one edition per barcode.
@@ -251,13 +263,22 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   is never low confidence. Each run upserts today's `valuation_history` row and
   sets the `ohara_collection_*` gauges. Skupksiazek.pl (cart behind an
   app flow) and Rivendo (manual form with photos) have no automatic
-  quote, so movie discs have no floor.
+  quote, so movie discs have no floor. A title page reads
+  `GET /api/valuation/copies?title_id=`: that title's owned copies valued
+  as `GET /api/valuation` values them, from that title's prices only,
+  with no summary or history.
 - A barcode no provider resolves goes to `scan_queue`; a trigger on `edition`
   removes it once an edition carries that barcode. `ohara_scan_queue_size`
   counts it on each scrape. The trigger keeps the entry it removes in
   `scan_queue_resolved`; `DELETE /api/editions/{id}?requeue=1` puts it back
   with its scans and times in the same transaction, as the scanner does when
   it undoes an add that created the edition.
+- An edition's own cover photo is served at the `cover_override_url` the API
+  hands out, `/api/editions/{id}/cover?v=` plus the edition's `updated_at`,
+  which a new photo or any edit changes. A request whose query parses and
+  holds one `v`, the current one, answers
+  `Cache-Control: private, max-age=31536000, immutable`; any other `v`, a
+  second one, none or an error answers `no-store`.
 
 ### Frontend
 
@@ -281,7 +302,8 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   then moved where the requests answer: a queue POST (also for a sheet
   already replaced), an edition POST for a queued code (even when its copy
   then fails) and that add's undo. Only undoing an add made before the
-  first read answered reads the queue again.
+  first read answered, or one kept from before a reload, reads the queue
+  again.
 - A code whose check gets no answer is kept in IndexedDB
   (`src/lib/pending-scans.svelte.ts`, barcode only, once in the server's
   normalized form) and posted to `/api/scan-queue` as `lookup_failed` on app
@@ -289,6 +311,14 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   time (Web Locks), each POST within 15 s. `request` does not follow
   redirects, so a 401 or Authelia's cross-origin redirect is an expired
   session ("Odśwież"), not a lost connection; the code is kept either way.
+- The scanner's visit ("Ta sesja" adds, "Ostatnie skany" and the purchase
+  date carried to the next add) is kept in `localStorage`
+  (`ohara.scan.visit`, `src/lib/visit.ts`) and restored on load until 12
+  hours after its last add or scan. Each change starts from what storage
+  holds, so tabs keep each other's adds, and an add writes its date, scan
+  and tray entry at once. A waiting scan turns queued once the queue takes
+  its code. Undo toasts are not restored; without storage the visit lasts
+  until the next load.
 - Kolekcja's "Dodaj tytuł" (`/titles/new`) is the scanner's quick confirm
   without a barcode (`ScanFlow.start`): search by title or fill in by hand;
   the save creates the title, a barcode-less edition and the copy. Such

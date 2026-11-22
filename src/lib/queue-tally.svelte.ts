@@ -20,12 +20,20 @@ export class QueueTally {
 	#unsure = new Set<number>();
 	/** The editions this tab created for codes, by code, until an undo removes them. */
 	#editions = new Map<string, number>();
+	/** Every edition this tab created, with or without a code, until an undo removes it. */
+	#created = new Set<number>();
 	/** Changes made while a load is out, replayed over its answer. */
 	#changes: Change[] = [];
 	#seq = 0;
 	#loading = 0;
 	#issued = 0;
 	#applied = 0;
+	#fetch: typeof fetch;
+
+	/** fetchFn reads the queue again when an undo cannot tell what it put back. */
+	constructor(fetchFn: typeof fetch = (input, init) => fetch(input, init)) {
+		this.#fetch = fetchFn;
+	}
 
 	/** How many codes wait in the queue; null while unknown. */
 	get count(): number | null {
@@ -71,9 +79,12 @@ export class QueueTally {
 	/**
 	 * An add created the edition for barcode, which takes the code out of the queue. A code the
 	 * queue held is remembered by the edition, so undoing the add can count it again; an edition
-	 * created before the queue was known is remembered as unsure.
+	 * created before the queue was known is remembered as unsure. An edition without a code takes
+	 * nothing out, but is remembered as one this tab knows.
 	 */
-	resolved(editionID: number, barcode: string) {
+	resolved(editionID: number, barcode: string | null) {
+		this.#created.add(editionID);
+		if (barcode === null) return;
 		this.#editions.set(barcode, editionID);
 		if (this.#codes === null) this.#unsure.add(editionID);
 		else if (this.#codes.has(barcode)) this.#taken.set(editionID, barcode);
@@ -82,11 +93,13 @@ export class QueueTally {
 
 	/**
 	 * The edition an add created is gone, and the queue took back the code it had resolved. For
-	 * an edition created while the queue was unknown, the queue is read again instead.
+	 * an edition created while the queue was unknown, or one this tab never saw created, such as
+	 * an add kept from before a reload, the queue is read again instead.
 	 */
-	requeued(editionID: number, fetchFn: typeof fetch): Promise<void> {
+	requeued(editionID: number): Promise<void> {
 		for (const [code, id] of this.#editions) if (id === editionID) this.#editions.delete(code);
-		if (this.#unsure.delete(editionID)) return this.load(fetchFn);
+		const known = this.#created.delete(editionID);
+		if (this.#unsure.delete(editionID) || !known) return this.load(this.#fetch);
 		const barcode = this.#taken.get(editionID);
 		if (barcode !== undefined) {
 			this.#taken.delete(editionID);

@@ -215,8 +215,11 @@ func TestLookupCanceledBeforeItsRequestAsksNothing(t *testing.T) {
 	}
 }
 
-func TestLookupCanceledAfterItsRequestCounts(t *testing.T) {
-	p := &canceledProvider{fakeProvider: fakeProvider{name: "upc", confidence: 0.9}}
+// TestCanceledLookupsBlockNothingOnTheirOwn cancels lookups while their
+// requests wait, as one queued behind a source's pacing does: they count,
+// but with no failure known a lookup past the limit still asks.
+func TestCanceledLookupsBlockNothingOnTheirOwn(t *testing.T) {
+	p := &canceledProvider{fakeProvider: fakeProvider{name: "discogs", confidence: 0.9}}
 	svc, _ := serviceWith(t, p)
 	for i := range lookup.FailureRequests {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -226,12 +229,60 @@ func TestLookupCanceledAfterItsRequestCounts(t *testing.T) {
 		}
 	}
 	p.cancel = nil
-	res := svc.Lookup(context.Background(), recheckCode)
-	if got := p.fetchCount(); got != lookup.FailureRequests {
-		t.Fatalf("fetches = %d, want %d", got, lookup.FailureRequests)
+	if res := svc.Lookup(context.Background(), recheckCode); len(res.Candidates) != 1 || len(res.Errors) != 0 {
+		t.Fatalf("lookup after canceled ones = %+v, want the source's answer", res)
 	}
-	if len(res.Errors) != 1 || !strings.Contains(res.Errors[0].Error, "canceled") {
-		t.Fatalf("lookup past the limit = %+v, want the not-asked error", res)
+	if got := p.fetchCount(); got != lookup.FailureRequests+1 {
+		t.Fatalf("fetches = %d, want %d", got, lookup.FailureRequests+1)
+	}
+}
+
+// failingCanceledProvider answers 503 to a lookup that its client then
+// gave up on, or, while canceledOnly is set, fails with the cancellation.
+type failingCanceledProvider struct {
+	fakeProvider
+	cancel       context.CancelFunc
+	canceledOnly bool
+}
+
+func (p *failingCanceledProvider) Fetch(ctx context.Context, code string) (json.RawMessage, error) {
+	if _, err := p.fakeProvider.Fetch(ctx, code); err != nil {
+		return nil, err
+	}
+	p.cancel()
+	if p.canceledOnly {
+		return nil, ctx.Err()
+	}
+	return nil, errUnavailable
+}
+
+func TestFailureAnsweredToCanceledLookupsCounts(t *testing.T) {
+	tests := []struct {
+		name     string
+		canceled int
+	}{
+		{name: "every failure answered after the client gave up", canceled: 0},
+		{name: "two canceled requests, then a failure", canceled: 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := &failingCanceledProvider{fakeProvider: fakeProvider{name: "upc"}}
+			svc, _ := serviceWith(t, p)
+			for i := range lookup.FailureRequests {
+				ctx, cancel := context.WithCancel(context.Background())
+				p.cancel = cancel
+				p.canceledOnly = i < tt.canceled
+				svc.Lookup(ctx, recheckCode)
+			}
+			p.cancel = func() {}
+			res := svc.Lookup(context.Background(), recheckCode)
+			if got := p.fetchCount(); got != lookup.FailureRequests {
+				t.Fatalf("fetches = %d, want %d", got, lookup.FailureRequests)
+			}
+			if len(res.Errors) != 1 || !strings.Contains(res.Errors[0].Error, "503") {
+				t.Fatalf("lookup past the limit = %+v, want the 503", res)
+			}
+		})
 	}
 }
 
@@ -306,6 +357,7 @@ func TestPausedSourceIsAskedAgainAfterItsReset(t *testing.T) {
 		{name: "paused from the first request", errs: []func() error{pause}},
 		{name: "outages, then a rate limit", errs: []func() error{outage, outage, pause}},
 		{name: "partial answer with a pause and an outage", errs: []func() error{partial}},
+		{name: "a rate limit, then outages that were in flight", errs: []func() error{pause, outage}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -310,8 +310,8 @@ func (s *Service) pauseState(provider string, err error) (bool, bool) {
 }
 
 // errNoRequest answers a lookup past FailureRequests whose counted requests
-// are all still in flight or were given up on, so no failure is known.
-var errNoRequest = errors.New("not asked: earlier requests for this code are pending or were canceled")
+// are still in flight, so no failure is known yet.
+var errNoRequest = errors.New("not asked: earlier requests for this code are still pending")
 
 // failureLog counts, in memory, the requests a provider got for a barcode
 // in the last FailureWindow, until one succeeds.
@@ -320,55 +320,88 @@ type failureLog struct {
 	at map[string]*failures
 }
 
-type failures struct {
-	requests []time.Time
-	last     *outcome
-	// retry lets one request past the limit once a pause the last failure
-	// named resumes.
-	retry bool
+type requestState int
+
+const (
+	requestPending requestState = iota
+	requestFailed
+	requestCanceled
+)
+
+// request is one counted request: when it was made and how it ended.
+type request struct {
+	at    time.Time
+	state requestState
 }
 
-// claim counts a request for provider and code at now. It reports false,
-// with the last failure known (nil when none ended yet), when
-// FailureRequests were counted in the last FailureWindow and no pause the
-// last failure named has resumed, as resumed reports.
-func (l *failureLog) claim(provider, code string, now time.Time, resumed func(error) bool) (*outcome, bool) {
+type failures struct {
+	requests []*request
+	last     *outcome
+	// pause is the last failure that named a pause still on when it
+	// failed; once the pause resumes it lets one request past the limit.
+	pause error
+}
+
+// limited reports whether the counted requests refuse another: there are
+// FailureRequests of them and one failed or is in flight. Requests whose
+// lookups were all given up on before an answer prove nothing about the
+// source, for example ones queued behind its pacing that never went out.
+func (f *failures) limited() bool {
+	return len(f.requests) >= FailureRequests &&
+		slices.ContainsFunc(f.requests, func(r *request) bool { return r.state != requestCanceled })
+}
+
+// claim counts a request for provider and code at now and returns it. It
+// reports false, with the last failure known (nil when none ended yet),
+// when the counted requests of the last FailureWindow refuse another and
+// no pause a failure named has resumed, as resumed reports.
+func (l *failureLog) claim(provider, code string, now time.Time, resumed func(error) bool) (*request, *outcome, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	for key, f := range l.at {
-		f.requests = slices.DeleteFunc(f.requests, func(at time.Time) bool { return now.Sub(at) >= FailureWindow })
+		f.requests = slices.DeleteFunc(f.requests, func(r *request) bool { return now.Sub(r.at) >= FailureWindow })
 		if len(f.requests) == 0 {
 			delete(l.at, key)
 		}
 	}
 	key := provider + "\x00" + code
 	f, ok := l.at[key]
-	switch {
-	case !ok:
+	if !ok {
 		if l.at == nil {
 			l.at = map[string]*failures{}
 		}
-		l.at[key] = &failures{requests: []time.Time{now}}
-		return nil, true
-	case len(f.requests) < FailureRequests:
-	case f.retry && f.last != nil && resumed(f.last.err):
-		f.retry = false
-	default:
-		return f.last, false
+		f = &failures{}
+		l.at[key] = f
 	}
-	f.requests = append(f.requests, now)
-	return nil, true
+	if f.limited() {
+		if f.pause == nil || !resumed(f.pause) {
+			return nil, f.last, false
+		}
+		f.pause = nil
+	}
+	r := &request{at: now}
+	f.requests = append(f.requests, r)
+	return r, nil, true
 }
 
-// failed records a counted request's failure as the answer for lookups
-// past the limit. retry is whether it names a pause still on, so a source
-// whose pause already ended when it failed lets nothing past the limit.
-func (l *failureLog) failed(provider, code string, o outcome, retry bool) {
+// failed records how a counted request failed. A failure caused by its
+// lookup's cancellation only marks the request; any other becomes the
+// answer past the limit, and when pause is set it names a pause still on.
+func (l *failureLog) failed(provider, code string, r *request, o outcome, canceled, pause bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if f, ok := l.at[provider+"\x00"+code]; ok {
-		f.last = &o
-		f.retry = retry
+	f, ok := l.at[provider+"\x00"+code]
+	if !ok {
+		return
+	}
+	if canceled {
+		r.state = requestCanceled
+		return
+	}
+	r.state = requestFailed
+	f.last = &o
+	if pause {
+		f.pause = o.err
 	}
 }
 
@@ -528,9 +561,8 @@ func (s *Service) query(ctx context.Context, e entry, code string, recheck bool,
 }
 
 // limitedRequest is request within the provider's FailureRequests for
-// code. A lookup already given up on asks nothing. One given up on after
-// its request went out counts, but its failure says nothing about the
-// source, so the last failure stays the one past the limit answers with.
+// code. A lookup already given up on asks nothing; one given up on before
+// its source answered counts, but blocks nothing on its own.
 func (s *Service) limitedRequest(ctx context.Context, e entry, code string, deadline time.Time) ([]Candidate, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("fetch: %w", err)
@@ -540,20 +572,21 @@ func (s *Service) limitedRequest(ctx context.Context, e entry, code string, dead
 		_, ok := s.pauseState(name, err)
 		return ok
 	}
-	if last, ok := s.failures.claim(name, code, s.now(), resumed); !ok {
+	r, last, ok := s.failures.claim(name, code, s.now(), resumed)
+	if !ok {
 		if last == nil {
 			return nil, errNoRequest
 		}
 		return last.candidates, last.err
 	}
 	cands, err := s.request(ctx, e, code, deadline)
-	switch {
-	case err == nil:
+	if err == nil {
 		s.failures.succeeded(name, code)
-	case ctx.Err() == nil:
-		paused, ended := s.pauseState(name, err)
-		s.failures.failed(name, code, outcome{candidates: cands, err: err}, paused && !ended)
+		return cands, nil
 	}
+	canceled := ctx.Err() != nil && errors.Is(err, ctx.Err())
+	paused, ended := s.pauseState(name, err)
+	s.failures.failed(name, code, r, outcome{candidates: cands, err: err}, canceled, paused && !ended)
 	return cands, err
 }
 

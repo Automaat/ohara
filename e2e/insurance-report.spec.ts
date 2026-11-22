@@ -438,18 +438,30 @@ test('Raport dla ubezpieczyciela offers printing only once every cover has loade
 	await expect.poll(() => reportTable(page).locator('tbody img').evaluateAll(loaded)).toBe(true);
 });
 
-test('Raport dla ubezpieczyciela keeps its columns on a wide screen with a 500-byte title', async ({
-	page
-}) => {
-	await fulfillSixty(page);
-	await page.setViewportSize({ width: 2560, height: 1440 });
-	await page.goto('/valuation/report');
-	const table = reportTable(page);
-	await expect(table.locator('tbody tr')).toHaveCount(60);
-	expect(await table.evaluate(clipped)).toBe(0);
-	const width = await page.evaluate(() => ({
-		page: document.documentElement.scrollWidth,
-		view: window.innerWidth
-	}));
-	expect(width.page).toBeLessThanOrEqual(width.view);
-});
+const screens = [
+	[2560, 1440],
+	[1280, 844],
+	[1200, 844],
+	[1199, 844],
+	[1024, 844],
+	[900, 844],
+	[768, 844],
+	[767, 844],
+	[390, 844]
+] as const;
+
+for (const [width, height] of screens) {
+	test(`Raport dla ubezpieczyciela fits ${width} px with a 500-byte title`, async ({ page }) => {
+		await fulfillSixty(page);
+		await page.setViewportSize({ width, height });
+		await page.goto('/valuation/report');
+		const table = reportTable(page);
+		await expect(table.locator('tbody tr')).toHaveCount(60);
+		const size = await page.evaluate(() => ({
+			page: document.documentElement.scrollWidth,
+			view: window.innerWidth
+		}));
+		expect(size.page).toBeLessThanOrEqual(size.view);
+		expect(await table.evaluate(clipped)).toBe(0);
+	});
+}

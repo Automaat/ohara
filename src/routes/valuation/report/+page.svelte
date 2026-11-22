@@ -378,8 +378,9 @@
 		overflow-wrap: anywhere;
 	}
 
-	/* On a phone each copy is a card: its cover and title, then the other cells labelled. */
-	@media screen and (max-width: 47.9375rem) {
+	/* Below the width nine columns need beside the side navigation, each copy is a card: its
+	   cover and title, then the other cells labelled. */
+	@media screen and (max-width: 74.9375rem) {
 		.copies thead {
 			position: absolute;
 			inline-size: 1px;

@@ -37,6 +37,7 @@ async function answerSeasons(page: Page, show: string, tmdbID: number): Promise<
 				season: n
 			},
 			edition: { barcode: '' },
+			cover_url: `${url.origin}/apple-touch-icon.png?season=${n}`,
 			provider: 'tmdb',
 			sources: ['tmdb'],
 			confidence: 0.6
@@ -65,7 +66,14 @@ test('Dodaj tytuł finds a show, saves its second season and lists it under Seri
 	expect(searched).toEqual(['tv']);
 
 	await expect(form.getByRole('radio', { name: 'Serial' })).toBeChecked();
-	await expect(form.getByRole('textbox', { name: 'Sezon' })).toHaveValue('2');
+	const seasonField = form.getByRole('textbox', { name: 'Sezon' });
+	const poster = page.locator('header.found img');
+	await expect(seasonField).toHaveValue('2');
+	await expect(poster).toHaveAttribute('src', /season=2$/);
+	await seasonField.fill('3');
+	await expect(poster).toHaveCount(0);
+	await seasonField.fill('2');
+	await expect(poster).toHaveAttribute('src', /season=2$/);
 	await form.getByRole('radio', { name: 'Blu-ray' }).check();
 	await form.getByRole('button', { name: 'Dodaj do kolekcji' }).click();
 	await expect(page).toHaveURL(/\/titles\/\d+$/);

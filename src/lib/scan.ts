@@ -516,7 +516,7 @@ function fitCoverURL(value: string | null | undefined): string | undefined {
  * is another season of the same show: the show's names and TMDB ID still fit it, the picked
  * season's year and poster do not.
  */
-function sameSeason(f: QuickForm, candidate: Candidate | null): boolean {
+export function sameSeason(f: QuickForm, candidate: Candidate | null): boolean {
 	if (f.kind !== 'tv') return true;
 	const typed = trimSpace(f.season ?? '');
 	return /^\d+$/.test(typed) && Number(typed) === candidate?.title.season;

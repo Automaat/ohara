@@ -743,7 +743,7 @@ func pendingAlerts(ctx context.Context, q querier, markets marketTable, only *in
 		`+marketJoin("e", 3)+`
 		WHERE a.sent_at IS NULL AND a.attempts < $1 AND a.created_at > now() - `+alertWindow+`
 			AND (o.price_cents <= c.max_price_cents OR o.price_cents * 100 <= m.cents * c.max_market_percent)
-			AND o.dismissed_at IS NULL AND `+wishNamedBy("c")+`
+			AND o.dismissed_at IS NULL AND `+wishNamedBy("c")+` AND `+huntedWish("c")+`
 			AND (a.alerted_price_cents IS NULL OR o.price_cents < a.alerted_price_cents)
 			AND ($2::bigint IS NULL OR a.observation_id = $2)
 		ORDER BY a.created_at, a.observation_id`, MaxAttempts, only, markets.titles, markets.formats, markets.cents)
@@ -854,13 +854,14 @@ var (
 		LEFT JOIN deal_alert a ON a.observation_id = o.id
 		LEFT JOIN copy w ON w.status = 'wishlist' AND w.id = coalesce(o.wishlist_copy_id, a.copy_id)
 			AND (o.wishlist_copy_id IS NOT NULL OR ` + wishOfListingTitle + `) AND ` + wishNamedBy("w") + `
+			AND ` + huntedWish("w") + `
 		WHERE o.dismissed_at IS NULL`
 	wishedListings = `SELECT o.id, o.observed_at, o.price_cents, o.source, a.sent_at, w.id AS wish_id, w.max_price_cents,
 			w.max_market_percent, w.edition_id AS wish_edition_id
 		FROM copy w
 		JOIN price_observation o ON o.wishlist_copy_id = w.id AND o.dismissed_at IS NULL
 		LEFT JOIN deal_alert a ON a.observation_id = o.id
-		WHERE w.status = 'wishlist' AND ` + wishNamedBy("w") + `
+		WHERE w.status = 'wishlist' AND ` + wishNamedBy("w") + ` AND ` + huntedWish("w") + `
 		UNION ALL
 		SELECT o.id, o.observed_at, o.price_cents, o.source, a.sent_at, w.id, w.max_price_cents,
 			w.max_market_percent, w.edition_id
@@ -868,7 +869,7 @@ var (
 		JOIN deal_alert a ON a.copy_id = w.id
 		JOIN price_observation o ON o.id = a.observation_id AND o.wishlist_copy_id IS NULL
 			AND o.dismissed_at IS NULL
-		WHERE w.status = 'wishlist' AND ` + wishOfListingTitle + ` AND ` + wishNamedBy("w")
+		WHERE w.status = 'wishlist' AND ` + wishOfListingTitle + ` AND ` + wishNamedBy("w") + ` AND ` + huntedWish("w")
 )
 
 // Recent returns the newest deal observations that pass f. It picks the page from the listing

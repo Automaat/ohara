@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { purchaseDate } from './polish';
 import {
 	addTag,
+	bookFormat,
 	centsToInput,
 	collectionSearch,
 	copyPayload,
@@ -81,8 +82,17 @@ describe('labels', () => {
 			{ value: 'uhd', label: '4K UHD' },
 			{ value: 'cd', label: 'CD' },
 			{ value: 'vinyl', label: 'Winyl' },
-			{ value: 'cassette', label: 'Kaseta' }
+			{ value: 'cassette', label: 'Kaseta' },
+			{ value: 'audiobook', label: 'Audiobook' }
 		]);
+	});
+
+	it('takes an audiobook as the only book format', () => {
+		expect(formatLabels.audiobook).toBe('Audiobook');
+		expect(bookFormat('audiobook')).toBe('audiobook');
+		expect(bookFormat('')).toBeNull();
+		expect(bookFormat(null)).toBeNull();
+		expect(bookFormat('cd')).toBeNull();
 	});
 
 	it('offers each kind its own media', () => {
@@ -119,6 +129,14 @@ describe('labels', () => {
 		expect(editionSummary({ format: null, binding: null, label: '', barcode: null })).toBe(
 			'Wydanie bez opisu'
 		);
+		expect(
+			editionSummary({
+				format: 'audiobook',
+				binding: null,
+				label: 'Czyta Krzysztof Gosztyła',
+				barcode: null
+			})
+		).toBe('Audiobook · Czyta Krzysztof Gosztyła');
 	});
 });
 
@@ -591,6 +609,24 @@ describe('edition form', () => {
 			packaging: [],
 			binding: 'hardcover'
 		});
+	});
+
+	it('keeps an audiobook format on a book edition and drops its binding', () => {
+		const form = {
+			...editionToForm(edition),
+			format: 'audiobook' as const,
+			binding: 'hardcover' as const
+		};
+		const parsed = editionPayload(form, 2, 'book');
+		expect(parsed.ok && parsed.value).toMatchObject({
+			format: 'audiobook',
+			binding: null,
+			packaging: []
+		});
+		const film = editionPayload({ ...form, format: 'dvd' }, 2, 'book');
+		expect(film.ok && film.value).toMatchObject({ format: null, binding: 'hardcover' });
+		const movie = editionPayload(form, 1, 'movie');
+		expect(!movie.ok && movie.issue.field).toBe('format');
 	});
 
 	it('requires a format for movies and a numeric year', () => {

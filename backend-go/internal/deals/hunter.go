@@ -636,7 +636,7 @@ func (h *Hunter) sent() {
 var (
 	formatLabels = map[string]string{
 		"dvd": "DVD", "bluray": "Blu-ray", "uhd": "4K UHD",
-		"cd": "CD", "vinyl": "Winyl", "cassette": "Kaseta",
+		"cd": "CD", "vinyl": "Winyl", "cassette": "Kaseta", FormatAudiobook: "Audiobook",
 	}
 	sourceLabels = map[string]string{"olx": "OLX", "pepper": "Pepper"}
 	stateLabels  = map[string]string{"new": "nowy", "used": "używany"}

@@ -488,6 +488,22 @@ describe('ScanFlow picks', () => {
 		expect(flow.form.packaging).toEqual([]);
 	});
 
+	it("takes a book's medium from the pick as one choice, else keeps the chosen one", async () => {
+		const audiobook: Candidate = { ...book, edition: { barcode: code, format: 'audiobook' } };
+		const bare: Candidate = { ...book, edition: { barcode: code } };
+		const s = server(lookup([book, audiobook, bare], true));
+		const flow = new ScanFlow(s.fetchFn, memory());
+		await flow.load(code);
+		flow.pick(0);
+		expect(flow.form).toMatchObject({ format: '', binding: 'hardcover' });
+		flow.pick(1);
+		expect(flow.form).toMatchObject({ format: 'audiobook', binding: '' });
+		flow.pick(2);
+		expect(flow.form).toMatchObject({ format: 'audiobook', binding: '' });
+		flow.pick(0);
+		expect(flow.form).toMatchObject({ format: '', binding: 'hardcover' });
+	});
+
 	it('does nothing on an owned edition', async () => {
 		const s = server(ownedRoutes());
 		const flow = new ScanFlow(s.fetchFn, memory());

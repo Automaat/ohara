@@ -31,6 +31,10 @@ type TitleFields struct {
 	OpenLibraryID *string  `json:"openlibrary_id,omitempty" ts:",null"`
 }
 
+// FormatAudiobook is the format of a book edition that is a recording; a
+// print book has none, and only print has a binding.
+const FormatAudiobook = "audiobook"
+
 // EditionFields mirrors the edition body of POST /api/editions without
 // title_id.
 type EditionFields struct {

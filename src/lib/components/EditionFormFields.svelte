@@ -12,6 +12,7 @@
 	import { request } from '#lib/api.js';
 	import {
 		bindingLabels,
+		bookFormatLabels,
 		displayName,
 		kindLabels,
 		movieFormatLabels,
@@ -173,16 +174,27 @@
 			error={errorFor('discogs_release_id')}
 		/>
 	{:else}
-		<Field label="Oprawa" error={errorFor('binding')}>
+		<Field label="Nośnik" error={errorFor('format')}>
 			{#snippet control(c)}
 				<Select
 					{...c}
-					bind:value={form.binding}
-					placeholder="Nie podano"
-					options={[{ value: '', label: 'Nie podano' }, ...options(bindingLabels)]}
+					bind:value={form.format}
+					options={[{ value: '', label: 'Druk' }, ...options(bookFormatLabels)]}
 				/>
 			{/snippet}
 		</Field>
+		{#if form.format !== 'audiobook'}
+			<Field label="Oprawa" error={errorFor('binding')}>
+				{#snippet control(c)}
+					<Select
+						{...c}
+						bind:value={form.binding}
+						placeholder="Nie podano"
+						options={[{ value: '', label: 'Nie podano' }, ...options(bindingLabels)]}
+					/>
+				{/snippet}
+			</Field>
+		{/if}
 	{/if}
 	<Field label="Wydawca" bind:value={form.publisher} error={errorFor('publisher')} />
 	<Field label="Rok wydania" inputmode="numeric" bind:value={form.year} error={errorFor('year')} />

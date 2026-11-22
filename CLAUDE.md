@@ -243,6 +243,14 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   only when Discogs finds nothing or fails, with covers from the Cover Art
   Archive. Every release becomes a candidate: one barcode often names
   several pressings, so the user picks the edition.
+- An audiobook stays kind `book`, its authors as authors: a book edition
+  takes format `audiobook` or none for print, and only print takes a
+  binding (a film or music format on a book, or a binding on an audiobook,
+  answers 422). BN sets it from a record whose `kind` is "audiobook"; a
+  merged candidate drops any binding another catalog named. The book
+  edition form's "Nośnik" ("Druk" or "Audiobook") hides "Oprawa" for an
+  audiobook, the quick confirm offers it beside the bindings, and the
+  shelf, the edition summary and Kolekcja's "Nośnik" filter name it.
 - Every Discogs request in the process (music lookup, title search,
   valuation), and every redirect it follows, waits for one shared
   `discogs.Limiter`: a burst of 4, then one every 1.2 s. Each request
@@ -309,7 +317,10 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   media word, a release year or the author, or anything right after the
   author, and a lone letter before a space ("M Fritz Lang"); the
   edition's format for movies, the author's surname in any case for
-  books ("Andrzeja Sapkowskiego", "Lalka Prusa"), the artist's words
+  books ("Andrzeja Sapkowskiego", "Lalka Prusa") and, for an audiobook
+  only, a word naming one ("audiobook", "audiobooka", "audiobuk",
+  "audioksiążka"; a print book skips such listings, and an audiobook's
+  queries add "audiobook"), the artist's words
   and a fitting medium for
   albums, where a listing naming no medium counts as a CD, minus the
   editable reject phrases a want's own name or artist does not contain),
@@ -768,6 +779,8 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   read, the queue count following a queued scan, its add and undo,
   Kolekcja's filters, which also run at 1440 × 900, and its sort orders
   under active filters, tags from the title form to Kolekcja's filter,
+  an audiobook from "Dodaj tytuł" to the shelf, the "Nośnik" filter and
+  the edition form,
   cover photo uploads, the collection export, and the insurance report
   with its A4 printout. `scripts/e2e.sh` builds
   the image (or takes one as its first argument), starts it from

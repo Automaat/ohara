@@ -20,6 +20,7 @@ var (
 	}
 	formatLabels = map[string]string{
 		"dvd": "DVD", "bluray": "Blu-ray", "uhd": "4K UHD", "cd": "CD", "vinyl": "Winyl", "cassette": "Kaseta",
+		collection.FormatAudiobook: "Audiobook",
 	}
 	bindingLabels = map[string]string{
 		"hardcover": "Twarda oprawa", "paperback": "Miękka oprawa", "other": "Inna oprawa",

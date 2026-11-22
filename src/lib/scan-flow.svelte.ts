@@ -450,10 +450,13 @@ export class ScanFlow {
 		const next = quickForm(candidate, this.sticky, item.barcode);
 		const f = this.form;
 		const sameKind = next.kind === f.kind;
+		// The pick's medium, or the one chosen before when it names none: a book's binding and its
+		// audiobook format are one choice, so a pick naming either replaces both.
+		const medium = next.format || next.binding ? next : sameKind ? f : null;
 		this.form = {
 			...next,
-			format: next.format || (sameKind ? f.format : ''),
-			binding: next.binding || (sameKind ? f.binding : ''),
+			format: medium?.format ?? '',
+			binding: medium?.binding ?? '',
 			status: f.status,
 			price: f.price,
 			purchased_on: f.purchased_on,

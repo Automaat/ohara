@@ -7,7 +7,9 @@ export type MovieFormat = 'dvd' | 'bluray' | 'uhd';
 
 export type MusicFormat = 'cd' | 'vinyl' | 'cassette';
 
-export type Format = 'dvd' | 'bluray' | 'uhd' | 'cd' | 'vinyl' | 'cassette';
+export type BookFormat = 'audiobook';
+
+export type Format = 'dvd' | 'bluray' | 'uhd' | 'cd' | 'vinyl' | 'cassette' | 'audiobook';
 
 export type Binding = 'hardcover' | 'paperback' | 'other';
 

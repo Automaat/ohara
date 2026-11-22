@@ -394,6 +394,38 @@ func TestLookupMergesBookAnswers(t *testing.T) {
 	}
 }
 
+func TestLookupMergedAudiobookHasNoBinding(t *testing.T) {
+	const code = "9788375780420"
+	for _, audioFirst := range []bool{true, false} {
+		audio := book(code, "Ostatnie życzenie. Cz. 1", 0.9)
+		audio.Edition.Format = new(lookup.FormatAudiobook)
+		bound := book(code, "Ostatnie życzenie", 0.8)
+		bound.Edition.Binding = new("paperback")
+		bound.CoverURL = "https://example.test/cover.jpg"
+		first, second := audio, bound
+		if !audioFirst {
+			first, second = bound, audio
+		}
+		r := &lookup.Registry{}
+		for _, p := range []*fixedProvider{
+			{name: "first", cands: []lookup.Candidate{first}},
+			{name: "second", cands: []lookup.Candidate{second}},
+		} {
+			if err := r.Register(p, 0); err != nil {
+				t.Fatal(err)
+			}
+		}
+		res := lookup.NewService(r, nil, discard()).Lookup(context.Background(), code)
+		if len(res.Candidates) != 1 {
+			t.Fatalf("audio first %v: candidates = %+v", audioFirst, res.Candidates)
+		}
+		e := res.Candidates[0].Edition
+		if e.Format == nil || *e.Format != lookup.FormatAudiobook || e.Binding != nil || res.Candidates[0].CoverURL == "" {
+			t.Fatalf("audio first %v: merged edition = %+v", audioFirst, e)
+		}
+	}
+}
+
 func TestLookupKeepsSingleBookAnswer(t *testing.T) {
 	const code = "9780140449136"
 	r := &lookup.Registry{}

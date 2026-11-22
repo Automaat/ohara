@@ -13,6 +13,7 @@ import {
 	displayName,
 	formatFits,
 	bindingLabels,
+	bookFormat,
 	formatLabels,
 	packagingLabels,
 	triStateLabels,
@@ -542,6 +543,8 @@ export function scanEditionPayload(
 	if ((movie || music) && !formatFits(f.kind, f.format)) {
 		return { ok: false, issue: { field: 'format', message: 'Wybierz nośnik.' } };
 	}
+	const book = f.kind === 'book';
+	const audiobook = book ? bookFormat(f.format) : null;
 	const selected = candidate?.type === f.kind ? candidate : null;
 	const e = selected?.edition;
 	return {
@@ -552,14 +555,15 @@ export function scanEditionPayload(
 			label: fitText(e?.label) ?? '',
 			publisher: fitText(e?.publisher) ?? '',
 			year: fitYear(e?.year),
-			format: (movie || music) && f.format ? f.format : null,
+			format: (movie || music) && f.format ? f.format : audiobook,
 			pl_subtitles: (movie && fitEnum(triStateLabels, e?.pl_subtitles)) || 'unknown',
 			pl_voiceover: (movie && fitEnum(triStateLabels, e?.pl_voiceover)) || 'unknown',
 			// The form takes these from the pick without a choice the user made.
 			packaging: movie
 				? f.packaging.flatMap((p) => fitEnum<Packaging>(packagingLabels, p) ?? [])
 				: [],
-			binding: f.kind === 'book' ? fitEnum<Binding>(bindingLabels, f.binding) : null,
+			// An audiobook has no binding, even one a catalog named for its ISBN.
+			binding: book && !audiobook ? fitEnum<Binding>(bindingLabels, f.binding) : null,
 			// The release is one pressing on its own medium; another or an unknown medium is not it.
 			discogs_release_id: music && e?.format === f.format ? fitID(e?.discogs_release_id) : null,
 			cover_url: fitCoverURL(selected?.cover_url),

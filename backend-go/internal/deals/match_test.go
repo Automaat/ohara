@@ -175,6 +175,8 @@ func TestWantQueries(t *testing.T) {
 		{"uhd keyword", bladeRunner("uhd"), []string{"Łowca androidów 4k", "Blade Runner 4k"}},
 		{"book with surname", wiedzmin(), []string{"Ostatnie życzenie sapkowski"}},
 		{"book without authors", Want{Kind: "book", Name: "Lalka"}, []string{"Lalka"}},
+		{"audiobook", audiobook("Ostatnie życzenie", "Andrzej Sapkowski"), []string{"Ostatnie życzenie sapkowski audiobook"}},
+		{"audiobook already named", audiobook("Lalka audiobook", "Bolesław Prus"), []string{"Lalka audiobook prus"}},
 		{"name already has the keyword", Want{Kind: "movie", Name: "Seria DVD", Format: new("dvd")}, []string{"Seria DVD"}},
 		{"album after its artist", album("The Wall", "Pink Floyd", "cd"), []string{"Pink Floyd The Wall"}},
 		{"self-titled album", album("Metallica", "Metallica", "cd"), []string{"Metallica"}},
@@ -442,6 +444,47 @@ func TestLotsDoNotMatch(t *testing.T) {
 
 func book(name, author string) Want {
 	return Want{CopyID: 6, EditionID: 60, TitleID: 600, Kind: "book", Name: name, Authors: []string{author}}
+}
+
+func audiobook(name, author string) Want {
+	w := book(name, author)
+	w.Format = new(FormatAudiobook)
+	return w
+}
+
+func TestAudiobookMatches(t *testing.T) {
+	audio := audiobook("Ostatnie życzenie", "Andrzej Sapkowski")
+	paper := book("Ostatnie życzenie", "Andrzej Sapkowski")
+	tests := []struct {
+		name  string
+		want  Want
+		title string
+		match bool
+	}{
+		{"audiobook names its medium", audio, "Ostatnie życzenie Sapkowski audiobook CD", true},
+		{"audiobook in capitals", audio, "SAPKOWSKI OSTATNIE ŻYCZENIE AUDIOBOOK", true},
+		{"genitive audiobooka", audio, "Sprzedam audiobooka Ostatnie życzenie Sapkowskiego", true},
+		{"plural audiobooki", audio, "Audiobooki: Ostatnie życzenie - Sapkowski", true},
+		{"audio book in two words", audio, "Ostatnie życzenie Sapkowski audio book mp3", true},
+		{"polish audiobuk", audio, "Ostatnie życzenie Sapkowski audiobuk", true},
+		{"audioksiążka", audio, "Audioksiążka Ostatnie życzenie Sapkowski", true},
+		{"print listing for an audiobook", audio, "Ostatnie życzenie Sapkowski twarda oprawa", false},
+		{"cd alone names no audiobook", audio, "Ostatnie życzenie Sapkowski CD", false},
+		{"audiobook still needs the author", audio, "Ostatnie życzenie audiobook", false},
+		{"print book ignores an audiobook", paper, "Ostatnie życzenie Sapkowski audiobook CD", false},
+		{"print book ignores audiobooka", paper, "Ostatnie życzenie Sapkowskiego audiobooka", false},
+		{"print book matches print", paper, "Ostatnie życzenie Sapkowski miękka oprawa", true},
+		{"a title naming audiobooks is no medium", book("Audiobook", "Jan Kowalski"), "Audiobook Kowalski książka", true},
+		{"an audiobook titled so needs another word", audiobook("Audiobook", "Jan Kowalski"), "Audiobook Kowalski książka", false},
+		{"movies ignore the word", bladeRunner("dvd"), "Blade Runner DVD audiobook gratis", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.want.Matches(tt.title); got != tt.match {
+				t.Fatalf("Matches(%q) = %v, want %v", tt.title, got, tt.match)
+			}
+		})
+	}
 }
 
 func TestSpellingVariantsMatch(t *testing.T) {

@@ -8,6 +8,7 @@
 		PageHeader,
 		Skeleton
 	} from '@smykla-skalski/sui';
+	import { SvelteSet } from 'svelte/reactivity';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { ApiError, errorMessage, request } from '#lib/api.js';
@@ -22,6 +23,7 @@
 		type FormIssue
 	} from '#lib/collection.js';
 	import CopyFormFields from '#lib/components/CopyFormFields.svelte';
+	import { LatestLoad } from '#lib/scan.js';
 
 	const id = $derived(Number(page.params.id));
 
@@ -30,21 +32,45 @@
 	let busy = $state(false);
 	let form = $state(copyToForm(null));
 	let issue = $state<FormIssue | null>(null);
-	let saving = $state(false);
+	/**
+	 * Copies whose save is still on its way, kept across a jump to another copy and back, so a
+	 * second save of the same copy cannot start until the first one has landed.
+	 */
+	const pendingSaves = new SvelteSet<number>();
+	const saving = $derived(detail !== null && pendingSaves.has(detail.id));
 	let saved = $state(false);
 	let confirmDelete = $state(false);
 	let deleteError = $state<string | null>(null);
 
+	/** The copy the page was last asked for; another one's answers and forms are dropped. */
+	let requested: number | undefined;
+	/** A slower answer for an earlier load never replaces a newer one. */
+	const loads = new LatestLoad();
+
 	async function load(copyID: number) {
+		if (copyID !== requested) {
+			requested = copyID;
+			detail = null;
+			failure = null;
+			form = copyToForm(null);
+			issue = null;
+			saved = false;
+			confirmDelete = false;
+			deleteError = null;
+		}
+		const isLatest = loads.start();
 		busy = true;
 		try {
-			detail = await request<CopyDetail>(fetch, 'GET', `/api/copies/${copyID}`);
-			form = copyToForm(detail);
+			const next = await request<CopyDetail>(fetch, 'GET', `/api/copies/${copyID}`);
+			if (!isLatest()) return;
+			detail = next;
+			form = copyToForm(next);
 			failure = null;
 		} catch (err) {
+			if (!isLatest()) return;
 			failure = errorMessage(err);
 		} finally {
-			busy = false;
+			if (isLatest()) busy = false;
 		}
 	}
 
@@ -58,29 +84,32 @@
 			issue = parsed.issue;
 			return;
 		}
-		saving = true;
+		if (pendingSaves.has(d.id)) return;
+		pendingSaves.add(d.id);
 		saved = false;
 		try {
-			await request<Copy>(fetch, 'PUT', `/api/copies/${id}`, parsed.value);
+			await request<Copy>(fetch, 'PUT', `/api/copies/${d.id}`, parsed.value);
+			if (d.id !== requested) return;
 			issue = null;
 			saved = true;
-			await load(id);
+			await load(d.id);
 		} catch (err) {
+			if (d.id !== requested) return;
 			issue = {
 				field: err instanceof ApiError ? (err.field ?? '') : '',
 				message: errorMessage(err)
 			};
 		} finally {
-			saving = false;
+			pendingSaves.delete(d.id);
 		}
 	}
 
 	async function remove(d: CopyDetail) {
 		try {
-			await request(fetch, 'DELETE', `/api/copies/${id}`);
-			await goto(`/editions/${d.edition_id}`);
+			await request(fetch, 'DELETE', `/api/copies/${d.id}`);
+			if (d.id === requested) await goto(`/editions/${d.edition_id}`);
 		} catch (err) {
-			deleteError = errorMessage(err);
+			if (d.id === requested) deleteError = errorMessage(err);
 		}
 	}
 </script>

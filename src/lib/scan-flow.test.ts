@@ -2,7 +2,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { invalidBarcodeMessage } from './api';
 import { formatPLN, type EditionDetail } from './collection';
 import { recentScans } from './recent.svelte';
-import { ScanFlow, checkTimeout, resetVisit, type Keeper } from './scan-flow.svelte';
+import {
+	ScanFlow,
+	checkTimeout,
+	announceSettle,
+	resetVisit,
+	resultAnnouncement,
+	type Keeper
+} from './scan-flow.svelte';
 import { resetSession, session } from './session.svelte';
 import type { Candidate, KeyValueStore } from './scan';
 
@@ -1365,5 +1372,136 @@ describe('ScanFlow.manual and dismiss', () => {
 		flow.dismiss();
 		flow.manual();
 		expect(recentScans.list).toHaveLength(0);
+	});
+});
+
+describe('resultAnnouncement', () => {
+	const ready = { kind: 'ready', status: 'found' } as const;
+
+	it('reads the result line, then the name', () => {
+		expect(resultAnnouncement(ready, '5901234123457', 'Znaleziono · TMDB', 'Matrix')).toBe(
+			'Znaleziono · TMDB. Matrix'
+		);
+		expect(
+			resultAnnouncement(
+				{ kind: 'ready', status: 'owned' },
+				'5901234123457',
+				'Masz już to wydanie',
+				'Matrix'
+			)
+		).toBe('Masz już to wydanie. Matrix');
+	});
+
+	it('reads the line alone for a result without a name', () => {
+		expect(resultAnnouncement(ready, '5901234123457', 'Znaleziono propozycje: 3')).toBe(
+			'Znaleziono propozycje: 3'
+		);
+	});
+
+	it('stays silent while checking, for results with a live callout and without a code', () => {
+		const silent = [
+			{ kind: 'loading' },
+			{ kind: 'invalid', message: 'x' },
+			{ kind: 'failed', message: 'x' },
+			{ kind: 'offline' },
+			{ kind: 'expired', saved: true },
+			{
+				kind: 'queued',
+				entry: {
+					id: 1,
+					barcode: '5901234123457',
+					reason: 'lookup_failed',
+					detail: '',
+					scans: 1,
+					created_at: '',
+					last_scanned_at: ''
+				}
+			}
+		] as const;
+		for (const phase of silent) {
+			expect(resultAnnouncement(phase, '5901234123457', 'Linia', 'Matrix')).toBe('');
+		}
+		expect(resultAnnouncement(ready, '', 'Dodaj ręcznie')).toBe('');
+	});
+});
+
+describe('ScanFlow announcement', () => {
+	/** Loads the code and returns what the status holds before and after the words settle. */
+	async function heard(routes: Record<string, Reply | Reply[]>, kept = device()) {
+		vi.useFakeTimers();
+		try {
+			const flow = new ScanFlow(server(routes).fetchFn, memory(), kept);
+			await flow.load(code);
+			const before = flow.announcement;
+			vi.advanceTimersByTime(announceSettle);
+			return { flow, before, after: flow.announcement };
+		} finally {
+			vi.useRealTimers();
+		}
+	}
+
+	it('reads an owned edition with its name once the words settle', async () => {
+		const { before, after } = await heard(ownedRoutes());
+		expect(before).toBe('');
+		expect(after).toBe('Masz już to wydanie. Rejs');
+	});
+
+	it('reads a found item with its source and name', async () => {
+		const { after } = await heard(lookup([movie], false));
+		expect(after).toBe('Znaleziono · TMDB. Diuna: Część druga');
+	});
+
+	it('reads the one candidate waiting for a pick by name', async () => {
+		const { after } = await heard(lookup([book], true));
+		expect(after).toBe('Znaleziono propozycję. Bolesław Prus – Lalka');
+	});
+
+	it('names pressings of one item, and counts different items alone', async () => {
+		const paperback: Candidate = { ...book, edition: { ...book.edition, binding: 'paperback' } };
+		expect((await heard(lookup([book, paperback], true))).after).toBe(
+			'Znaleziono propozycje: 2. Bolesław Prus – Lalka'
+		);
+		expect((await heard(lookup([book, movie], true))).after).toBe('Znaleziono propozycje: 2');
+	});
+
+	it('leaves results with their own live callout to it', async () => {
+		const queued = await heard({
+			...noEdition,
+			[`GET /api/lookup/${code}`]: [200, { barcode: code, candidates: [], errors: [] }],
+			'POST /api/scan-queue': [
+				201,
+				{
+					id: 1,
+					barcode: code,
+					reason: 'not_found',
+					detail: '',
+					scans: 1,
+					created_at: '',
+					last_scanned_at: ''
+				}
+			]
+		});
+		expect(queued.flow.phase.kind).toBe('queued');
+		expect(queued.after).toBe('');
+		const offline = await heard({ [`GET /api/editions?barcode=${code}`]: noAnswer });
+		expect(offline.flow.phase).toEqual({ kind: 'offline' });
+		expect(offline.after).toBe('');
+	});
+
+	it('is not read again as the form changes, and empties for the next code', async () => {
+		vi.useFakeTimers();
+		try {
+			const flow = new ScanFlow(server(lookup([movie], false)).fetchFn, memory());
+			await flow.load(code);
+			vi.advanceTimersByTime(announceSettle);
+			flow.form.name = 'Inny tytuł';
+			flow.wish(true);
+			expect(flow.announcement).toBe('Znaleziono · TMDB. Diuna: Część druga');
+			const next = flow.load(code);
+			expect(flow.announcement).toBe('');
+			await next;
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });

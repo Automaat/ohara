@@ -7,8 +7,8 @@ name: Release
 #
 # GitHub runs the copy of this file on the chosen ref, and branches cut
 # before a change keep the old copy. So the tags are guarded outside the
-# file: a ruleset on refs/tags/v* admits only deploy keys to create, move
-# or drop such a tag, and the one deploy key is the RELEASE_DEPLOY_KEY
+# file: a ruleset on every tag admits only deploy keys to create, move
+# or drop one, and the one deploy key is the RELEASE_DEPLOY_KEY
 # secret of the release environment, which admits main alone. Old copies
 # cannot tag, and with no tag they cannot cut a release (docs/ci.md).
 on:
@@ -77,7 +77,9 @@ jobs:
               VERSION="$MAJOR.$((MINOR + 1)).0"
             fi
           fi
-          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+          # Whole-string match: grep checks line by line, so a newline in the
+          # input would pass and add a second VERSION line to GITHUB_ENV.
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::version '$VERSION' is not X.Y.Z"
             exit 1
           fi
@@ -126,7 +128,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_DEPLOY_KEY: ${{ secrets.RELEASE_DEPLOY_KEY }}
         run: |
-          # The ruleset refuses a v* tag from GITHUB_TOKEN; only the deploy
+          # The ruleset refuses any tag from GITHUB_TOKEN; only the deploy
           # key may push one.
           if [ -z "$RELEASE_DEPLOY_KEY" ]; then
             echo "::error::the release environment has no RELEASE_DEPLOY_KEY secret"

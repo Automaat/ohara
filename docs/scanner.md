@@ -40,13 +40,13 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   normalized form) and posted to `/api/scan-queue` as `lookup_failed` on app
   start, on `online`, when the app is shown and every 20 s, by one tab at a
   time (Web Locks), each POST within 15 s. A run first waits until the
-  browser has settled the scan queue DELETEs on their way
-  (`src/lib/queue-deletes.ts`), so a POST is not sent while one is open.
-  `request`'s 20 s deadline fails a DELETE that gets no answer (the queue
-  page shows its error and keeps the entry), so the wait ends there. The
-  server may still receive such a DELETE later, after the POST for the
-  same code, and then removes that entry. `request` does not follow
-  redirects, so a 401 or Authelia's cross-origin redirect is an expired
+  browser has settled the scan queue DELETEs this tab has on their way
+  (`src/lib/queue-deletes.ts`). `request`'s 20 s deadline fails a DELETE
+  that gets no answer (the queue page shows its error and keeps the
+  entry), so the wait ends there. A DELETE the server gets after the POST
+  for the same code still removes that entry: one held past the deadline,
+  one started during the run, or one from another tab (#506). `request`
+  does not follow redirects, so a 401 or Authelia's cross-origin redirect is an expired
   session ("Odśwież"), not a lost connection; the code is kept either way.
 - The queue page (`/scan/queue`, `QueueList` in `src/lib/queue.svelte.ts`)
   reads the queue when it opens and again each time codes kept on the

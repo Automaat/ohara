@@ -27,6 +27,7 @@
 		titlePayload,
 		titleToForm,
 		type Copy,
+		type CopyStatus,
 		type Edition,
 		type FormIssue,
 		type Title,
@@ -66,6 +67,12 @@
 		{ mode: 'edit'; copy: Copy } | { mode: 'add'; editionID: number; requestKey: string };
 
 	const id = $derived(Number(page.params.id));
+	/** The heading of the card of a title's one copy. */
+	const soleCopyHeading: Record<CopyStatus, string> = {
+		owned: 'Twój egzemplarz',
+		wishlist: 'Na liście życzeń',
+		sold: 'Sprzedany egzemplarz'
+	};
 
 	let detail = $state<TitleDetail | null>(null);
 	/** The title as the collection showed it, drawn in the hero until the title loads. */
@@ -382,7 +389,7 @@
 
 		{#if sole}
 			{@const s = sole}
-			<Card title={s.copy.status === 'owned' ? 'Twój egzemplarz' : 'Na liście życzeń'} level={2}>
+			<Card title={soleCopyHeading[s.copy.status]} level={2}>
 				{#snippet actions()}
 					<Button tone="ghost" onclick={() => openCopy({ mode: 'edit', copy: s.copy })}>
 						Edytuj

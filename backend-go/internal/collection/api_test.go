@@ -10,10 +10,12 @@ import (
 	"image/png"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -690,6 +692,204 @@ func TestCollectionViewLoans(t *testing.T) {
 	}
 	for _, q := range []string{"?loaned=0", "?loaned=true"} {
 		a.fails(http.MethodGet, "/api/collection"+q, nil, http.StatusUnprocessableEntity, "loaned")
+	}
+}
+
+func TestSoldCopy(t *testing.T) {
+	a := newAPI(t)
+	movie := a.title("movie", "Rejs")
+	edition := a.edition(obj{"title_id": movie, "format": "dvd"})
+	owned := obj{
+		"edition_id": edition, "status": "owned", "price_cents": 4999, "purchased_on": "2024-03-01",
+		"shop": "Empik", "acquired_as": "used", "condition": "good",
+	}
+	id := a.copyOf(owned)
+	path := fmt.Sprintf("/api/copies/%d", id)
+	with := func(base obj, fields obj) obj {
+		out := maps.Clone(base)
+		maps.Copy(out, fields)
+		return out
+	}
+	sold := with(owned, obj{"status": "sold", "sold_on": "2026-05-10", "sale_price_cents": 3500})
+
+	a.mustDo(http.MethodPut, path, sold, nil, http.StatusOK)
+	var got collection.CopyDetail
+	a.mustDo(http.MethodGet, path, nil, &got, http.StatusOK)
+	c := got.Copy
+	if c.Status != "sold" || c.SoldOn == nil || c.SoldOn.Format("2006-01-02") != "2026-05-10" ||
+		c.SalePriceCents == nil || *c.SalePriceCents != 3500 {
+		t.Fatalf("sold copy = %+v", c)
+	}
+	if c.PriceCents == nil || *c.PriceCents != 4999 || c.PurchasedOn == nil ||
+		c.PurchasedOn.Format("2006-01-02") != "2024-03-01" || c.Shop != "Empik" ||
+		c.AcquiredAs == nil || *c.AcquiredAs != "used" || c.Condition == nil || *c.Condition != "good" {
+		t.Fatalf("sold copy lost its purchase: %+v", c)
+	}
+
+	refused := []struct {
+		name  string
+		body  obj
+		field string
+	}{
+		{"sold without a day", with(owned, obj{"status": "sold", "sale_price_cents": 3500}), "sold_on"},
+		{"owned with a sale day", with(owned, obj{"sold_on": "2026-05-10"}), "sold_on"},
+		{"owned with a sale price", with(owned, obj{"sale_price_cents": 3500}), "sale_price_cents"},
+		{"wish with a sale day", obj{"edition_id": edition, "status": "wishlist", "sold_on": "2026-05-10"}, "sold_on"},
+		{"wish with a sale price", obj{"edition_id": edition, "status": "wishlist", "sale_price_cents": 3500}, "sale_price_cents"},
+		{"negative sale price", with(sold, obj{"sale_price_cents": -1}), "sale_price_cents"},
+		{"sale price over the cap", with(sold, obj{"sale_price_cents": collection.MaxPriceCents + 1}), "sale_price_cents"},
+		{"sale price past int64", with(sold, obj{"sale_price_cents": json.Number("9223372036854775808")}), "sale_price_cents"},
+		{"sale price not a number", with(sold, obj{"sale_price_cents": "35"}), "sale_price_cents"},
+		{"sold with a wish limit", with(sold, obj{"max_price_cents": 3000}), "max_price_cents"},
+		{"sold with a market percent", with(sold, obj{"max_market_percent": 70}), "max_market_percent"},
+	}
+	for _, tt := range refused {
+		t.Run(tt.name, func(t *testing.T) {
+			a.fails(http.MethodPut, path, tt.body, http.StatusUnprocessableEntity, tt.field)
+		})
+	}
+	var kept collection.Copy
+	a.mustDo(http.MethodGet, path, nil, &kept, http.StatusOK)
+	if kept.Status != "sold" || *kept.SalePriceCents != 3500 {
+		t.Fatalf("refused updates changed the copy to %+v", kept)
+	}
+
+	var unpriced collection.Copy
+	a.mustDo(http.MethodPut, path, with(sold, obj{"sale_price_cents": nil}), &unpriced, http.StatusOK)
+	if unpriced.Status != "sold" || unpriced.SoldOn == nil || unpriced.SalePriceCents != nil {
+		t.Fatalf("sold copy without a sale price = %+v", unpriced)
+	}
+
+	var back collection.Copy
+	a.mustDo(http.MethodPut, path, sold, nil, http.StatusOK)
+	a.mustDo(http.MethodPut, path, owned, &back, http.StatusOK)
+	if back.Status != "owned" || back.SoldOn != nil || back.SalePriceCents != nil || *back.PriceCents != 4999 {
+		t.Fatalf("copy back on the shelf = %+v", back)
+	}
+	var raw map[string]any
+	a.mustDo(http.MethodGet, path, nil, &raw, http.StatusOK)
+	if _, ok := raw["sold_on"]; ok {
+		t.Fatalf("owned copy answers a sale day: %v", raw)
+	}
+
+	var created collection.Copy
+	a.mustDo(http.MethodPost, "/api/copies", obj{"edition_id": edition, "status": "sold", "sold_on": "2026-01-02"}, &created, http.StatusCreated)
+	if created.Status != "sold" || created.SoldOn == nil || created.PriceCents != nil {
+		t.Fatalf("created sold copy = %+v", created)
+	}
+	a.fails(http.MethodPost, "/api/copies", obj{"edition_id": edition, "status": "sold"}, http.StatusUnprocessableEntity, "sold_on")
+}
+
+// TestConcurrentCopyUpdatesAnswerTheirOwnRow overlaps updates that sell a
+// copy and put it back: each answer shows the copy as its own update left it.
+func TestConcurrentCopyUpdatesAnswerTheirOwnRow(t *testing.T) {
+	a := newAPI(t)
+	movie := a.title("movie", "Rejs")
+	edition := a.edition(obj{"title_id": movie, "format": "dvd"})
+	id := a.copyOf(obj{"edition_id": edition, "status": "owned"})
+	path := fmt.Sprintf("%s/api/copies/%d", a.url, id)
+
+	put := func(body obj) (collection.Copy, error) {
+		raw, err := json.Marshal(body)
+		if err != nil {
+			return collection.Copy{}, err
+		}
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodPut, path, bytes.NewReader(raw))
+		if err != nil {
+			return collection.Copy{}, err
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return collection.Copy{}, err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return collection.Copy{}, fmt.Errorf("status %d", resp.StatusCode)
+		}
+		var c collection.Copy
+		return c, json.NewDecoder(resp.Body).Decode(&c)
+	}
+
+	const rounds = 100
+	errs := make(chan error, 2*rounds)
+	// Sixty-four in flight overlap the updates while staying within the test
+	// server's listen backlog.
+	inFlight := make(chan struct{}, 64)
+	var wg sync.WaitGroup
+	for i := range rounds {
+		day := fmt.Sprintf("2026-05-%02d", i%28+1)
+		bodies := []obj{
+			{"edition_id": edition, "status": "sold", "sold_on": day, "sale_price_cents": 3500 + i},
+			{"edition_id": edition, "status": "owned"},
+		}
+		for _, body := range bodies {
+			wg.Go(func() {
+				inFlight <- struct{}{}
+				got, err := put(body)
+				<-inFlight
+				switch {
+				case err != nil:
+					errs <- err
+				case got.Status != body["status"]:
+					errs <- fmt.Errorf("sent %v, answer %+v", body, got)
+				case got.Status == "sold" && (got.SoldOn == nil || got.SoldOn.Format("2006-01-02") != day):
+					errs <- fmt.Errorf("sent %v, answer %+v", body, got)
+				}
+			})
+		}
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+}
+
+func TestCollectionViewKeepsSoldCopiesApart(t *testing.T) {
+	a := newAPI(t)
+	movie := a.title("movie", "Seksmisja")
+	dvd := a.edition(obj{"title_id": movie, "format": "dvd"})
+	a.copyOf(obj{"edition_id": dvd, "status": "owned", "price_cents": 4999})
+	a.copyOf(obj{"edition_id": dvd, "status": "wishlist"})
+	sold := a.copyOf(obj{
+		"edition_id": dvd, "status": "sold", "price_cents": 2000, "sold_on": "2026-05-10",
+		"sale_price_cents": 3500,
+	})
+
+	tests := []struct {
+		query string
+		want  collection.Totals
+		ids   int
+	}{
+		{"", collection.Totals{Copies: 3, Owned: 1, Wishlist: 1, Priced: 1, SpentCents: 4999}, 3},
+		{"?status=sold", collection.Totals{Copies: 1}, 1},
+		{"?status=owned", collection.Totals{Copies: 1, Owned: 1, Priced: 1, SpentCents: 4999}, 1},
+		{"?status=wishlist", collection.Totals{Copies: 1, Wishlist: 1}, 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			var view collection.CollectionView
+			a.mustDo(http.MethodGet, "/api/collection"+tt.query, nil, &view, http.StatusOK)
+			if view.Totals != tt.want || len(view.Items) != tt.ids {
+				t.Fatalf("totals = %+v (%d items), want %+v", view.Totals, len(view.Items), tt.want)
+			}
+			for _, it := range view.Items {
+				if (it.CopyID == sold) != (it.Status == "sold") {
+					t.Fatalf("item %+v", it)
+				}
+				if tt.query == "?status=owned" && it.CopyID == sold {
+					t.Fatalf("owned view lists the sold copy")
+				}
+			}
+		})
+	}
+
+	var view collection.CollectionView
+	a.mustDo(http.MethodGet, "/api/collection?status=sold", nil, &view, http.StatusOK)
+	it := view.Items[0]
+	if it.CopyID != sold || it.SoldOn == nil || it.SoldOn.Format("2006-01-02") != "2026-05-10" ||
+		it.SalePriceCents == nil || *it.SalePriceCents != 3500 || *it.PriceCents != 2000 {
+		t.Fatalf("sold item = %+v", it)
 	}
 }
 

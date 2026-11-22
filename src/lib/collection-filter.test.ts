@@ -214,6 +214,35 @@ describe('the loan filter', () => {
 	});
 });
 
+describe('sold copies', () => {
+	const shelf: CollectionItem[] = [
+		item({ copy_id: 1, kind: 'movie', format: 'dvd', name: 'Alien', price_cents: 2999 }),
+		item({ copy_id: 2, kind: 'movie', format: 'dvd', name: 'Aliens', status: 'wishlist' }),
+		item({
+			copy_id: 3,
+			kind: 'movie',
+			format: 'dvd',
+			name: 'Alien³',
+			status: 'sold',
+			sold_on: '2026-05-10'
+		}),
+		item({ copy_id: 4, kind: 'book', name: 'Solaris', status: 'sold', sold_on: '2026-05-10' })
+	];
+
+	it.each([
+		['the default list leaves them out', {}, [1, 2]],
+		['a search leaves them out', { q: 'alien' }, [1, 2]],
+		['"Sprzedane" lists them alone', { status: 'sold' }, [3, 4]],
+		['"Sprzedane" with a kind', { status: 'sold', kind: 'book' }, [4]],
+		['"Sprzedane" with a search', { status: 'sold', q: 'alien' }, [3]],
+		['owned copies leave them out', { status: 'owned' }, [1]],
+		['copies without a price leave them out', { status: 'unpriced' }, []]
+	] as [string, Partial<CollectionFilter>, number[]][])('%s', (_name, filter, copies) => {
+		const listed = filterCollection(shelf, { ...none, ...filter });
+		expect(listed.map((i) => i.copy_id)).toEqual(copies);
+	});
+});
+
 describe('searchBarcode', () => {
 	it.each([
 		['9788374690997', '9788374690997'],

@@ -106,7 +106,8 @@ func notFound(err error) error {
 	return err
 }
 
-// Totals sums the copies in a collection view. Spent counts owned copies only.
+// Totals sums the copies in a collection view. Copies counts sold ones too;
+// owned, priced and spent count owned copies only.
 type Totals struct {
 	Copies     int   `json:"copies"`
 	Owned      int   `json:"owned"`
@@ -126,8 +127,11 @@ func totals(items []Item) Totals {
 	for i := range items {
 		it := &items[i]
 		t.Copies++
-		if it.Status == StatusWishlist {
+		switch it.Status {
+		case StatusWishlist:
 			t.Wishlist++
+			continue
+		case StatusSold:
 			continue
 		}
 		t.Owned++
@@ -467,7 +471,7 @@ func (h *Handler) getCopy(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) decodeCopy(w http.ResponseWriter, r *http.Request) (*CopyInput, bool) {
 	var in CopyInput
-	if !httpx.DecodeJSON(w, r, h.logger, &in) {
+	if !httpx.DecodeJSONFields(w, r, h.logger, &in, "sale_price_cents") {
 		return nil, false
 	}
 	if fe := in.Normalize(); fe != nil {

@@ -206,6 +206,7 @@
 			{@const name = displayName(row)}
 			{@const wish = row.status === 'wishlist'}
 			{@const lent = row.loan_borrower != null}
+			{@const sold = row.status === 'sold'}
 			<li
 				data-cover-title={row.title_id}
 				data-cover-key={row.copy_id}
@@ -216,7 +217,7 @@
 					<CollectionCover kind={row.kind} url={row.cover_url} large {name} {wish} {lent} />
 				</div>
 				<Link href={`/titles/${row.title_id}`}>{name}</Link>
-				<span class="meta" class:wish class:lent>{shelfLine(row)}</span>
+				<span class="meta" class:wish class:sold class:lent>{shelfLine(row)}</span>
 			</li>
 		{/each}
 	</ul>
@@ -270,8 +271,13 @@
 		font-variant-numeric: tabular-nums;
 	}
 
+	/* A sale's line, "Sprzedany 10 maj 2026 · 35 zł", in the details' colour. */
+	.meta.sold {
+		font-variant-numeric: tabular-nums;
+	}
+
 	/* Phones: three covers a row, a title of at most two lines and one line of details, two for
-	   a wish and its limit. */
+	   a wish and its limit or a sale. */
 	@media (max-width: 640px) {
 		.shelf {
 			grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -307,8 +313,9 @@
 			white-space: nowrap;
 		}
 
-		/* A wish's limit and a loan's "po terminie" wrap rather than vanish past the edge. */
+		/* A wish's limit, a sale and a loan's "po terminie" wrap rather than vanish past the edge. */
 		.meta.wish,
+		.meta.sold,
 		.meta.lent {
 			white-space: normal;
 			overflow-wrap: anywhere;

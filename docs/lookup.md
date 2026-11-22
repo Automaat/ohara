@@ -67,6 +67,14 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   only when Discogs finds nothing or fails, with covers from the Cover Art
   Archive. Every release becomes a candidate: one barcode often names
   several pressings, so the user picks the edition.
+- An audiobook stays kind `book`, its authors as authors: a book edition
+  takes format `audiobook` or none for print, and only print takes a
+  binding (a film or music format on a book, or a binding on an audiobook,
+  answers 422). BN sets it from a record whose `kind` is "audiobook"; a
+  merged candidate drops any binding another catalog named. The book
+  edition form's "Nośnik" ("Druk" or "Audiobook") hides "Oprawa" for an
+  audiobook, the quick confirm offers it beside the bindings, and the
+  shelf, the edition summary and Kolekcja's "Nośnik" filter name it.
 - Every Discogs request in the process (music lookup, title search,
   valuation), and every redirect it follows, waits for one shared
   `discogs.Limiter`: a burst of 4, then one every 1.2 s. Each request

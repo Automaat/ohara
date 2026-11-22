@@ -25,6 +25,7 @@ func Ohara() API {
 			{Name: "Kind", Values: c["Kind"]},
 			{Name: "MovieFormat", Values: c["MovieFormat"]},
 			{Name: "MusicFormat", Values: c["MusicFormat"]},
+			{Name: "BookFormat", Values: c["BookFormat"]},
 			{Name: "Format", Values: c["Format"]},
 			{Name: "Binding", Values: c["Binding"]},
 			{Name: "TriState", Values: c["TriState"]},

@@ -25,6 +25,7 @@
 		boundKeys,
 		boundLabels,
 		byValue,
+		copyGain,
 		discogsRelease,
 		estimateSource,
 		estimateValue,
@@ -90,6 +91,7 @@
 		{ key: 'floor', label: boundLabels.floor, numeric: true },
 		{ key: 'mid', label: boundLabels.mid, numeric: true },
 		{ key: 'ceiling', label: boundLabels.ceiling, numeric: true },
+		{ key: 'gain', label: 'Względem zakupu', numeric: true },
 		{ key: 'low_confidence', label: 'Pewność' }
 	];
 	const copies = $derived(byValue(view?.copies ?? []));
@@ -211,6 +213,8 @@
 					{:else if column.key === 'floor' || column.key === 'mid' || column.key === 'ceiling'}
 						{estimateValue(row[column.key])}
 						<span class="meta">{estimateSource(column.key, row[column.key])}</span>
+					{:else if column.key === 'gain'}
+						{copyGain(row)}
 					{:else if column.key === 'low_confidence'}
 						<Pill tone={row.low_confidence ? 'warning' : 'success'}>
 							{row.low_confidence ? 'Niska' : 'Dobra'}

@@ -3,6 +3,7 @@ import {
 	boundLine,
 	byValue,
 	copiesLabel,
+	copyGain,
 	copyMeta,
 	copyNote,
 	copyRange,
@@ -593,6 +594,33 @@ describe('copy rows', () => {
 		expect(discogsRelease(copy({ discogs_release_id: 1873013, mid: est(2500) }))).toBeNull();
 		expect(discogsRelease(copy({ discogs_release_id: 1873013 }))).toBeNull();
 		expect(discogsRelease(copy({ mid: discogs }))).toBeNull();
+	});
+
+	it('states the used value against the price paid in złoty and percent', () => {
+		expect(nbsp(copyGain(copy({ mid: est(6000), price_cents: 5000 })))).toBe('+10 zł · +20%');
+		expect(nbsp(copyGain(copy({ mid: est(3400), price_cents: 5000 })))).toBe('−16 zł · −32%');
+		expect(nbsp(copyGain(copy({ mid: est(123456), price_cents: 100000 })))).toBe('+235 zł · +23%');
+		expect(nbsp(copyGain(copy({ mid: est(5000), price_cents: 5000 })))).toBe('0 zł · 0%');
+	});
+
+	it('rounds both ways alike and drops the sign of a difference that rounds to 0', () => {
+		expect(nbsp(copyGain(copy({ mid: est(2750), price_cents: 2500 })))).toBe('+3 zł · +10%');
+		expect(nbsp(copyGain(copy({ mid: est(2250), price_cents: 2500 })))).toBe('−3 zł · −10%');
+		expect(nbsp(copyGain(copy({ mid: est(2570), price_cents: 2000 })))).toBe('+6 zł · +29%');
+		expect(nbsp(copyGain(copy({ mid: est(1430), price_cents: 2000 })))).toBe('−6 zł · −29%');
+		expect(nbsp(copyGain(copy({ mid: est(4960), price_cents: 5000 })))).toBe('0 zł · −1%');
+		expect(nbsp(copyGain(copy({ mid: est(100001), price_cents: 100000 })))).toBe('0 zł · 0%');
+	});
+
+	it('shows only the złoty for a copy bought for 0 zł', () => {
+		expect(nbsp(copyGain(copy({ mid: est(2500), price_cents: 0 })))).toBe('+25 zł');
+		expect(nbsp(copyGain(copy({ mid: est(0), price_cents: 0 })))).toBe('0 zł');
+	});
+
+	it('shows a dash without a used value or a price', () => {
+		expect(copyGain(copy({ price_cents: 5000 }))).toBe('—');
+		expect(copyGain(copy({ mid: est(6000) }))).toBe('—');
+		expect(copyGain(copy({}))).toBe('—');
 	});
 
 	it('names the format, or the kind, and what was paid', () => {

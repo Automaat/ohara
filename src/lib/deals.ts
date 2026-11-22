@@ -7,6 +7,8 @@ import type {
 	Keyword,
 	KeywordKind,
 	KeywordPayload,
+	Format,
+	MarketPrice,
 	Observation
 } from '#lib/api.gen.js';
 
@@ -19,6 +21,8 @@ export type {
 	Keyword,
 	KeywordKind,
 	KeywordPayload,
+	MarketPrice,
+	MarketView,
 	Observation
 } from '#lib/api.gen.js';
 
@@ -61,11 +65,45 @@ export function underLimitCount(
 
 const pluralRules = new Intl.PluralRules('pl-PL');
 
-/** The count of listings under the limit in words, as "3 oferty pod limitem". */
-export function underLimitLabel(count: number): string {
+/** A count of listings in words, as "1 oferta", "3 oferty" or "5 ofert". */
+function offers(count: number): string {
 	const plural = pluralRules.select(count);
 	const noun = plural === 'one' ? 'oferta' : plural === 'few' ? 'oferty' : 'ofert';
-	return `${count} ${noun} pod limitem`;
+	return `${count} ${noun}`;
+}
+
+/** The count of listings under the limit in words, as "3 oferty pod limitem". */
+export function underLimitLabel(count: number): string {
+	return `${offers(count)} pod limitem`;
+}
+
+/** Every wished title and format, or with a title every format of it. */
+export function marketPath(titleId?: number): string {
+	return titleId == null ? '/api/valuation/market' : `/api/valuation/market?title_id=${titleId}`;
+}
+
+/** The fewest listings a market price needs before it is trusted, the server's MinObservations. */
+export const marketMinListings = 3;
+
+/** The market price of one title in one format, null when it has none. */
+export function marketFor(
+	markets: readonly MarketPrice[] | null | undefined,
+	titleId: number | null,
+	format: Format | null
+): MarketPrice | null {
+	if (titleId == null) return null;
+	return markets?.find((m) => m.title_id === titleId && m.format === format) ?? null;
+}
+
+/**
+ * The market price in words, as "Rynek ok. 42,50 zł (4 oferty)", with "mało danych" when it rests
+ * on fewer than 3 listings; null without a price.
+ */
+export function marketLabel(market: Pick<MarketPrice, 'cents' | 'count'> | null): string | null {
+	if (market == null || market.count <= 0) return null;
+	const basis = offers(market.count);
+	const note = market.count < marketMinListings ? `${basis}, mało danych` : basis;
+	return `Rynek ok. ${dealPrice(market.cents)} (${note})`;
 }
 
 /**
@@ -76,6 +114,19 @@ export const matchedPath = '/api/deals?matched=true&limit=500';
 
 /** The listings whose Telegram alert went out for a wish that still has a limit. */
 export const sentPath = '/api/deals?sent=true&limit=500';
+
+/** POST hides the listing from Okazje ("Ignoruj"), DELETE brings it back. */
+export function dismissalPath(id: number): string {
+	return `/api/deals/${id}/dismissal`;
+}
+
+/** The listings without those just dismissed, before the server's next answer leaves them out. */
+export function withoutDismissed<T extends Pick<Observation, 'id'>>(
+	listings: T[],
+	dismissed: ReadonlySet<number>
+): T[] {
+	return dismissed.size === 0 ? listings : listings.filter((o) => !dismissed.has(o.id));
+}
 
 export type DealSegment = 'under' | 'all' | 'sent';
 

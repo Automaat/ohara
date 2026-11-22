@@ -10,29 +10,39 @@
 		FormError,
 		PageHeader,
 		Section,
-		SegmentedControl
+		SegmentedControl,
+		Toaster,
+		dismiss,
+		toast
 	} from '@smykla-skalski/sui';
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 	import { ApiError, errorMessage, request } from '#lib/api.js';
-	import { dealBadge, loadUnderLimit } from '#lib/deal-badge.svelte.js';
+	import { dealBadge, forgetDealListing, loadUnderLimit } from '#lib/deal-badge.svelte.js';
 	import { options, type FormIssue } from '#lib/collection.js';
 	import DealCard from '#lib/components/DealCard.svelte';
+	import { DealDismissals } from '#lib/deal-dismissals.svelte.js';
 	import {
 		dealsSummary,
+		dismissalPath,
 		intervalLabel,
 		keywordKindLabels,
 		keywordPayload,
 		keywordsOf,
 		lastRunSummary,
+		marketFor,
+		marketPath,
 		matchedPath,
 		searchedFor,
 		segmentLabel,
 		sentPath,
+		withoutDismissed,
 		type DealSegment,
 		type DealsView,
 		type HunterStatus,
 		type Keyword,
 		type KeywordKind,
+		type MarketPrice,
+		type MarketView,
 		type Observation
 	} from '#lib/deals.js';
 
@@ -44,6 +54,7 @@
 	};
 
 	let deals = $state<Deals | null>(null);
+	let markets = $state<MarketPrice[]>([]);
 	let now = $state(new Date());
 	let segment = $state<DealSegment>('under');
 	let failure = $state<string | null>(null);
@@ -66,11 +77,13 @@
 	 * a navigation or a returning tab moves the segment and the badge together. The page asks again
 	 * when the tab becomes visible, so the other segments follow. An answer that arrives after a
 	 * later request's answer is dropped. The search counts as running while any answer says so.
+	 * The wishes' market prices load beside them without holding them back.
 	 */
 	async function load() {
 		const ticket = ++issued;
 		loading = true;
 		try {
+			void loadMarkets();
 			const [under, all, sent] = await Promise.all([
 				loadUnderLimit(fetch),
 				request<DealsView>(fetch, 'GET', matchedPath),
@@ -94,6 +107,46 @@
 		if (deals?.status.running) poll = setTimeout(load, 3000);
 	}
 
+	/**
+	 * The wishes' market prices, asked beside the listings and drawn when they come, so a slow
+	 * answer never holds the listings back. A failed request keeps the last prices, and an answer
+	 * older than one already drawn is dropped.
+	 */
+	let marketsAsked = 0;
+	let marketsDrawn = 0;
+	async function loadMarkets() {
+		const ticket = ++marketsAsked;
+		const view = await request<MarketView>(fetch, 'GET', marketPath()).catch(() => null);
+		if (view && ticket > marketsDrawn) {
+			marketsDrawn = ticket;
+			markets = view.markets;
+		}
+	}
+
+	const dismissals = new DealDismissals({
+		toast,
+		dismiss,
+		send: (method, id) => request(fetch, method, dismissalPath(id)),
+		forget: forgetDealListing,
+		reload: load
+	});
+
+	/**
+	 * The card's "Ignoruj" goes with its card, so focus moves to the next card's "Ignoruj", or the
+	 * previous one's, or the segments when the list is empty.
+	 */
+	async function dismissDeal(deal: Observation) {
+		const at = shown.findIndex((o) => o.id === deal.id);
+		const next = shown[at + 1] ?? shown[at - 1];
+		const done = dismissals.dismiss(deal);
+		await tick();
+		const target = next
+			? document.querySelector<HTMLElement>(`[data-dismiss="${next.id}"]`)
+			: document.querySelector<HTMLElement>('.content input[type="radio"]:checked');
+		target?.focus();
+		await done;
+	}
+
 	async function loadKeywords() {
 		try {
 			keywords = await request<Keyword[]>(fetch, 'GET', '/api/deals/keywords');
@@ -112,6 +165,7 @@
 		};
 		document.addEventListener('visibilitychange', onvisibility);
 		return () => {
+			dismissals.destroy();
 			clearTimeout(poll);
 			clearInterval(clock);
 			document.removeEventListener('visibilitychange', onvisibility);
@@ -164,9 +218,9 @@
 
 	const status = $derived(deals?.status);
 	const lists = $derived<Record<DealSegment, Observation[]>>({
-		under: deals ? (dealBadge.listings ?? []) : [],
-		all: deals?.all ?? [],
-		sent: deals?.sent ?? []
+		under: withoutDismissed(deals ? (dealBadge.listings ?? []) : [], dismissals.hidden),
+		all: withoutDismissed(deals?.all ?? [], dismissals.hidden),
+		sent: withoutDismissed(deals?.sent ?? [], dismissals.hidden)
 	});
 	const segments = $derived(
 		(['under', 'all', 'sent'] as const).map((value) => ({
@@ -246,7 +300,13 @@
 			{#if shown.length > 0}
 				<ul class="deals" aria-label={segmentLabel(segment, shown.length)}>
 					{#each shown as deal (deal.id)}
-						<li><DealCard {deal} /></li>
+						<li>
+							<DealCard
+								{deal}
+								market={marketFor(markets, deal.title_id, deal.format)}
+								ondismiss={() => void dismissDeal(deal)}
+							/>
+						</li>
 					{/each}
 				</ul>
 			{:else if segment === 'under' && lists.all.length > 0}
@@ -342,6 +402,10 @@
 	</Disclosure>
 </div>
 
+<div class="toasts">
+	<Toaster label="Powiadomienia" dismissLabel="Zamknij" />
+</div>
+
 <style>
 	.content {
 		display: grid;
@@ -379,5 +443,9 @@
 		gap: 1rem;
 		max-width: 40rem;
 		margin-top: 1.5rem;
+	}
+	/* On a phone the undo toast stands above the floating tab bar instead of covering it. */
+	:global(.ohara-phone) .toasts :global(.sui-toaster) {
+		inset-block-end: calc(4rem + max(env(safe-area-inset-bottom, 0px), 0.75rem));
 	}
 </style>

@@ -55,6 +55,7 @@
 		type Hero
 	} from '#lib/title-detail.js';
 	import { newRequestKey } from '#lib/scan.js';
+	import { TitleMarkets } from '#lib/title-market.svelte.js';
 	import type { CopyValue, TitleValues } from '#lib/valuation.js';
 
 	/**
@@ -119,6 +120,12 @@
 		return detail?.editions.find((e) => e.id === editionID);
 	});
 	const value = $derived(sole ? valueCard(sole.copy, values) : null);
+
+	/** The wish's market price, asked once the copy sheet shows a wish's limit. */
+	const markets = new TitleMarkets(fetch);
+	$effect(() => {
+		if (detail && copySheet && copyForm.status === 'wishlist') void markets.load(detail.id);
+	});
 
 	async function load(titleID: number) {
 		if (titleID !== requested) {
@@ -549,6 +556,7 @@
 				issue={copyIssue}
 				saving={savingCopy}
 				submitLabel={target.mode === 'add' ? 'Dodaj egzemplarz' : 'Zapisz zmiany'}
+				market={copyEdition ? markets.for(copyEdition.title_id, copyEdition.format) : null}
 				onsubmit={() => saveCopy(target)}
 				oncancel={() => (copySheet = false)}
 			/>

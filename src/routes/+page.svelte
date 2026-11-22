@@ -15,6 +15,7 @@
 		type DataTableColumn
 	} from '@smykla-skalski/sui';
 	import { onDestroy, onMount, tick, untrack } from 'svelte';
+	import { MediaQuery } from 'svelte/reactivity';
 	import { afterNavigate, replaceState } from '$app/navigation';
 	import { page } from '$app/state';
 	import { errorMessage, request } from '#lib/api.js';
@@ -60,6 +61,7 @@
 	import type { QueueEntry } from '#lib/scan.js';
 	import CollectionFilterSheet from '#lib/components/CollectionFilterSheet.svelte';
 	import CollectionShelf from '#lib/components/CollectionShelf.svelte';
+	import type { ShelfPlace } from '#lib/shelf-drawing.js';
 	import TitleShelf from '#lib/components/TitleShelf.svelte';
 	import type { Snapshot } from './$types';
 
@@ -72,6 +74,8 @@
 		{ value: 'table', label: 'Tabela' }
 	];
 	let layout = $state<Layout>('shelf');
+	/** A phone always gets the shelf; the same width as the `max-width: 640px` rules below. */
+	const phone = new MediaQuery('(max-width: 640px)');
 
 	onMount(() => {
 		try {
@@ -118,6 +122,7 @@
 	let pendingUncopied: Promise<void> | undefined;
 
 	let results = $state<HTMLElement>();
+	let shelf = $state<CollectionShelf>();
 
 	/** Where the copies start on the page, so a position kept from them survives what loads above. */
 	function resultsTop(): number {
@@ -236,14 +241,16 @@
 	}
 
 	/**
-	 * Scrolls back to where the reader left the copies, once they are drawn. The position is
-	 * kept from the copies' top, so the header's counts and a queue notice that arrives later
-	 * cannot move the restored row.
+	 * Scrolls back to where the reader left the copies, once they are drawn: the shelf draws its
+	 * tiles in parts, so it first draws down to that place. The position is kept from the
+	 * copies' top, so the header's counts and a queue notice that arrives later cannot move the
+	 * restored row.
 	 */
 	async function restore(mine: number, overviewReady?: Promise<void>) {
 		if (!restoreScroll) return;
 		await overviewReady;
 		await tick();
+		if (mine === seq && restoreScroll) await shelf?.drawTo(resultsTop() + restoreScroll[1]);
 		if (mine === seq && restoreScroll) {
 			const [x, fromResults] = restoreScroll;
 			window.scrollTo(x, resultsTop() + fromResults);
@@ -402,6 +409,26 @@
 	);
 	/** "Bez egzemplarzy": the view lists titles that have no copy instead of copies. */
 	const listsTitles = $derived(filter.status === 'none');
+
+	/** Whether the copies showed as the shelf rather than the table. */
+	let shelfBefore: boolean | undefined;
+	/**
+	 * The tile at the top of the screen when the table took over from the shelf, as when a phone
+	 * turns sideways. The shelf that comes back starts with its first tiles only, so it draws down
+	 * to that tile and puts it back where it was.
+	 */
+	let shelfPlace: ShelfPlace | null = null;
+
+	$effect.pre(() => {
+		const shown = layout === 'shelf' || phone.current;
+		const was = shelfBefore;
+		shelfBefore = shown;
+		if (was === true && !shown) shelfPlace = shelf?.shownTile() ?? null;
+		if (was !== false || !shown || !shelfPlace) return;
+		const place = shelfPlace;
+		shelfPlace = null;
+		void tick().then(() => shelf?.showTile(place));
+	});
 	const titleRows = $derived(sortTitles(uncopiedTitles(uncopied ?? [], filter), sort));
 	const listed = $derived(listsTitles ? uncopied : collection);
 	const emptyShelf = $derived(
@@ -590,14 +617,10 @@
 		<div class="results" bind:this={results}>
 			{#if listsTitles}
 				<TitleShelf titles={titleRows} {loading} {failure} onretry={load} {empty} />
-			{:else if layout === 'shelf'}
-				<CollectionShelf {rows} {loading} {failure} onretry={load} {empty} />
+			{:else if layout === 'shelf' || phone.current}
+				<CollectionShelf bind:this={shelf} {rows} {loading} {failure} onretry={load} {empty} />
 			{:else}
-				<div class="phone-only">
-					<CollectionShelf {rows} {loading} {failure} onretry={load} {empty} />
-				</div>
 				<DataTable
-					class="desktop-only"
 					aria-label="Egzemplarze w kolekcji"
 					{columns}
 					{rows}

@@ -16,6 +16,7 @@ import {
 	screenKind,
 	seasonName,
 	bindingLabels,
+	bookFormat,
 	formatLabels,
 	packagingLabels,
 	triStateLabels,
@@ -484,6 +485,21 @@ function fitID(id: number | null | undefined): number | null {
 	return id != null && Number.isSafeInteger(id) && id > 0 ? id : null;
 }
 
+/**
+ * A candidate's series as the API takes it: a one-line name and, only with one, a whole number
+ * from 1 to 10000. Anything else is left out, so the save keeps the rest of the pick.
+ */
+function fitSeries(
+	name: string | null | undefined,
+	number: number | null | undefined
+): Pick<TitlePayload, 'series_name' | 'series_number'> {
+	const fitName = fitText(name);
+	if (fitName === null || /\p{Cc}/u.test(fitName)) return {};
+	const fitNumber =
+		number != null && Number.isInteger(number) && number >= 1 && number <= 10000 ? number : null;
+	return { series_name: fitName, series_number: fitNumber };
+}
+
 function fitAuthors(authors: readonly string[] | null | undefined): string[] {
 	const fit = (authors ?? []).map(trimSpace).filter(Boolean);
 	return fit.length <= maxAuthors && fit.every((a) => fitText(a) !== null) ? fit : [];
@@ -545,7 +561,8 @@ export function scanTitlePayload(f: QuickForm, candidate: Candidate | null): Par
 			authors: movie ? [] : fitAuthors(t?.authors),
 			bn_id: book ? fitText(t?.bn_id) : null,
 			openlibrary_id: book ? fitText(t?.openlibrary_id) : null,
-			notes: ''
+			notes: '',
+			...fitSeries(t?.series_name, t?.series_number)
 		}
 	};
 }
@@ -565,6 +582,8 @@ export function scanEditionPayload(
 	if ((movie || music) && !formatFits(f.kind, f.format)) {
 		return { ok: false, issue: { field: 'format', message: 'Wybierz nośnik.' } };
 	}
+	const book = f.kind === 'book';
+	const audiobook = book ? bookFormat(f.format) : null;
 	const selected = candidate?.type === f.kind ? candidate : null;
 	const e = selected?.edition;
 	return {
@@ -575,14 +594,15 @@ export function scanEditionPayload(
 			label: fitText(e?.label) ?? '',
 			publisher: fitText(e?.publisher) ?? '',
 			year: fitYear(e?.year),
-			format: (movie || music) && f.format ? f.format : null,
+			format: (movie || music) && f.format ? f.format : audiobook,
 			pl_subtitles: (movie && fitEnum(triStateLabels, e?.pl_subtitles)) || 'unknown',
 			pl_voiceover: (movie && fitEnum(triStateLabels, e?.pl_voiceover)) || 'unknown',
 			// The form takes these from the pick without a choice the user made.
 			packaging: movie
 				? f.packaging.flatMap((p) => fitEnum<Packaging>(packagingLabels, p) ?? [])
 				: [],
-			binding: f.kind === 'book' ? fitEnum<Binding>(bindingLabels, f.binding) : null,
+			// An audiobook has no binding, even one a catalog named for its ISBN.
+			binding: book && !audiobook ? fitEnum<Binding>(bindingLabels, f.binding) : null,
 			// The release is one pressing on its own medium; another or an unknown medium is not it.
 			discogs_release_id: music && e?.format === f.format ? fitID(e?.discogs_release_id) : null,
 			cover_url: sameSeason(f, selected) ? fitCoverURL(selected?.cover_url) : undefined,

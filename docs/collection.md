@@ -1,7 +1,7 @@
 # Collection
 
 Copies, titles and the Kolekcja pages. Read before changing ordered copies,
-add request keys, ratings, loans, the finished mark, tags, box sets, the
+add request keys, ratings, series, loans, the finished mark, tags, box sets, the
 export, cover photos, Kolekcja, "Dodaj tytuł" or Statystyki.
 
 Moved from `CLAUDE.md`, whose conventions still apply.
@@ -56,6 +56,40 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   shown rating. `GET /api/collection` items carry it (absent while unrated),
   and Kolekcja's "Ocena malejąco" lists rated copies from 10 down,
   unrated ones last, ties in title order.
+- A series (`series`) holds titles of one kind (a composite reference to
+  `(id, kind)`), and a title sits in at most one, optionally with a whole
+  `series_number` from 1 to 10000, unique in the series (409 on
+  `series_number`). `POST` and `PUT /api/titles` name it by `series_name`,
+  not by ID, so a lookup candidate could carry one: a name matching a
+  series of the title's kind by the Go case fold `foldCase` (trimmed) joins
+  it, a new one creates it, blank or null is none. A number without a name,
+  below 1, past 10000 or a fraction answers 422 on `series_number`; a
+  `PUT` without both fields keeps the stored series, and a title turned
+  into another kind takes its series' name and number into a series of
+  that kind. A series has an optional `total_volumes` (`PUT
+/api/series/{id}`, the key required, null clears it). `GET
+/api/series/{id}` lists its titles by number, those without one last, each
+  `owned`, `ordered`, `wishlist` or `none` by its copies (sold ones count as
+  none; a box set with an owned copy holding the title makes it owned), and `missing`: every number from 1 to the larger of the total and
+  the highest number held whose title has no owned copy, with that title and
+  its state, or none. `GET /api/series` lists every series with its title
+  and missing counts. The `title_series_drop_empty` trigger deletes a series
+  once its last title leaves it or is deleted, after locking its row, which
+  a save joining a title holds; a title moving between two series locks
+  both in key order, and a title deleted locks its series first
+  (`title_series_lock_for_delete`), so a create taking its number answers
+  409 instead of a deadlock. A series page reads the series and its titles
+  in one snapshot. Lookup candidates' `title` carries the same optional
+  `series_name` and `series_number` (no provider fills them yet), which the
+  scanner's add forwards when the API would take them; the title form sends
+  the two fields only when the reader changed them, so a form opened
+  before another save gave the title its series keeps it. Kolekcja's
+  desktop header links to `/series`, the list, and a phone's summary line
+  does ("Serie"), since a third header control would cover the heading; a
+  series page (`/series/{id}`) shows the volumes, "Brakujące tomy" and the
+  "Liczba tomów" field; the title form has "Seria" (suggesting the series
+  of the title's kind) and "Tom"; the title page shows "<series> · tom <n>"
+  linking to its series.
 - A loan (`loan`) records who has an owned copy: `POST /api/copies/{id}/loans`
   (`borrower` trimmed, at most 500 bytes; `lent_on` today in Poland when
   null; optional `due_on`, not before it) answers 201, 409 for a wish or a
@@ -201,5 +235,16 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   in whole percents adding up to 100 (a 0 zł price is a price). The months
   move on once the month in Poland has changed (`src/lib/stats-month.svelte.ts`:
   checked every minute and when the page is shown again). Charts are plain
-  SVG and CSS, each with its data under "Pokaż dane"; no value figures.
-  Without an owned copy the page offers "Skanuj".
+  SVG and CSS, each with its data under "Pokaż dane". It also reads
+  `GET /api/valuation` and groups its copies (`src/lib/stats-value.ts`):
+  "Wartość według rodzaju" and "Wartość według nośnika" (print books,
+  which have no format, as one group and audiobooks as another) give each
+  group's summed used value, price paid
+  (with its unpriced copies), copy count and how many copies have no used
+  value or a low-confidence one, the most valuable group first; no history,
+  gains or movers. The figures are today's values from the window's prices,
+  as Wartość computes them, and the note names the last valuation's day
+  apart; a group priced from Discogs carries a `DiscogsCredit` per release.
+  Before the first valuation (`last_valuation` null) one "Wartość kolekcji"
+  card says so and links to Wartość, also beside the empty shelf; a failed
+  read shows its own retry. Without an owned copy the page offers "Skanuj".

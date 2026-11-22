@@ -40,7 +40,7 @@ Same layout and tooling as `../baratie`. `package.json` and
     /seed/             # `api seed`: demo data for an empty local database
     /reqlog/           # slog handler adding a request's request_id, method and path to *Context log lines
 /src/                  # SvelteKit SPA (adapter-static, ssr off)
-  /routes/             # pages; /scan is the scanner, /scan/queue the unresolved barcodes
+  /routes/             # pages; /scan is the scanner, /scan/queue the unresolved barcodes, /series the series
   /lib/                # nav table, API client, generated API types (api.gen.ts), form helpers, scan flow (pure TS, unit tested)
   /lib/components/     # forms shared by create and edit pages, camera and quick confirm
   /service-worker/     # SUI service worker (index.ts): precache, update only on the reader's consent
@@ -57,7 +57,7 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
 Detailed behavior lives in `docs/`; read a file before changing its area:
 
 - [collection](docs/collection.md): ordered copies, request keys, ratings,
-  loans, finished titles, tags, box sets, export, cover photos, Kolekcja,
+  series, loans, finished titles, tags, box sets, export, cover photos, Kolekcja,
   Statystyki.
 - [lookup](docs/lookup.md): lookup providers, outside-source metrics and
   `fetch.Do` (deals and valuation too), Discogs, Allegro, title search.

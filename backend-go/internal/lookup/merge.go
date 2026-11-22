@@ -70,6 +70,11 @@ func fillCandidate(dst, src *Candidate) {
 	fillSlice(&dst.Title.Authors, src.Title.Authors)
 	fillPtr(&dst.Title.BNID, src.Title.BNID)
 	fillPtr(&dst.Title.OpenLibraryID, src.Title.OpenLibraryID)
+	// A series' name and number come from one source, so a name never
+	// takes another source's number.
+	if dst.Title.SeriesName == nil {
+		dst.Title.SeriesName, dst.Title.SeriesNumber = src.Title.SeriesName, src.Title.SeriesNumber
+	}
 
 	fill(&dst.Edition.Label, src.Edition.Label)
 	fill(&dst.Edition.Publisher, src.Edition.Publisher)
@@ -79,6 +84,10 @@ func fillCandidate(dst, src *Candidate) {
 	fill(&dst.Edition.PLVoiceover, src.Edition.PLVoiceover)
 	fillSlice(&dst.Edition.Packaging, src.Edition.Packaging)
 	fillPtr(&dst.Edition.Binding, src.Edition.Binding)
+	if dst.Edition.Format != nil && *dst.Edition.Format == FormatAudiobook {
+		// A recording has no binding, whichever catalog named one.
+		dst.Edition.Binding = nil
+	}
 	fillPtr(&dst.Edition.DiscogsReleaseID, src.Edition.DiscogsReleaseID)
 
 	fill(&dst.CoverURL, src.CoverURL)

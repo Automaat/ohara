@@ -10,6 +10,7 @@
 	import { tick } from 'svelte';
 	import {
 		acquiredLabels,
+		bookFormatLabels,
 		conditionLabels,
 		formatOptions as formatOptionsFor,
 		kindLabels,
@@ -53,6 +54,14 @@
 		paperback: 'Miękka',
 		other: 'Inna'
 	};
+	// A book's medium is one choice: a binding for print, or an audiobook, which has none.
+	const bookMediumOptions = [...options(bindingShort), ...options(bookFormatLabels)];
+	type BookMedium = Binding | 'audiobook' | '';
+	const bookMedium = () => (form.format === 'audiobook' ? 'audiobook' : form.binding);
+	function setBookMedium(medium: BookMedium) {
+		form.format = medium === 'audiobook' ? 'audiobook' : '';
+		form.binding = medium === 'audiobook' ? '' : medium;
+	}
 	const packagingOptions = options(packagingLabels);
 	const acquiredOptions = options(acquiredLabels);
 	const conditionOptions = [{ value: '', label: 'Nie podano' }, ...options(conditionLabels)];
@@ -144,9 +153,9 @@
 		{:else}
 			<SegmentedControl
 				class="seg"
-				label="Oprawa"
-				options={options(bindingShort)}
-				bind:value={form.binding}
+				label="Nośnik"
+				options={bookMediumOptions}
+				bind:value={bookMedium, setBookMedium}
 			/>
 		{/if}
 		{#if screenKind(form.kind)}

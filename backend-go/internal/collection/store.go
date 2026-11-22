@@ -64,6 +64,8 @@ func mapErr(err, notFound error, op string) error {
 		return ErrDuplicateTMDB
 	case code == pgUniqueViolation && constraint == "discarded_request_key":
 		return ErrRequestDiscarded
+	case code == pgUniqueViolation && constraint == "title_series_number_key":
+		return ErrDuplicateSeriesNumber
 	}
 	return fmt.Errorf("%s: %w", op, err)
 }
@@ -82,6 +84,7 @@ func hasTag(param string) string {
 
 const titleColumns = `t.id, t.kind, t.name, t.original_title, t.polish_title, t.year,
 	t.tmdb_id, t.season, t.authors, t.bn_id, t.openlibrary_id, t.notes, t.cover_url, t.rating, ` + titleTags + `, t.finished, t.finished_on,
+	t.series_id, (SELECT s.name FROM series s WHERE s.id = t.series_id), t.series_number,
 	t.created_at, t.updated_at,
 	(SELECT count(*) FROM edition e WHERE e.title_id = t.id),
 	(SELECT count(*) FROM copy c JOIN edition e ON e.id = c.edition_id WHERE e.title_id = t.id),
@@ -94,7 +97,8 @@ func scanTitle(row pgx.Row) (Title, error) {
 	var finishedOn *time.Time
 	err := row.Scan(&t.ID, &t.Kind, &t.Name, &t.OriginalTitle, &t.PolishTitle, &t.Year,
 		&t.TMDBID, &t.Season, &t.Authors, &t.BNID, &t.OpenLibraryID, &t.Notes, &t.CoverURL, &t.Rating, &t.Tags, &finished, &finishedOn,
-		&t.CreatedAt, &t.UpdatedAt, &t.EditionCount, &t.CopyCount, &t.InOwnedBoxSet)
+		&t.SeriesID, &t.SeriesName, &t.SeriesNumber, &t.CreatedAt, &t.UpdatedAt, &t.EditionCount, &t.CopyCount,
+		&t.InOwnedBoxSet)
 	if t.Tags == nil {
 		t.Tags = []string{}
 	}
@@ -226,14 +230,36 @@ func (s *Store) CreateTitle(ctx context.Context, in *TitleInput) (Title, bool, e
 			return err
 		}
 		var id int64
+		// A repeat answers with the key's title before a series is joined
+		// or made: one made here would stay without a title.
+		if in.RequestKey != nil {
+			err := tx.QueryRow(ctx, `SELECT id FROM title WHERE request_key = $1`, *in.RequestKey).Scan(&id)
+			if err == nil {
+				created = false
+				t, err = getTitle(ctx, tx, id)
+				return err
+			}
+			if !errors.Is(err, pgx.ErrNoRows) {
+				return fmt.Errorf("replay title: %w", err)
+			}
+		}
+		var seriesID *int64
+		if in.SeriesName != nil {
+			joined, err := joinSeries(ctx, tx, in.Kind, *in.SeriesName, nil)
+			if err != nil {
+				return err
+			}
+			seriesID = &joined
+		}
 		err := tx.QueryRow(ctx, `INSERT INTO title
 			(kind, name, original_title, polish_title, year, tmdb_id, authors, bn_id, openlibrary_id, notes,
-			cover_url, request_key, rating, finished, finished_on, season)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, ''), $12, $13, COALESCE($14, false), $15, $16)
+			cover_url, request_key, rating, finished, finished_on, season, series_id, series_number)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, ''), $12, $13, COALESCE($14, false), $15,
+			$16, $17, $18)
 			ON CONFLICT (request_key) DO NOTHING RETURNING id`,
 			in.Kind, in.Name, in.OriginalTitle, in.PolishTitle, in.Year, in.TMDBID, in.Authors,
 			in.BNID, in.OpenLibraryID, in.Notes, in.CoverURL, in.RequestKey, in.Rating,
-			in.Finished, timeOf(in.FinishedOn), in.Season).Scan(&id)
+			in.Finished, timeOf(in.FinishedOn), in.Season, seriesID, in.SeriesNumber).Scan(&id)
 		if errors.Is(err, pgx.ErrNoRows) && in.RequestKey != nil {
 			created = false
 			err = tx.QueryRow(ctx, `SELECT id FROM title WHERE request_key = $1`, *in.RequestKey).Scan(&id)
@@ -271,9 +297,11 @@ func checkFinishedOn(ctx context.Context, tx pgx.Tx, day *Date) error {
 }
 
 // UpdateTitle replaces a title. The kind cannot change while editions exist,
-// since their kind-specific fields would no longer apply. A nil cover URL
-// and in.KeepRating keep the stored cover and rating; without Finished the
-// title keeps its finished state and day.
+// since their kind-specific fields would no longer apply. A nil cover URL,
+// in.KeepRating and in.KeepSeries keep the stored cover, rating and series;
+// without Finished the title keeps its finished state and day. A title of
+// another kind keeps its series' name and number in a series of its new
+// kind. The series the title leaves goes once no title is in it.
 func (s *Store) UpdateTitle(ctx context.Context, id int64, in *TitleInput) (Title, error) {
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
 		var kind string
@@ -281,9 +309,42 @@ func (s *Store) UpdateTitle(ctx context.Context, id int64, in *TitleInput) (Titl
 		if err != nil {
 			return mapErr(err, ErrTitleNotFound, "lock title")
 		}
+		// The series is read after the lock in a statement of its own: a
+		// join in the locking statement keeps the snapshot from before the
+		// wait and misses a series a save committed meanwhile.
+		var stored storedSeries
+		err = tx.QueryRow(ctx, `SELECT t.series_id, s.name, t.series_number
+			FROM title t LEFT JOIN series s ON s.id = t.series_id WHERE t.id = $1`, id).
+			Scan(&stored.id, &stored.name, &stored.number)
+		if err != nil {
+			return fmt.Errorf("read title series: %w", err)
+		}
 		if kind != in.Kind {
 			if err := checkNoEditions(ctx, tx, id); err != nil {
 				return err
+			}
+		}
+		keepSeries := in.KeepSeries && kind == in.Kind
+		var seriesID *int64
+		if !keepSeries {
+			if in.KeepSeries {
+				in.SeriesName, in.SeriesNumber = stored.name, stored.number
+			}
+			if in.SeriesName != nil {
+				joined, err := joinSeries(ctx, tx, in.Kind, *in.SeriesName, stored.id)
+				if err != nil {
+					return err
+				}
+				seriesID = &joined
+			} else if stored.id != nil {
+				// The series is locked before the title leaves it, as
+				// joinSeries locks one a title moves from: the UPDATE frees
+				// the title's number, and a create holding the series row
+				// while it waits on that number would otherwise deadlock with
+				// the trigger that then locks the series.
+				if _, err := tx.Exec(ctx, `SELECT 1 FROM series WHERE id = $1 FOR UPDATE`, *stored.id); err != nil {
+					return fmt.Errorf("lock series: %w", err)
+				}
 			}
 		}
 		if err := checkFinishedOn(ctx, tx, in.FinishedOn); err != nil {
@@ -293,13 +354,15 @@ func (s *Store) UpdateTitle(ctx context.Context, id int64, in *TitleInput) (Titl
 			polish_title = $5, year = $6, tmdb_id = $7, authors = $8, bn_id = $9,
 			openlibrary_id = $10, notes = $11, cover_url = NULLIF(COALESCE($12, cover_url), ''),
 			rating = CASE WHEN $13 THEN rating ELSE $14 END,
+			series_id = CASE WHEN $18 THEN series_id ELSE $19 END,
+			series_number = CASE WHEN $18 THEN series_number ELSE $20 END,
 			finished = COALESCE($15, finished),
 			finished_on = CASE WHEN $15::boolean IS NULL THEN finished_on ELSE $16::date END,
 			season = $17,
 			updated_at = now(), edited_at = now() WHERE id = $1`,
 			id, in.Kind, in.Name, in.OriginalTitle, in.PolishTitle, in.Year, in.TMDBID, in.Authors,
 			in.BNID, in.OpenLibraryID, in.Notes, in.CoverURL, in.KeepRating, in.Rating, in.Finished, timeOf(in.FinishedOn),
-			in.Season)
+			in.Season, keepSeries, seriesID, in.SeriesNumber)
 		if err != nil {
 			return mapErr(err, ErrTitleNotFound, "update title")
 		}

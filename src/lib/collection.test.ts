@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { purchaseDate } from './polish';
 import {
 	addTag,
+	bookFormat,
 	centsToInput,
 	collectionSearch,
 	copyPayload,
@@ -28,6 +29,10 @@ import {
 	readCollectionFilter,
 	saleLine,
 	seasonName,
+	seriesLine,
+	seriesNames,
+	seriesSummary,
+	seriesTotalPayload,
 	shelfLine,
 	shelfSummary,
 	tagHref,
@@ -83,8 +88,17 @@ describe('labels', () => {
 			{ value: 'uhd', label: '4K UHD' },
 			{ value: 'cd', label: 'CD' },
 			{ value: 'vinyl', label: 'Winyl' },
-			{ value: 'cassette', label: 'Kaseta' }
+			{ value: 'cassette', label: 'Kaseta' },
+			{ value: 'audiobook', label: 'Audiobook' }
 		]);
+	});
+
+	it('takes an audiobook as the only book format', () => {
+		expect(formatLabels.audiobook).toBe('Audiobook');
+		expect(bookFormat('audiobook')).toBe('audiobook');
+		expect(bookFormat('')).toBeNull();
+		expect(bookFormat(null)).toBeNull();
+		expect(bookFormat('cd')).toBeNull();
 	});
 
 	it('offers each kind its own media', () => {
@@ -121,6 +135,14 @@ describe('labels', () => {
 		expect(editionSummary({ format: null, binding: null, label: '', barcode: null })).toBe(
 			'Wydanie bez opisu'
 		);
+		expect(
+			editionSummary({
+				format: 'audiobook',
+				binding: null,
+				label: 'Czyta Krzysztof Gosztyła',
+				barcode: null
+			})
+		).toBe('Audiobook · Czyta Krzysztof Gosztyła');
 	});
 });
 
@@ -547,6 +569,84 @@ describe('title form', () => {
 	});
 });
 
+describe('series', () => {
+	it('round-trips a title in a series', () => {
+		const form = titleToForm({ ...title, series_name: 'Wiedźmin', series_number: 3 });
+		expect(form).toMatchObject({ series_name: 'Wiedźmin', series_number: '3' });
+		const parsed = titlePayload({ ...form, series_name: '  Wiedźmin ', series_number: ' 4 ' });
+		expect(parsed.ok && parsed.value).toMatchObject({ series_name: 'Wiedźmin', series_number: 4 });
+	});
+
+	it('sends the series only when the form changed it, so a stale form keeps it', () => {
+		const unchanged = titlePayload({ ...titleToForm(title), notes: 'Nowe' });
+		expect(unchanged.ok && 'series_name' in unchanged.value).toBe(false);
+		expect(unchanged.ok && 'series_number' in unchanged.value).toBe(false);
+		const kept = titleToForm({ ...title, series_name: 'Diuna', series_number: 2 });
+		const same = titlePayload({ ...kept, series_name: ' Diuna ', series_number: '2' });
+		expect(same.ok && 'series_name' in same.value).toBe(false);
+		const left = titlePayload({ ...kept, series_name: '', series_number: '' });
+		expect(left.ok && left.value).toMatchObject({ series_name: null, series_number: null });
+		const renumbered = titlePayload({ ...kept, series_number: '3' });
+		expect(renumbered.ok && renumbered.value).toMatchObject({
+			series_name: 'Diuna',
+			series_number: 3
+		});
+		const unnumbered = titlePayload({ ...titleToForm(title), series_name: 'Diuna' });
+		expect(unnumbered.ok && unnumbered.value).toMatchObject({
+			series_name: 'Diuna',
+			series_number: null
+		});
+	});
+
+	it.each([
+		[{ series_name: 'Saga', series_number: '0' }, 'series_number'],
+		[{ series_name: 'Saga', series_number: '2.5' }, 'series_number'],
+		[{ series_name: 'Saga', series_number: '-1' }, 'series_number'],
+		[{ series_name: 'Saga', series_number: '10001' }, 'series_number'],
+		[{ series_name: ' ', series_number: '2' }, 'series_name']
+	])('rejects %j on %s', (patch, field) => {
+		const parsed = titlePayload({ ...titleToForm(null), name: 'x', ...patch });
+		expect(!parsed.ok && parsed.issue.field).toBe(field);
+	});
+
+	it.each([
+		[{ series_name: 'Wiedźmin', series_number: 3 }, 'Wiedźmin · tom 3'],
+		[{ series_name: 'Wiedźmin', series_number: null }, 'Wiedźmin'],
+		[{ series_name: null, series_number: null }, null],
+		[{}, null]
+	])('places %j as %s', (t, want) => {
+		expect(seriesLine(t)).toBe(want);
+	});
+
+	it.each([
+		[{ title_count: 1, missing_count: 0 }, '1 tytuł'],
+		[{ title_count: 4, missing_count: 2 }, '4 tytuły · brakuje 2'],
+		[{ title_count: 12, missing_count: 1 }, '12 tytułów · brakuje 1']
+	])('sums up %j as %s', (s, want) => {
+		expect(seriesSummary(s)).toBe(want);
+	});
+
+	it('suggests the series of the title kind only', () => {
+		const series = [
+			{ kind: 'book' as const, name: 'Wiedźmin' },
+			{ kind: 'movie' as const, name: 'Bond' },
+			{ kind: 'book' as const, name: 'Diuna' }
+		];
+		expect(seriesNames(series, 'book')).toEqual(['Wiedźmin', 'Diuna']);
+		expect(seriesNames(series, 'music')).toEqual([]);
+	});
+
+	it.each([
+		['8', { ok: true, value: { total_volumes: 8 } }],
+		[' ', { ok: true, value: { total_volumes: null } }],
+		['0', { ok: false }],
+		['abc', { ok: false }],
+		['10001', { ok: false }]
+	])('reads a total of %j', (input, want) => {
+		expect(seriesTotalPayload(input)).toMatchObject(want);
+	});
+});
+
 const edition: Edition = {
 	id: 3,
 	title_id: 1,
@@ -593,6 +693,24 @@ describe('edition form', () => {
 			packaging: [],
 			binding: 'hardcover'
 		});
+	});
+
+	it('keeps an audiobook format on a book edition and drops its binding', () => {
+		const form = {
+			...editionToForm(edition),
+			format: 'audiobook' as const,
+			binding: 'hardcover' as const
+		};
+		const parsed = editionPayload(form, 2, 'book');
+		expect(parsed.ok && parsed.value).toMatchObject({
+			format: 'audiobook',
+			binding: null,
+			packaging: []
+		});
+		const film = editionPayload({ ...form, format: 'dvd' }, 2, 'book');
+		expect(film.ok && film.value).toMatchObject({ format: null, binding: 'hardcover' });
+		const movie = editionPayload(form, 1, 'movie');
+		expect(!movie.ok && movie.issue.field).toBe('format');
 	});
 
 	it('requires a format for movies and a numeric year', () => {

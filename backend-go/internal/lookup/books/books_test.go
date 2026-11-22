@@ -112,6 +112,7 @@ type want struct {
 	authors, sources       []string
 	titleYear, editionYear int
 	binding, bnID, olID    string
+	format                 string
 	cover, description     bool
 }
 
@@ -147,6 +148,11 @@ func TestBookChainFixtures(t *testing.T) {
 			name: "The Fellowship of the Ring", publisher: "HarperCollinsPublishers", editionYear: 2011,
 			binding: "paperback", olID: "OL27513W", cover: true, description: true,
 			sources: []string{"openlibrary"},
+		}},
+		{"9788375780420", &want{
+			name: "Ostatnie życzenie. Cz. 1", authors: []string{"Andrzej Sapkowski"},
+			publisher: "SuperNowa", titleYear: 1993, editionYear: 2011, format: "audiobook", bnID: "2704411",
+			sources: []string{"bn"},
 		}},
 		{"9788300000005", nil},
 	}
@@ -194,6 +200,9 @@ func checkBook(t *testing.T, isbn string, c lookup.Candidate, w *want) {
 	}
 	if got := deref(c.Edition.Year); got != w.editionYear {
 		t.Errorf("edition year = %d, want %d", got, w.editionYear)
+	}
+	if got := deref(c.Edition.Format); got != w.format {
+		t.Errorf("format = %q, want %q", got, w.format)
 	}
 	if got := deref(c.Edition.Binding); got != w.binding {
 		t.Errorf("binding = %q, want %q", got, w.binding)

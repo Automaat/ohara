@@ -61,6 +61,21 @@ describe('TitleMarkets', () => {
 		expect(markets.for(2, 'dvd')).toEqual(dvd);
 	});
 
+	it("drops the first answer for a title asked again after another's", async () => {
+		const reads = held();
+		const markets = new TitleMarkets(reads.fetchFn);
+		const first = markets.load(2);
+		const other = markets.load(3);
+		const again = markets.load(2);
+		await reads.asked(3);
+		reads.answer(1, answer({ ...dvd, title_id: 3 }));
+		reads.answer(2, answer({ ...dvd, cents: 6000 }));
+		await Promise.all([other, again]);
+		reads.answer(0, answer(dvd));
+		await first;
+		expect(markets.for(2, 'dvd')).toEqual({ ...dvd, cents: 6000 });
+	});
+
 	it("drops an earlier title's late answer", async () => {
 		const reads = held();
 		const markets = new TitleMarkets(reads.fetchFn);

@@ -71,22 +71,20 @@
 	 * a navigation or a returning tab moves the segment and the badge together. The page asks again
 	 * when the tab becomes visible, so the other segments follow. An answer that arrives after a
 	 * later request's answer is dropped. The search counts as running while any answer says so.
-	 * The wishes' market prices come along; when they fail, the cards keep the last ones or show
-	 * none, and the listings still load.
+	 * The wishes' market prices load beside them without holding them back.
 	 */
 	async function load() {
 		const ticket = ++issued;
 		loading = true;
 		try {
-			const [under, all, sent, market] = await Promise.all([
+			void loadMarkets();
+			const [under, all, sent] = await Promise.all([
 				loadUnderLimit(fetch),
 				request<DealsView>(fetch, 'GET', matchedPath),
-				request<DealsView>(fetch, 'GET', sentPath),
-				request<MarketView>(fetch, 'GET', marketPath()).catch(() => null)
+				request<DealsView>(fetch, 'GET', sentPath)
 			]);
 			if (ticket !== issued) return;
 			now = new Date();
-			if (market) markets = market.markets;
 			deals = {
 				status: [under, all, sent].find((v) => v.status.running)?.status ?? all.status,
 				wishes: all.wishes,
@@ -101,6 +99,22 @@
 		loading = false;
 		clearTimeout(poll);
 		if (deals?.status.running) poll = setTimeout(load, 3000);
+	}
+
+	/**
+	 * The wishes' market prices, asked beside the listings and drawn when they come, so a slow
+	 * answer never holds the listings back. A failed request keeps the last prices, and an answer
+	 * older than one already drawn is dropped.
+	 */
+	let marketsAsked = 0;
+	let marketsDrawn = 0;
+	async function loadMarkets() {
+		const ticket = ++marketsAsked;
+		const view = await request<MarketView>(fetch, 'GET', marketPath()).catch(() => null);
+		if (view && ticket > marketsDrawn) {
+			marketsDrawn = ticket;
+			markets = view.markets;
+		}
 	}
 
 	async function loadKeywords() {

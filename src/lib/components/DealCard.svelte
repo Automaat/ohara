@@ -3,6 +3,8 @@
 	import { acquiredLabels } from '#lib/collection.js';
 	import {
 		alertLabels,
+		automaticBasis,
+		automaticComparison,
 		dealPrice,
 		isUnderLimit,
 		marketLabel,
@@ -10,22 +12,32 @@
 		sourceNotices,
 		wishComparison,
 		wishLimit,
+		type AutomaticDeal,
 		type MarketPrice,
 		type Observation
 	} from '#lib/deals.js';
 
 	let {
 		deal,
+		automatic,
 		market = null,
 		ondismiss
-	}: { deal: Observation; market?: MarketPrice | null; ondismiss?: () => void } = $props();
-	const marketLine = $derived(marketLabel(market));
+	}: {
+		deal: Observation;
+		automatic?: AutomaticDeal;
+		market?: MarketPrice | null;
+		ondismiss?: () => void;
+	} = $props();
+	const comparison = $derived(
+		deal.max_price_cents == null && deal.max_market_percent == null ? automatic : undefined
+	);
+	const marketLine = $derived(comparison ? automaticBasis(deal, comparison) : marketLabel(market));
 	let failed = $state<string[]>([]);
 
 	const image = $derived(
 		[deal.listing_photo_url, deal.cover_url].find((url) => url && !failed.includes(url))
 	);
-	const under = $derived(isUnderLimit(deal));
+	const under = $derived(isUnderLimit(deal) || comparison?.qualifies);
 	const notice = $derived(sourceNotices[deal.source]);
 	const wishHref = $derived(
 		deal.edition_id
@@ -63,7 +75,7 @@
 			<p class="price">
 				<span class="amount">{dealPrice(deal.price_cents)}</span>
 				<Pill tone={under ? 'success' : 'neutral'}>
-					{wishComparison(deal)}
+					{comparison ? automaticComparison(deal, comparison) : wishComparison(deal)}
 				</Pill>
 			</p>
 			{#if notice}

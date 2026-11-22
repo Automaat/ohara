@@ -2,12 +2,14 @@ import {
 	formatLabels,
 	formatPLN,
 	kindLabels,
+	acquiredLabels,
 	type CollectionItem,
 	type FormIssue,
 	type Parsed
 } from '#lib/collection.js';
 import type {
 	AlertState,
+	AutomaticDeal,
 	DealSource,
 	DealsRunResult,
 	HunterStatus,
@@ -22,6 +24,7 @@ import type {
 
 export type {
 	AlertState,
+	AutomaticDeal,
 	DealSource,
 	DealsRunResult as RunResult,
 	DealsView,
@@ -29,6 +32,7 @@ export type {
 	Keyword,
 	KeywordKind,
 	KeywordPayload,
+	MatchedDealsView,
 	MarketPrice,
 	MarketView,
 	Observation,
@@ -131,6 +135,44 @@ export function underLimitLabel(count: number): string {
 	return `${offers(count)} pod limitem`;
 }
 
+export function automaticComparison(
+	deal: Pick<Observation, 'acquired_as'>,
+	comparison: AutomaticDeal
+): string {
+	if (deal.acquired_as == null) return 'Nieznany stan oferty';
+	if (comparison.typical_cents == null || comparison.discount_percent == null) {
+		return 'Brak typowej ceny ofertowej';
+	}
+	const discount = comparison.discount_percent;
+	if (discount > 0) return `${discount}% poniżej typowej ceny ofertowej`;
+	if (discount < 0) return `${-discount}% powyżej typowej ceny ofertowej`;
+	return 'W okolicy typowej ceny ofertowej';
+}
+
+export function automaticBasis(
+	deal: Pick<Observation, 'acquired_as'>,
+	comparison: AutomaticDeal
+): string | null {
+	if (deal.acquired_as == null) return null;
+	const state = acquiredLabels[deal.acquired_as].toLowerCase();
+	const sample = offers(comparison.sample_count);
+	if (comparison.typical_cents == null) return `Stan ${state} · ${sample} do porównania`;
+	return `Typowa cena ofertowa ${dealPrice(comparison.typical_cents)} · stan ${state} · ${sample}`;
+}
+
+/** Merge the independent manual and automatic results in the deals view's usual order. */
+export function displayedDeals(
+	manual: Observation[],
+	matched: Observation[],
+	automatic: ReadonlyMap<number, AutomaticDeal>
+): Observation[] {
+	const ids = new Set(manual.map((o) => o.id));
+	const qualified = matched.filter((o) => !ids.has(o.id) && automatic.get(o.id)?.qualifies);
+	return [...manual, ...qualified].sort(
+		(a, b) => Date.parse(b.observed_at) - Date.parse(a.observed_at) || b.id - a.id
+	);
+}
+
 /** Every wished title and format, or with a title every format of it. */
 export function marketPath(titleId?: number): string {
 	return titleId == null ? '/api/valuation/market' : `/api/valuation/market?title_id=${titleId}`;
@@ -164,7 +206,7 @@ export function marketLabel(market: Pick<MarketPrice, 'cents' | 'count'> | null)
  * Every listing matched to a wish, with or without a limit, filtered by the server before its
  * row limit, so listings for owned editions never push them out.
  */
-export const matchedPath = '/api/deals?matched=true&limit=500';
+export const matchedPath = '/api/deals/matched?limit=500';
 
 /** The listings whose Telegram alert went out for a wish that still has a limit. */
 export const sentPath = '/api/deals?sent=true&limit=500';

@@ -265,6 +265,12 @@ func TestPickMostSpecific(t *testing.T) {
 	wall := album("The Wall", "Pink Floyd", "cd")
 	wallLive := Want{TitleID: 501, Kind: "music", Name: "The Wall Live", Authors: []string{"Roger Waters"}}
 	both := NewTitles([]Want{obcy(), covenant()})
+	alias := Want{
+		CopyID: 15, TitleID: 1500, Kind: "movie", Name: "Obcy", PolishTitle: new("Obcy"),
+		OriginalTitle: new("Alien"), Format: new("dvd"), MaxPriceCents: new(int64(2500)),
+	}
+	newYork := Want{CopyID: 16, TitleID: 1600, Kind: "movie", Name: "New York", Format: new("dvd"), MaxPriceCents: new(int64(2500))}
+	newYorkNewYork := Want{CopyID: 17, TitleID: 1700, Kind: "movie", Name: "New York, New York", Format: new("dvd")}
 
 	tests := []struct {
 		name     string
@@ -287,6 +293,11 @@ func TestPickMostSpecific(t *testing.T) {
 		{"equally specific titles keep the affordable want", []Want{limited, twin}, NewTitles([]Want{limited, twin}), "Alien DVD", 2800, 14},
 		{"another artist's album", []Want{wall}, NewTitles([]Want{wall, wallLive}), "Pink Floyd The Wall Live CD", 2000, 5},
 		{"another artist's album it names", []Want{wall}, NewTitles([]Want{wall, wallLive}), "Pink Floyd Roger Waters The Wall Live CD", 2000, 0},
+		{"longer title extending another alias", []Want{alias, covenant()}, NewTitles([]Want{alias, covenant()}), "Obcy: Przymierze / Alien: Covenant DVD", 2000, 12},
+		{"media word inside the longer title", []Want{limited, covenant()}, both, "Alien DVD Covenant", 2000, 12},
+		{"disc count after the longer title", []Want{obcy()}, both, "Alien Covenant 2 płyty DVD", 2000, 0},
+		{"repeated words", []Want{newYork, newYorkNewYork}, NewTitles([]Want{newYork, newYorkNewYork}), "New York New York DVD", 2000, 17},
+		{"shorter title with repeated words", []Want{newYork, newYorkNewYork}, NewTitles([]Want{newYork, newYorkNewYork}), "New York DVD", 2000, 16},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

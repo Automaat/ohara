@@ -345,7 +345,7 @@ func sequelAfter(text []string, name string) bool {
 // not match.
 func (w *Want) Matches(title string) bool {
 	text := words(title)
-	return w.qualifies(text) && len(w.matched(text)) > 0
+	return w.qualifies(text) && len(w.carried(text)) > 0
 }
 
 // qualifies reports whether listing text fits w apart from its names: the
@@ -369,18 +369,18 @@ func (w *Want) qualifies(text []string) bool {
 	return true
 }
 
-// matched returns the required words of the most specific of w's names
-// that listing text carries, or nil when it carries none. A movie listing
-// naming a sequel of a name does not carry that name.
-func (w *Want) matched(text []string) []string {
-	var best []string
+// carried returns the required words of each of w's names that listing
+// text carries. A movie listing naming a sequel of a name does not carry
+// that name.
+func (w *Want) carried(text []string) [][]string {
+	var out [][]string
 	for _, n := range w.titleNames() {
-		if req := required(n); len(req) > len(best) && containsAll(text, req) &&
+		if req := required(n); len(req) > 0 && containsAll(text, req) &&
 			(w.Kind != "movie" || !sequelAfter(text, n)) {
-			best = req
+			out = append(out, req)
 		}
 	}
-	return best
+	return out
 }
 
 // Titles are the collection's titles, wished, owned or neither, that a
@@ -417,35 +417,105 @@ func NewTitles(titles []Want) Titles {
 
 // Outranks reports whether a listing w matches names another title of w's
 // kind more specifically: one of that title's names holds every required
-// word of the name w matched and more, the listing carries those words in
-// the name's order with only stop words between them, and it fits that
-// title's author or artist. So "Alien: Covenant DVD" leaves an "Alien"
-// want when "Alien: Covenant" is known, while "Gladiator DVD 2 płyty" stays
-// with "Gladiator" when "Gladiator 2" is.
+// word of a name of w the listing carries, as often, and more; the listing
+// carries that name as one phrase; and it fits that title's author or
+// artist. A phrase may skip stop words and media words ("Alien DVD
+// Covenant"), and a disc count ("2 płyty") is no part of a title. So
+// "Alien: Covenant DVD" leaves an "Alien" want when "Alien: Covenant" is
+// known, while "Gladiator DVD 2 płyty" stays with "Gladiator" when
+// "Gladiator 2" is.
 func (t Titles) Outranks(w *Want, title string) bool {
 	known := t.byKind[w.Kind]
 	if len(known) == 0 {
 		return false
 	}
 	text := words(title)
-	mine := w.matched(text)
+	mine := w.carried(text)
 	if len(mine) == 0 {
 		return false
 	}
-	run := significant(text)
+	plain := withoutDiscCounts(text)
 	for i := range known {
 		k := &known[i]
 		if k.title.TitleID == w.TitleID {
 			continue
 		}
 		for _, n := range k.names {
-			if containsAll(n.req, mine) && !containsAll(mine, n.req) && hasRun(run, n.req) &&
-				(k.title.Kind != "movie" || !sequelAfter(text, n.name)) && k.title.qualifies(text) {
+			if extendsAny(n.req, mine) && carriesPhrase(plain, n.req) &&
+				(k.title.Kind != "movie" || !sequelAfter(plain, n.name)) && k.title.qualifies(text) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// extendsAny reports whether name holds every word of one of names, each
+// at least as often, and more words besides.
+func extendsAny(name []string, names [][]string) bool {
+	for _, shorter := range names {
+		if extends(name, shorter) {
+			return true
+		}
+	}
+	return false
+}
+
+func extends(name, shorter []string) bool {
+	if len(name) <= len(shorter) {
+		return false
+	}
+	left := slices.Clone(name)
+	for _, w := range shorter {
+		i := slices.Index(left, w)
+		if i < 0 {
+			return false
+		}
+		left = slices.Delete(left, i, i+1)
+	}
+	return true
+}
+
+// mediaWords name a disc format or medium, which sellers put anywhere in
+// a listing title, even inside the film's name.
+var mediaWords = map[string]bool{
+	"dvd": true, "bluray": true, "blu": true, "ray": true, "bd": true, "4k": true, "uhd": true, "ultra": true, "hd": true,
+	"cd": true, "2cd": true, "3cd": true, "cdr": true, "sacd": true, "lp": true, "2lp": true, "3lp": true,
+	"vinyl": true, "vinyls": true, "winyl": true, "winyle": true, "kaseta": true, "kasety": true, "cassette": true, "mc": true,
+}
+
+// discWords follow a disc count, as in "2 płyty" or "2 discs".
+var discWords = map[string]bool{
+	"plyty": true, "plyt": true, "plytach": true, "plytowe": true, "plytowa": true, "plytowy": true,
+	"disc": true, "discs": true, "disk": true, "disks": true, "dyski": true, "dyskow": true,
+}
+
+// withoutDiscCounts drops each number followed by a disc word, and that
+// word.
+func withoutDiscCounts(text []string) []string {
+	out := make([]string, 0, len(text))
+	for i := 0; i < len(text); i++ {
+		if i+1 < len(text) && discWords[text[i+1]] {
+			if _, err := strconv.Atoi(text[i]); err == nil {
+				i++
+				continue
+			}
+		}
+		out = append(out, text[i])
+	}
+	return out
+}
+
+// carriesPhrase reports whether text holds req as consecutive words once
+// stop words, single letters and the media words req lacks are left out.
+func carriesPhrase(text, req []string) bool {
+	run := make([]string, 0, len(text))
+	for _, t := range significant(text) {
+		if !mediaWords[t] || slices.Contains(req, t) {
+			run = append(run, t)
+		}
+	}
+	return hasRun(run, req)
 }
 
 // hasRun reports whether phrase occurs in text as consecutive words.

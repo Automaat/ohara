@@ -1,6 +1,7 @@
 <script lang="ts">
 	import {
 		Button,
+		Combobox,
 		Field,
 		FormError,
 		SegmentedControl,
@@ -18,6 +19,7 @@
 		type FormIssue
 	} from '#lib/collection.js';
 	import { marketLabel, type MarketPrice } from '#lib/deals.js';
+	import { request } from '#lib/api.js';
 
 	let {
 		form = $bindable(),
@@ -41,6 +43,20 @@
 	const marketId = $props.id();
 	const marketLine = $derived(marketLabel(market));
 
+	/** The places copies are stored at, the most used first, asked once an owned copy shows. */
+	let locations = $state<string[] | null>(null);
+	$effect(() => {
+		if (form.status !== 'owned' || locations !== null) return;
+		locations = [];
+		request<string[]>(fetch, 'GET', '/api/copies/locations').then(
+			(found) => (locations = found),
+			() => {
+				// Without suggestions the field still takes any place typed.
+			}
+		);
+	});
+	const locationOptions = $derived((locations ?? []).map((l) => ({ value: l, label: l })));
+
 	const errorFor = (field: string) => (issue?.field === field ? issue.message : undefined);
 	const fieldKeys = [
 		'price_cents',
@@ -52,7 +68,8 @@
 		'max_price_cents',
 		'max_market_percent',
 		'sold_on',
-		'sale_price_cents'
+		'sale_price_cents',
+		'location'
 	];
 	const general = $derived(issue && !fieldKeys.includes(issue.field) ? issue.message : null);
 </script>
@@ -125,6 +142,22 @@
 		bind:value={form.shop}
 		error={errorFor('shop')}
 	/>
+	{#if form.status === 'owned'}
+		<Field label="Miejsce" hint="Gdzie stoi egzemplarz, np. Regał 2." error={errorFor('location')}>
+			{#snippet control(c)}
+				<Combobox
+					{...c}
+					free
+					options={locationOptions}
+					bind:value={form.location}
+					emptyLabel="Brak zapisanych miejsc"
+					useLabel={(text) => `Użyj „${text}”`}
+					countLabel={(count) => (count === 1 ? '1 podpowiedź' : `Podpowiedzi: ${count}`)}
+					moreLabel={(count) => `Jeszcze ${count}, pisz dalej, aby zawęzić`}
+				/>
+			{/snippet}
+		</Field>
+	{/if}
 	<Field label="Nowy czy używany" error={errorFor('acquired_as')}>
 		{#snippet control(c)}
 			<Select

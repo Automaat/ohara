@@ -1,3 +1,4 @@
+import { trimSpace } from './go-text';
 import { editionCount, purchaseDate } from './polish';
 import type {
 	AcquiredAs,
@@ -311,13 +312,16 @@ export type CollectionFilter = {
 	kind: Kind | '';
 	format: Format | '';
 	status: CollectionStatus | '';
+	/** Where the copies are stored, the whole location, case aside; absent for any place. */
+	location?: string;
 	q: string;
 	/** Only copies with an open loan; left out when off. */
 	loaned?: boolean;
 };
 
 /**
- * The filter a collection address names. A title has no format or loan, so `none` drops both.
+ * The filter a collection address names. A title has no format, location or loan, so `none`
+ * drops them.
  */
 export function readCollectionFilter(params: Pick<URLSearchParams, 'get'>): CollectionFilter {
 	function read<K extends string>(key: string, labels: Record<K, string>): K | '' {
@@ -326,10 +330,12 @@ export function readCollectionFilter(params: Pick<URLSearchParams, 'get'>): Coll
 	}
 
 	const status = read('status', collectionStatusLabels);
+	const location = status === 'none' ? '' : trimSpace(params.get('location') ?? '');
 	return {
 		kind: read('kind', kindLabels),
 		format: status === 'none' ? '' : read('format', formatLabels),
 		status,
+		...(location ? { location } : {}),
 		q: params.get('q') ?? '',
 		...(status !== 'none' && params.get('loaned') === '1' ? { loaned: true } : {})
 	};
@@ -341,6 +347,8 @@ export function collectionSearch(f: CollectionFilter): string {
 	if (f.format) params.set('format', f.format);
 	if (f.status) params.set('status', f.status);
 	if (f.loaned) params.set('loaned', '1');
+	const location = trimSpace(f.location ?? '');
+	if (location) params.set('location', location);
 	if (f.q.trim()) params.set('q', f.q.trim());
 	const qs = params.toString();
 	return qs ? `?${qs}` : '';
@@ -541,6 +549,7 @@ export type CopyForm = {
 	market_percent: string;
 	sold_on: string;
 	sale_price: string;
+	location: string;
 };
 
 /** The editable form of a copy, or an empty owned one. */
@@ -556,7 +565,8 @@ export function copyToForm(c: CopyPayload | null): CopyForm {
 		max_price: centsToInput(c?.max_price_cents ?? null),
 		market_percent: c?.max_market_percent == null ? '' : String(c.max_market_percent),
 		sold_on: c?.sold_on ?? '',
-		sale_price: centsToInput(c?.sale_price_cents ?? null)
+		sale_price: centsToInput(c?.sale_price_cents ?? null),
+		location: c?.location ?? ''
 	};
 }
 
@@ -571,9 +581,9 @@ export function parsePercent(input: string): number | null | undefined {
 
 /**
  * The request body for a copy. A wishlist copy carries no price or purchase date, an owned or
- * sold copy no maximum price or market percent, and only a sold copy its sale's day, which it
- * needs, and price. A field a copy does not carry is left out, which the server reads as none,
- * so a sold copy put back on the shelf drops its sale.
+ * sold copy no maximum price or market percent, only a sold copy its sale's day, which it needs,
+ * and price, and only an owned copy its location. A field a copy does not carry is left out,
+ * which the server reads as none, so a sold copy put back on the shelf drops its sale.
  */
 export function copyPayload(f: CopyForm, editionID: number): Parsed<CopyPayload> {
 	const sold = f.status === 'sold';
@@ -605,6 +615,8 @@ export function copyPayload(f: CopyForm, editionID: number): Parsed<CopyPayload>
 			}
 		};
 	}
+	// Trimmed as the server trims, so saving other fields leaves a stored location as it is.
+	const location = f.status === 'owned' ? trimSpace(f.location) : '';
 	const date = owned ? f.purchased_on.trim() : '';
 	if (date && !isDate(date)) {
 		return { ok: false, issue: { field: 'purchased_on', message: 'Data w formacie RRRR-MM-DD.' } };
@@ -624,7 +636,8 @@ export function copyPayload(f: CopyForm, editionID: number): Parsed<CopyPayload>
 			notes: f.notes.trim(),
 			max_price_cents: maxPrice,
 			...(marketPercent == null ? {} : { max_market_percent: marketPercent }),
-			...sale
+			...sale,
+			...(location ? { location } : {})
 		}
 	};
 }

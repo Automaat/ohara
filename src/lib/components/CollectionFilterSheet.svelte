@@ -7,6 +7,7 @@
 		options,
 		type CollectionFilter
 	} from '#lib/collection.js';
+	import { foldLocation } from '#lib/collection-filter.js';
 	import { collectionSortOptions, type CollectionSort } from '#lib/collection-sort.js';
 
 	let {
@@ -15,20 +16,28 @@
 		format,
 		status,
 		loaned,
+		location,
+		locations,
 		onsort,
 		onformat,
 		onstatus,
-		onloaned
+		onloaned,
+		onlocation
 	}: {
 		open?: boolean;
 		sort: CollectionSort;
 		format: CollectionFilter['format'];
 		status: CollectionFilter['status'];
 		loaned: boolean;
+		/** The location the copies are filtered by, empty for any. */
+		location: string;
+		/** The locations in use, the most used first. */
+		locations: readonly string[];
 		onsort: (sort: CollectionSort) => void;
 		onformat: (format: CollectionFilter['format']) => void;
 		onstatus: (status: CollectionFilter['status']) => void;
 		onloaned: (loaned: boolean) => void;
+		onlocation: (location: string) => void;
 	} = $props();
 
 	const all = 'all';
@@ -38,6 +47,19 @@
 	// a select, and sold copies are the ones no other choice lists.
 	const { sold, ...shelfStatuses } = collectionStatusLabels;
 	const statusOptions = [{ value: all, label: 'Każdy' }, ...options(shelfStatuses)];
+	// A location is trimmed text, so a lone space can never be one, unlike a word such as "all".
+	const anyPlace = ' ';
+	/** The location filtered by, as a place in use spells it, else as the address does. */
+	const picked = $derived(
+		locations.find((place) => foldLocation(place) === foldLocation(location)) ?? location
+	);
+	const locationOptions = $derived([
+		{ value: anyPlace, label: 'Każde' },
+		...[...locations, ...(picked && !locations.includes(picked) ? [picked] : [])].map((place) => ({
+			value: place,
+			label: place
+		}))
+	]);
 </script>
 
 <Modal bind:open class="collection-filter-sheet" title="Sortowanie i filtry" closeLabel="Zamknij">
@@ -63,6 +85,21 @@
 					bind:value={
 						() => format || all,
 						(v) => onformat(v === all || v === null ? '' : (v as CollectionFilter['format']))
+					}
+				/>
+			{/snippet}
+		</Field>
+		<Field
+			label="Miejsce"
+			hint={status === 'none' ? 'Miejsce mają egzemplarze, nie tytuły.' : undefined}
+		>
+			{#snippet control(c)}
+				<Select
+					{...c}
+					disabled={status === 'none'}
+					options={locationOptions}
+					bind:value={
+						() => picked || anyPlace, (v) => onlocation(v === anyPlace || v === null ? '' : v)
 					}
 				/>
 			{/snippet}

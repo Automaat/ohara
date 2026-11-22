@@ -1,11 +1,14 @@
 package collection
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -99,14 +102,14 @@ func scanEdition(row pgx.Row) (Edition, error) {
 
 const copyColumns = `c.id, c.edition_id, c.status, c.price_cents, c.purchased_on, c.shop,
 	c.acquired_as, c.condition, c.notes, c.max_price_cents, c.max_market_percent, c.sold_on,
-	c.sale_price_cents, c.created_at, c.updated_at`
+	c.sale_price_cents, c.location, c.created_at, c.updated_at`
 
 func scanCopy(row pgx.Row) (Copy, error) {
 	var c Copy
 	var purchased, sold *time.Time
 	err := row.Scan(&c.ID, &c.EditionID, &c.Status, &c.PriceCents, &purchased, &c.Shop,
 		&c.AcquiredAs, &c.Condition, &c.Notes, &c.MaxPriceCents, &c.MaxMarketPercent, &sold,
-		&c.SalePriceCents, &c.CreatedAt, &c.UpdatedAt)
+		&c.SalePriceCents, &c.Location, &c.CreatedAt, &c.UpdatedAt)
 	c.PurchasedOn = dateOf(purchased)
 	c.SoldOn = dateOf(sold)
 	return c, err
@@ -516,12 +519,12 @@ func (s *Store) CreateCopy(ctx context.Context, in *CopyInput) (Copy, bool, erro
 		var id int64
 		err := tx.QueryRow(ctx, `INSERT INTO copy (edition_id, status, price_cents, purchased_on,
 			shop, acquired_as, condition, notes, max_price_cents, max_market_percent, sold_on,
-			sale_price_cents, request_key)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+			sale_price_cents, location, request_key)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 			ON CONFLICT (request_key) DO NOTHING RETURNING id`,
 			in.EditionID, in.Status, in.PriceCents, timeOf(in.PurchasedOn), in.Shop, in.AcquiredAs,
 			in.Condition, in.Notes, in.MaxPriceCents, in.MaxMarketPercent, timeOf(in.SoldOn),
-			in.SalePriceCents, in.RequestKey).Scan(&id)
+			in.SalePriceCents, in.Location, in.RequestKey).Scan(&id)
 		switch {
 		case errors.Is(err, pgx.ErrNoRows) && in.RequestKey != nil:
 			created = false
@@ -558,10 +561,10 @@ func (s *Store) UpdateCopy(ctx context.Context, id int64, in *CopyInput) (Copy, 
 		c, err = scanCopy(tx.QueryRow(ctx, `UPDATE copy c SET edition_id = $2, status = $3, price_cents = $4,
 			purchased_on = $5, shop = $6, acquired_as = $7, condition = $8, notes = $9,
 			max_price_cents = $10, max_market_percent = $11, sold_on = $12, sale_price_cents = $13,
-			updated_at = now() WHERE c.id = $1 RETURNING `+copyColumns,
+			location = $14, updated_at = now() WHERE c.id = $1 RETURNING `+copyColumns,
 			id, in.EditionID, in.Status, in.PriceCents, timeOf(in.PurchasedOn), in.Shop, in.AcquiredAs,
 			in.Condition, in.Notes, in.MaxPriceCents, in.MaxMarketPercent, timeOf(in.SoldOn),
-			in.SalePriceCents))
+			in.SalePriceCents, in.Location))
 		if isFKViolation(err, "copy_edition_id_fkey") {
 			return ErrEditionNotFound
 		}
@@ -838,13 +841,32 @@ func discardUnused(ctx context.Context, tx pgx.Tx, key, lock, used, remove strin
 }
 
 // Filter narrows the collection view; empty fields match everything.
+// Location matches a copy's whole location, case aside. Query is the search
+// as barcode.Normalize leaves it, Typed as the reader typed it: a location
+// holding a code is found by the code as typed.
 type Filter struct {
-	Kind   string
-	Format string
-	Status string
-	Query  string
+	Kind     string
+	Format   string
+	Status   string
+	Location string
+	Query    string
+	Typed    string
 	// Loaned keeps only copies with an open loan.
 	Loaned bool
+}
+
+// foldCase lower-cases text one character at a time, the key locations
+// match and merge by, with a final sigma as σ, since ΟΣ and ος name one
+// place. The browser's foldLocation folds the same way, so the filter it
+// applies to the loaded collection lists what this one does; Postgres's
+// lower follows the database's older Unicode tables.
+func foldCase(text string) string {
+	return strings.Map(func(r rune) rune {
+		if r = unicode.ToLower(r); r == 'ς' {
+			return 'σ'
+		}
+		return r
+	}, text)
 }
 
 // Item is one copy in the collection view with its edition and title.
@@ -861,6 +883,7 @@ type Item struct {
 	// SoldOn and SalePriceCents are a sold copy's sale.
 	SoldOn         *Date    `json:"sold_on,omitempty" ts:",null"`
 	SalePriceCents *int64   `json:"sale_price_cents,omitempty" ts:",null"`
+	Location       *string  `json:"location,omitempty" ts:",null"`
 	EditionID      int64    `json:"edition_id"`
 	Barcode        *string  `json:"barcode"`
 	Label          string   `json:"label"`
@@ -884,7 +907,7 @@ func scanItem(row pgx.Row) (Item, error) {
 	var createdAt time.Time
 	var purchased, sold, due *time.Time
 	err := row.Scan(&it.CopyID, &createdAt, &it.Status, &it.PriceCents, &it.MaxPriceCents, &purchased, &it.Shop,
-		&it.AcquiredAs, &it.Condition, &sold, &it.SalePriceCents, &it.EditionID, &it.Barcode, &it.Label, &it.Format, &it.Binding,
+		&it.AcquiredAs, &it.Condition, &sold, &it.SalePriceCents, &it.Location, &it.EditionID, &it.Barcode, &it.Label, &it.Format, &it.Binding,
 		&it.TitleID, &it.Kind, &it.Name, &it.OriginalTitle, &it.PolishTitle, &it.Year, &it.CoverURL, &it.Authors,
 		&it.LoanBorrower, &due)
 	it.CreatedAtUS = createdAt.UnixMicro()
@@ -899,7 +922,7 @@ func scanItem(row pgx.Row) (Item, error) {
 // filter them itself.
 func (s *Store) Collection(ctx context.Context, f Filter) ([]Item, error) {
 	rows, err := s.pool.Query(ctx, `SELECT c.id, c.created_at, c.status, c.price_cents, c.max_price_cents,
-			c.purchased_on, c.shop, c.acquired_as, c.condition, c.sold_on, c.sale_price_cents,
+			c.purchased_on, c.shop, c.acquired_as, c.condition, c.sold_on, c.sale_price_cents, c.location,
 			e.id, e.barcode, e.label, e.format, e.binding,
 			t.id, t.kind, t.name, t.original_title, t.polish_title, t.year,
 			`+CoverURL+`, t.authors, l.borrower, l.due_on
@@ -907,14 +930,77 @@ func (s *Store) Collection(ctx context.Context, f Filter) ([]Item, error) {
 		LEFT JOIN loan l ON l.copy_id = c.id AND l.returned_on IS NULL
 		WHERE ($1 = '' OR t.kind = $1) AND ($2 = '' OR e.format = $2) AND ($3 = '' OR c.status = $3)
 		  AND ($4 = '' OR e.barcode = $4 OR strpos(lower(concat_ws(' ', t.name, t.original_title,
-		       t.polish_title, array_to_string(t.authors, ' '), e.label, c.shop)), lower($4)) > 0)
-		  AND (NOT $5 OR l.id IS NOT NULL)
+		       t.polish_title, array_to_string(t.authors, ' '), e.label, c.shop, c.location)), lower($4)) > 0
+		       OR strpos(lower(c.location), lower($5)) > 0)
+		  AND (NOT $6 OR l.id IS NOT NULL)
 		ORDER BY lower(t.name), t.id, e.id, c.id`,
-		f.Kind, f.Format, f.Status, strings.TrimSpace(f.Query), f.Loaned)
+		f.Kind, f.Format, f.Status, strings.TrimSpace(f.Query), strings.TrimSpace(f.Typed), f.Loaned)
 	if err != nil {
 		return nil, fmt.Errorf("collection: %w", err)
 	}
-	return collect(rows, scanItem, "collection")
+	items, err := collect(rows, scanItem, "collection")
+	if err != nil {
+		return nil, err
+	}
+	if place := foldCase(strings.TrimSpace(f.Location)); place != "" {
+		items = slices.DeleteFunc(items, func(it Item) bool {
+			return it.Location == nil || foldCase(*it.Location) != place
+		})
+	}
+	return items, nil
+}
+
+// Locations returns the locations copies are stored at, each once whatever
+// its letter case (foldCase), the most used first. A place spelled several
+// ways goes by its most used spelling. Ties go in code point order, as the
+// browser's locationsInUse orders them.
+func (s *Store) Locations(ctx context.Context) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `SELECT location, count(*) FROM copy
+		WHERE location IS NOT NULL GROUP BY location`)
+	if err != nil {
+		return nil, fmt.Errorf("locations: %w", err)
+	}
+	type spelling struct {
+		text   string
+		copies int
+	}
+	spellings, err := collect(rows, func(row pgx.Row) (spelling, error) {
+		var sp spelling
+		err := row.Scan(&sp.text, &sp.copies)
+		return sp, err
+	}, "locations")
+	if err != nil {
+		return nil, err
+	}
+	type place struct {
+		key, name   string
+		copies, top int
+	}
+	byKey := map[string]*place{}
+	for _, sp := range spellings {
+		key := foldCase(sp.text)
+		p := byKey[key]
+		if p == nil {
+			p = &place{key: key}
+			byKey[key] = p
+		}
+		p.copies += sp.copies
+		if sp.copies > p.top || (sp.copies == p.top && sp.text < p.name) {
+			p.name, p.top = sp.text, sp.copies
+		}
+	}
+	places := make([]*place, 0, len(byKey))
+	for _, p := range byKey {
+		places = append(places, p)
+	}
+	slices.SortFunc(places, func(a, b *place) int {
+		return cmp.Or(cmp.Compare(b.copies, a.copies), cmp.Compare(a.key, b.key))
+	})
+	names := make([]string, len(places))
+	for i, p := range places {
+		names[i] = p.name
+	}
+	return names, nil
 }
 
 func (s *Store) inTx(ctx context.Context, fn func(pgx.Tx) error) error {

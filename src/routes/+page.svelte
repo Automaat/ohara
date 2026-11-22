@@ -40,7 +40,7 @@
 		type CollectionFilter,
 		type CollectionItem
 	} from '#lib/collection.js';
-	import { filterCollection } from '#lib/collection-filter.js';
+	import { filterCollection, locationsInUse } from '#lib/collection-filter.js';
 	import {
 		collectionSortLabels,
 		sortCopies,
@@ -201,15 +201,20 @@
 	}
 
 	function setStatus(status: CollectionFilter['status']) {
-		// A title has no format or loan, so listing titles without copies drops those filters.
+		// A title has no format, location or loan, so listing titles without copies drops those
+		// filters.
 		const titles = status === 'none';
 		updateFilter({
 			...filter,
 			status,
 			format: titles ? '' : filter.format,
+			location: titles ? '' : filter.location,
 			loaned: titles ? false : filter.loaned
 		});
 	}
+
+	/** The places the loaded copies are stored at, for the sheet's "Miejsce". */
+	const locations = $derived(locationsInUse(collection?.items ?? []));
 
 	// A no-break space keeps the line's height until the counts arrive, so nothing below moves.
 	const summary = $derived(overview ? shelfSummary(overview.totals) : '\u00a0');
@@ -262,6 +267,7 @@
 				{ key: 'q', label: filter.q.trim() },
 				{ key: 'kind', label: filter.kind && kindLabels[filter.kind] },
 				{ key: 'format', label: filter.format && formatLabels[filter.format] },
+				{ key: 'location', label: filter.location },
 				{ key: 'status', label: filter.status && collectionStatusLabels[filter.status] },
 				{ key: 'loaned', label: filter.loaned ? loanedLabel : '' }
 			] as const
@@ -284,6 +290,11 @@
 				key: 'format',
 				label: formatLabels[filter.format],
 				remove: () => set('format', '')
+			},
+			!!filter.location && {
+				key: 'location',
+				label: `Miejsce: ${filter.location}`,
+				remove: () => set('location', '')
 			},
 			// The wishlist has its own chip beside the list.
 			filter.status &&
@@ -361,10 +372,13 @@
 		format={filter.format}
 		status={filter.status}
 		loaned={filter.loaned ?? false}
+		location={filter.location ?? ''}
+		{locations}
 		onsort={setSort}
 		onformat={(format) => set('format', format)}
 		onstatus={setStatus}
 		onloaned={(loaned) => set('loaned', loaned)}
+		onlocation={(location) => set('location', location)}
 	/>
 </div>
 

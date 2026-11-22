@@ -81,8 +81,8 @@ func wishlist(t *testing.T, pool *pgxpool.Pool, w *Want) int64 {
 		w.Kind, w.Name, w.PolishTitle, w.OriginalTitle, append([]string{}, w.Authors...)).Scan(&titleID); err != nil {
 		t.Fatalf("title: %v", err)
 	}
-	if err := pool.QueryRow(ctx, `INSERT INTO edition (title_id, format) VALUES ($1, $2) RETURNING id`,
-		titleID, w.Format).Scan(&editionID); err != nil {
+	if err := pool.QueryRow(ctx, `INSERT INTO edition (title_id, format, barcode) VALUES ($1, $2, $3) RETURNING id`,
+		titleID, w.Format, w.Barcode).Scan(&editionID); err != nil {
 		t.Fatalf("edition: %v", err)
 	}
 	if err := pool.QueryRow(ctx, `INSERT INTO copy (edition_id, status, max_price_cents)

@@ -9,6 +9,7 @@
 	} from '#lib/collection.js';
 	import { foldLocation } from '#lib/collection-filter.js';
 	import { collectionSortOptions, type CollectionSort } from '#lib/collection-sort.js';
+	import { tagKey, tagTerm } from '#lib/tags.js';
 
 	let {
 		open = $bindable(false),
@@ -18,11 +19,14 @@
 		loaned,
 		location,
 		locations,
+		tag,
+		tags,
 		onsort,
 		onformat,
 		onstatus,
 		onloaned,
-		onlocation
+		onlocation,
+		ontag
 	}: {
 		open?: boolean;
 		sort: CollectionSort;
@@ -33,11 +37,16 @@
 		location: string;
 		/** The locations in use, the most used first. */
 		locations: readonly string[];
+		/** The tag the titles are filtered by, empty for any. */
+		tag: string;
+		/** The tags the loaded titles carry, by name. */
+		tags: readonly string[];
 		onsort: (sort: CollectionSort) => void;
 		onformat: (format: CollectionFilter['format']) => void;
 		onstatus: (status: CollectionFilter['status']) => void;
 		onloaned: (loaned: boolean) => void;
 		onlocation: (location: string) => void;
+		ontag: (tag: string) => void;
 	} = $props();
 
 	const all = 'all';
@@ -61,6 +70,20 @@
 			label: place
 		}))
 	]);
+
+	// A tag value is the tag itself, so "Każdy" takes a value no tag can have: tags are trimmed.
+	const anyTag = ' ';
+	const chosenTag = $derived(tagTerm(tag));
+	/** The tags in use, and the chosen one even when nothing loaded carries it. */
+	const tagOptions = $derived([
+		{ value: anyTag, label: 'Każdy' },
+		...(chosenTag && !tags.some((t) => tagKey(t) === tagKey(chosenTag)) ? [chosenTag] : [])
+			.concat(tags)
+			.map((t) => ({ value: t, label: t }))
+	]);
+	const selectedTag = $derived(
+		chosenTag ? (tags.find((t) => tagKey(t) === tagKey(chosenTag)) ?? chosenTag) : anyTag
+	);
 </script>
 
 <Modal bind:open class="collection-filter-sheet" title="Sortowanie i filtry" closeLabel="Zamknij">
@@ -102,6 +125,18 @@
 					bind:value={
 						() => picked || anyPlace, (v) => onlocation(v === anyPlace || v === null ? '' : v)
 					}
+				/>
+			{/snippet}
+		</Field>
+		<Field
+			label="Tag"
+			hint={tags.length === 0 && !chosenTag ? 'Tagi dodasz w edycji tytułu.' : undefined}
+		>
+			{#snippet control(c)}
+				<Select
+					{...c}
+					options={tagOptions}
+					bind:value={() => selectedTag, (v) => ontag(v === anyTag || v === null ? '' : v)}
 				/>
 			{/snippet}
 		</Field>

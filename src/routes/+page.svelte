@@ -35,6 +35,7 @@
 		shelvedCount,
 		spentLabel,
 		statusLabels,
+		tagsInUse,
 		uncopiedTitles,
 		unpricedCount,
 		unpricedLabel,
@@ -42,6 +43,7 @@
 		type CollectionItem
 	} from '#lib/collection.js';
 	import { filterCollection, locationsInUse } from '#lib/collection-filter.js';
+	import { tagKey } from '#lib/tags.js';
 	import {
 		collectionSortLabels,
 		sortCopies,
@@ -267,6 +269,12 @@
 			overview?.totals.copies === 0 &&
 			rows.length === 0
 	);
+	/** The tags the loaded copies and titles carry, for the sheet's "Tag". */
+	const tags = $derived(tagsInUse(collection?.items ?? [], uncopied ?? []));
+	/** The filtered tag as it was first saved, whatever case the address spells it in. */
+	const shownTag = $derived(
+		filter.tag ? (tags.find((t) => tagKey(t) === tagKey(filter.tag ?? '')) ?? filter.tag) : ''
+	);
 	const activeFilters = $derived(
 		(
 			[
@@ -275,7 +283,8 @@
 				{ key: 'format', label: filter.format && formatLabels[filter.format] },
 				{ key: 'location', label: filter.location },
 				{ key: 'status', label: filter.status && collectionStatusLabels[filter.status] },
-				{ key: 'loaned', label: filter.loaned ? loanedLabel : '' }
+				{ key: 'loaned', label: filter.loaned ? loanedLabel : '' },
+				{ key: 'tag', label: shownTag }
 			] as const
 		).filter((entry) => entry.label)
 	);
@@ -301,6 +310,11 @@
 				key: 'location',
 				label: `Miejsce: ${filter.location}`,
 				remove: () => set('location', '')
+			},
+			!!filter.tag && {
+				key: 'tag',
+				label: `Tag: ${shownTag}`,
+				remove: () => set('tag', '')
 			},
 			// The wishlist has its own chip beside the list.
 			filter.status &&
@@ -380,11 +394,14 @@
 		loaned={filter.loaned ?? false}
 		location={filter.location ?? ''}
 		{locations}
+		tag={filter.tag ?? ''}
+		{tags}
 		onsort={setSort}
 		onformat={(format) => set('format', format)}
 		onstatus={setStatus}
 		onloaned={(loaned) => set('loaned', loaned)}
 		onlocation={(location) => set('location', location)}
+		ontag={(tag) => set('tag', tag)}
 	/>
 </div>
 

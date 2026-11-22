@@ -355,9 +355,9 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   in Chromium at 390 × 844 with touch: a wedge scan, quick confirm and
   "Cofnij", "Dodaj tytuł" by hand, the scan sheet sending no deals or queue
   read, the queue count following a queued scan, its add and undo, and
-  Kolekcja's filters, which also run at 1440 × 900. `scripts/e2e.sh`
-  builds the image (or takes one as its first argument), starts it from
-  `e2e/compose.yaml`
+  Kolekcja's filters, which also run at 1440 × 900, and its sort orders
+  under active filters. `scripts/e2e.sh` builds the image (or takes one as
+  its first argument), starts it from `e2e/compose.yaml`
   with Postgres, `OHARA_LOOKUP_STUB=true`, `OHARA_MUSICBRAINZ=false` and no
   provider keys, and removes it afterwards. App and Postgres sit on an
   internal network, so no public provider is reachable; each test also

@@ -734,10 +734,10 @@ func TestRunStoresRealizedGain(t *testing.T) {
 	}
 }
 
-// TestSaveDayRealizesTheRowsDay saves a summary read before midnight,
-// which has no gain yet, after a sale dated the new day: the row keeps the
-// gain of the day it names, not the summary's.
-func TestSaveDayRealizesTheRowsDay(t *testing.T) {
+// TestSaveDayCountsASaleOnce sells an owned copy after the run read its
+// snapshot and before it saves the day: the day counts the copy as owned,
+// as its snapshot did, not also as sold. The next run counts it as sold.
+func TestSaveDayCountsASaleOnce(t *testing.T) {
 	pool := dbtest.Migrated(t)
 	seed(t, pool)
 	store := NewStore(pool)
@@ -746,26 +746,67 @@ func TestSaveDayRealizesTheRowsDay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if read.Realized != (Realized{}) {
-		t.Fatalf("realized before the sale = %+v, want none", read.Realized)
+	exec(t, pool, `UPDATE copy SET status = 'sold', sold_on = current_date, sale_price_cents = 7000
+		WHERE edition_id = 10`)
+
+	point, err := store.SaveDay(ctx, &read, owned)
+	if err != nil {
+		t.Fatalf("SaveDay: %v", err)
 	}
+	if point.Copies != 3 || point.SpentCents != 8000 || point.Realized != (Realized{}) {
+		t.Fatalf("saved day = %+v, want the 3 copies owned when read and no sale", point.Totals)
+	}
+
+	owned, read, err = store.Valued(ctx, 90*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	point, err = store.SaveDay(ctx, &read, owned)
+	if err != nil {
+		t.Fatalf("SaveDay: %v", err)
+	}
+	want := Realized{Copies: 1, GainCents: 4000}
+	if point.Copies != 2 || point.SpentCents != 5000 || point.Realized != want {
+		t.Fatalf("next day save = %+v, want 2 owned copies, 50 zł spent and %+v", point.Totals, want)
+	}
+}
+
+// TestSaveDayKeepsTheSnapshotsDay saves a summary read on an earlier day,
+// as a run that read before midnight and saves after it does: the day and
+// the copies' values go under the day the summary was read on, beside the
+// sales realized by then.
+func TestSaveDayKeepsTheSnapshotsDay(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	seed(t, pool)
 	exec(t, pool, `INSERT INTO copy (edition_id, status, price_cents, sold_on, sale_price_cents)
-		VALUES (10, 'sold', 4000, current_date, 7000)`)
+		VALUES (10, 'sold', 4000, current_date - 1, 7000)`)
+	store := NewStore(pool)
+	ctx := context.Background()
+	owned, read, err := store.Valued(ctx, 90*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var yesterday string
+	if err := pool.QueryRow(ctx, `SELECT to_char(current_date - 1, 'YYYY-MM-DD')`).Scan(&yesterday); err != nil {
+		t.Fatal(err)
+	}
+	read.day = yesterday
 
 	point, err := store.SaveDay(ctx, &read, owned)
 	if err != nil {
 		t.Fatalf("SaveDay: %v", err)
 	}
 	want := Realized{Copies: 1, GainCents: 3000}
-	if point.Realized != want {
-		t.Fatalf("saved realized = %+v, want %+v", point.Realized, want)
+	if point.Day != yesterday || point.Realized != want {
+		t.Fatalf("saved day %s realized %+v, want %s with %+v", point.Day, point.Realized, yesterday, want)
 	}
-	history, err := store.History(ctx, 1)
-	if err != nil {
+	var copyDays int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM copy_value_history WHERE day = current_date - 1`).
+		Scan(&copyDays); err != nil {
 		t.Fatal(err)
 	}
-	if len(history) != 1 || history[0].Realized != want {
-		t.Fatalf("history = %+v, want today's row with %+v", history, want)
+	if copyDays != len(owned) {
+		t.Fatalf("copy days stored yesterday = %d, want the %d owned copies", copyDays, len(owned))
 	}
 }
 

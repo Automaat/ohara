@@ -433,6 +433,10 @@ type Gain struct {
 type Summary struct {
 	Totals
 	Gain Gain `json:"gain"`
+	// day is the database's date (YYYY-MM-DD) in the snapshot Valued read
+	// the summary from, the day SaveDay stores it under; empty for a
+	// summary Valued did not read, which SaveDay stores under today.
+	day string
 }
 
 // Value fills each copy's range from ranges, at the copy's condition, and

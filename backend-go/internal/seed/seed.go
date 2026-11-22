@@ -471,9 +471,10 @@ func (s *seeder) alert(ctx context.Context, l *listing, obsID, copyID int64) err
 	var err error
 	switch l.alert {
 	case "sent":
-		_, err = s.tx.Exec(ctx, `INSERT INTO deal_alert (observation_id, copy_id, created_at, sent_at, attempts)
-			VALUES ($1, $2, now() - make_interval(hours => $3), now() - make_interval(hours => $3), 1)`,
-			obsID, copyID, l.firstSeenHoursAgo)
+		_, err = s.tx.Exec(ctx, `INSERT INTO deal_alert (observation_id, copy_id, created_at, sent_at, attempts,
+				alerted_price_cents)
+			VALUES ($1, $2, now() - make_interval(hours => $3), now() - make_interval(hours => $3), 1, $4)`,
+			obsID, copyID, l.firstSeenHoursAgo, l.priceCents)
 	case "failed":
 		_, err = s.tx.Exec(ctx, `INSERT INTO deal_alert (observation_id, copy_id, created_at, attempts, last_error)
 			VALUES ($1, $2, now() - make_interval(hours => $3), $4, 'telegram: status 400')`,

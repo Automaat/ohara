@@ -226,6 +226,11 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   queues one `deal_alert` per listing at or below the copy's
   `max_price_cents`; a listing seen again keeps its row, takes the new
   price and `last_seen_at`, and alerts if it has no alert yet. Alerts are retried up to 5 times within a week.
+  A sent alert stores the price it named (`deal_alert.alerted_price_cents`);
+  a later price under it, within the limit, queues the same row again and
+  its message names the earlier price ("było …"). An alert still waiting
+  goes out at the current price; one that gave up or expired is queued
+  again only on a further drop.
   The wish a listing was recorded for (`raw.wishlist_copy_id`) is also the
   generated, indexed column `wishlist_copy_id`, so the deals list's filters
   start from wished listings instead of reading every observation.

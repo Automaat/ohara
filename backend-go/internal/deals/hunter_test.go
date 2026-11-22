@@ -513,6 +513,89 @@ func TestRunAlertsOnListingsStoredBefore(t *testing.T) {
 	}
 }
 
+// TestRunAlertsAgainOnPriceDrop follows one listing under a 50 zł wish
+// through price changes: only a price under the one the last sent alert
+// named, still within the limit, alerts again.
+func TestRunAlertsAgainOnPriceDrop(t *testing.T) {
+	type step struct {
+		price  int64
+		limit  int64 // changes the wish's limit before the run when not 0
+		fail   int   // failed sends from this run on, unless 0
+		alerts int
+		sent   []string // the messages' price lines
+	}
+	tests := []struct {
+		name  string
+		steps []step
+	}{
+		{"drops alert again and rises do not", []step{
+			{price: 4500, alerts: 1, sent: []string{"45,00 zł (limit 50,00 zł) · OLX"}},
+			{price: 4000, alerts: 1, sent: []string{"40,00 zł (było 45,00 zł, limit 50,00 zł) · OLX"}},
+			{price: 4200},
+			{price: 4100},
+			{price: 4000},
+			{price: 3500, alerts: 1, sent: []string{"35,00 zł (było 40,00 zł, limit 50,00 zł) · OLX"}},
+		}},
+		{"a drop still over the limit", []step{
+			{price: 4500, alerts: 1, sent: []string{"45,00 zł (limit 50,00 zł) · OLX"}},
+			{price: 4000, limit: 3000},
+			{price: 3500},
+		}},
+		{"a drop while the first alert is unsent", []step{
+			{price: 4500, fail: 1, alerts: 1},
+			{price: 4000, sent: []string{"40,00 zł (limit 50,00 zł) · OLX"}},
+			{price: 4000},
+		}},
+		{"a drop after a repeat alert gave up", []step{
+			{price: 4500, alerts: 1, sent: []string{"45,00 zł (limit 50,00 zł) · OLX"}},
+			{price: 4000, fail: MaxAttempts, alerts: 1},
+			{price: 4000},
+			{price: 4000},
+			{price: 4000},
+			{price: 4000},
+			{price: 4000},
+			{price: 3800, alerts: 1, sent: []string{"38,00 zł (było 45,00 zł, limit 50,00 zł) · OLX"}},
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pool := dbtest.Migrated(t)
+			copyID := wishlist(t, pool, wantBluray(new(int64(5000))))
+			listing := Listing{
+				Source: "olx", ExternalID: "777", Title: "Blade Runner Blu-ray", URL: "https://www.olx.pl/d/oferta/z-ID777.html",
+			}
+			olx := &fakeSource{name: "olx", perQuery: true, listings: []Listing{listing}}
+			notifier := &fakeNotifier{}
+			h := newTestHunter(pool, notifier, olx)
+			for i, s := range tt.steps {
+				if s.limit != 0 {
+					if _, err := pool.Exec(context.Background(),
+						`UPDATE copy SET max_price_cents = $2 WHERE id = $1`, copyID, s.limit); err != nil {
+						t.Fatal(err)
+					}
+				}
+				olx.listings[0].PriceCents = s.price
+				if s.fail != 0 {
+					notifier.fail = s.fail
+				}
+				before := len(notifier.messages())
+				res := mustRun(t, h)
+				var sent []string
+				for _, msg := range notifier.messages()[before:] {
+					sent = append(sent, strings.Split(msg, "\n")[1])
+				}
+				if res.Alerts != s.alerts || !slices.Equal(sent, s.sent) {
+					t.Fatalf("step %d at %d grosze: %d alerts queued, sent %q; want %d, %q",
+						i, s.price, res.Alerts, sent, s.alerts, s.sent)
+				}
+			}
+			if n := count(t, pool, `SELECT count(*) FROM deal_alert`); n != 1 {
+				t.Fatalf("stored %d alerts, want one row for the listing", n)
+			}
+		})
+	}
+}
+
 // metric reads one series from /metrics, such as
 // `ohara_source_canary_ok{source="olx"}`; the bool is false when it is
 // absent.

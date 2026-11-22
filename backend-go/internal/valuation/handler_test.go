@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/Automaat/ohara/backend-go/internal/dbtest"
+	"github.com/Automaat/ohara/backend-go/internal/deals"
 	"github.com/Automaat/ohara/backend-go/internal/server"
 )
 
@@ -139,6 +140,90 @@ func TestTitleCopiesAPI(t *testing.T) {
 	for _, raw := range []string{"", "0", "-1", "abc", "1.5", "99999999999999999999"} {
 		var body map[string]string
 		code := get(t, srv.URL+"/api/valuation/copies?title_id="+raw, &body)
+		if code != http.StatusUnprocessableEntity || body["field"] != "title_id" {
+			t.Fatalf("title_id %q = %d %v, want 422 naming title_id", raw, code, body)
+		}
+	}
+}
+
+// recordDVDWish stores found as the deal hunter does for seed's wished
+// DVD edition 21 of "Diuna": against that edition, whatever the price.
+func recordDVDWish(t *testing.T, pool *pgxpool.Pool, found ...deals.Listing) {
+	t.Helper()
+	dvd := "dvd"
+	wish := deals.Want{CopyID: 4, EditionID: 21, TitleID: 2, Kind: "movie", Name: "Diuna", Format: &dvd}
+	for i := range found {
+		if _, _, err := deals.NewStore(pool).Record(context.Background(), &found[i], &wish, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestWishMarketPrice prices a wished title and format from the OLX
+// listings the hunter stored for it, as the valuation prices a middle:
+// used prices within the window, outliers dropped. With title_id it also
+// gives an owned format the middle its copies are valued at, and a
+// listing first seen before its edition last changed stops counting.
+func TestWishMarketPrice(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	seed(t, pool)
+	logger := slog.New(slog.DiscardHandler)
+	store := NewStore(pool)
+	runner := NewRunner(store, nil, nil, nil, Config{Window: 90 * 24 * time.Hour}, logger)
+	srv := httptest.NewServer(server.New(server.Config{}, logger,
+		server.Deps{DB: pool, API: []server.Mounter{NewHandler(store, runner, logger)}}))
+	t.Cleanup(srv.Close)
+
+	exec(t, pool, `UPDATE edition SET updated_at = now() - interval '200 days' WHERE id = 21`)
+	recordDVDWish(t, pool,
+		listing("u1", "Diuna DVD", 3000, used()),
+		listing("u2", "Diuna DVD PL", 4000, used()),
+		listing("u3", "Diuna DVD stan dobry", 4500, nil),
+		listing("u4", "Diuna DVD lektor", 5000, used()),
+		listing("u5", "Diuna DVD kolekcjonerska", 40000, used()),
+		listing("n1", "Diuna DVD nowa w folii", 2000, fresh()))
+	exec(t, pool, `INSERT INTO price_observation
+			(source, external_id, price_cents, edition_id, title_id, acquired_as, observed_at, last_seen_at)
+		VALUES ('pepper', 'p1', 1000, 21, 2, 'used', now(), now()),
+		       ('ceneo', 'c1', 1100, 21, 2, 'used', now(), now()),
+		       ('olx', 'old', 1200, 21, 2, 'used', now() - interval '100 days', now() - interval '91 days'),
+		       ('olx', 'b1', 4000, 20, 2, 'used', now(), now()),
+		       ('olx', 'b2', 4400, 20, 2, 'used', now(), now())`)
+
+	dvd := "dvd"
+	dvdMarket := Market{TitleID: 2, Format: &dvd, Estimate: Estimate{Cents: 4250, Source: SourceOLX, Count: 4, Trimmed: 1}}
+	var wished MarketView
+	if code := get(t, srv.URL+"/api/valuation/market", &wished); code != http.StatusOK {
+		t.Fatalf("GET market = %d", code)
+	}
+	if wished.WindowDays != 90 || !reflect.DeepEqual(wished.Markets, []Market{dvdMarket}) {
+		t.Fatalf("wished markets = %+v, want only the DVD at 42,50 zł from 4 listings with 1 dropped", wished)
+	}
+
+	var title MarketView
+	if code := get(t, srv.URL+"/api/valuation/market?title_id=2", &title); code != http.StatusOK {
+		t.Fatalf("GET title market = %d", code)
+	}
+	owned, err := store.TitleValued(context.Background(), runner.Window(), 2)
+	if err != nil || len(owned) == 0 || owned[0].Mid == nil {
+		t.Fatalf("TitleValued = %+v, %v; want a valued owned Blu-ray", owned, err)
+	}
+	bluray := "bluray"
+	want := []Market{{TitleID: 2, Format: &bluray, Estimate: *owned[0].Mid}, dvdMarket}
+	if !reflect.DeepEqual(title.Markets, want) {
+		t.Fatalf("title markets = %+v, want the owned Blu-ray's middle and the DVD's %+v", title.Markets, want)
+	}
+
+	exec(t, pool, `UPDATE edition SET updated_at = now() WHERE id = 21`)
+	var edited MarketView
+	get(t, srv.URL+"/api/valuation/market", &edited)
+	if edited.Markets == nil || len(edited.Markets) != 0 {
+		t.Fatalf("markets after the wished edition changed = %+v, want none", edited.Markets)
+	}
+
+	for _, raw := range []string{"", "0", "-1", "abc", "1.5", "99999999999999999999", "%ZZ", "2&title_id=%ZZ", "2&title_id=3"} {
+		var body map[string]string
+		code := get(t, srv.URL+"/api/valuation/market?title_id="+raw, &body)
 		if code != http.StatusUnprocessableEntity || body["field"] != "title_id" {
 			t.Fatalf("title_id %q = %d %v, want 422 naming title_id", raw, code, body)
 		}

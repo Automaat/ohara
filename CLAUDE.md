@@ -305,6 +305,11 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   and the price paid over the copies that have both; the Wartość hero's
   difference reads only that, and names its coverage when it counts
   fewer copies than the collection. History keeps no gain.
+  `GET /api/valuation/market` gives each
+  wished title and format that used middle from stored listings, owned
+  or not (`?title_id=`: every format of one title), and sends no request
+  out: Okazje's deal cards and a wish form's "Cena maksymalna" show it as
+  "Rynek ok. 42,50 zł (4 oferty)", with "mało danych" under 3 listings.
 - A barcode no provider resolves goes to `scan_queue`; a trigger on `edition`
   removes it once an edition carries that barcode. `ohara_scan_queue_size`
   counts it on each scrape. The trigger keeps the entry it removes in
@@ -381,7 +386,16 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   refreshes it once. Its filter sheet's "Bez egzemplarzy"
   (`?status=none`) lists titles without one instead, filtered in the client
   from `GET /api/titles`; `/titles` redirects to `/`. `?add=copy` on a title
-  or edition page opens the form for its next copy.
+  or edition page opens the form for its next copy. The shelf draws its
+  tiles in parts (`src/lib/shelf-drawing.ts`): 60 with the page, then 150
+  a task, each tile carrying `aria-setsize`. Until the last part lands the
+  list keeps the height all tiles will take and a scroll past the drawn
+  tiles draws them at once; End, or a scroll to the end of the page, draws
+  every tile left before scrolling, so it reaches the last copy. A restored
+  scroll first draws down to its place. Only the layout on screen
+  is mounted: a phone always gets the shelf, never the hidden table, and a
+  shelf back from the table (a phone turned sideways and back) returns to
+  the tile that was at the top when the reader last scrolled.
 - "Zmień okładkę" shrinks the chosen photo in the browser before upload
   (`shrinkPhoto` in `src/lib/edition-cover.ts`): `createImageBitmap` turns
   it upright from its EXIF orientation, a canvas at most 1600 px on the

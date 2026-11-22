@@ -24,6 +24,7 @@
 	} from '#lib/collection.js';
 	import CopyFormFields from '#lib/components/CopyFormFields.svelte';
 	import { LatestLoad } from '#lib/scan.js';
+	import { TitleMarkets } from '#lib/title-market.svelte.js';
 
 	const id = $derived(Number(page.params.id));
 
@@ -76,6 +77,12 @@
 
 	$effect(() => {
 		void load(id);
+	});
+
+	/** The wish's market price, asked once the form shows a wish's limit. */
+	const markets = new TitleMarkets(fetch);
+	$effect(() => {
+		if (detail && form.status === 'wishlist') void markets.load(detail.title.id);
 	});
 
 	async function save(d: CopyDetail) {
@@ -154,6 +161,7 @@
 			{issue}
 			{saving}
 			submitLabel="Zapisz zmiany"
+			market={markets.for(d.title.id, d.edition.format)}
 			onsubmit={() => save(d)}
 		/>
 	</div>

@@ -34,6 +34,10 @@ export function limitedRun(count: number): string {
 	return `nakład ${numberFormat.format(count)} egz.`;
 }
 
+export function titleCount(count: number): string {
+	return counted(count, 'tytuł', 'tytuły', 'tytułów');
+}
+
 /** Copies on their way, such as "2 zamówione". */
 export function orderedCount(count: number): string {
 	return counted(count, 'zamówiony', 'zamówione', 'zamówionych');

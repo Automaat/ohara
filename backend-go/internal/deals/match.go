@@ -1172,18 +1172,26 @@ func carriesPhrase(significant, req []string) bool {
 	return false
 }
 
-// pick returns the want a listing belongs to, or nil. A want of a kind
-// the listing's Kinds leave out, or one that loses a listing naming
-// another known title more specifically (Outranks), does not get it.
+// pick returns the want a listing belongs to, or nil. A want loses a
+// listing that names another known title more specifically (Outranks).
 // Among the remaining matching wants it prefers one whose limit or market
 // share the listing meets, so a cheap listing alerts even when an earlier
 // want for the same title has a lower limit.
 func pick(wants []Want, l *Listing, rules Rules, titles Titles) *Want {
+	return pickOf(wants, nil, l, rules, titles)
+}
+
+// pickOf is pick among the wants of kinds, or among every want when kinds
+// is nil. A listing with Kinds also goes to no want of another kind.
+func pickOf(wants []Want, kinds []string, l *Listing, rules Rules, titles Titles) *Want {
 	text := NewListingText(l.Title, rules)
 	var first *Want
 	for i := range wants {
 		w := &wants[i]
-		if l.Kinds != nil && !slices.Contains(l.Kinds, w.Kind) || !text.Belongs(w, titles) {
+		if kinds != nil && !slices.Contains(kinds, w.Kind) || l.Kinds != nil && !slices.Contains(l.Kinds, w.Kind) {
+			continue
+		}
+		if !text.Belongs(w, titles) {
 			continue
 		}
 		if w.Meets(l.PriceCents) {

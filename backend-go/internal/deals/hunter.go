@@ -42,7 +42,8 @@ const firstRunDelay = 5 * time.Minute
 // be started by hand. Delay separates two source requests; both are
 // jittered. CanaryQuery, when set, is asked of every query source on every
 // run, wishlist or not: a query that always has listings, so a source that
-// answers with none is broken. A feed source's one request is its canary.
+// answers with none is broken. A Canaried source asks its own query
+// instead. A feed source's one request is its canary.
 type Config struct {
 	Interval    time.Duration
 	Delay       time.Duration
@@ -278,6 +279,7 @@ type run struct {
 	// tried holds the observations whose alert this run sent or failed to
 	// send; a failed one waits for the next run.
 	tried map[int64]bool
+	kinds map[string][]string
 }
 
 // Run searches every source for every wishlist copy, records matching
@@ -326,7 +328,7 @@ func (h *Hunter) Run(ctx context.Context) (RunResult, error) {
 	}
 	if len(wants) > 0 || h.cfg.CanaryQuery != "" {
 		for _, src := range h.sources {
-			if err := r.search(ctx, src, queries); err != nil {
+			if err := r.search(ctx, src, r.queriesFor(src, queries)); err != nil {
 				return r.res, err
 			}
 		}
@@ -340,6 +342,28 @@ func (h *Hunter) Run(ctx context.Context) (RunResult, error) {
 		return r.res, err
 	}
 	return r.res, nil
+}
+
+// queriesFor are the queries src is asked: all of them, or for a
+// KindSource only those of the wishes of its kinds, whose kinds the run
+// then keeps for matching the source's listings.
+func (r *run) queriesFor(src Source, all []string) []string {
+	ks, ok := src.(KindSource)
+	if !ok {
+		return all
+	}
+	kinds := ks.Kinds()
+	if r.kinds == nil {
+		r.kinds = map[string][]string{}
+	}
+	r.kinds[src.Name()] = kinds
+	var wants []Want
+	for i := range r.wants {
+		if slices.Contains(kinds, r.wants[i].Kind) {
+			wants = append(wants, r.wants[i])
+		}
+	}
+	return searchQueries(wants)
 }
 
 // searchQueries are the distinct queries of every want, in want order.
@@ -367,8 +391,11 @@ func (r *run) pause(ctx context.Context) error {
 }
 
 // search asks src for the canary query and every wishlist query, then
-// publishes the listing count and canary outcome. A feed source is asked
-// once: that answer is both its canary and, with a wishlist, its listings.
+// publishes the listing count and canary outcome. A wishlist query that is
+// the canary query takes the canary's answer, or its failure, instead of
+// asking again, and its listings count once. A
+// feed source is asked once: that answer is both its canary and, with a
+// wishlist, its listings.
 func (r *run) search(ctx context.Context, src Source, queries []string) error {
 	var f Refused
 	err := r.searchAll(ctx, src, &f, queries)
@@ -379,14 +406,14 @@ func (r *run) search(ctx context.Context, src Source, queries []string) error {
 }
 
 func (r *run) searchAll(ctx context.Context, src Source, f *Refused, queries []string) error {
-	canary := r.h.cfg.CanaryQuery
+	canary := canaryQuery(src, r.h.cfg.CanaryQuery)
 	if !src.PerQuery() {
 		listings, ok, err := r.ask(ctx, src, f, "")
 		if err != nil {
 			return err
 		}
 		if canary != "" {
-			r.canary(src, ok, len(listings))
+			r.canary(src, canary, ok, len(listings))
 		}
 		metrics.SetSourceResults(src.Name(), len(listings))
 		if ok && len(r.wants) > 0 {
@@ -395,23 +422,31 @@ func (r *run) searchAll(ctx context.Context, src Source, f *Refused, queries []s
 		return nil
 	}
 	results := 0
+	var answered []Listing
+	answeredOK := false
 	if canary != "" {
 		listings, ok, err := r.ask(ctx, src, f, canary)
 		if err != nil {
 			return err
 		}
-		r.canary(src, ok, len(listings))
+		r.canary(src, canary, ok, len(listings))
 		results += len(listings)
+		answered, answeredOK = listings, ok
 	}
 	for _, q := range queries {
-		listings, ok, err := r.ask(ctx, src, f, q)
-		if err != nil {
-			return err
+		listings, ok := answered, answeredOK
+		if canary == "" || q != canary {
+			var err error
+			if listings, ok, err = r.ask(ctx, src, f, q); err != nil {
+				return err
+			}
+			if ok {
+				results += len(listings)
+			}
 		}
 		if !ok {
 			continue
 		}
-		results += len(listings)
 		if err := r.record(ctx, listings); err != nil {
 			return err
 		}
@@ -473,10 +508,10 @@ func searchPage(ctx context.Context, src Source, query string) (Page, error) {
 
 // canary publishes the canary outcome of src; an answer without listings
 // is a failure too, since the canary query always has some.
-func (r *run) canary(src Source, ok bool, listings int) {
+func (r *run) canary(src Source, query string, ok bool, listings int) {
 	metrics.SetSourceCanary(src.Name(), ok && listings > 0)
 	if ok && listings == 0 {
-		r.h.logger.Warn("deal source canary found no listings", "source", src.Name(), "query", r.h.cfg.CanaryQuery)
+		r.h.logger.Warn("deal source canary found no listings", "source", src.Name(), "query", query)
 		r.fail(src.Name() + ": canary query found no listings")
 	}
 }
@@ -499,7 +534,7 @@ func (r *run) record(ctx context.Context, listings []Listing) error {
 	refreshed := map[string]bool{}
 	for i := range listings {
 		l := &listings[i]
-		w := pick(r.wants, l, r.rules, r.titles)
+		w := pickOf(r.wants, r.kinds[l.Source], l, r.rules, r.titles)
 		if w == nil {
 			continue
 		}
@@ -544,7 +579,7 @@ func (r *run) remeasure(ctx context.Context, refreshed map[string]bool) error {
 	}
 	for _, key := range slices.Sorted(maps.Keys(r.missed)) {
 		l := r.missed[key]
-		w := pick(r.wants, &l, r.rules, r.titles)
+		w := pickOf(r.wants, r.kinds[l.Source], &l, r.rules, r.titles)
 		if w == nil || !w.Meets(l.PriceCents) {
 			continue
 		}
@@ -638,7 +673,7 @@ var (
 		"dvd": "DVD", "bluray": "Blu-ray", "uhd": "4K UHD",
 		"cd": "CD", "vinyl": "Winyl", "cassette": "Kaseta", FormatAudiobook: "Audiobook",
 	}
-	sourceLabels = map[string]string{"olx": "OLX", "swiatksiazki": "Świat Książki", "pepper": "Pepper"}
+	sourceLabels = map[string]string{"olx": "OLX", "bluedvd": "BlueDVD", "swiatksiazki": "Świat Książki", "pepper": "Pepper", "tezeusz": "Tezeusz"}
 	stateLabels  = map[string]string{"new": "nowy", "used": "używany"}
 )
 

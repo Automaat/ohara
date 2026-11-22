@@ -70,8 +70,9 @@ type wantText struct {
 
 // nameText is one of a want's names with its words and the words a
 // listing must contain to carry it. A short name, every word of at most
-// two letters ("M", "Up", "It"), needs all its words and must stand as
-// the title (standsAt).
+// two letters ("M", "Up", "It"), instead needs all its words in a row
+// where they stand as the title (standsAt); its req still serves other
+// titles' names compared with it, as a longer name's does.
 type nameText struct {
 	name  string
 	words []string
@@ -88,14 +89,9 @@ func newNameText(name string) *nameText {
 	if len(ws) == 0 {
 		return nil
 	}
-	n := &nameText{name: name, words: ws, short: true}
+	n := &nameText{name: name, words: ws, req: significant(ws), short: true}
 	for _, w := range ws {
 		n.short = n.short && utf8.RuneCountInString(w) <= maxShortWord
-	}
-	if n.short {
-		n.req = ws
-	} else {
-		n.req = significant(ws)
 	}
 	return n
 }
@@ -648,13 +644,26 @@ func (l *ListingText) lotFor(kind string, p *wantText) bool {
 }
 
 // nameStart is where the first word of a name of p the listing carries
-// stands in it, or -1 when it carries none.
+// stands in it, or -1 when it carries none. A longer name the listing
+// carries counts before a short one, whose letters often stand elsewhere
+// too: in "M Blu-ray - pakiet: M le maudit" the set starts "M le maudit".
 func (p *wantText) nameStart(kind string, l *ListingText) int {
-	start := -1
+	start, shortStart := -1, -1
 	for i := range p.names {
-		if j := p.names[i].carriedAt(kind, l, p.byline); j >= 0 && (start < 0 || j < start) {
+		n := &p.names[i]
+		j := n.carriedAt(kind, l, p.byline)
+		switch {
+		case j < 0:
+		case n.short:
+			if shortStart < 0 || j < shortStart {
+				shortStart = j
+			}
+		case start < 0 || j < start:
 			start = j
 		}
+	}
+	if start < 0 {
+		return shortStart
 	}
 	return start
 }
@@ -780,7 +789,7 @@ func (n *nameText) standsAt(l *ListingText, byline []string) int {
 	k := len(n.words)
 	lone := k == 1 && utf8.RuneCountInString(n.words[0]) == 1
 	for i := 0; i+k <= len(l.words); i++ {
-		if !slices.Equal(l.words[i:i+k], n.words) {
+		if !slices.Equal(l.words[i:i+k], n.words) || slices.Contains(l.gaps[i+1:i+k], gapApart) {
 			continue
 		}
 		afterByline := i > 0 && inByline(byline, l.words[i-1])
@@ -900,7 +909,7 @@ func NewTitles(titles []Want) Titles {
 		w.Prepare()
 		k := knownTitle{title: w}
 		for _, n := range w.text().names {
-			if len(n.req) > 0 {
+			if len(n.req) > 0 || n.short {
 				k.names = append(k.names, n)
 			}
 		}

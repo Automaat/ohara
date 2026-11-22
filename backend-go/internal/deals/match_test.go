@@ -530,6 +530,8 @@ func TestShortTitles(t *testing.T) {
 		{"book before its declined author", book("To", "Stephen King"), "To Stephena Kinga, wydanie kieszonkowe", true},
 		{"short title before a numbered medium", up, "Up DVD9 Pixar", true},
 		{"short alias after a lot word", mAlias, "M:I Blu-ray - pakiet: M le maudit / Metropolis Blu-ray", false},
+		{"lot word after a leading short alias", mAlias, "M Blu-ray - pakiet: M le maudit / Metropolis Blu-ray", false},
+		{"letters split by a separator", et, "„E” / „T” DVD – dwa różne filmy", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -546,6 +548,17 @@ func TestShortTitleOutranked(t *testing.T) {
 	titles := NewTitles([]Want{x, xMen})
 	for title, want := range map[string]bool{"X Men DVD": false, "X DVD Ti West": true, "X (2022) DVD": true} {
 		if got := NewListingText(title, Rules{}).Belongs(&x, titles); got != want {
+			t.Errorf("Belongs(%q) = %v, want %v", title, got, want)
+		}
+	}
+}
+
+func TestShortTitleOutranks(t *testing.T) {
+	seven := Want{CopyID: 19, TitleID: 1900, Kind: "book", Name: "The 7", Authors: []string{"Bolesław Prus"}}
+	sevenEight := Want{TitleID: 1901, Kind: "book", Name: "7 i 8", Authors: []string{"Bolesław Prus"}}
+	titles := NewTitles([]Want{seven, sevenEight})
+	for title, want := range map[string]bool{"7 i 8 Prusa – wydanie ilustrowane": false, "The 7 Prusa – wydanie ilustrowane": true} {
+		if got := NewListingText(title, Rules{}).Belongs(&seven, titles); got != want {
 			t.Errorf("Belongs(%q) = %v, want %v", title, got, want)
 		}
 	}

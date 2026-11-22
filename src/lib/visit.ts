@@ -227,15 +227,26 @@ function inMemory(k: Kept): StoredVisit {
 
 /**
  * What a change starts from: the visit the store keeps, so a change made in another tab is not
- * lost, unless the store is off or refused the last write; then the visit this tab holds. A visit
- * that ended starts over empty; without storage it lasts until the next load.
+ * lost. Where storage is off or cannot be read, the visit this tab shows, which lasts until the
+ * next load. After the store refused a write, the visit as last changed here, a change kept only
+ * for the next load included; it starts over empty once it ended.
  */
 function base(k: Kept, now: number): StoredVisit {
 	if (k.dirty) return k.visit;
-	const stored = k.synced ? readStored(k.store, now) : null;
-	if (stored) return stored;
-	const held = inMemory(k);
-	return k.store && ended(held.at, now) ? emptyVisit() : held;
+	const stored = readStored(k.store, now);
+	if (stored === null) return inMemory(k);
+	if (k.synced) return stored;
+	return ended(k.visit.at, now) ? emptyVisit() : k.visit;
+}
+
+/**
+ * Whether the visit this tab holds has ended, so what it carries no longer applies. Without
+ * storage it lasts until the next load.
+ */
+export function visitEnded(): boolean {
+	const k = opened();
+	const now = Date.now();
+	return ended(k.visit.at, now) && readStored(k.store, now) !== null;
 }
 
 function flush(k: Kept): void {

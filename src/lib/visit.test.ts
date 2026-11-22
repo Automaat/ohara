@@ -152,8 +152,9 @@ async function load(storage: unknown) {
 const code = '5901234123457';
 
 /** A fetch that answers a scan of an edition already in the collection and its copy's add. */
+const copies = { last: 40 };
+
 function shop(): typeof fetch {
-	let copy = 40;
 	return async (input, init) => {
 		const url = `${init?.method ?? 'GET'} ${String(input)}`;
 		const replies: Record<string, () => unknown> = {
@@ -170,7 +171,7 @@ function shop(): typeof fetch {
 				copies: []
 			}),
 			'POST /api/copies?cover=auto': () => ({
-				id: ++copy,
+				id: ++copies.last,
 				edition_id: 5,
 				price_cents: JSON.parse(String(init?.body)).price_cents,
 				max_price_cents: null,
@@ -226,7 +227,11 @@ describe('the visit across reloads', () => {
 		const third = await addCopy(after, '10', '2026-11-20');
 		expect(third?.add.id).toBe(Math.max(...adds.map((a) => a.id)) + 1);
 		expect(third?.add.recentID).toBe(Math.max(...scans.map((s) => s.id)) + 1);
-		expect(after.session.adds.map((a) => a.copyID)).toEqual([41, 41, 41]);
+		expect(after.session.adds.map((a) => a.copyID)).toEqual([
+			third?.saved.copy.id,
+			...adds.map((a) => a.copyID)
+		]);
+		expect(new Set(after.session.adds.map((a) => a.copyID)).size).toBe(3);
 	});
 
 	it('undoes an add made after a reload, leaving the earlier ones', async () => {
@@ -411,4 +416,99 @@ describe('the visit across reloads', () => {
 			href: '/scan/queue'
 		});
 	});
+
+	it('lasts until the next load where storage throws, past the 12 hours too', async () => {
+		vi.useFakeTimers({ now, toFake: ['Date'] });
+		const refusing = {
+			getItem: () => {
+				throw new DOMException('denied', 'SecurityError');
+			},
+			setItem: () => {
+				throw new DOMException('denied', 'SecurityError');
+			}
+		};
+		const page = await load(refusing);
+		await addCopy(page, '25', '2026-11-20');
+		vi.setSystemTime(now + visitLifetime);
+		page.logScan('5901234123458', 'skipped', 'Nie dodano');
+		expect(page.session.adds).toHaveLength(1);
+		const flow = new page.ScanFlow(shop(), memory(), device);
+		flow.start('movie');
+		expect(flow.form.purchased_on).toBe('2026-11-20');
+	});
+
+	it('does not carry the purchase date of a visit that ended into the next add', async () => {
+		vi.useFakeTimers({ now, toFake: ['Date'] });
+		const page = await load(memory());
+		await addCopy(page, '25', '2026-11-20');
+		vi.setSystemTime(now + visitLifetime);
+		const flow = new page.ScanFlow(shop(), memory(), device);
+		await flow.load(code);
+		expect(flow.form.purchased_on).toBe('');
+		flow.start('movie');
+		expect(flow.form.purchased_on).toBe('');
+	});
+
+	it('keeps an undone copy gone after a refused write, once storage takes writes again', async () => {
+		const data: Record<string, string> = {};
+		const limit = { full: false };
+		const storage: KeyValueStore = {
+			getItem: (k) => data[k] ?? null,
+			setItem: (k, v) => {
+				if (limit.full) throw new DOMException('full', 'QuotaExceededError');
+				data[k] = v;
+			}
+		};
+		const page = await load(storage);
+		const add = page.recordAdd({ ...rejs, recentID: page.logScan(code, 'added', 'Rejs') });
+		limit.full = true;
+		await expect(page.undoAdd(editionFails, add)).rejects.toThrow();
+		limit.full = false;
+		page.logScan('5901234123458', 'skipped', 'Nie dodano');
+
+		const after = await load(storage);
+		expect(after.session.adds).toEqual([]);
+		expect(after.recentScans.list.map((r) => r.outcome)).toEqual(['skipped', 'undone']);
+	});
+
+	it('leaves the add another tab made while an undo cleans up', async () => {
+		const storage = memory();
+		const a = await load(storage);
+		const b = await load(storage);
+		const undone = a.recordAdd({ ...rejs, recentID: null });
+		let cleanup = (): void => undefined;
+		const slow: typeof fetch = async (input) => {
+			if (String(input).startsWith('/api/editions/')) {
+				await new Promise<void>((resolve) => (cleanup = resolve));
+			}
+			return new Response(null, { status: 204 });
+		};
+		const undo = a.undoAdd(slow, undone);
+		await vi.waitFor(() => expect(storage.data[key]).not.toContain('"copyID":40'));
+		const kept = b.recordAdd({ ...rejs, copyID: 41, recentID: null });
+		expect(kept.id).toBe(undone.id);
+		cleanup();
+		await undo;
+
+		const after = await load(storage);
+		expect(after.session.adds.map((x) => x.copyID)).toEqual([41]);
+	});
 });
+
+const rejs: Omit<SessionAdd, 'id' | 'recentID'> = {
+	copyID: 40,
+	editionID: 21,
+	titleID: 9,
+	createdEdition: true,
+	createdTitle: false,
+	name: 'Rejs',
+	medium: 'DVD',
+	kind: 'movie',
+	status: 'owned',
+	priceCents: 2500
+};
+
+const editionFails: typeof fetch = async (input) => {
+	if (String(input).startsWith('/api/editions/')) throw new TypeError('Failed to fetch');
+	return new Response(null, { status: 204 });
+};

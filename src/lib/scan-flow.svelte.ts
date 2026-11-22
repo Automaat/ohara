@@ -48,7 +48,7 @@ import {
 	type Sticky
 } from './scan';
 import { recordAdd, type SessionAdd } from './session.svelte';
-import { batchVisit, bindVisit, changeVisit } from './visit';
+import { batchVisit, bindVisit, changeVisit, visitEnded } from './visit';
 
 /** found and owned have candidates or the edition; missing is filled in by hand. */
 export type ItemStatus = 'found' | 'owned' | 'missing';
@@ -160,6 +160,11 @@ visit.date = bindVisit('date', {
 	}
 });
 
+/** The purchase date the next add starts with; none once the visit ended. */
+function carriedDate(): string {
+	return visitEnded() ? '' : visit.date;
+}
+
 /** Sets the purchase date the visit's next add starts with and keeps it for the next load. */
 function carryDate(date: string) {
 	changeVisit((v) => ({ ...v, date }), false);
@@ -225,7 +230,7 @@ export class ScanFlow {
 	}
 
 	#blank(code: string, byHand: boolean): FlowItem {
-		this.form = quickForm(null, this.sticky, code, visit.date);
+		this.form = quickForm(null, this.sticky, code, carriedDate());
 		return {
 			key: newRequestKey(),
 			barcode: code,
@@ -311,7 +316,12 @@ export class ScanFlow {
 					picked,
 					errors: r.errors
 				};
-				this.form = quickForm(picked === null ? null : first, this.sticky, r.barcode, visit.date);
+				this.form = quickForm(
+					picked === null ? null : first,
+					this.sticky,
+					r.barcode,
+					carriedDate()
+				);
 				if (first) this.form.kind = first.type;
 				this.phase = { kind: 'ready', status: 'found' };
 			} else {

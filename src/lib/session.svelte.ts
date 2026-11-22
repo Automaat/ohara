@@ -119,11 +119,14 @@ export async function undoAdd(fetchFn: typeof fetch, add: SessionAdd): Promise<v
 	changeVisit((v) => withoutAdd(v, add), false);
 }
 
-/** The visit without the add, its recent scan read as undone. */
+/**
+ * The visit without the add, its recent scan read as undone. The add is found by its id and its
+ * copy, as another tab may have given the id to a new add once the copy was gone.
+ */
 function withoutAdd(v: StoredVisit, add: SessionAdd): StoredVisit {
 	return {
 		...v,
-		adds: v.adds.filter((a) => a.id !== add.id),
+		adds: v.adds.filter((a) => a.id !== add.id || a.copyID !== add.copyID),
 		scans: add.recentID === null ? v.scans : retracted(v.scans, add.recentID)
 	};
 }

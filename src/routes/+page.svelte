@@ -20,6 +20,8 @@
 	import { page } from '$app/state';
 	import { CollectionLoad } from '#lib/collection-load.svelte.js';
 	import SettingsSheet from '#lib/components/SettingsSheet.svelte';
+	import ExportLinks from '#lib/components/ExportLinks.svelte';
+	import ExportMenu from '#lib/components/ExportMenu.svelte';
 	import {
 		collectionSearch,
 		collectionStatusLabels,
@@ -28,6 +30,7 @@
 		formatLabels,
 		formatPLN,
 		kindLabels,
+		listsOwned,
 		loanedLabel,
 		orderLine,
 		readCollectionFilter,
@@ -39,6 +42,7 @@
 		uncopiedTitles,
 		unpricedCount,
 		unpricedLabel,
+		unfinishedLabel,
 		type CollectionFilter,
 		type CollectionItem
 	} from '#lib/collection.js';
@@ -210,14 +214,15 @@
 
 	function setStatus(status: CollectionFilter['status']) {
 		// A title has no format, location or loan, so listing titles without copies drops those
-		// filters.
+		// filters. "Do nadrobienia" lists owned copies only, so a status without them drops it.
 		const titles = status === 'none';
 		updateFilter({
 			...filter,
 			status,
 			format: titles ? '' : filter.format,
 			location: titles ? '' : filter.location,
-			loaned: titles ? false : filter.loaned
+			loaned: titles ? false : filter.loaned,
+			unfinished: listsOwned(status) ? filter.unfinished : false
 		});
 	}
 
@@ -284,6 +289,7 @@
 				{ key: 'location', label: filter.location },
 				{ key: 'status', label: filter.status && collectionStatusLabels[filter.status] },
 				{ key: 'loaned', label: filter.loaned ? loanedLabel : '' },
+				{ key: 'unfinished', label: filter.unfinished ? unfinishedLabel : '' },
 				{ key: 'tag', label: shownTag }
 			] as const
 		).filter((entry) => entry.label)
@@ -327,6 +333,11 @@
 				key: 'loaned',
 				label: loanedLabel,
 				remove: () => set('loaned', false)
+			},
+			filter.unfinished === true && {
+				key: 'unfinished',
+				label: unfinishedLabel,
+				remove: () => set('unfinished', false)
 			}
 		].filter((choice) => choice !== false && choice !== '')
 	);
@@ -349,6 +360,7 @@
 			{#if !emptyShelf}
 				<Button tone="signal" href="/titles/new">Dodaj tytuł</Button>
 			{/if}
+			<ExportMenu toolbar />
 			<SettingsSheet />
 		{/snippet}
 	</PageHeader>
@@ -359,7 +371,10 @@
 			{#if !emptyShelf}
 				<Button href="/titles/new">Dodaj tytuł</Button>
 			{/if}
-			<SettingsSheet />
+			<!-- A third header control would cover the heading on a narrow phone. -->
+			<SettingsSheet>
+				<ExportLinks />
+			</SettingsSheet>
 		</div>
 		<p class="summary">
 			{summary}
@@ -392,6 +407,7 @@
 		format={filter.format}
 		status={filter.status}
 		loaned={filter.loaned ?? false}
+		unfinished={filter.unfinished ?? false}
 		location={filter.location ?? ''}
 		{locations}
 		tag={filter.tag ?? ''}
@@ -400,6 +416,7 @@
 		onformat={(format) => set('format', format)}
 		onstatus={setStatus}
 		onloaned={(loaned) => set('loaned', loaned)}
+		onunfinished={(unfinished) => set('unfinished', unfinished)}
 		onlocation={(location) => set('location', location)}
 		ontag={(tag) => set('tag', tag)}
 	/>

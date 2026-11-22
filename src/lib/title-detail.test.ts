@@ -3,10 +3,16 @@ import type { Copy, TitleDetail } from './collection';
 import {
 	addCopyHref,
 	addCopyStart,
+	applyFinish,
 	copyFacts,
 	copyLine,
 	copyRequest,
 	editionArtwork,
+	finishAction,
+	finishDay,
+	finishedLabels,
+	finishedLine,
+	finishPayload,
 	editionName,
 	editionsLine,
 	kindAndYear,
@@ -18,6 +24,8 @@ import {
 	soleCopy,
 	titleArtwork,
 	titleHero,
+	todayInPoland,
+	withoutFinish,
 	valueCard,
 	wantsCopy,
 	type TitleEdition
@@ -203,6 +211,94 @@ describe('artwork', () => {
 		expect(titleArtwork(title({ cover_url: 'https://t', editions }))).toBe('https://t');
 		expect(titleArtwork(title({ editions }))).toBe('/api/editions/4/cover');
 		expect(titleArtwork(title({ editions: [] }))).toBeUndefined();
+	});
+});
+
+describe('finished titles', () => {
+	it('names finishing by kind', () => {
+		expect(finishedLabels).toEqual({
+			movie: 'Obejrzane',
+			book: 'Przeczytane',
+			music: 'Przesłuchane'
+		});
+		expect(finishAction('movie')).toBe('Oznacz jako obejrzane');
+		expect(finishAction('book')).toBe('Oznacz jako przeczytane');
+		expect(finishAction('music')).toBe('Oznacz jako przesłuchane');
+	});
+
+	it('shows the day when known, the label alone when not, nothing while unfinished', () => {
+		expect(finishedLine({ kind: 'book', finished: true, finished_on: '2026-11-01' })).toBe(
+			'Przeczytane 1 lis 2026'
+		);
+		expect(finishedLine({ kind: 'music', finished: true, finished_on: null })).toBe('Przesłuchane');
+		expect(finishedLine({ kind: 'movie', finished: true })).toBe('Obejrzane');
+		expect(finishedLine({ kind: 'movie', finished: false })).toBeNull();
+		expect(finishedLine({ kind: 'movie', finished: null })).toBeNull();
+		expect(finishedLine({ kind: 'movie' })).toBeNull();
+	});
+
+	it('reads a finish day from the form, empty as an unknown day', () => {
+		const today = '2026-05-12';
+		expect(finishDay(' 2026-05-01 ', today)).toEqual({ ok: true, value: '2026-05-01' });
+		expect(finishDay(today, today)).toEqual({ ok: true, value: today });
+		expect(finishDay('  ', today)).toEqual({ ok: true, value: null });
+		for (const bad of ['12.05.2026', '2026-5-1', 'wczoraj']) {
+			expect(finishDay(bad, today)).toEqual({
+				ok: false,
+				issue: { field: 'finished_on', message: 'Data w formacie RRRR-MM-DD.' }
+			});
+		}
+		expect(finishDay('2026-05-13', today)).toEqual({
+			ok: false,
+			issue: { field: 'finished_on', message: 'Data nie może być późniejsza niż dziś.' }
+		});
+	});
+
+	it('takes only the finish state from an answer, keeping a newer name and notes', () => {
+		const shown = title({ name: 'Nowa nazwa', notes: 'Nowe notatki', finished: false });
+		applyFinish(shown, {
+			...title({ name: 'Stara nazwa', notes: '' }),
+			finished: true,
+			finished_on: '2026-05-01'
+		});
+		expect(shown).toMatchObject({
+			name: 'Nowa nazwa',
+			notes: 'Nowe notatki',
+			finished: true,
+			finished_on: '2026-05-01'
+		});
+		applyFinish(shown, { finished: true });
+		expect(shown).toMatchObject({ finished: true, finished_on: null });
+		applyFinish(shown, { finished: false });
+		expect(shown).toMatchObject({ name: 'Nowa nazwa', finished: false, finished_on: null });
+	});
+
+	it('leaves the finish state out of a title edit answer', () => {
+		const answer = title({ name: 'Nowa nazwa', finished: false });
+		const rest = withoutFinish(answer);
+		expect(rest).not.toHaveProperty('finished');
+		expect(rest).not.toHaveProperty('finished_on');
+		const shown = title({ name: 'Stara nazwa', finished: true, finished_on: '2026-05-01' });
+		Object.assign(shown, rest);
+		expect(shown).toMatchObject({ name: 'Nowa nazwa', finished: true, finished_on: '2026-05-01' });
+	});
+
+	it('sends only the finished state, never the rest of the title', () => {
+		expect(finishPayload(true, '2026-05-01')).toEqual({
+			finished: true,
+			finished_on: '2026-05-01'
+		});
+		expect(finishPayload(true, null)).toEqual({ finished: true, finished_on: null });
+		expect(finishPayload(false, '2026-05-01')).toEqual({ finished: false, finished_on: null });
+	});
+
+	it("takes today as Poland's day, whatever the reader's time zone", () => {
+		// Just after midnight in Tokyo Warsaw is still on the day before, and late in New York
+		// it is already the next day.
+		expect(todayInPoland(new Date('2026-11-22T15:30:00Z'))).toBe('2026-11-22');
+		expect(todayInPoland(new Date('2026-11-22T23:30:00Z'))).toBe('2026-11-23');
+		expect(todayInPoland(new Date('2026-07-01T21:59:00Z'))).toBe('2026-07-01');
+		expect(todayInPoland(new Date('2026-07-01T22:00:00Z'))).toBe('2026-07-02');
 	});
 });
 

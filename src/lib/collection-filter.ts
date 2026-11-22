@@ -73,7 +73,7 @@ function hasStatus(item: CollectionItem, status: CollectionFilter['status']): bo
 
 /**
  * The copies the filter lists, in their order: of its kind, medium, status, location and tag, out on
- * loan when it asks for that, whose barcode is the searched code or whose text holds the search,
+ * loan when it asks for that, owned copies of titles not finished for "Do nadrobienia", whose barcode is the searched code or whose text holds the search,
  * case aside. A search that reads as a barcode still finds a location holding it as typed, as the
  * server does.
  */
@@ -91,6 +91,7 @@ export function filterCollection(
 			(!f.format || item.format === f.format) &&
 			hasStatus(item, f.status) &&
 			(!f.loaned || item.loan_borrower != null) &&
+			(!f.unfinished || (item.status === 'owned' && !item.finished)) &&
 			tagMatches(item.tags, f.tag) &&
 			(!place || (item.location != null && foldLocation(item.location) === place)) &&
 			(!term ||

@@ -22,6 +22,7 @@ Same layout and tooling as `../baratie`. `package.json` and
     /apitypes/         # Go structs → TypeScript types: generator and the list of API types and enums
     /barcode/          # EAN/UPC/ISBN normalization (ISBN-10 → ISBN-13)
     /collection/       # titles, editions, copies, collection view
+    /export/           # GET /api/export: the collection as a CSV or JSON file
     /lookup/           # GET /api/lookup/{barcode}: provider registry + lookup_cache
       /books/          # BN, Open Library, Google Books providers (fixtures in testdata/)
       /movie/          # movie chain: Allegro catalog, UPCitemdb → product name → TMDB search
@@ -167,6 +168,22 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   open loan's `loan_borrower` and `loan_due_on`; `?loaned=1` lists only lent
   copies. A discard keeps a copy that was lent: it locks the copy, as a
   loan does, before it looks for loans.
+- A title records whether the owner finished it (watched, read or heard):
+  `finished` and `finished_on`, the latest day when known, on
+  `POST`/`PUT /api/titles`. `finished_on` without `finished` marks it
+  finished; with `finished: false`, or after today in Poland, it answers 422
+  on `finished_on`; `finished: true` alone is an unknown day and `false`
+  clears the day. A `PUT` without `finished` (or with null) keeps both.
+  One state per title, no log of rewatches. `GET /api/collection` items
+  carry the title's `finished` and `finished_on`; `?unfinished=1` lists
+  only owned copies of titles not finished. `PUT
+/api/titles/{id}/finished` (`finished` and `finished_on`, checked the
+  same way; `finished` required unless a day is given) writes that state
+  alone, so a page holding an older title never writes its name or notes
+  back. The title page shows "Obejrzane", "Przeczytane" or "Przesłuchane"
+  with the day, marks it finished today in Poland (`todayInPoland`,
+  whatever the browser's zone) in one tap and changes, forgets or takes
+  back the mark in a sheet, all through that endpoint.
 - Lookup providers implement `lookup.Provider` (`Fetch` returns raw JSON,
   `Parse` turns raw JSON into candidates) and register in `cmd/api` with a
   cache TTL. Candidate `title`/`edition` fields match the POST bodies of
@@ -536,6 +553,18 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   `scan_queue_resolved`; `DELETE /api/editions/{id}?requeue=1` puts it back
   with its scans and times in the same transaction, as the scanner does when
   it undoes an add that created the edition.
+- `GET /api/export?format=csv|json` (any other `format` 422) downloads the
+  whole collection as `ohara-YYYY-MM-DD.<format>` (the day in Poland),
+  each owned copy with the floor, mid and ceiling `GET /api/valuation`
+  shows now, all read in one snapshot. The CSV is for Polish Excel: UTF-8
+  with a BOM, `;`, LF line ends (a CR inside a cell survives),
+  Polish headers and labels (tags joined by ", "), złoty with a decimal
+  comma, one row per copy
+  (sold and ordered ones too) and one per title without copies, and a `'` before a
+  cell starting with `=`, `+`, `-`, `@`, a tab or a CR. The JSON is the
+  titles with their editions and copies under the API's field names,
+  grosze as the API sends them. Kolekcja's "Eksportuj kolekcję" menu
+  offers both.
 - An edition's own cover photo is served at the `cover_override_url` the API
   hands out, `/api/editions/{id}/cover?v=` plus the edition's `updated_at`,
   which a new photo or any edit changes. A request whose query parses and
@@ -613,6 +642,10 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   count as its toggle, hidden at 0.
   Its "Sprzedane" switch (`?status=sold`) lists the sold copies, which
   every other view, the counts and the default shelf leave out.
+  Its "Do nadrobienia" switch (`?unfinished=1`, as on the server) lists
+  owned copies of titles not finished; a status without owned copies
+  (wishes, sold, "Bez egzemplarzy") drops it, in the sheet and when
+  read from the address.
   Its "Tag" (`?tag=`) offers the tags the loaded copies and titles carry,
   "Każdy" first; a title page's tags link there, and its form's "Tagi"
   suggests `GET /api/tags`. Enter or a suggestion adds a tag; one left
@@ -679,8 +712,8 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   "Cofnij", "Dodaj tytuł" by hand, the scan sheet sending no deals or queue
   read, the queue count following a queued scan, its add and undo,
   Kolekcja's filters, which also run at 1440 × 900, and its sort orders
-  under active filters, tags from the title form to Kolekcja's filter, and
-  cover photo uploads. `scripts/e2e.sh` builds
+  under active filters, tags from the title form to Kolekcja's filter,
+  cover photo uploads and the collection export. `scripts/e2e.sh` builds
   the image (or takes one as its first argument), starts it from
   `e2e/compose.yaml`
   with Postgres, `OHARA_LOOKUP_STUB=true`, `OHARA_MUSICBRAINZ=false` and no

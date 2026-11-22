@@ -49,6 +49,8 @@ export type TitlePayload = {
 	openlibrary_id: string | null;
 	notes: string;
 	cover_url?: string;
+	finished?: boolean | null;
+	finished_on?: string | null;
 	rating?: number | null;
 	tags?: string[];
 	request_key?: string;
@@ -67,6 +69,8 @@ export type Title = {
 	openlibrary_id: string | null;
 	notes: string;
 	cover_url?: string;
+	finished?: boolean | null;
+	finished_on?: string | null;
 	rating?: number | null;
 	request_key?: string;
 	tags: string[];
@@ -194,6 +198,8 @@ export type TitleDetail = {
 	openlibrary_id: string | null;
 	notes: string;
 	cover_url?: string;
+	finished?: boolean | null;
+	finished_on?: string | null;
 	rating?: number | null;
 	request_key?: string;
 	tags: string[];
@@ -236,6 +242,11 @@ export type LoanPayload = {
 
 export type ReturnPayload = {
 	returned_on: string | null;
+};
+
+export type FinishPayload = {
+	finished: boolean | null;
+	finished_on: string | null;
 };
 
 export type Loan = {
@@ -303,6 +314,8 @@ export type CollectionItem = {
 	rating?: number;
 	loan_borrower?: string;
 	loan_due_on?: string;
+	finished: boolean;
+	finished_on?: string;
 	tags?: string[];
 };
 

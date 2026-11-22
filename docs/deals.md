@@ -84,7 +84,7 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   wish that now matches, keeping its attempts and age. Alerts sent before
   migration 0016 have no stored price and never repeat.
   Okazje's "Ignoruj" (`POST /api/deals/{id}/dismissal`, undone by `DELETE`,
-  both 204 when repeated, 404 for an id no OLX or Pepper listing has) sets
+  both 204 when repeated, 404 for an id no OLX, Pepper or Tezeusz listing has) sets
   the listing's `dismissed_at`, for every wish it matches: it leaves every
   deals list and the badge, its unsent alert is never sent and a run that
   sees it again keeps it dismissed and queues no alert. The hunter sends
@@ -153,6 +153,27 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   The last run, scheduled, manual or cut short by shutdown, is kept in
   `deal_run`: after a restart the status shows it and the first scheduled
   run comes one interval after it started, at least 5 minutes on.
+
+## Tezeusz
+
+- `deals.Tezeusz` searches the Tezeusz used-book shop (`tezeusz.pl`) as a
+  query source: one `GET /szukaj?szukaj=<query>&tylko_dostepne=1` per
+  query, in stock only, in the site's relevance order (sorting by price
+  put unrelated books first), and no product page. Each product card of
+  the results page is one listing: `data-ga-product-id` as its ID, the
+  card title with its author ("Ostatnie życzenie - Andrzej Sapkowski"),
+  the card link made absolute, its cover and the card's lowest price
+  ("od 27,12 zł do 89,65 zł" is 27,12 zł; a one-copy card's struck-out
+  30-day lowest is not its price). A card is a book with any number of
+  copies, so a listing names no condition. A results page without cards
+  has no listings; a page without the results column (a Cloudflare
+  challenge, an error page) is a `parse_error`.
+- It shares the canary query (`dvd` finds books sold with a film) and the
+  refusal rule of the other sources. `OHARA_TEZEUSZ=false` leaves it out
+  of runs and `/metrics`; `OHARA_DEALS_TEZEUSZ_URL` points it at a test
+  double. The valuation never asks it.
+- Its regulamin (`/info/regulamin`, read 2026-11-22) has no clause on
+  automated access; robots.txt disallows `/szukaj?`.
 
 ## Discogs wantlist
 

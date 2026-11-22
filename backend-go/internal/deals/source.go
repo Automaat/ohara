@@ -1,5 +1,5 @@
-// Package deals hunts for listings of wishlist copies on OLX and
-// Pepper.pl. A run asks every source, keeps the listings that
+// Package deals hunts for listings of wishlist copies on OLX, Pepper.pl
+// and Tezeusz. A run asks every source, keeps the listings that
 // match a wishlist copy, stores each once as a price_observation and sends
 // one Telegram message per new listing at or below the copy's maximum price.
 package deals

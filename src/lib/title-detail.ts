@@ -232,8 +232,11 @@ export type ValueCard = {
 	paidAt: number | null;
 	/** The used value against the price paid in whole złoty, such as "−16 zł względem zakupu". */
 	delta: string | null;
-	/** The used value's trend over the stored days in a trendWidth × trendHeight box, null under two days with one. */
-	trend: { path: string; end: { x: number; y: number } } | null;
+	/**
+	 * The used value's trend over the stored days in a trendWidth × trendHeight box: the line
+	 * through runs of days and a dot for each day alone between gaps; null under two days with one.
+	 */
+	trend: { path: string; dots: { x: number; y: number }[] } | null;
 };
 
 /** The size of a value card's trend. */

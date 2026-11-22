@@ -408,7 +408,7 @@ describe('valueCard', () => {
 				day('2026-11-20', 1, 99)
 			]
 		);
-		expect(card?.trend).toEqual({ path: 'M4 32 L46 32 L88 4', end: { x: 88, y: 4 } });
+		expect(card?.trend).toEqual({ path: 'M4 32 L46 32 L88 4', dots: [] });
 	});
 
 	it('leaves a gap on a day without a used value and ends on the last one', () => {
@@ -423,8 +423,11 @@ describe('valueCard', () => {
 			]
 		);
 		expect(card?.trend).toEqual({
-			path: 'M4 32 L4 32 M88 4 L88 4',
-			end: { x: 88, y: 4 }
+			path: '',
+			dots: [
+				{ x: 4, y: 32 },
+				{ x: 88, y: 4 }
+			]
 		});
 	});
 
@@ -434,10 +437,20 @@ describe('valueCard', () => {
 			[valued()],
 			[day('2026-11-18', 6000), day('2026-11-19', 6000), day('2026-11-21', 7400)]
 		);
-		expect(card?.trend).toEqual({
-			path: 'M4 32 L32 32 M88 4 L88 4',
-			end: { x: 88, y: 4 }
-		});
+		expect(card?.trend).toEqual({ path: 'M4 32 L32 32', dots: [{ x: 88, y: 4 }] });
+	});
+
+	it('keeps a single missing day visible over 90 days', () => {
+		const days = Array.from({ length: 90 }, (_, i) =>
+			day(new Date(Date.UTC(2026, 7, 24 + i)).toISOString().slice(0, 10), 5000)
+		).filter((_, i) => i !== 45);
+		const trend = valueCard(copy(), [valued()], days)?.trend;
+		const runs = trend?.path.split(' M').map((run) => run.match(/-?[\d.]+/g)?.map(Number) ?? []);
+		expect(runs).toHaveLength(2);
+		const [before, after] = runs ?? [];
+		const gap = (after?.[0] ?? 0) - (before?.at(-2) ?? 0);
+		expect(gap).toBeGreaterThan(1.8);
+		expect(trend?.dots).toEqual([]);
 	});
 
 	it('keeps the trend of a copy whose prices left the window', () => {
@@ -450,7 +463,7 @@ describe('valueCard', () => {
 			usedAt: null,
 			paidAt: null,
 			delta: null,
-			trend: { path: 'M4 32 L88 4', end: { x: 88, y: 4 } }
+			trend: { path: 'M4 32 L88 4', dots: [] }
 		});
 		expect(valueCard(copy(), [], days)?.trend).toEqual(expired?.trend);
 		expect(valueCard(copy({ status: 'wishlist' }), [], days)).toBeNull();

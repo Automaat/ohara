@@ -438,7 +438,9 @@
 								aria-hidden="true"
 							>
 								<path d={value.trend.path} />
-								<circle cx={value.trend.end.x} cy={value.trend.end.y} r="3.5" />
+								{#each value.trend.dots as dot (dot.x)}
+									<circle cx={dot.x} cy={dot.y} r="0.9" />
+								{/each}
 							</svg>
 						{/if}
 					</div>
@@ -688,7 +690,7 @@
 	.trend path {
 		stroke: var(--sui-brand-action);
 		stroke-width: 2.4;
-		stroke-linecap: round;
+		stroke-linecap: butt;
 		stroke-linejoin: round;
 	}
 	.trend circle {

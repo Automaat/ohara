@@ -389,40 +389,7 @@ export function historyPaths(history: HistoryPoint[], width: number, height: num
  * used total leave a gap. Null under two days with one.
  */
 export function sparkline(history: HistoryPoint[], width: number, height: number, inset = 4) {
-	return usedSparkline(historyRows(history), width, height, inset);
-}
-
-/**
- * A sparkline of one copy's used value over its stored days, drawn as `sparkline` draws the
- * collection's. A day without a used value leaves a gap, and so does a day with no stored value
- * at all, such as one the valuation did not run on. Null under two days with a used value.
- */
-export function copySparkline(
-	days: readonly CopyValueDay[],
-	copyID: number,
-	width: number,
-	height: number,
-	inset = 4
-) {
-	const own = days.filter((d) => d.copy_id === copyID);
-	const start = own[0] ? dayTimestamp(own[0].day) : 0;
-	const rows: { x: number; mid: number | null }[] = [];
-	for (const d of own) {
-		const x = Math.round((dayTimestamp(d.day) - start) / dayMilliseconds);
-		const previous = rows.at(-1);
-		if (previous && x > previous.x + 1) rows.push({ x: previous.x + 1, mid: null });
-		rows.push({ x, mid: d.mid_cents === null ? null : d.mid_cents / 100 });
-	}
-	return usedSparkline(rows, width, height, inset);
-}
-
-/** The sparkline of rows' used values, x in days; null under two rows with one. */
-function usedSparkline(
-	rows: { x: number; mid: number | null }[],
-	width: number,
-	height: number,
-	inset: number
-) {
+	const rows = historyRows(history);
 	const valued = rows.filter((r) => r.mid !== null);
 	if (valued.length < 2) return null;
 	const s = scale(
@@ -435,6 +402,52 @@ function usedSparkline(
 		.join(' ');
 	const last = valued.at(-1);
 	return { path, end: { x: s.x(last?.x ?? 0), y: s.y(last?.mid ?? 0) } };
+}
+
+/**
+ * A sparkline of one copy's used value over its stored days in a width × height box, scaled as
+ * `sparkline` scales the collection's. A day without a used value leaves a gap, and so does a day
+ * with no stored value at all, such as one the valuation did not run on. At 90 days a day is
+ * under a pixel wide, so the runs of two days or more are drawn for flat line ends and a day
+ * standing alone between gaps is a dot: neither reaches into a gap. Null under two days with a
+ * used value.
+ */
+export function copySparkline(
+	days: readonly CopyValueDay[],
+	copyID: number,
+	width: number,
+	height: number,
+	inset = 4
+): { path: string; dots: { x: number; y: number }[] } | null {
+	const own = days.filter((d) => d.copy_id === copyID);
+	const start = own[0] ? dayTimestamp(own[0].day) : 0;
+	const rows: { x: number; mid: number | null }[] = [];
+	for (const d of own) {
+		const x = Math.round((dayTimestamp(d.day) - start) / dayMilliseconds);
+		const previous = rows.at(-1);
+		if (previous && x > previous.x + 1) rows.push({ x: previous.x + 1, mid: null });
+		rows.push({ x, mid: d.mid_cents === null ? null : d.mid_cents / 100 });
+	}
+	const valued = rows.filter((r) => r.mid !== null);
+	if (valued.length < 2) return null;
+	const s = scale(
+		valued.map((r) => r.x),
+		valued.map((r) => r.mid ?? 0),
+		{ width, height, xInset: inset, yInset: inset, pad: 0 }
+	);
+	const segments = runs(rows, (r) => r.mid).map((run) =>
+		run.map(([r, v]): Point => [s.x(r.x), s.y(v)])
+	);
+	return {
+		path: segments
+			.filter((points) => points.length > 1)
+			.map(line)
+			.join(' '),
+		dots: segments.flatMap((points) => {
+			const [only] = points;
+			return points.length === 1 && only ? [{ x: only[0], y: only[1] }] : [];
+		})
+	};
 }
 
 /** Copies by used value, highest first; copies without one keep their order at the end. */

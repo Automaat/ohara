@@ -168,7 +168,12 @@ func TestCrawlDelayedSpacesArrivals(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 4 {
 		wg.Go(func() {
-			resp, err := client.Get(srv.URL + "/hop")
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/hop", http.NoBody)
+			if err != nil {
+				t.Errorf("request: %v", err)
+				return
+			}
+			resp, err := client.Do(req)
 			if err != nil {
 				t.Errorf("get: %v", err)
 				return

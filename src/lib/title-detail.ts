@@ -9,7 +9,9 @@ import {
 	statusLabels,
 	type Copy,
 	type Kind,
-	type TitleDetail
+	type Title,
+	type TitleDetail,
+	type TitlePayload
 } from '#lib/collection.js';
 import { copyCount, editionCount, purchaseDate } from '#lib/polish.js';
 import {
@@ -28,6 +30,35 @@ export function soleCopy(t: TitleDetail): { edition: TitleEdition; copy: Copy } 
 	if (t.editions.length !== 1 || !edition || edition.copies.length !== 1) return null;
 	const [copy] = edition.copies;
 	return copy ? { edition, copy } : null;
+}
+
+/** The rating select's value for a title without a rating; ratings run from 1 to 10. */
+export const noRating = 0;
+
+/** The rating select's options: no rating, then 1 to 10, as lubimyczytac.pl shows them. */
+export const ratingOptions = [
+	{ value: noRating, label: 'Brak oceny' },
+	...Array.from({ length: 10 }, (_, i) => ({ value: i + 1, label: `${i + 1} / 10` }))
+];
+
+/**
+ * The PUT body that changes only a title's rating. It leaves the cover out, so the server keeps
+ * it, and sends the rest as the title stands.
+ */
+export function ratingPayload(t: Title, rating: number | null): TitlePayload {
+	return {
+		kind: t.kind,
+		name: t.name,
+		original_title: t.original_title,
+		polish_title: t.polish_title,
+		year: t.year,
+		tmdb_id: t.tmdb_id,
+		authors: t.authors,
+		bn_id: t.bn_id,
+		openlibrary_id: t.openlibrary_id,
+		notes: t.notes,
+		rating
+	};
 }
 
 /** A link to a title or edition page that opens the form for adding a copy once it loads. */

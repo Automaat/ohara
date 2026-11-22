@@ -2,6 +2,7 @@ package collection
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -255,9 +256,22 @@ func (h *Handler) getTitle(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, h.logger, http.StatusOK, detail)
 }
 
+// titleBody reads a title's rating as it was sent, since a body without
+// one keeps the stored rating and a null clears it.
+type titleBody struct {
+	TitleInput
+	Rating json.RawMessage `json:"rating"`
+}
+
 func (h *Handler) decodeTitle(w http.ResponseWriter, r *http.Request) (*TitleInput, bool) {
-	var in TitleInput
-	if !httpx.DecodeJSON(w, r, h.logger, &in) {
+	var body titleBody
+	if !httpx.DecodeJSON(w, r, h.logger, &body) {
+		return nil, false
+	}
+	in := body.TitleInput
+	in.KeepRating = body.Rating == nil
+	if !in.KeepRating && json.Unmarshal(body.Rating, &in.Rating) != nil {
+		httpx.WriteFieldError(w, h.logger, fieldErr("rating", ratingMsg))
 		return nil, false
 	}
 	if fe := in.Normalize(); fe != nil {

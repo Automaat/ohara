@@ -6,11 +6,13 @@
 		ConfirmDialog,
 		ErrorState,
 		FactList,
+		Field,
 		FormError,
 		Icon,
 		Link,
 		Modal,
 		Section,
+		Select,
 		Skeleton
 	} from '@smykla-skalski/sui';
 	import { onDestroy } from 'svelte';
@@ -47,9 +49,12 @@
 		copyRequest,
 		editionArtwork,
 		editionName,
+		noRating,
 		openedFromCollection,
 		plainClick,
 		previewHero,
+		ratingOptions,
+		ratingPayload,
 		soleCopy,
 		titleHero,
 		trendHeight,
@@ -90,6 +95,12 @@
 	let loads = 0;
 	/** The title the page was last asked for; moving to another one closes this one's forms. */
 	let requested: number | undefined;
+
+	/** Saves of the rating run one after another, so the last pick is the one stored. */
+	let ratingSaves: Promise<void> = Promise.resolve();
+	/** Picks not yet stored; only the answer to the last one shows. */
+	let ratingPending = 0;
+	let ratingError = $state<string | null>(null);
 
 	let titleSheet = $state(false);
 	let titleForm = $state(titleToForm(null));
@@ -146,6 +157,7 @@
 			valueDays = [];
 			failure = null;
 			refreshError = null;
+			ratingError = null;
 			titleSheet = false;
 			copySheet = false;
 			adding = false;
@@ -265,6 +277,31 @@
 		} finally {
 			savingTitle = false;
 		}
+	}
+
+	/**
+	 * Shows the picked rating at once and stores it without the edit form. A failed save says so
+	 * and loads the title again, so the page shows the rating the server holds.
+	 */
+	function rate(picked: number | null) {
+		const t = detail;
+		if (!t) return;
+		const rating = picked === null || picked === noRating ? null : picked;
+		t.rating = rating;
+		ratingError = null;
+		ratingPending++;
+		const body = ratingPayload(t, rating);
+		ratingSaves = ratingSaves.then(async () => {
+			try {
+				const saved = await request<Title>(fetch, 'PUT', `/api/titles/${t.id}`, body);
+				if (--ratingPending === 0 && detail?.id === saved.id) detail.rating = saved.rating ?? null;
+			} catch (err) {
+				ratingPending--;
+				if (detail?.id !== t.id) return;
+				ratingError = `Nie udało się zapisać oceny: ${errorMessage(err)}`;
+				await load(t.id);
+			}
+		});
 	}
 
 	/** Shows a saved copy at once, so it stays in view even when the refresh after it fails. */
@@ -546,6 +583,18 @@
 			</Card>
 		{/if}
 
+		<div class="rating">
+			<Field label="Ocena" error={ratingError ?? undefined}>
+				{#snippet control(c)}
+					<Select
+						{...c}
+						options={ratingOptions}
+						bind:value={() => t.rating ?? noRating, (v) => rate(v)}
+					/>
+				{/snippet}
+			</Field>
+		</div>
+
 		{#if t.notes}
 			<p class="notes">{t.notes}</p>
 		{/if}
@@ -651,6 +700,10 @@
 		display: grid;
 		gap: 1rem;
 		padding: var(--sui-pane-gutter, 1.5rem);
+	}
+	.rating {
+		justify-self: start;
+		min-inline-size: 10rem;
 	}
 	.cards {
 		display: grid;

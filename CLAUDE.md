@@ -123,6 +123,14 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   refused save and before saving another valid pick over a key that may
   have written; a pick's provider values the API would refuse are left
   out of the save. A key is at most 100 bytes of UTF-8 without NUL.
+- A title's `rating` is the owner's own, a whole number from 1 to 10, on
+  any title, a wish's too; `null` clears it and 0, 11 or a fraction
+  answers 422 on `rating`. A `PUT /api/titles/{id}` without `rating`
+  keeps the stored one, so the edit form leaves it alone; the title
+  page's "Ocena" select sends the title as it stands with the new
+  rating. `GET /api/collection` items carry it (absent while unrated),
+  and Kolekcja's "Ocena malejąco" lists rated copies from 10 down,
+  unrated ones last, ties in title order.
 - A loan (`loan`) records who has an owned copy: `POST /api/copies/{id}/loans`
   (`borrower` trimmed, at most 500 bytes; `lent_on` today in Poland when
   null; optional `due_on`, not before it) answers 201, 409 for a wish or a

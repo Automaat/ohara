@@ -20,7 +20,9 @@ import (
 // or right after its previous run, keeps its pacing.
 //
 // A request holds the site from its turn until it is sent, so a request
-// still connecting cannot let another lane's request overtake it. It
+// still connecting cannot let another lane's request overtake it. Sent
+// means its last bytes reached the connection where Lane.Transport can
+// see them, and reported written by the transport where it cannot. It
 // never holds the site while waiting for an answer, so one run never
 // waits for another to finish.
 type Pacer struct {
@@ -100,35 +102,46 @@ func (p *Pacer) site(name string) *paceSite {
 // Each request a client sends through it is paced, a redirect's next
 // request too.
 //
-// When base is an *http.Transport that leaves dialing TLS to itself, as
-// http.DefaultTransport does, Transport uses a clone of it with
-// connections of its own, and a request is sent once its last bytes
-// reach the connection: HTTP/1 reports a request written while its end
-// still sits in the connection's buffer, so an HTTP/1 request is sent
-// with the first write to its connection after that. HTTP/2 flushes a
-// request before reporting it written, and so does HTTP/1 a request with
-// a fixed-length body that has already written some of it, which can
-// leave the buffer empty; those are sent once reported written. With any
-// other base a request is sent once base reports it written. Either way
-// the round trip ending first, after a failed write too, releases the
-// site, but a write that sent nothing keeps it while the transport tries
-// the request again on another connection.
+// When base is an *http.Transport, as http.DefaultTransport is,
+// Transport uses a clone of it with connections of its own, and a request
+// is sent once its last bytes reach the connection. HTTP/1 reports a
+// request written while its end still sits in the connection's buffer,
+// so an HTTP/1 request is sent with the first write to its connection
+// after that. HTTP/2 flushes a request before reporting it written, and
+// so does HTTP/1 a request with a Content-Length body that has already
+// written some of it, which can leave the buffer empty; those are sent
+// once reported written. The clone sends each TLS record whole, rather
+// than in the small first records Go uses to start a connection, so that
+// one flush is one write to the connection. Requests whose connection
+// comes from base's own DialTLSContext or DialTLS, which the clone cannot
+// see beneath, and requests through any other base are sent once
+// reported written. Either way the round trip ending first, after a
+// failed write too, releases the site, but a write that sent nothing
+// keeps it while the transport tries the request again on another
+// connection.
 func (l *Lane) Transport(base http.RoundTripper) http.RoundTripper {
 	if base == nil {
 		base = http.DefaultTransport
 	}
-	if t, ok := base.(*http.Transport); ok && t.DialTLSContext == nil && (t.DialContext != nil || !dialsThroughDial(t)) {
+	if t, ok := base.(*http.Transport); ok {
 		base = watchWrites(t)
 	}
 	return pacedTransport{base: base, lane: l}
 }
 
-// dialsThroughDial reports whether t dials with its deprecated Dial
-// field, which a DialContext set on its clone would override. The field
-// is read through reflection because naming it fails the linters.
-func dialsThroughDial(t *http.Transport) bool {
-	dial := reflect.ValueOf(t).Elem().FieldByName("Dial")
-	return dial.IsValid() && !dial.IsNil()
+// deprecatedDial returns t's deprecated Dial, nil when unset. It reads
+// the field through reflection, as naming it fails the linters, and a
+// field a later Go drops counts as unset.
+func deprecatedDial(t *http.Transport) func(network, addr string) (net.Conn, error) {
+	field := reflect.ValueOf(t).Elem().FieldByName("Dial")
+	if !field.IsValid() || field.IsNil() {
+		return nil
+	}
+	dial, ok := reflect.TypeAssert[func(network, addr string) (net.Conn, error)](field)
+	if !ok {
+		return nil
+	}
+	return dial
 }
 
 type pacedTransport struct {
@@ -145,18 +158,36 @@ func (t pacedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, err
 	}
 	defer sent()
-	w := &sendWatch{sent: sent, fixedBody: req.Body != nil && req.Body != http.NoBody && req.ContentLength > 0}
+	w := &sendWatch{sent: sent, fixedBody: sendsContentLength(req)}
 	defer w.stop()
 	trace := &httptrace.ClientTrace{GotConn: w.gotConn, WroteRequest: w.wroteRequest}
 	return t.base.RoundTrip(req.WithContext(httptrace.WithClientTrace(req.Context(), trace)))
 }
 
+// sendsContentLength reports whether the transport sends req's body with
+// a Content-Length rather than in chunks, whose end always stays in the
+// buffer until the flush.
+func sendsContentLength(req *http.Request) bool {
+	chunked := len(req.TransferEncoding) > 0 && req.TransferEncoding[0] == "chunked"
+	return req.Body != nil && req.Body != http.NoBody && req.ContentLength > 0 && !chunked
+}
+
+// maxFlushBytes bounds the clone's HTTP/1 write buffer, so that one
+// flush fits one TLS record even inside another TLS layer, as behind an
+// HTTPS proxy: a record carries at most 16 KiB.
+const maxFlushBytes = 8 << 10
+
 // watchWrites returns a clone of t whose connections tell the request
-// that uses them when a write to them ends. A nil DialContext dials as
-// http.Transport does then, with a zero net.Dialer.
+// that uses them when a write to them sends something. It dials as t
+// does: through DialContext, else the deprecated Dial, else a zero
+// net.Dialer. Its TLS records are sent whole, and it negotiates HTTP/2
+// whenever t would have.
 func watchWrites(t *http.Transport) *http.Transport {
 	clone := t.Clone()
 	dial := t.DialContext
+	if plain := deprecatedDial(t); dial == nil && plain != nil {
+		dial = func(_ context.Context, network, addr string) (net.Conn, error) { return plain(network, addr) }
+	}
 	if dial == nil {
 		dial = (&net.Dialer{}).DialContext
 	}
@@ -166,6 +197,20 @@ func watchWrites(t *http.Transport) *http.Transport {
 			return nil, err
 		}
 		return &watchedConn{Conn: conn}, nil
+	}
+	// http.Transport turns HTTP/2 on by itself only while no dialer or
+	// TLS config is set; the clone sets both, so it asks for HTTP/2
+	// whenever t has it. Clone has set t up, so t.TLSNextProto holds h2
+	// then.
+	if _, ok := t.TLSNextProto["h2"]; ok {
+		clone.ForceAttemptHTTP2 = true
+	}
+	if clone.TLSClientConfig == nil {
+		clone.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	}
+	clone.TLSClientConfig.DynamicRecordSizingDisabled = true
+	if clone.WriteBufferSize > maxFlushBytes {
+		clone.WriteBufferSize = maxFlushBytes
 	}
 	return clone
 }

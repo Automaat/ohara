@@ -172,8 +172,12 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   in a lane of its own that paces every request of its HTTP client,
   redirects too: a request to a host is sent at least half of
   `OHARA_DEALS_DELAY` after the other lane's last one there. Sent means
-  its bytes reached the connection: HTTP/1 reports a request written
-  while it still sits in a buffer, so the pacer waits for the flush. A
+  its last bytes reached the connection: HTTP/1 reports a request
+  written while its end still sits in a buffer, so the pacer waits for
+  the flush, and the lane's transport sends each TLS record whole so a
+  flush is one write. HTTP/2 flushes before it reports a request
+  written, as does HTTP/1 a Content-Length body larger than the buffer;
+  those count as sent when reported written. A
   request holds the site until it is sent, never while it waits for an answer,
   so neither run waits for the other to finish; a lane never waits for
   itself, so a run on its own keeps its pacing.

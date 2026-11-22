@@ -6,7 +6,7 @@
 		options,
 		type CollectionFilter
 	} from '#lib/collection.js';
-	import { lowerCase } from '#lib/collection-filter.js';
+	import { foldLocation } from '#lib/collection-filter.js';
 	import { collectionSortOptions, type CollectionSort } from '#lib/collection-sort.js';
 
 	let {
@@ -43,7 +43,7 @@
 	const anyPlace = ' ';
 	/** The location filtered by, as a place in use spells it, else as the address does. */
 	const picked = $derived(
-		locations.find((place) => lowerCase(place) === lowerCase(location)) ?? location
+		locations.find((place) => foldLocation(place) === foldLocation(location)) ?? location
 	);
 	const locationOptions = $derived([
 		{ value: anyPlace, label: 'Każde' },

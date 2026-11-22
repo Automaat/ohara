@@ -692,11 +692,17 @@ type Filter struct {
 }
 
 // foldCase lower-cases text one character at a time, the key locations
-// match and merge by. The browser's lowerCase folds the same way, so the
-// filter it applies to the loaded collection lists what this one does;
-// Postgres's lower follows the database's older Unicode tables.
+// match and merge by, with a final sigma as σ, since ΟΣ and ος name one
+// place. The browser's foldLocation folds the same way, so the filter it
+// applies to the loaded collection lists what this one does; Postgres's
+// lower follows the database's older Unicode tables.
 func foldCase(text string) string {
-	return strings.Map(unicode.ToLower, text)
+	return strings.Map(func(r rune) rune {
+		if r = unicode.ToLower(r); r == 'ς' {
+			return 'σ'
+		}
+		return r
+	}, text)
 }
 
 // Item is one copy in the collection view with its edition and title.

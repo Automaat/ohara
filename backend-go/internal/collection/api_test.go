@@ -1114,7 +1114,9 @@ func TestCopyLocation(t *testing.T) {
 		t.Fatalf("500-byte location = %v", got)
 	}
 	a.fails(http.MethodPut, path, obj{"edition_id": edition, "status": "owned", "location": longest + "x"}, http.StatusUnprocessableEntity, "location")
-	a.fails(http.MethodPut, path, obj{"edition_id": edition, "status": "owned", "location": "Regał\u00002"}, http.StatusUnprocessableEntity, "location")
+	for _, control := range []string{"Regał\u00002", "Półka\nPółeczka", "Regał\t2", "Regał\u00852"} {
+		a.fails(http.MethodPut, path, obj{"edition_id": edition, "status": "owned", "location": control}, http.StatusUnprocessableEntity, "location")
+	}
 	if got := put("owned", "   "); got != nil {
 		t.Fatalf("blank location stored as %q", *got)
 	}
@@ -1239,4 +1241,28 @@ func deref(s *string) string {
 		return "<nil>"
 	}
 	return *s
+}
+
+func TestLocationFinalSigmaIsOnePlace(t *testing.T) {
+	a := newAPI(t)
+	edition := a.edition(obj{"title_id": a.title("movie", "Rejs"), "format": "dvd"})
+	upper := a.copyOf(obj{"edition_id": edition, "status": "owned", "location": "ΟΣ"})
+	lower := a.copyOf(obj{"edition_id": edition, "status": "owned", "location": "ος"})
+
+	var locations []string
+	a.mustDo(http.MethodGet, "/api/copies/locations", nil, &locations, http.StatusOK)
+	if fmt.Sprint(locations) != fmt.Sprint([]string{"ΟΣ"}) {
+		t.Fatalf("locations = %q, want one place", locations)
+	}
+	for _, place := range []string{"ΟΣ", "ος", "οσ"} {
+		var view collection.CollectionView
+		a.mustDo(http.MethodGet, "/api/collection?location="+url.QueryEscape(place), nil, &view, http.StatusOK)
+		got := []int64{}
+		for _, it := range view.Items {
+			got = append(got, it.CopyID)
+		}
+		if fmt.Sprint(got) != fmt.Sprint([]int64{upper, lower}) {
+			t.Fatalf("location %q lists %v, want %v", place, got, []int64{upper, lower})
+		}
+	}
 }

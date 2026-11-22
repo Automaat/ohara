@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/Automaat/ohara/backend-go/internal/barcode"
@@ -233,9 +234,11 @@ func checkLen(field, value string, limit int) *httpx.FieldError {
 	return nil
 }
 
-// checkText refuses a NUL byte, which Postgres text cannot hold.
+// checkText refuses control characters in one-line text: Postgres text
+// cannot hold a NUL, and a line break or tab would not survive the form's
+// one-line field, which would rewrite the value on its next save.
 func checkText(field, value string) *httpx.FieldError {
-	if strings.ContainsRune(value, 0) {
+	if strings.ContainsFunc(value, unicode.IsControl) {
 		return fieldErr(field, "is not valid")
 	}
 	return nil

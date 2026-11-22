@@ -28,7 +28,7 @@ export function searchTerm(q: string): string {
 }
 
 /**
- * Lower case one character at a time, as PostgreSQL's `lower` and the server's foldCase map each
+ * Lower case one character at a time, as PostgreSQL's `lower` and Go's unicode.ToLower map each
  * character on its own: a final capital sigma becomes σ, not ς, and a character whose lower case
  * is longer keeps only its first.
  */
@@ -39,6 +39,14 @@ export function lowerCase(text: string): string {
 		out += [...lower][0] ?? lower;
 	}
 	return out;
+}
+
+/**
+ * The key locations match and merge by, as the server's foldCase makes it: lower case one
+ * character at a time, with a final sigma as σ, since ΟΣ and ος name one place.
+ */
+export function foldLocation(text: string): string {
+	return lowerCase(text).replaceAll('ς', 'σ');
 }
 
 /**
@@ -80,13 +88,13 @@ export function filterCollection(
 	const term = searchTerm(f.q);
 	const words = lowerCase(term);
 	const typed = lowerCase(trimSpace(f.q));
-	const place = lowerCase(trimSpace(f.location ?? ''));
+	const place = foldLocation(trimSpace(f.location ?? ''));
 	return items.filter(
 		(item) =>
 			(!f.kind || item.kind === f.kind) &&
 			(!f.format || item.format === f.format) &&
 			hasStatus(item, f.status) &&
-			(!place || (item.location != null && lowerCase(item.location) === place)) &&
+			(!place || (item.location != null && foldLocation(item.location) === place)) &&
 			(!term ||
 				item.barcode === term ||
 				searchedText(item).includes(words) ||
@@ -115,7 +123,7 @@ export function locationsInUse(items: readonly Pick<CollectionItem, 'location'>[
 	const places = new Map<string, { copies: number; spellings: Map<string, number> }>();
 	for (const { location } of items) {
 		if (!location) continue;
-		const key = lowerCase(location);
+		const key = foldLocation(location);
 		const place = places.get(key) ?? { copies: 0, spellings: new Map<string, number>() };
 		place.copies++;
 		place.spellings.set(location, (place.spellings.get(location) ?? 0) + 1);

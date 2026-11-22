@@ -249,6 +249,14 @@ describe('the location filter, as the server folds case', () => {
 		expect(filterCollection(odd, { ...none, ...filter }).map((i) => i.copy_id)).toEqual(copies);
 	});
 
+	it('takes a final sigma for σ, so ΟΣ and ος are one place', () => {
+		const greek = [item({ copy_id: 1, location: 'ΟΣ' }), item({ copy_id: 2, location: 'ος' })];
+		expect(locationsInUse(greek)).toEqual(['ΟΣ']);
+		for (const location of ['ΟΣ', 'ος', 'οσ']) {
+			expect(filterCollection(greek, { ...none, location }).map((i) => i.copy_id)).toEqual([1, 2]);
+		}
+	});
+
 	it('merges those letters into one place and orders ties by code point', () => {
 		expect(locationsInUse(odd)).toEqual(['\u{10D50}', 'Box 012345678905', '\ufeffRegał']);
 	});

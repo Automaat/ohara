@@ -197,6 +197,29 @@ describe('ScanFlow.load', () => {
 		]);
 	});
 
+	it('counts a queued code whose answer came after the next scan started', async () => {
+		await queueTally.load(server({ 'GET /api/scan-queue': [200, []] }).fetchFn);
+		let answer: (reply: [number, unknown]) => void = () => undefined;
+		const late = new Promise<[number, unknown]>((resolve) => (answer = resolve));
+		const entry = { id: 1, barcode: code, reason: 'not_found', detail: '', scans: 1 };
+		const s = server({
+			...noEdition,
+			[`GET /api/lookup/${code}`]: [200, { barcode: code, candidates: [], errors: [] }],
+			'POST /api/scan-queue': [() => late, [201, { ...entry, id: 2, barcode: other }]],
+			[`GET /api/editions?barcode=${other}`]: [200, []],
+			[`GET /api/lookup/${other}`]: [200, { barcode: other, candidates: [], errors: [] }]
+		});
+		const flow = new ScanFlow(s.fetchFn, memory());
+		const first = flow.load(code);
+		await vi.waitFor(() => expect(s.paths()).toContain('POST /api/scan-queue'));
+		await flow.load(other);
+		expect(queueTally.count).toBe(1);
+		answer([201, entry]);
+		await first;
+		expect(flow.phase).toMatchObject({ kind: 'queued', entry: { barcode: other } });
+		expect(queueTally.count).toBe(2);
+	});
+
 	it.each([
 		['no barcode shape', ' 12ab ', '„12ab” nie wygląda na kod kreskowy.'],
 		['a wrong check digit', '5901234123458', invalidBarcodeMessage]
@@ -720,6 +743,24 @@ describe('ScanFlow.save', () => {
 		await flow.load(code);
 		await flow.save();
 		expect(queueTally.count).toBe(1);
+	});
+
+	it('takes the code out of the queue count once the edition exists, even when the copy fails', async () => {
+		await queueTally.load(
+			server({ 'GET /api/scan-queue': [200, [{ id: 1, barcode: code }]] }).fetchFn
+		);
+		const s = server({
+			...lookup([movie], false),
+			'GET /api/titles?tmdb_id=1': [200, []],
+			'POST /api/titles': [201, { id: 9, name: 'Diuna: Część druga', kind: 'movie' }],
+			'POST /api/editions': [201, { id: 21, title_id: 9, barcode: code, format: 'uhd' }],
+			'POST /api/copies?cover=auto': [500, { error: 'boom' }]
+		});
+		const flow = new ScanFlow(s.fetchFn, memory());
+		await flow.load(code);
+		expect(await flow.save()).toBeNull();
+		flow.dismiss();
+		expect(queueTally.count).toBe(0);
 	});
 
 	it('records a book by its binding and a wish without a price', async () => {

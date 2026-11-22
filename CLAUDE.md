@@ -278,8 +278,10 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
 - The scan sheet's history entries are shallow navigations, which skip the
   Okazje badge refresh. The camera's queue count
   (`src/lib/queue-tally.svelte.ts`) is read once when the scanner opens,
-  then moved by queued scans, adds that create a queued code's edition and
-  their undo, without reading the queue again.
+  then moved where the requests answer: a queue POST (also for a sheet
+  already replaced), an edition POST for a queued code (even when its copy
+  then fails) and that add's undo. Only undoing an add made before the
+  first read answered reads the queue again.
 - A code whose check gets no answer is kept in IndexedDB
   (`src/lib/pending-scans.svelte.ts`, barcode only, once in the server's
   normalized form) and posted to `/api/scan-queue` as `lookup_failed` on app

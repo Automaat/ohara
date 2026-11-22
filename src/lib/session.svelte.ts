@@ -97,7 +97,7 @@ export async function undoAdd(fetchFn: typeof fetch, add: SessionAdd): Promise<v
 	await deleteCopy(fetchFn, add.copyID);
 	if (add.createdEdition) {
 		const gone = await deleteUnused(fetchFn, `/api/editions/${add.editionID}?requeue=1`);
-		if (gone) queueTally.requeued(add.editionID);
+		if (gone) void queueTally.requeued(add.editionID, fetchFn);
 		if (gone && add.createdTitle) await deleteUnused(fetchFn, `/api/titles/${add.titleID}`);
 	}
 	session.adds = session.adds.filter((a) => a.id !== add.id);

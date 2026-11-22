@@ -280,11 +280,6 @@
 	});
 
 	$effect(() => {
-		const p = flow.phase;
-		if (p.kind === 'queued') untrack(() => queueTally.queued(p.entry.barcode));
-	});
-
-	$effect(() => {
 		const waiting = pendingScans.count;
 		untrack(() => {
 			if (waiting < waitingBefore) void queueTally.load(fetch);

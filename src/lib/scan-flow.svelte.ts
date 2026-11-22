@@ -17,7 +17,6 @@ import {
 	type Kind
 } from './collection';
 import { pendingScans, type PendingScans } from './pending-scans.svelte';
-import { queueTally } from './queue-tally.svelte';
 import { logScan } from './recent.svelte';
 import {
 	FormRejected,
@@ -580,9 +579,6 @@ export class ScanFlow {
 				priceCents: kept.status === 'owned' ? (saved.copy.price_cents ?? null) : null,
 				recentID
 			});
-			if (saved.createdEdition && saved.edition.barcode) {
-				queueTally.resolved(saved.editionID, saved.edition.barcode);
-			}
 			return current() ? { saved, add, barcode: item.barcode, next } : null;
 		} catch (err) {
 			if (!item.barcode && refused(err)) await this.#discard(item);

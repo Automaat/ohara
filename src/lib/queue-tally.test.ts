@@ -25,6 +25,9 @@ function held() {
 	};
 }
 
+/** A fetch the test expects no request from. */
+const unused: typeof fetch = () => Promise.reject(new TypeError('unexpected request'));
+
 async function loaded(...barcodes: string[]): Promise<QueueTally> {
 	const tally = new QueueTally();
 	await tally.load(async () => listing(...barcodes));
@@ -61,9 +64,9 @@ describe('QueueTally', () => {
 		const tally = await loaded('5901234123457', '5907777123456');
 		tally.resolved(31, '5907777123456');
 		expect(tally.count).toBe(1);
-		tally.requeued(31);
+		tally.requeued(31, unused);
 		expect(tally.count).toBe(2);
-		tally.requeued(31);
+		tally.requeued(31, unused);
 		expect(tally.count).toBe(2);
 	});
 
@@ -71,9 +74,24 @@ describe('QueueTally', () => {
 		const tally = await loaded('5901234123457');
 		tally.resolved(31, '5907777123456');
 		expect(tally.count).toBe(1);
-		tally.requeued(31);
-		tally.requeued(99);
+		tally.requeued(31, unused);
+		tally.requeued(99, unused);
 		expect(tally.count).toBe(1);
+	});
+
+	it('reads the queue again to undo an add made before the queue was known', async () => {
+		const tally = new QueueTally();
+		const queue = held();
+		const reading = tally.load(queue.fetchFn);
+		tally.resolved(31, '5907777123456');
+		await queue.asked(1);
+		queue.answer(0, listing('5901234123457', '5907777123456'));
+		await reading;
+		expect(tally.count).toBe(1);
+		await tally.requeued(31, async () => listing('5901234123457', '5907777123456'));
+		expect(tally.count).toBe(2);
+		await tally.requeued(31, unused);
+		expect(tally.count).toBe(2);
 	});
 
 	it('forgets the count when the queue read fails, and counts again on the next one', async () => {
@@ -98,7 +116,7 @@ describe('QueueTally', () => {
 		queue.answer(0, listing('5901234123457', '5907777123456'));
 		await reading;
 		expect(tally.count).toBe(3);
-		tally.requeued(31);
+		tally.requeued(31, unused);
 		expect(tally.count).toBe(4);
 	});
 

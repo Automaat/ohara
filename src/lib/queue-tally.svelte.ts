@@ -16,6 +16,8 @@ export class QueueTally {
 	#codes = $state<ReadonlySet<string> | null>(null);
 	/** The queued codes adds took out, by the edition each created. */
 	#taken = new Map<number, string>();
+	/** Editions created while the queue was unknown, so whether they took a code out is too. */
+	#unsure = new Set<number>();
 	/** Changes made while a load is out, replayed over its answer. */
 	#changes: Change[] = [];
 	#seq = 0;
@@ -60,19 +62,27 @@ export class QueueTally {
 
 	/**
 	 * An add created the edition for barcode, which takes the code out of the queue. A code the
-	 * queue held is remembered by the edition, so undoing the add can count it again.
+	 * queue held is remembered by the edition, so undoing the add can count it again; an edition
+	 * created before the queue was known is remembered as unsure.
 	 */
 	resolved(editionID: number, barcode: string) {
-		if (this.#codes?.has(barcode)) this.#taken.set(editionID, barcode);
+		if (this.#codes === null) this.#unsure.add(editionID);
+		else if (this.#codes.has(barcode)) this.#taken.set(editionID, barcode);
 		this.#change(barcode, false);
 	}
 
-	/** The edition an add created is gone, and the queue took back the code it had resolved. */
-	requeued(editionID: number) {
+	/**
+	 * The edition an add created is gone, and the queue took back the code it had resolved. For
+	 * an edition created while the queue was unknown, the queue is read again instead.
+	 */
+	requeued(editionID: number, fetchFn: typeof fetch): Promise<void> {
+		if (this.#unsure.delete(editionID)) return this.load(fetchFn);
 		const barcode = this.#taken.get(editionID);
-		if (barcode === undefined) return;
-		this.#taken.delete(editionID);
-		this.#change(barcode, true);
+		if (barcode !== undefined) {
+			this.#taken.delete(editionID);
+			this.#change(barcode, true);
+		}
+		return Promise.resolve();
 	}
 
 	#change(barcode: string, queued: boolean) {

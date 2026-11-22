@@ -7,6 +7,7 @@ import {
 	request
 } from './api';
 import { queueDeletesSettled } from './queue-deletes';
+import { queueTally } from './queue-tally.svelte';
 import {
 	copyPayload,
 	displayName,
@@ -397,6 +398,7 @@ export async function resolveScan(
 		reason: failed ? 'lookup_failed' : 'not_found',
 		detail: lookup ? providerDetail(lookup.errors) : failure
 	});
+	queueTally.queued(entry.barcode);
 	return { kind: 'queued', barcode, entry };
 }
 
@@ -840,6 +842,7 @@ export async function saveScan(
 			request_key: requestKey
 		});
 		remember(made.editions, edition.id);
+		if (edition.barcode) queueTally.resolved(edition.id, edition.barcode);
 	} catch (err) {
 		const raced = err instanceof ApiError && err.status === 409 && err.field === 'barcode';
 		const existing = raced ? await editionByBarcode(fetchFn, target.barcode) : null;

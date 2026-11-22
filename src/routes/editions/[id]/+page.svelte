@@ -12,6 +12,7 @@
 		Skeleton
 	} from '@smykla-skalski/sui';
 	import { onDestroy } from 'svelte';
+	import { SvelteSet } from 'svelte/reactivity';
 	import { goto, replaceState } from '$app/navigation';
 	import { page } from '$app/state';
 	import { ApiError, errorMessage, request } from '#lib/api.js';
@@ -38,7 +39,7 @@
 	import EditionCoverSheet from '#lib/components/EditionCoverSheet.svelte';
 	import { coverUndo } from '#lib/edition-cover.js';
 	import { purchaseDate } from '#lib/polish.js';
-	import { newRequestKey } from '#lib/scan.js';
+	import { LatestLoad, newRequestKey } from '#lib/scan.js';
 	import { copyRequest } from '#lib/title-detail.js';
 
 	const id = $derived(Number(page.params.id));
@@ -50,7 +51,14 @@
 	let editing = $state(false);
 	let editionForm = $state(editionToForm(null));
 	let editionIssue = $state<FormIssue | null>(null);
-	let savingEdition = $state(false);
+	/**
+	 * Editions whose save is still on its way, kept across a jump to another edition and back, so
+	 * a second save of the same edition cannot start until the first one has landed.
+	 */
+	const pendingSaves = new SvelteSet<number>();
+	const savingEdition = $derived(detail !== null && pendingSaves.has(detail.id));
+	/** Counts opened edit forms, so a save's answer closes only the form it was sent from. */
+	let editionEdits = 0;
 
 	let adding = $state(false);
 	let copyForm = $state(copyToForm(null));
@@ -67,25 +75,48 @@
 	let confirmDelete = $state(false);
 	let deleteError = $state<string | null>(null);
 
-	/** The edition the page was last asked for, and a link's request to add a copy to it. */
+	/**
+	 * The edition the page was last asked for, and a link's request to add a copy to it. Another
+	 * edition's answers and forms are dropped.
+	 */
 	let requested: number | undefined;
 	const addRequest = copyRequest();
 	onDestroy(addRequest.close);
+	/** A slower answer for an earlier load never replaces a newer one. */
+	const loads = new LatestLoad();
 
 	async function load(editionID: number) {
 		if (editionID !== requested) {
 			requested = editionID;
+			detail = null;
+			failure = null;
+			editing = false;
+			editionForm = editionToForm(null);
+			editionIssue = null;
+			editionEdits++;
+			adding = false;
+			copyForm = copyToForm(null);
+			copyIssue = null;
+			savingCopy = false;
+			copyKey = '';
+			coverSheet = false;
+			confirmDelete = false;
+			deleteError = null;
 			addRequest.open(editionID, page.url.searchParams);
 		}
+		const isLatest = loads.start();
 		busy = true;
 		try {
-			detail = await request<EditionDetail>(fetch, 'GET', `/api/editions/${editionID}`);
+			const next = await request<EditionDetail>(fetch, 'GET', `/api/editions/${editionID}`);
+			if (!isLatest()) return;
+			detail = next;
 			failure = null;
 			if (addRequest.take(editionID)) startCopyFromLink();
 		} catch (err) {
+			if (!isLatest()) return;
 			failure = errorMessage(err);
 		} finally {
-			busy = false;
+			if (isLatest()) busy = false;
 		}
 	}
 
@@ -97,6 +128,7 @@
 		copyForm = copyToForm(null);
 		copyIssue = null;
 		copyKey = newRequestKey();
+		savingCopy = false;
 		adding = true;
 	}
 
@@ -106,6 +138,18 @@
 		url.searchParams.delete('add');
 		replaceState(url, page.state);
 		startCopy();
+	}
+
+	/**
+	 * Opened only once a pending save and every load have landed: a newer load drops the save's own
+	 * reload, so only the newest answer holds what the save stored.
+	 */
+	function startEdit(d: EditionDetail) {
+		if (pendingSaves.has(d.id) || busy) return;
+		editionForm = editionToForm(d);
+		editionIssue = null;
+		editionEdits++;
+		editing = true;
 	}
 
 	function issueFrom(err: unknown): FormIssue {
@@ -118,42 +162,48 @@
 			editionIssue = parsed.issue;
 			return;
 		}
-		savingEdition = true;
+		if (pendingSaves.has(d.id)) return;
+		const edit = editionEdits;
+		pendingSaves.add(d.id);
 		try {
-			await request<Edition>(fetch, 'PUT', `/api/editions/${id}`, parsed.value);
-			editing = false;
-			await load(id);
+			await request<Edition>(fetch, 'PUT', `/api/editions/${d.id}`, parsed.value);
+			if (d.id !== requested) return;
+			if (edit === editionEdits) editing = false;
+			await load(d.id);
 		} catch (err) {
-			editionIssue = issueFrom(err);
+			if (edit === editionEdits) editionIssue = issueFrom(err);
 		} finally {
-			savingEdition = false;
+			pendingSaves.delete(d.id);
 		}
 	}
 
-	async function addCopy() {
-		const parsed = copyPayload(copyForm, id);
+	async function addCopy(d: EditionDetail) {
+		const parsed = copyPayload(copyForm, d.id);
 		if (!parsed.ok) {
 			copyIssue = parsed.issue;
 			return;
 		}
+		// The key names the open form: another form has its own key, so this answer leaves it alone.
+		const key = copyKey;
 		savingCopy = true;
 		try {
-			await request<Copy>(fetch, 'POST', '/api/copies', { ...parsed.value, request_key: copyKey });
-			adding = false;
-			await load(id);
+			await request<Copy>(fetch, 'POST', '/api/copies', { ...parsed.value, request_key: key });
+			if (d.id !== requested) return;
+			if (copyKey === key) adding = false;
+			await load(d.id);
 		} catch (err) {
-			copyIssue = issueFrom(err);
+			if (copyKey === key) copyIssue = issueFrom(err);
 		} finally {
-			savingCopy = false;
+			if (copyKey === key) savingCopy = false;
 		}
 	}
 
 	async function remove(d: EditionDetail) {
 		try {
-			await request(fetch, 'DELETE', `/api/editions/${id}`);
-			await goto(`/titles/${d.title_id}`);
+			await request(fetch, 'DELETE', `/api/editions/${d.id}`);
+			if (d.id === requested) await goto(`/titles/${d.title_id}`);
 		} catch (err) {
-			deleteError = errorMessage(err);
+			if (d.id === requested) deleteError = errorMessage(err);
 		}
 	}
 </script>
@@ -222,7 +272,7 @@
 						issue={copyIssue}
 						saving={savingCopy}
 						submitLabel="Zapisz egzemplarz"
-						onsubmit={addCopy}
+						onsubmit={() => addCopy(d)}
 						oncancel={() => (adding = false)}
 					/>
 				</Card>
@@ -300,14 +350,7 @@
 
 		<Section title="Zarządzanie wydaniem">
 			<div class="actions">
-				<Button
-					tone="ghost"
-					onclick={() => (
-						(editionForm = editionToForm(d)),
-						(editionIssue = null),
-						(editing = true)
-					)}
-				>
+				<Button tone="ghost" disabled={savingEdition || busy} onclick={() => startEdit(d)}>
 					Edytuj wydanie
 				</Button>
 				<Button tone="stop-quiet" onclick={() => ((deleteError = null), (confirmDelete = true))}>

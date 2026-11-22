@@ -76,7 +76,10 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   release's prices are stored in one transaction, so a grade counts only
   when the edition's newest answer naming any middle grade named it; an
   answer naming none (`{}`, Mint only) or a failed request keeps the last
-  answer (#411). The suggestion replaces the OLX mid and is never
+  answer (#411). A stats answer without `num_for_sale` (`{}`) is a
+  Discogs parse error, not a release with nothing for sale: the run
+  counts it as the source's failure and stores nothing for that release
+  (#324). The suggestion replaces the OLX mid and is never
   low confidence. Each run upserts today's `valuation_history` row and
   sets the `ohara_collection_*` gauges. Skupksiazek.pl (cart behind an
   app flow) and Rivendo (manual form with photos) have no automatic

@@ -149,12 +149,48 @@ type Stats struct {
 }
 
 // Stats returns the marketplace summary of release id, priced in currency
-// (one of the currencies Discogs sells in, such as EUR or USD).
+// (one of the currencies Discogs sells in, such as EUR or USD). An answer
+// without num_for_sale is a parse error: decoded as is, it would look like
+// a release with nothing for sale.
 func (c *Client) Stats(ctx context.Context, id int64, currency string) (Stats, error) {
 	q := url.Values{"curr_abbr": {currency}}
-	var s Stats
-	err := c.get(ctx, "/marketplace/stats/"+strconv.FormatInt(id, 10)+"?"+q.Encode(), &s, nil)
-	return s, err
+	var r statsAnswer
+	if err := c.get(ctx, "/marketplace/stats/"+strconv.FormatInt(id, 10)+"?"+q.Encode(), &r, func() error {
+		if r.NumForSale == nil {
+			return errors.New("no num_for_sale field")
+		}
+		return nil
+	}); err != nil {
+		return Stats{}, err
+	}
+	return Stats{LowestPrice: r.LowestPrice, NumForSale: *r.NumForSale}, nil
+}
+
+// statsAnswer is a marketplace stats answer read by its exact keys:
+// encoding/json matches struct tags without regard to case, so a struct
+// would take NUM_FOR_SALE for num_for_sale. A key that is absent or null
+// leaves its field nil.
+type statsAnswer struct {
+	LowestPrice *Money
+	NumForSale  *int
+}
+
+func (a *statsAnswer) UnmarshalJSON(b []byte) error {
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(b, &keys); err != nil {
+		return err
+	}
+	if v, ok := keys["lowest_price"]; ok {
+		if err := json.Unmarshal(v, &a.LowestPrice); err != nil {
+			return err
+		}
+	}
+	if v, ok := keys["num_for_sale"]; ok {
+		if err := json.Unmarshal(v, &a.NumForSale); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Suggestions are the prices Discogs suggests for a release by media

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+	allegroSearchURL,
 	ageClock,
 	confirmedListings,
 	wishFacts,
@@ -334,6 +335,25 @@ describe('the wish list', () => {
 			authors: 'authors' in wish ? [...wish.authors] : undefined
 		});
 		expect(facts.replace(/\s/g, ' ')).toBe(expected);
+	});
+});
+
+describe('Allegro wish search', () => {
+	it('keeps movie accents and punctuation in a single search parameter', () => {
+		const href = allegroSearchURL({ kind: 'movie', name: 'Żółć: A & B + C #2', format: 'dvd' });
+		const url = new URL(href ?? '');
+		expect(`${url.origin}${url.pathname}`).toBe('https://allegro.pl/listing');
+		expect([...url.searchParams]).toEqual([['string', 'Żółć: A & B + C #2 DVD']]);
+	});
+
+	it('includes the artist and medium for an album', () => {
+		const href = allegroSearchURL({
+			kind: 'music',
+			name: 'Debut',
+			authors: ['Björk'],
+			format: 'vinyl'
+		});
+		expect(new URL(href ?? '').searchParams.get('string')).toBe('Debut Björk Winyl');
 	});
 });
 

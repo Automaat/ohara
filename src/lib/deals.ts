@@ -367,6 +367,18 @@ export function lastRunSummary(result: DealsRunResult | null): string | null {
  */
 export const wishesPath = '/api/collection?status=wishlist';
 
+export function allegroSearchURL(
+	wish: Pick<CollectionItem, 'name' | 'kind' | 'season' | 'format' | 'authors'>
+): string | null {
+	const title = wish.name.trim();
+	if (!title) return null;
+	const season = wish.kind === 'tv' && wish.season != null ? `sezon ${wish.season}` : null;
+	const artist = wish.kind === 'music' ? wish.authors?.join(' ') : null;
+	const format = wish.format ? formatLabels[wish.format] : null;
+	const phrase = [title, season, artist, format].filter(Boolean).join(' ');
+	return `https://allegro.pl/listing?${new URLSearchParams({ string: phrase })}`;
+}
+
 /**
  * A wish's line on Okazje, such as "Film · Blu-ray · limit 80 zł" or "Książka · Stanisław Lem": its
  * kind, authors, format and price limit. The collection does not carry a wish's market percent,

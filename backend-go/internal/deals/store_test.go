@@ -2,6 +2,8 @@ package deals
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -273,6 +275,58 @@ func TestUnmatchTakesOnlyNamedUnsentAlerts(t *testing.T) {
 	if want := []string{"bluedvd pending", "olx other", "olx sent"}; !slices.Equal(bound, want) {
 		t.Fatalf("alerts still for the wish = %q, want %q", bound, want)
 	}
+}
+
+// TestUnmatchWaitsForASendInProgress: Unmatch of a listing whose alert
+// SendAlert is sending waits for its outcome, so the message goes out and
+// its sent alert keeps its wish.
+func TestUnmatchWaitsForASendInProgress(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	ctx := context.Background()
+	store := NewStore(pool)
+	w := bladeRunner("bluray")
+	w.MaxPriceCents = new(int64(5000))
+	wish := wished(t, pool, w)
+	l := Listing{Source: "olx", ExternalID: "1", Title: "Blade Runner Blu-ray", URL: "https://example.test/1", PriceCents: 4000}
+	if _, alerted, err := store.Record(ctx, &l, &wish, true); err != nil || !alerted {
+		t.Fatalf("Record = %v, %v; want an alert", alerted, err)
+	}
+	unmatched := make(chan error, 1)
+	delivered, err := store.SendAlert(ctx, stored(t, pool).ID, func(*Alert) error {
+		go func() { unmatched <- store.Unmatch(ctx, "olx", []string{"1"}) }()
+		return waitForUnmatch(ctx, pool, unmatched)
+	})
+	if err != nil || !delivered {
+		t.Fatalf("SendAlert = %v, %v; want the message sent", delivered, err)
+	}
+	if err := <-unmatched; err != nil {
+		t.Fatalf("Unmatch: %v", err)
+	}
+	if got := stored(t, pool); !got.AlertSent || !is(got.AlertCopyID, wish.CopyID) {
+		t.Fatalf("alert = sent %v for copy %v, want sent for %d", got.AlertSent, deref(got.AlertCopyID), wish.CopyID)
+	}
+}
+
+// waitForUnmatch returns nil once Unmatch waits for a row lock, or an error
+// when it finished first or never waited.
+func waitForUnmatch(ctx context.Context, pool *pgxpool.Pool, unmatched <-chan error) error {
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		select {
+		case err := <-unmatched:
+			return fmt.Errorf("unmatch finished during the send: %w", err)
+		default:
+		}
+		var waiting bool
+		if err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT FROM pg_stat_activity
+			WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE 'WITH locked AS%')`).
+			Scan(&waiting); err != nil {
+			return err
+		}
+		if waiting {
+			return nil
+		}
+	}
+	return errors.New("unmatch never waited for the listing's row")
 }
 
 // TestRecordAsOfKeepsANewerMove follows a hunt that read the wishlist

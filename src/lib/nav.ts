@@ -7,7 +7,8 @@ export const sections: NavSection[] = [
 			{ href: '/scan', label: 'Skanuj', icon: 'plus' },
 			{ href: '/scan/queue', label: 'Do uzupełnienia', icon: 'pending' },
 			{ href: '/deals', label: 'Okazje', icon: 'tag' },
-			{ href: '/valuation', label: 'Wartość', icon: 'gauge' }
+			{ href: '/valuation', label: 'Wartość', icon: 'gauge' },
+			{ href: '/stats', label: 'Statystyki', icon: 'calendar' }
 		]
 	},
 	{

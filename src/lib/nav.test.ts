@@ -37,6 +37,12 @@ describe('sections', () => {
 		expect(hrefs).not.toContain('/titles');
 		expect(hrefs).toContain('/');
 	});
+
+	it('lists Statystyki in the side navigation', () => {
+		const items = sections.flatMap((s) => s.items);
+		expect(items).toContainEqual({ href: '/stats', label: 'Statystyki', icon: 'calendar' });
+		expect(currentItem('/stats', sections)?.label).toBe('Statystyki');
+	});
 });
 
 describe('currentTab', () => {
@@ -53,6 +59,7 @@ describe('currentTab', () => {
 		['/scan/queue', '/scan'],
 		['/scan/5901234123457', '/scan'],
 		['/informacje', undefined],
+		['/stats', undefined],
 		['/dealsx', undefined],
 		['/scanner', undefined]
 	])('%s → %s', (pathname, href) => {
@@ -68,6 +75,10 @@ describe('tabs', () => {
 
 describe('morePages', () => {
 	it('lists the pages that have no place in the tab bar', () => {
-		expect(morePages(sections).map((item) => item.href)).toEqual(['/scan/queue', '/informacje']);
+		expect(morePages(sections).map((item) => item.href)).toEqual([
+			'/scan/queue',
+			'/stats',
+			'/informacje'
+		]);
 	});
 });

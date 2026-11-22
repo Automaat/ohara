@@ -19,6 +19,8 @@ import {
 	historySpan,
 	intervalLabel,
 	lastRunSummary,
+	likelySold,
+	likelySoldLine,
 	offers,
 	pageSummary,
 	rangeMarks,
@@ -372,6 +374,7 @@ describe('page summary', () => {
 			status: status({}),
 			window_days: 90,
 			min_observations: 3,
+			likely_sold_days: 21,
 			summary: s,
 			copies: [],
 			history: [],
@@ -553,10 +556,41 @@ const copy = (patch: Partial<CopyValue>): CopyValue => ({
 	mid: null,
 	ceiling: null,
 	low_confidence: false,
+	likely_sold: null,
 	...patch
 });
 
 const est = (cents: number, count = 3) => ({ cents, source: 'olx' as const, count, trimmed: 0 });
+
+describe('likely-sold price', () => {
+	it('shows the median of the vanished listings with their count', () => {
+		const c = copy({ likely_sold: est(5000, 3) });
+
+		expect(likelySold(c, 3)).toEqual({ note: '3 oferty', low: false });
+		expect(nbsp(likelySoldLine(c, 3) ?? '')).toBe('Prawdopodobnie sprzedane: 50 zł · 3 oferty');
+	});
+
+	it.each([
+		[1, '1 oferta · mało danych'],
+		[2, '2 oferty · mało danych']
+	])('marks a price from %i listings as too little data', (count, note) => {
+		expect(likelySold(copy({ likely_sold: est(4500, count) }), 3)).toMatchObject({
+			note,
+			low: true
+		});
+	});
+
+	it('names the outliers left out', () => {
+		const c = copy({ likely_sold: { cents: 4300, source: 'olx', count: 4, trimmed: 1 } });
+
+		expect(likelySold(c, 3)?.note).toBe('4 oferty (1 odrzucone)');
+	});
+
+	it('is not shown without vanished listings', () => {
+		expect(likelySold(copy({ mid: est(4000) }), 3)).toBeNull();
+		expect(likelySoldLine(copy({ mid: est(4000) }), 3)).toBeNull();
+	});
+});
 
 describe('copy rows', () => {
 	it('sorts by used value from the highest, unvalued copies last in their order', () => {

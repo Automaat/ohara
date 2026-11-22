@@ -463,9 +463,10 @@ func newRuns(pool *pgxpool.Pool, logger *slog.Logger) (*deals.Hunter, *deals.Sto
 }
 
 // newHunter configures the deal hunter from the environment. Polling stays
-// off until OHARA_DEALS_INTERVAL is set; alerts need both Telegram
-// variables. The *_URL variables point the sources at test doubles.
-// lane spaces its requests from the valuation's.
+// off until OHARA_DEALS_INTERVAL is set; alerts, and the poller for their
+// "Ignoruj" button, need both Telegram variables. The *_URL variables
+// point the sources at test doubles. lane spaces its requests from the
+// valuation's.
 func newHunter(pool *pgxpool.Pool, lane *deals.Lane, logger *slog.Logger) (*deals.Hunter, *deals.Store, error) {
 	interval, err := time.ParseDuration(envOr("OHARA_DEALS_INTERVAL", "0s"))
 	if err != nil || interval < 0 {
@@ -481,20 +482,28 @@ func newHunter(pool *pgxpool.Pool, lane *deals.Lane, logger *slog.Logger) (*deal
 	client := pacedClient(lane)
 	sources := usedSources(client)
 	sources = append(sources, deals.Pepper{Client: client, BaseURL: envOr("OHARA_DEALS_PEPPER_URL", deals.PepperURL)})
+	store := deals.NewStore(pool)
 	var notifier deals.Notifier
+	var poller *deals.TelegramPoller
 	token, chat := os.Getenv("OHARA_TELEGRAM_BOT_TOKEN"), os.Getenv("OHARA_TELEGRAM_CHAT_ID")
 	switch {
 	case token != "" && chat != "":
-		notifier = &deals.Telegram{
-			Client: client, BaseURL: envOr("OHARA_TELEGRAM_URL", deals.TelegramURL), Token: token, ChatID: chat,
+		baseURL := envOr("OHARA_TELEGRAM_URL", deals.TelegramURL)
+		notifier = &deals.Telegram{Client: client, BaseURL: baseURL, Token: token, ChatID: chat}
+		poller = &deals.TelegramPoller{
+			Bot:   &deals.Telegram{Client: deals.NewTelegramPollClient(), BaseURL: baseURL, Token: token, ChatID: chat},
+			Store: store, Logger: logger,
 		}
 	case token != "" || chat != "":
 		return nil, nil, errors.New("set both OHARA_TELEGRAM_BOT_TOKEN and OHARA_TELEGRAM_CHAT_ID, or neither")
 	}
 	logger.Info("deal hunter", "interval", interval, "delay", delay, "telegram", notifier != nil)
-	store := deals.NewStore(pool)
 	cfg := deals.Config{Interval: interval, Delay: delay, CanaryQuery: envOr("OHARA_DEALS_CANARY_QUERY", "dvd")}
-	return deals.NewHunter(store, sources, notifier, cfg, logger), store, nil
+	hunter := deals.NewHunter(store, sources, notifier, cfg, logger)
+	if poller != nil {
+		hunter.PollTelegram(poller)
+	}
+	return hunter, store, nil
 }
 
 // sourceDelay is the pause between two requests to the deal and valuation

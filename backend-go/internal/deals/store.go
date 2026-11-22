@@ -18,6 +18,10 @@ var (
 	ErrDuplicateKeyword = errors.New("this phrase is already on the list")
 )
 
+// ErrPressReplayed reports a Telegram button press DismissPress already
+// applied.
+var ErrPressReplayed = errors.New("press already applied")
+
 // MaxAttempts bounds Telegram deliveries per alert; after that the alert is
 // reported as failed and no longer retried.
 const MaxAttempts = 5
@@ -602,8 +606,43 @@ func (s *Store) Undismiss(ctx context.Context, id int64) error {
 	return s.setDismissed(ctx, id, false)
 }
 
+// DismissPress is Dismiss for the press callbackQueryID of a Telegram
+// alert's "Ignoruj" button, applied once: ErrPressReplayed, with nothing
+// changed, when that press already dismissed a listing, so a press
+// Telegram sends again after a restart does not undo an Okazje "Cofnij"
+// made in between.
+func (s *Store) DismissPress(ctx context.Context, callbackQueryID string, id int64) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("dismiss press: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	if _, err := tx.Exec(ctx, `DELETE FROM telegram_press WHERE pressed_at < now() - interval '2 days'`); err != nil {
+		return fmt.Errorf("dismiss press: prune: %w", err)
+	}
+	tag, err := tx.Exec(ctx, `INSERT INTO telegram_press (callback_query_id) VALUES ($1)
+		ON CONFLICT DO NOTHING`, callbackQueryID)
+	if err != nil {
+		return fmt.Errorf("dismiss press: record: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrPressReplayed
+	}
+	if err := setDismissed(ctx, tx, id, true); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("dismiss press: commit: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) setDismissed(ctx context.Context, id int64, dismissed bool) error {
-	tag, err := s.pool.Exec(ctx, `UPDATE price_observation
+	return setDismissed(ctx, s.pool, id, dismissed)
+}
+
+func setDismissed(ctx context.Context, q querier, id int64, dismissed bool) error {
+	tag, err := q.Exec(ctx, `UPDATE price_observation
 		SET dismissed_at = CASE WHEN $3 THEN coalesce(dismissed_at, now()) END
 		WHERE id = $1 AND source = ANY ($2)`, id, sources, dismissed)
 	if err != nil {

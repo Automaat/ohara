@@ -52,7 +52,7 @@ const items: CollectionItem[] = [
 		copy_id: 2,
 		kind: 'movie',
 		format: 'dvd',
-		status: 'wishlist',
+		status: 'ordered',
 		name: 'Siedem samurajów',
 		original_title: 'Shichinin no samurai',
 		polish_title: 'Siedmiu samurajów',
@@ -79,7 +79,7 @@ const items: CollectionItem[] = [
 		copy_id: 5,
 		kind: 'music',
 		format: 'cd',
-		status: 'wishlist',
+		status: 'ordered',
 		name: 'Blue Train',
 		authors: ['John Coltrane'],
 		barcode: '40000008'
@@ -108,8 +108,8 @@ const cases: [string, Partial<CollectionFilter>, number[]][] = [
 	['kind', { kind: 'book' }, [3, 6]],
 	['format', { format: 'vinyl' }, [4]],
 	['status owned', { status: 'owned' }, [1, 3, 4, 6]],
-	['status wishlist', { status: 'wishlist' }, [2, 5]],
-	['kind, format and status together', { kind: 'music', format: 'cd', status: 'wishlist' }, [5]],
+	['status ordered', { status: 'ordered' }, [2, 5]],
+	['kind, format and status together', { kind: 'music', format: 'cd', status: 'ordered' }, [5]],
 	['kind and format that never meet', { kind: 'book', format: 'dvd' }, []],
 	['name', { q: 'solaris' }, [3]],
 	['original title', { q: 'Shichinin' }, [2]],
@@ -213,7 +213,6 @@ describe('the loan filter', () => {
 		['with a medium', { format: 'dvd' }, [1]],
 		['with a search', { q: 'rejs' }, [1]],
 		['with a status', { status: 'owned' }, [1, 2]],
-		['with the wishlist, which is never lent', { status: 'wishlist' }, []],
 		['a borrower is not searched, as on the server', { q: 'ania' }, []]
 	] as [string, Partial<CollectionFilter>, number[]][])('%s', (_name, filter, copies) => {
 		const listed = filterCollection(lent, { ...none, loaned: true, ...filter });
@@ -240,7 +239,6 @@ describe('the unfinished filter', () => {
 		['with the owned status', { status: 'owned' }, [1, 3, 7]],
 		['with the unpriced copies', { status: 'unpriced' }, [1, 7]],
 		['with the lent copies', { loaned: true }, [7]],
-		['with the wishlist, which is not owned', { status: 'wishlist' }, []],
 		['with the sold copies, which are not owned', { status: 'sold' }, []]
 	] as [string, Partial<CollectionFilter>, number[]][])('%s', (_name, filter, copies) => {
 		const listed = filterCollection(shelf, { ...none, unfinished: true, ...filter });
@@ -248,7 +246,7 @@ describe('the unfinished filter', () => {
 	});
 
 	it('lists finished titles too when off', () => {
-		expect(filterCollection(shelf, none).map((i) => i.copy_id)).toEqual([1, 2, 3, 4, 5, 7]);
+		expect(filterCollection(shelf, none).map((i) => i.copy_id)).toEqual([1, 2, 3, 4, 7]);
 	});
 });
 
@@ -278,8 +276,8 @@ describe('the location filter', () => {
 		['trimmed', { location: '  Regał 2  ' }, [1, 2]],
 		['never part of one', { location: 'Regał' }, []],
 		['with a kind', { location: 'Regał 2', kind: 'book' }, [2]],
-		['with a status no placed copy has', { location: 'Regał 2', status: 'wishlist' }, []],
-		['a blank location is no filter', { location: ' ' }, [1, 2, 3, 4, 5]],
+		['with a status no placed copy has', { location: 'Regał 2', status: 'sold' }, []],
+		['a blank location is no filter', { location: ' ' }, [1, 2, 3, 4]],
 		['the search reads the location', { q: 'dolny' }, [3]],
 		['after the shop, one space apart', { q: 'empik regał 2' }, [1]],
 		['a missing location is not the text "null"', { q: 'null' }, []]
@@ -351,8 +349,8 @@ describe('sold copies', () => {
 	];
 
 	it.each([
-		['the default list leaves them out', {}, [1, 2]],
-		['a search leaves them out', { q: 'alien' }, [1, 2]],
+		['the default list leaves them out', {}, [1]],
+		['a search leaves them out', { q: 'alien' }, [1]],
 		['"Sprzedane" lists them alone', { status: 'sold' }, [3, 4]],
 		['"Sprzedane" with a kind', { status: 'sold', kind: 'book' }, [4]],
 		['"Sprzedane" with a search', { status: 'sold', q: 'alien' }, [3]],
@@ -393,13 +391,62 @@ describe('ordered copies', () => {
 	});
 });
 
+describe('wishes', () => {
+	/** A wish beside an owned copy, each findable by every filter Kolekcja offers. */
+	const wished: CollectionItem[] = [
+		item({
+			copy_id: 1,
+			kind: 'movie',
+			format: 'dvd',
+			name: 'Rejs',
+			barcode: '5051892214179',
+			location: 'Regał 2',
+			tags: ['Kult']
+		}),
+		item({
+			copy_id: 2,
+			kind: 'movie',
+			format: 'dvd',
+			name: 'Rejs',
+			status: 'wishlist',
+			barcode: '5051892214179',
+			max_price_cents: 3000,
+			tags: ['Kult']
+		})
+	];
+
+	it.each([
+		['the default list', {}],
+		['a kind', { kind: 'movie' }],
+		['a medium', { format: 'dvd' }],
+		['a search', { q: 'rejs' }],
+		['a barcode search', { q: '5051892214179' }],
+		['a tag', { tag: 'kult' }],
+		['a location', { location: 'Regał 2' }],
+		['the owned status', { status: 'owned' }],
+		['the unpriced status', { status: 'unpriced' }],
+		['the unfinished filter', { unfinished: true }]
+	] as [string, Partial<CollectionFilter>][])('%s never lists one', (_name, filter) => {
+		const listed = filterCollection(wished, { ...none, ...filter });
+		expect(listed.map((i) => i.copy_id)).toEqual([1]);
+	});
+
+	it.each([
+		['the ordered status', { status: 'ordered' }],
+		['the sold status', { status: 'sold' }],
+		['the loan filter', { loaned: true }]
+	] as [string, Partial<CollectionFilter>][])('%s lists none', (_name, filter) => {
+		expect(filterCollection(wished, { ...none, ...filter })).toEqual([]);
+	});
+});
+
 describe('the tag filter', () => {
 	/** Copies of tagged titles, as `GET /api/collection` gives each the title's tags. */
 	const tagged: CollectionItem[] = [
 		item({ copy_id: 1, name: 'Obcy', format: 'dvd', tags: ['Horror', 'Kult'] }),
 		item({ copy_id: 2, name: 'Coś', format: 'bluray', tags: ['horror'] }),
 		item({ copy_id: 3, kind: 'book', name: 'Lalka', tags: ['Do sprzedania'] }),
-		item({ copy_id: 4, kind: 'book', name: 'Lód', status: 'wishlist', tags: ['Ścisła'] }),
+		item({ copy_id: 4, kind: 'book', name: 'Lód', status: 'ordered', tags: ['Ścisła'] }),
 		item({ copy_id: 5, name: 'Rejs' }),
 		item({ copy_id: 6, kind: 'music', name: 'Ήχοι', tags: ['ΟΣ', 'Ᲊ'] })
 	];

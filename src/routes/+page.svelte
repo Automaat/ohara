@@ -36,6 +36,7 @@
 		readCollectionFilter,
 		shelfSummary,
 		shelvedCount,
+		soldCount as soldCopies,
 		spentLabel,
 		statusLabels,
 		tagsInUse,
@@ -262,7 +263,9 @@
 	const titleRows = $derived(sortTitles(uncopiedTitles(uncopied ?? [], filter), sort));
 	const listed = $derived(listsTitles ? uncopied : collection);
 	/** Sold copies, which only "Sprzedane" lists. */
-	const soldCount = $derived(overview ? overview.totals.copies - shelvedCount(overview.totals) : 0);
+	const soldCount = $derived(overview ? soldCopies(overview.totals) : 0);
+	/** Wishes, which Kolekcja leaves to Okazje. */
+	const wishCount = $derived(overview?.totals.wishlist ?? 0);
 	/**
 	 * An empty collection greets the reader whatever the filter, except "Bez ceny", which keeps
 	 * "Nic nie pasuje" and its "Wyczyść filtry" like any filter that lists nothing. A collection
@@ -323,13 +326,11 @@
 				label: `Tag: ${shownTag}`,
 				remove: () => set('tag', '')
 			},
-			// The wishlist has its own chip beside the list.
-			filter.status &&
-				filter.status !== 'wishlist' && {
-					key: 'status',
-					label: collectionStatusLabels[filter.status],
-					remove: () => set('status', '')
-				},
+			filter.status && {
+				key: 'status',
+				label: collectionStatusLabels[filter.status],
+				remove: () => set('status', '')
+			},
 			filter.loaned === true && {
 				key: 'loaned',
 				label: loanedLabel,
@@ -470,20 +471,6 @@
 						{#if count !== undefined}<span class="chip-count">{count}</span>{/if}
 					</button>
 				{/each}
-				<button
-					type="button"
-					class="chip"
-					aria-pressed={filter.status === 'wishlist'}
-					onclick={() => setStatus(filter.status === 'wishlist' ? '' : 'wishlist')}
-				>
-					<svg class="heart" viewBox="0 0 24 24" aria-hidden="true">
-						<path
-							d="M12 20s-7.5-4.6-7.5-10.2A4.3 4.3 0 0 1 12 7.2a4.3 4.3 0 0 1 7.5 2.6C19.5 15.4 12 20 12 20z"
-						/>
-					</svg>
-					<span class="visually-hidden">{statusLabels.wishlist}</span>
-					{#if overview}<span class="chip-count">{overview.totals.wishlist}</span>{/if}
-				</button>
 			</div>
 
 			{#if !listsTitles}
@@ -574,11 +561,9 @@
 								{/if}
 							</div>
 						{:else if column.key === 'price_cents'}
-							{#if row.status !== 'wishlist'}
-								<span class="price">
-									{row.price_cents === null ? 'Nieznana' : formatPLN(row.price_cents)}
-								</span>
-							{/if}
+							<span class="price">
+								{row.price_cents === null ? 'Nieznana' : formatPLN(row.price_cents)}
+							</span>
 						{:else if column.key === 'shop'}
 							{row.shop}
 						{:else if column.key === 'purchased_on'}
@@ -658,6 +643,15 @@
 					<Button tone="signal" onclick={() => setStatus('sold')}>
 						{`${collectionStatusLabels.sold} (${soldCount})`}
 					</Button>
+					<Button href="/titles/new">Dodaj tytuł</Button>
+				</div>
+			{/snippet}
+		</EmptyState>
+	{:else if wishCount > 0}
+		<EmptyState title="Półka jest pusta" description="Twoja lista życzeń czeka w Okazjach.">
+			{#snippet action()}
+				<div class="empty-actions">
+					<Button tone="signal" href="/deals">Okazje</Button>
 					<Button href="/titles/new">Dodaj tytuł</Button>
 				</div>
 			{/snippet}
@@ -805,16 +799,6 @@
 	.chip[aria-pressed='true'] .chip-count {
 		color: inherit;
 		opacity: 0.8;
-	}
-
-	.heart {
-		inline-size: 0.875rem;
-		block-size: 0.875rem;
-		fill: var(--sui-brand-action);
-	}
-
-	.chip[aria-pressed='true'] .heart {
-		fill: currentColor;
 	}
 
 	.layout-switch {
@@ -1003,15 +987,6 @@
 		display: grid;
 		justify-items: start;
 		gap: var(--sui-space-1);
-	}
-
-	.visually-hidden {
-		position: absolute;
-		inline-size: 1px;
-		block-size: 1px;
-		overflow: hidden;
-		clip-path: inset(50%);
-		white-space: nowrap;
 	}
 
 	@media (max-width: 640px) {

@@ -197,8 +197,14 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   adds stay out of the scanner's recent scans. Okazje's "Dodaj pozycję"
   opens it as `/titles/new?from=deals`: the item starts as a wish and the
   page leads back to `/deals`.
-- Kolekcja (`/`) lists copies. It loads all of `GET /api/collection` once
-  per visit and filters, searches and counts it in the browser
+- Kolekcja (`/`) lists the copies you have: owned (lent ones included)
+  and ordered. Wishes are not had yet, so they live in Okazje (`/deals`)
+  and on their title's page; no Kolekcja view, chip, search, sort, count
+  or header summary shows them, an old `?status=wishlist` address reads
+  as the default list, and a shelf of wishes alone says "Półka jest
+  pusta" with a link to Okazje. The API still returns them. Kolekcja
+  loads all of `GET /api/collection` once per visit and filters,
+  searches and counts it in the browser
   (`src/lib/collection-filter.ts`, the server's `Store.Collection` filter
   with the search normalized by barcode.Normalize's rules), so a chip, the
   sheet or a search sends no request; Back draws the kept collection and
@@ -214,7 +220,7 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   every other view, the counts and the default shelf leave out.
   Its "Do nadrobienia" switch (`?unfinished=1`, as on the server) lists
   owned copies of titles not finished; a status without owned copies
-  (wishes, sold, "Bez egzemplarzy") drops it, in the sheet and when
+  (ordered, sold, "Bez egzemplarzy") drops it, in the sheet and when
   read from the address.
   Its "Tag" (`?tag=`) offers the tags the loaded copies and titles carry,
   "Każdy" first; a title page's tags link there, and its form's "Tagi"

@@ -181,12 +181,8 @@ for (const viewport of viewports) {
 			await expect(page).toHaveURL(/\/$/);
 			await expect(tile(page, cd)).toHaveCount(1);
 
-			await press(chip(page, /^Lista życzeń/));
-			await expect(page).toHaveURL(/\/\?status=wishlist$/);
-			await expect(tile(page, wish)).toHaveCount(1);
-			await expect(tile(page, film)).toHaveCount(0);
-			await press(chip(page, /^Lista życzeń/));
-			await expect(page).toHaveURL(/\/$/);
+			await expect(chip(page, /^Lista życzeń/)).toHaveCount(0);
+			await expect(tile(page, wish)).toHaveCount(0);
 
 			await press(page.getByRole('button', { name: /^Sortowanie i filtry/ }));
 			const sheet = page.getByRole('dialog', { name: 'Sortowanie i filtry' });
@@ -202,7 +198,8 @@ for (const viewport of viewports) {
 			await press(search);
 			await search.pressSequentially(t);
 			await expect(page).toHaveURL(new RegExp(`\\?q=${t}$`));
-			await expect(shelf(page).getByRole('listitem')).toHaveCount(4);
+			await expect(shelf(page).getByRole('listitem')).toHaveCount(3);
+			await expect(tile(page, wish)).toHaveCount(0);
 			await search.fill('');
 			await search.pressSequentially('empik');
 			await expect(tile(page, film)).toHaveCount(1);
@@ -213,6 +210,54 @@ for (const viewport of viewports) {
 
 			expect(sent, 'requests to /api/collection after the first load').toEqual([]);
 			await expectNoSourceRequests(request);
+		});
+
+		test('wishes stay out of Kolekcja, an old wishlist address included', async ({
+			page,
+			request
+		}) => {
+			const t = tag();
+			const film = `Mam ${t}`;
+			const wish = `Chcę ${t}`;
+			await seed(request, { kind: 'movie', name: film }, { format: 'dvd' });
+			await seed(request, { kind: 'movie', name: wish }, { format: 'dvd' }, { status: 'wishlist' });
+
+			await page.goto(`/?q=${t}`);
+			await expect(tile(page, film)).toBeVisible();
+			await expect(tile(page, wish)).toHaveCount(0);
+			await expect(shelf(page).getByRole('listitem')).toHaveCount(1);
+			await expect(page.getByRole('group', { name: 'Typ' }).getByRole('button')).toHaveText([
+				/^Wszystko/,
+				/^Filmy/,
+				/^Książki/,
+				/^Muzyka/,
+				/^Seriale/
+			]);
+			await expect(page.getByText(/na liście życzeń/)).toHaveCount(0);
+
+			await page.goto(`/?status=wishlist&q=${t}`);
+			await expect(tile(page, film)).toBeVisible();
+			await expect(tile(page, wish)).toHaveCount(0);
+			await expect(page.getByRole('group', { name: 'Sortowanie i filtry' })).toHaveCount(0);
+
+			await press(page.getByRole('button', { name: /^Sortowanie i filtry/ }));
+			const sheet = page.getByRole('dialog', { name: 'Sortowanie i filtry' });
+			await expect(sheet).toBeVisible();
+			await expect(sheet.getByText('Bez ceny', { exact: true }).first()).toBeAttached();
+			await expect(sheet.getByText('Lista życzeń', { exact: true })).toHaveCount(0);
+			await press(sheet.getByRole('button', { name: 'Gotowe' }));
+		});
+
+		test('a shelf of wishes alone points to Okazje', async ({ page }) => {
+			const wishes = {
+				items: [],
+				totals: { copies: 2, owned: 0, wishlist: 2, priced: 0, spent_cents: 0 }
+			};
+			await page.route('**/api/collection', (route) => route.fulfill({ json: wishes }));
+			await page.goto('/');
+			await expect(page.getByText('Półka jest pusta', { exact: true })).toBeVisible();
+			await press(page.locator('.results').getByRole('link', { name: 'Okazje', exact: true }));
+			await expect(page).toHaveURL(/\/deals$/);
 		});
 
 		test('a filtered address loads the collection once and counts all of it', async ({
@@ -231,13 +276,13 @@ for (const viewport of viewports) {
 
 			const res = await request.get('/api/collection');
 			expect(res.ok()).toBe(true);
-			const all = (await res.json()) as { items: Item[]; totals: { wishlist: number } };
-			const kinds = (kind: string) => all.items.filter((i) => i.kind === kind).length;
-			expect(await chipCount(page, /^Wszystko/)).toBe(all.items.length);
+			const all = (await res.json()) as { items: (Item & { status: string })[] };
+			const shelved = all.items.filter((i) => i.status === 'owned' || i.status === 'ordered');
+			const kinds = (kind: string) => shelved.filter((i) => i.kind === kind).length;
+			expect(await chipCount(page, /^Wszystko/)).toBe(shelved.length);
 			expect(await chipCount(page, /^Filmy/)).toBe(kinds('movie'));
 			expect(await chipCount(page, /^Książki/)).toBe(kinds('book'));
 			expect(await chipCount(page, /^Muzyka/)).toBe(kinds('music'));
-			expect(await chipCount(page, /^Lista życzeń/)).toBe(all.totals.wishlist);
 			await expect(shelf(page).getByRole('listitem')).toHaveCount(kinds('book'));
 		});
 
@@ -426,7 +471,8 @@ for (const viewport of viewports) {
 			await seed(request, { kind: 'movie', name: wish }, { format: 'dvd' }, { status: 'wishlist' });
 
 			await page.goto(`/?q=${t}`);
-			await expect(shelf(page).getByRole('listitem')).toHaveCount(4);
+			await expect(shelf(page).getByRole('listitem')).toHaveCount(3);
+			await expect(tile(page, wish)).toHaveCount(0);
 
 			const count = page.getByRole('button', { name: /^\d[\d\s]* bez ceny$/ });
 			if (viewport.touch) {

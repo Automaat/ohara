@@ -232,21 +232,30 @@ export function kindCounts(
 	return counts;
 }
 
-/** How many copies are on the shelf, on order or on the wishlist: every copy but the sold ones. */
-export function shelvedCount(t: Pick<Totals, 'owned' | 'ordered' | 'wishlist'>): number {
-	return t.owned + (t.ordered ?? 0) + t.wishlist;
+/**
+ * Whether Kolekcja lists a copy of this status without a status filter: one on the shelf or on
+ * order. A wish is not had yet, so it lives in Okazje; a sold copy only "Sprzedane" lists.
+ */
+export function shelved(status: CopyStatus): boolean {
+	return status === 'owned' || status === 'ordered';
+}
+
+/** How many copies are on the shelf or on order: the ones Kolekcja lists without a status. */
+export function shelvedCount(t: Pick<Totals, 'owned' | 'ordered'>): number {
+	return t.owned + (t.ordered ?? 0);
+}
+
+/** How many copies were sold: every copy neither shelved nor wished for. */
+export function soldCount(t: Pick<Totals, 'copies' | 'owned' | 'ordered' | 'wishlist'>): number {
+	return t.copies - shelvedCount(t) - t.wishlist;
 }
 
 /**
- * The collection header's one line, such as "20 na półce · 2 zamówione · 4 na liście życzeń";
- * copies on order are named only when there are some.
+ * The collection header's one line, such as "20 na półce · 2 zamówione"; copies on order are
+ * named only when there are some. Wishes are not counted: they live in Okazje.
  */
-export function shelfSummary(t: Pick<Totals, 'owned' | 'ordered' | 'wishlist'>): string {
-	return [
-		`${count.format(t.owned)} na półce`,
-		t.ordered ? orderedCount(t.ordered) : null,
-		`${count.format(t.wishlist)} na liście życzeń`
-	]
+export function shelfSummary(t: Pick<Totals, 'owned' | 'ordered'>): string {
+	return [`${count.format(t.owned)} na półce`, t.ordered ? orderedCount(t.ordered) : null]
 		.filter(Boolean)
 		.join(' · ');
 }
@@ -437,12 +446,13 @@ export function shelfLine(
 
 /**
  * What the collection lists: copies of a status, `unpriced`, the owned copies without a purchase
- * price, or `none`, the titles that have no copy yet. Without one it lists every copy but the
- * sold ones.
+ * price, or `none`, the titles that have no copy yet. Without one it lists the copies on the
+ * shelf or on order. Wishes have no status here: they live in Okazje, so an address naming them
+ * reads as no status.
  */
-export type CollectionStatus = CopyStatus | 'unpriced' | 'none';
+export type CollectionStatus = Exclude<CopyStatus, 'wishlist'> | 'unpriced' | 'none';
 export const collectionStatusLabels: Record<CollectionStatus, string> = {
-	...statusLabels,
+	owned: statusLabels.owned,
 	ordered: 'Zamówione',
 	sold: 'Sprzedane',
 	unpriced: 'Bez ceny',

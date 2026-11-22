@@ -302,7 +302,8 @@
 										label: 'Nowy/używany',
 										value: copy.acquired_as && acquiredLabels[copy.acquired_as]
 									},
-									{ label: 'Stan', value: copy.condition && conditionLabels[copy.condition] }
+									{ label: 'Stan', value: copy.condition && conditionLabels[copy.condition] },
+									{ label: 'Miejsce', value: copy.location }
 								].filter((fact) => fact.value)}
 							/>
 						</Card>

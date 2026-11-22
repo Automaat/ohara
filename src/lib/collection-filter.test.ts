@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { CollectionFilter, CollectionItem } from './collection';
-import { filterCollection, lowerCase, searchBarcode, searchTerm } from './collection-filter';
+import {
+	filterCollection,
+	locationsInUse,
+	lowerCase,
+	searchBarcode,
+	searchTerm
+} from './collection-filter';
 
 function item(over: Partial<CollectionItem>): CollectionItem {
 	return {
@@ -182,6 +188,89 @@ describe('the unpriced status', () => {
 	] as [string, Partial<CollectionFilter>, number[]][])('%s', (_name, filter, copies) => {
 		const listed = filterCollection(priced, { ...none, status: 'unpriced', ...filter });
 		expect(listed.map((i) => i.copy_id)).toEqual(copies);
+	});
+});
+
+describe('the location filter', () => {
+	/** Copies on two shelves spelled in different cases, one in a box, one nowhere and a wish. */
+	const placed: CollectionItem[] = [
+		item({
+			copy_id: 1,
+			kind: 'movie',
+			format: 'dvd',
+			name: 'Alien',
+			shop: 'Empik',
+			location: 'Regał 2'
+		}),
+		item({ copy_id: 2, kind: 'book', name: 'Solaris', location: 'REGAŁ 2' }),
+		item({ copy_id: 3, kind: 'movie', format: 'dvd', name: 'Aliens', location: 'Regał 2 dolny' }),
+		item({ copy_id: 4, kind: 'movie', format: 'dvd', name: 'Rejs', location: null }),
+		item({ copy_id: 5, kind: 'movie', format: 'dvd', name: 'Seksmisja', status: 'wishlist' })
+	];
+
+	/**
+	 * The server's `lower(c.location) = lower($5)`, `$5` trimmed, beside the other filters, and
+	 * `c.location` as the last field of the search's `concat_ws`.
+	 */
+	it.each([
+		['the whole location, case aside', { location: 'regał 2' }, [1, 2]],
+		['trimmed', { location: '  Regał 2  ' }, [1, 2]],
+		['never part of one', { location: 'Regał' }, []],
+		['with a kind', { location: 'Regał 2', kind: 'book' }, [2]],
+		['with a status no placed copy has', { location: 'Regał 2', status: 'wishlist' }, []],
+		['a blank location is no filter', { location: ' ' }, [1, 2, 3, 4, 5]],
+		['the search reads the location', { q: 'dolny' }, [3]],
+		['after the shop, one space apart', { q: 'empik regał 2' }, [1]],
+		['a missing location is not the text "null"', { q: 'null' }, []]
+	] as [string, Partial<CollectionFilter>, number[]][])('%s', (_name, filter, copies) => {
+		const listed = filterCollection(placed, { ...none, ...filter });
+		expect(listed.map((i) => i.copy_id)).toEqual(copies);
+	});
+});
+
+describe('the location filter, as the server folds case', () => {
+	const odd: CollectionItem[] = [
+		item({ copy_id: 1, location: 'Box 012345678905' }),
+		item({ copy_id: 2, location: '\ufeffRegał' }),
+		item({ copy_id: 3, location: '\u{10D50}' }),
+		item({ copy_id: 4, location: '\u{10D70}' })
+	];
+
+	it.each([
+		[
+			'a code read as a barcode still finds a location holding it as typed',
+			{ q: '012345678905' },
+			[1]
+		],
+		['a byte order mark is part of the location', { location: '\ufeffregał' }, [2]],
+		['so the location without it is another', { location: 'Regał' }, []],
+		['letters Unicode 17 pairs match case aside', { location: '\u{10D50}' }, [3, 4]]
+	] as [string, Partial<CollectionFilter>, number[]][])('%s', (_name, filter, copies) => {
+		expect(filterCollection(odd, { ...none, ...filter }).map((i) => i.copy_id)).toEqual(copies);
+	});
+
+	it('takes a final sigma for σ, so ΟΣ and ος are one place', () => {
+		const greek = [item({ copy_id: 1, location: 'ΟΣ' }), item({ copy_id: 2, location: 'ος' })];
+		expect(locationsInUse(greek)).toEqual(['ΟΣ']);
+		for (const location of ['ΟΣ', 'ος', 'οσ']) {
+			expect(filterCollection(greek, { ...none, location }).map((i) => i.copy_id)).toEqual([1, 2]);
+		}
+	});
+
+	it('merges those letters into one place and orders ties by code point', () => {
+		expect(locationsInUse(odd)).toEqual(['\u{10D50}', 'Box 012345678905', '\ufeffRegał']);
+	});
+});
+
+describe('locationsInUse', () => {
+	it('lists each place once whatever its case, the most used first', () => {
+		const places = ['Pudło', 'regał 2', 'Regał 2', 'Regał 2', 'Strych', 'Strych', 'Szafa'];
+		const items = [...places.map((location) => ({ location })), { location: null }, {}];
+		expect(locationsInUse(items)).toEqual(['Regał 2', 'Strych', 'Pudło', 'Szafa']);
+	});
+
+	it('lists nothing when no copy has a place', () => {
+		expect(locationsInUse([{ location: null }, {}])).toEqual([]);
 	});
 });
 

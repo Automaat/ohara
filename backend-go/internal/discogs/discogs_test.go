@@ -184,6 +184,21 @@ func TestPriceSuggestions(t *testing.T) {
 	wantDelta(t, before, scrape(t), map[string]float64{requestsSeries("ok"): 1, errorsSeries: 0})
 }
 
+// TestPriceSuggestionsNone checks that an empty object, Discogs' answer
+// when it has no suggestion, is a valid answer and counts as ok.
+func TestPriceSuggestionsNone(t *testing.T) {
+	c, _ := upstream(t, http.StatusOK, []byte(`{}`))
+	before := scrape(t)
+	s, err := c.PriceSuggestions(t.Context(), 1873013)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s) != 0 {
+		t.Errorf("got %d grades, want 0", len(s))
+	}
+	wantDelta(t, before, scrape(t), map[string]float64{requestsSeries("ok"): 1, errorsSeries: 0, parseErrorsSeries: 0})
+}
+
 // TestInvalidBaseURLIsTimed checks that a base URL that does not parse,
 // which counts as an error without a request sent, is timed as well.
 func TestInvalidBaseURLIsTimed(t *testing.T) {
@@ -221,6 +236,9 @@ func TestMarketplaceFailuresCountInMetrics(t *testing.T) {
 		{"stats rate limited", stats, http.StatusTooManyRequests, []byte(`{"message":"You are making requests too quickly."}`), false},
 		{"stats not JSON", stats, http.StatusOK, notJSON, true},
 		{"stats JSON then garbage", stats, http.StatusOK, trailingGarbage, true},
+		{"stats without its fields", stats, http.StatusOK, []byte(`{}`), true},
+		{"stats without num_for_sale", stats, http.StatusOK, []byte(`{"lowest_price":null,"blocked_from_sale":false}`), true},
+		{"stats with num_for_sale null", stats, http.StatusOK, []byte(`{"num_for_sale":null,"lowest_price":null}`), true},
 		{"stats created, not ok", stats, http.StatusCreated, fixture(t, "stats_for_sale.json"), false},
 		{"suggestions without token", suggestions, http.StatusUnauthorized, fixture(t, "price_suggestions_unauthenticated.json"), false},
 		{"suggestions without seller settings", suggestions, http.StatusUnprocessableEntity, []byte(`{"message":"You must fill out your seller settings first."}`), false},

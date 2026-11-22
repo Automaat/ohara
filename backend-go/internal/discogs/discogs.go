@@ -149,12 +149,24 @@ type Stats struct {
 }
 
 // Stats returns the marketplace summary of release id, priced in currency
-// (one of the currencies Discogs sells in, such as EUR or USD).
+// (one of the currencies Discogs sells in, such as EUR or USD). An answer
+// without num_for_sale is a parse error: decoded as is, it would look like
+// a release with nothing for sale.
 func (c *Client) Stats(ctx context.Context, id int64, currency string) (Stats, error) {
 	q := url.Values{"curr_abbr": {currency}}
-	var s Stats
-	err := c.get(ctx, "/marketplace/stats/"+strconv.FormatInt(id, 10)+"?"+q.Encode(), &s, nil)
-	return s, err
+	var r struct {
+		LowestPrice *Money `json:"lowest_price"`
+		NumForSale  *int   `json:"num_for_sale"`
+	}
+	if err := c.get(ctx, "/marketplace/stats/"+strconv.FormatInt(id, 10)+"?"+q.Encode(), &r, func() error {
+		if r.NumForSale == nil {
+			return errors.New("no num_for_sale field")
+		}
+		return nil
+	}); err != nil {
+		return Stats{}, err
+	}
+	return Stats{LowestPrice: r.LowestPrice, NumForSale: *r.NumForSale}, nil
 }
 
 // Suggestions are the prices Discogs suggests for a release by media

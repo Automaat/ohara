@@ -153,6 +153,7 @@ a conditional upsert that replaces only a pair it loaded or issued itself,
 so a login saved at the same moment is never overwritten. A refresh token
 Allegro rejects is dropped, so the next lookup loads the pair a later
 `allegro-login` stored. The first lookup after a start loads the stored
-pair the same way, on its own context, at most 20 s: every lookup waiting
-for that load still stops at its own deadline, and a failed load is tried
-again by the next lookup.
+pair itself, outside the provider's lock and within its own deadline, at
+most 20 s. A lookup waiting for that load stops at its own deadline, and
+loads the pair itself when the loading lookup gave up first. A failed
+load is tried again by the next lookup.

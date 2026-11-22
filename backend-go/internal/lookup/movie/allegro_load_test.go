@@ -77,19 +77,84 @@ func TestAllegroWaitForAColdLoadStopsAtTheDeadline(t *testing.T) {
 	}
 }
 
-func TestAllegroKeepsALoadTheLookupGaveUpOn(t *testing.T) {
+func TestAllegroLoadsAgainAfterTheLoadingLookupGaveUp(t *testing.T) {
 	a, store := coldAllegro(t, 300*time.Millisecond)
 	lookupByDeadline(t, a)
-	eventually(t, func() bool {
-		a.mu.Lock()
-		defer a.mu.Unlock()
-		return a.token != nil
-	})
 	if _, err := a.Products(context.Background(), "5906190326195"); err != nil {
 		t.Fatal(err)
 	}
-	if n := store.loads.Load(); n != 1 {
+	if n := store.loads.Load(); n != 2 {
+		t.Fatalf("loads = %d, want a new one after the first lookup gave up", n)
+	}
+}
+
+func TestAllegroWaitingLookupLoadsWhenTheLoadingOneGivesUp(t *testing.T) {
+	a, store := coldAllegro(t, 300*time.Millisecond)
+	first := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		defer cancel()
+		_, err := a.Products(ctx, "5906190326195")
+		first <- err
+	}()
+	<-store.started
+	if _, err := a.Products(context.Background(), "5906190326195"); err != nil {
+		t.Fatalf("waiting lookup: %v", err)
+	}
+	if err := <-first; !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("loading lookup: %v", err)
+	}
+	if n := store.loads.Load(); n != 2 {
 		t.Fatalf("loads = %d", n)
+	}
+}
+
+// panicLoadStore is a memStore whose first Load, while panics is set,
+// panics once release is closed.
+type panicLoadStore struct {
+	*memStore
+	panics  atomic.Bool
+	started chan struct{}
+	release chan struct{}
+}
+
+func (s *panicLoadStore) Load(ctx context.Context, provider string) (Token, bool, error) {
+	if s.panics.CompareAndSwap(true, false) {
+		close(s.started)
+		<-s.release
+		panic("token store")
+	}
+	return s.memStore.Load(ctx, provider)
+}
+
+func TestAllegroColdLoadPanicReachesTheLookup(t *testing.T) {
+	a, _ := coldAllegro(t, 0)
+	store := &panicLoadStore{memStore: a.Store.(*slowLoadStore).memStore, started: make(chan struct{}), release: make(chan struct{})}
+	store.panics.Store(true)
+	a.Store = store
+	recovered := make(chan any, 1)
+	go func() {
+		defer func() { recovered <- recover() }()
+		_, _ = a.Products(context.Background(), "5906190326195")
+	}()
+	<-store.started
+	waiter := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_, err := a.Products(ctx, "5906190326195")
+		waiter <- err
+	}()
+	time.Sleep(100 * time.Millisecond)
+	close(store.release)
+	if r := <-recovered; r != "token store" {
+		t.Fatalf("loading lookup recovered %v, want the store's panic", r)
+	}
+	if err := <-waiter; err == nil || errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("waiting lookup err = %v, want the aborted load", err)
+	}
+	if _, err := a.Products(context.Background(), "5906190326195"); err != nil {
+		t.Fatalf("lookup after the panic: %v", err)
 	}
 }
 

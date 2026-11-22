@@ -124,18 +124,30 @@
 		flex: 1 0 auto;
 	}
 
-	/* The floating tab bar's 4rem with its gap below and one above it. A control focused near the
-	   foot of the screen scrolls clear of the bar. */
+	/* A control focused near the foot of the screen scrolls clear of the floating tab bar. */
 	:global(:root:has(.ohara-phone)) {
-		--ohara-tab-bar-clearance: calc(4rem + 2 * max(env(safe-area-inset-bottom, 0px), 0.75rem));
-
-		scroll-padding-block-end: var(--ohara-tab-bar-clearance);
+		scroll-padding-block-end: calc(4rem + 2 * max(env(safe-area-inset-bottom, 0px), 0.75rem));
 	}
 
-	/* SUI floats the offline and update notice at the foot of a phone's screen, over the tab bar,
-	   where it would catch taps meant for the tabs (#303). It rests above the bar instead. */
+	/* SUI floats the offline and update notice at the foot of a phone's screen, where it caught
+	   taps meant for the tab bar (#303), and just above the bar stand the pages' toasts with their
+	   "Cofnij". On a phone the notice stands at the top of the screen, clear of both, and comes
+	   down into place instead of rising. */
 	:global(:root:has(.ohara-phone) .ohara-sw-status:not(.preview)) {
-		inset-block-end: var(--ohara-tab-bar-clearance);
+		inset-block-start: max(var(--sui-space-4), env(safe-area-inset-top));
+		inset-block-end: auto;
+	}
+
+	@media (prefers-reduced-motion: no-preference) {
+		:global(:root:has(.ohara-phone) .ohara-sw-status:not(.preview):not(:popover-open)) {
+			translate: 0 calc(-1 * var(--sui-space-2));
+		}
+
+		@starting-style {
+			:global(:root:has(.ohara-phone) .ohara-sw-status:popover-open) {
+				translate: 0 calc(-1 * var(--sui-space-2));
+			}
+		}
 	}
 
 	/* WebKit hides native select text when SUI supplies a selectedcontent button. */

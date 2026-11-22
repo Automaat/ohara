@@ -375,36 +375,39 @@ describe('ageClock', () => {
 		expect(ageClock() - start).toBe(60_000);
 	});
 
-	it('keeps moving when the system clock is set back', () => {
+	it('expires every earlier answer when the system clock is set back', () => {
 		fake();
 		const start = ageClock();
 		vi.advanceTimersByTime(30_000);
 		vi.setSystemTime(Date.now() - 3_600_000);
+		expect(ageClock() - start).toBeGreaterThanOrEqual(14 * 60_000);
+	});
+
+	it('expires every earlier answer after a sleep that only the wall clock saw', () => {
+		fake();
+		const start = ageClock();
+		vi.setSystemTime(Date.now() + 12 * 60_000);
+		expect(ageClock() - start).toBeGreaterThanOrEqual(14 * 60_000);
+	});
+
+	it('expires every earlier answer when a set-back clock and a sleep fall between two readings', () => {
+		fake();
+		const start = ageClock();
+		vi.advanceTimersByTime(6 * 60_000);
 		ageClock();
-		vi.advanceTimersByTime(30_000);
-		expect(ageClock() - start).toBe(60_000);
-	});
-
-	it('counts a sleep that only the wall clock saw', () => {
-		fake();
-		const start = ageClock();
-		vi.setSystemTime(Date.now() + 12 * 60_000);
-		expect(ageClock() - start).toBe(12 * 60_000);
-	});
-
-	it('counts a set-back clock and a later sleep together, never going back', () => {
-		fake();
-		const start = ageClock();
 		vi.setSystemTime(Date.now() - 10 * 60_000);
-		for (let i = 0; i < 10; i++) {
-			vi.advanceTimersByTime(30_000);
-			ageClock();
-		}
 		vi.setSystemTime(Date.now() + 12 * 60_000);
-		const total = ageClock() - start;
-		expect(total).toBe(17 * 60_000);
-		vi.setSystemTime(Date.now() - 9 * 60_000);
-		expect(ageClock() - start).toBe(total);
+		expect(ageClock() - start).toBeGreaterThanOrEqual(6 * 60_000 + 14 * 60_000);
+	});
+
+	it('lets the clocks part by up to 2 seconds and never goes back', () => {
+		fake();
+		const start = ageClock();
+		vi.advanceTimersByTime(30_000);
+		vi.setSystemTime(Date.now() + 2_000);
+		expect(ageClock() - start).toBe(32_000);
+		vi.setSystemTime(Date.now() - 1_000);
+		expect(ageClock() - start).toBe(32_000);
 	});
 });
 

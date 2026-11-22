@@ -245,15 +245,27 @@ let sampled: { wall: number; mono: number } | null = null;
 let aged = 0;
 
 /**
- * Milliseconds on the age clock that expires the listings of expiring sources. Each reading moves
- * it by the larger of the wall and the monotonic clock's steps since the last one and never back,
- * so neither a system clock set back nor a sleep that pauses the monotonic clock slows it, and
- * what expired stays expired. Pages read it every 30 seconds while such a listing shows, so the
- * two clocks are never both behind across one step.
+ * How far the wall and the monotonic clock may part between two readings of the age clock before
+ * it treats the time between them as unknown.
+ */
+export const clockSlipMs = 2_000;
+
+/**
+ * Milliseconds on the age clock that expires the listings of expiring sources. It never goes
+ * back. Each reading moves it by the larger of the wall and the monotonic clock's steps since the
+ * last one; when the two steps part by more than clockSlipMs (the system clock was set, or the
+ * computer slept and paused the monotonic clock), how long passed is unknown, so it also moves
+ * by unconfirmedAfterMs and every answer asked before expires. Pages read it every 30 seconds
+ * while such a listing shows.
  */
 export function ageClock(): number {
 	const now = { wall: Date.now(), mono: performance.now() };
-	if (sampled) aged += Math.max(0, now.wall - sampled.wall, now.mono - sampled.mono);
+	if (sampled) {
+		const wall = now.wall - sampled.wall;
+		const mono = now.mono - sampled.mono;
+		aged +=
+			Math.max(0, wall, mono) + (Math.abs(wall - mono) > clockSlipMs ? unconfirmedAfterMs : 0);
+	}
 	sampled = now;
 	return aged;
 }

@@ -166,8 +166,9 @@ func (s emptySource) Products(ctx context.Context, _ string) ([]Product, error) 
 
 // TestSlowAllegroMissLeavesUPCitemdbTime runs the lookup with its real
 // limits: Allegro answering nothing after 6 s still leaves UPCitemdb,
-// answering after 5 s, and TMDB the time to resolve the barcode, and
-// UPCitemdb is not asked when Allegro names a searchable title.
+// answering after 5 s, and TMDB, taking 2.4 s for its two searches, the
+// time to resolve the barcode, past the 10 s other providers get. UPCitemdb
+// is not asked when Allegro names a searchable title.
 func TestSlowAllegroMissLeavesUPCitemdbTime(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -177,8 +178,8 @@ func TestSlowAllegroMissLeavesUPCitemdbTime(t *testing.T) {
 		cached   int
 		maxTaken time.Duration
 	}{
-		{name: "slow miss", allegro: emptySource{name: "allegro", delay: 6 * time.Second}, failed: []string{"allegro"}, asked: 1, maxTaken: 11 * time.Second},
-		{name: "slow hit", allegro: namedSource{name: "allegro", delay: 3 * time.Second}, asked: 0, cached: 1, maxTaken: 5 * time.Second},
+		{name: "slow miss", allegro: emptySource{name: "allegro", delay: 6 * time.Second}, failed: []string{"allegro"}, asked: 1, maxTaken: 13 * time.Second},
+		{name: "slow hit", allegro: namedSource{name: "allegro", delay: 3 * time.Second}, asked: 0, cached: 1, maxTaken: 7 * time.Second},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -198,7 +199,7 @@ func TestSlowAllegroMissLeavesUPCitemdbTime(t *testing.T) {
 				_, _ = w.Write([]byte(`{"code":"OK","total":1,"items":[{"title":"Kursk (2019) [Blu-ray]","category":"Media > DVDs & Videos"}]}`))
 			})
 			upcitemdb := UPCitemdb{Client: &http.Client{Timeout: 8 * time.Second}, BaseURL: srv.URL}
-			p := &Provider{Sources: []NameSource{tc.allegro}, Fallbacks: []NameSource{upcitemdb}, TMDB: slowSearcher{}}
+			p := &Provider{Sources: []NameSource{tc.allegro}, Fallbacks: []NameSource{upcitemdb}, TMDB: slowSearcher{delay: 1200 * time.Millisecond}}
 			registry := &lookup.Registry{}
 			if err := registry.Register(p, time.Hour); err != nil {
 				t.Fatal(err)

@@ -622,13 +622,20 @@ func TestLookupFallbackRoundEndsWithinTheBudget(t *testing.T) {
 }
 
 // timedProvider has its own fetch limit and records its fetch deadline.
+// panics makes FetchTimeout panic.
 type timedProvider struct {
 	fixedProvider
 	timeout  time.Duration
+	panics   bool
 	deadline time.Time
 }
 
-func (p *timedProvider) FetchTimeout() time.Duration { return p.timeout }
+func (p *timedProvider) FetchTimeout() time.Duration {
+	if p.panics {
+		panic("fetch timeout")
+	}
+	return p.timeout
+}
 
 func (p *timedProvider) Fetch(ctx context.Context, code string) (json.RawMessage, error) {
 	p.deadline, _ = ctx.Deadline()
@@ -661,6 +668,27 @@ func TestLookupProviderFetchTimeout(t *testing.T) {
 				t.Fatalf("fetch deadline %v after the start, want about %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestLookupFetchTimeoutPanicFailsTheProvider(t *testing.T) {
+	timed := &timedProvider{fixedProvider: fixedProvider{name: "movie"}, panics: true}
+	other := &fixedProvider{name: "bn", cands: []lookup.Candidate{book("5906190326195", "Kursk", 0.9)}}
+	r := &lookup.Registry{}
+	for _, p := range []lookup.Provider{timed, other} {
+		if err := r.Register(p, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res := lookup.NewService(r, nil, discard()).Lookup(context.Background(), "5906190326195")
+	if len(res.Candidates) != 1 || res.Candidates[0].Provider != "bn" {
+		t.Fatalf("candidates = %+v", res.Candidates)
+	}
+	if len(res.Errors) != 1 || res.Errors[0].Provider != "movie" || !strings.Contains(res.Errors[0].Error, "panic") {
+		t.Fatalf("errors = %+v, want the movie provider failed with its panic", res.Errors)
+	}
+	if timed.fetches != 0 {
+		t.Fatalf("fetches = %d, want none after the panic", timed.fetches)
 	}
 }
 

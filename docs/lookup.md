@@ -63,10 +63,11 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   take 15 s. It waits at most 4 s for each name source and then, when
   they name no searchable title, 6 s for each fallback (UPCitemdb),
   counted from when the fallbacks are asked, so a slow Allegro miss
-  leaves UPCitemdb its own time and TMDB keeps at least 5 s. A source
-  that runs out of time fails as that source; the answer is then
-  partial and not cached. An Allegro token refresh runs on past that
-  wait.
+  leaves UPCitemdb its own time and TMDB keeps at least 5 s, unless the
+  17 s lookup budget ends first: an ISBN-range code asks the movie chain
+  in the second round, after the book providers. A source that runs out
+  of time fails as that source; the answer is then partial and not
+  cached. An Allegro token refresh runs on past that wait.
 - Music is the kind `music`: an album title whose `authors` are its credited
   artists, editions with a `cd`, `vinyl` or `cassette` format (required, like
   a movie's `dvd`/`bluray`/`uhd`) and an optional `discogs_release_id`. The

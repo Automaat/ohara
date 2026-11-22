@@ -55,7 +55,9 @@ const (
 // fallbackTimeout the wait for each fallback, counted from when the
 // fallbacks are asked. fetchTimeout is the provider's own fetch limit
 // (lookup.Timed): after a first stage that ran into its limit and a
-// fallback that did too, the TMDB search still has at least 5 s.
+// fallback that did too, the TMDB search still has at least 5 s, unless
+// the lookup's overall budget ends the fetch sooner (a second round after
+// slow book providers).
 const (
 	sourceTimeout   = 4 * time.Second
 	fallbackTimeout = 6 * time.Second

@@ -403,17 +403,8 @@ func (s *Service) query(ctx context.Context, e entry, code string, recheck bool,
 			return cands, err
 		}
 	}
-	timeout := s.timeout
-	if t, ok := p.(Timed); ok && t.FetchTimeout() > 0 {
-		timeout = t.FetchTimeout()
-	}
-	if limit := time.Now().Add(timeout); limit.Before(deadline) {
-		deadline = limit
-	}
-	fetchCtx, cancel := context.WithDeadline(ctx, deadline)
-	defer cancel()
 	metrics.ObserveLookupRequest(p.Name())
-	raw, err := s.fetch(fetchCtx, p, code)
+	raw, err := s.fetch(ctx, p, code, deadline)
 	if partial, ok := errors.AsType[*PartialError](err); ok {
 		metrics.ObserveLookupError(p.Name())
 		cands, perr := s.parse(p, code, partial.Raw)
@@ -463,10 +454,23 @@ func (s *Service) cached(ctx context.Context, p Provider, code string, maxAge ti
 	return nil, false, nil
 }
 
-// fetch calls the provider's Fetch; a panic in it, which the router's recoverer
-// cannot catch in this goroutine, fails the provider like an error.
-func (s *Service) fetch(ctx context.Context, p Provider, code string) (json.RawMessage, error) {
+// fetch calls the provider's Fetch for at most the service's provider
+// timeout, or the provider's own (Timed), and never past deadline. A panic
+// in it or in FetchTimeout, which the router's recoverer cannot catch in
+// this goroutine, fails the provider like an error.
+func (s *Service) fetch(ctx context.Context, p Provider, code string, deadline time.Time) (json.RawMessage, error) {
 	return recovery.Call(s.logger, "lookup provider panicked", func() (json.RawMessage, error) {
+		timeout := s.timeout
+		if t, ok := p.(Timed); ok {
+			if d := t.FetchTimeout(); d > 0 {
+				timeout = d
+			}
+		}
+		if limit := time.Now().Add(timeout); limit.Before(deadline) {
+			deadline = limit
+		}
+		ctx, cancel := context.WithDeadline(ctx, deadline)
+		defer cancel()
 		return p.Fetch(ctx, code)
 	}, "provider", p.Name(), "barcode", code, "call", "fetch")
 }

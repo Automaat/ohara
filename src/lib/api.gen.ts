@@ -43,7 +43,8 @@ export type VolumeState = 'owned' | 'ordered' | 'wishlist' | 'none';
 
 export type QueueReason = 'not_found' | 'lookup_failed';
 
-export type DealSource = 'olx' | 'bluedvd' | 'swiatksiazki' | 'pepper' | 'tezeusz';
+export type DealSource =
+	'olx' | 'bluedvd' | 'swiatksiazki' | 'pepper' | 'tezeusz' | 'discogs_inventory';
 
 export type AlertState = 'none' | 'pending' | 'sent' | 'failed';
 
@@ -468,6 +469,14 @@ export type SeriesDetail = {
 
 export type SeriesTotalPayload = {
 	total_volumes: number | null;
+};
+
+export type CopyDiscogs = {
+	enabled: boolean;
+	pushable: boolean;
+	instance_id: number | null;
+	release_url: string | null;
+	add_unknown: boolean;
 };
 
 export type CandidateTitle = {

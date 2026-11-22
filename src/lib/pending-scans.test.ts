@@ -388,6 +388,53 @@ describe('PendingScans.send', () => {
 	});
 });
 
+describe('PendingScans.departures', () => {
+	it('goes up once for a run that took codes off the device', async () => {
+		const device = memory([a, b]);
+		const pending = new PendingScans(api().fetchFn, device.open);
+		await pending.send();
+		expect(pending.count).toBe(0);
+		expect(pending.departures).toBe(1);
+		await pending.send();
+		expect(pending.departures).toBe(1);
+	});
+
+	it('stays when every code is kept for the next run', async () => {
+		const device = memory([a]);
+		const pending = new PendingScans(api({ [a]: 503 }).fetchFn, device.open);
+		await pending.send();
+		expect(pending.count).toBe(1);
+		expect(pending.departures).toBe(0);
+	});
+
+	it('goes up when a code another tab kept meanwhile leaves the count level', async () => {
+		const device = memory([a]);
+		const there = new PendingScans(api().fetchFn, device.open);
+		const s = api();
+		const fetchFn: typeof fetch = async (input, init) => {
+			await there.keep(b);
+			return s.fetchFn(input, init);
+		};
+		const here = new PendingScans(fetchFn, device.open);
+		await here.send();
+		expect(s.codes()).toEqual([a]);
+		expect(here.count).toBe(1);
+		expect(here.departures).toBe(1);
+	});
+
+	it('goes up when a read finds fewer codes than this tab counted', async () => {
+		const device = memory();
+		const here = new PendingScans(api().fetchFn, device.open);
+		await here.keep(a);
+		await here.keep(b);
+		expect(here.departures).toBe(0);
+		device.kept.clear();
+		await here.send();
+		expect(here.count).toBe(0);
+		expect(here.departures).toBe(1);
+	});
+});
+
 describe('PendingScans.start', () => {
 	it('sends on each tick a code another tab kept, though this tab counted none', async () => {
 		vi.useFakeTimers();

@@ -93,6 +93,9 @@ type StatusError struct{ Code int }
 
 func (e StatusError) Error() string { return "discogs: unexpected status " + strconv.Itoa(e.Code) }
 
+// StatusCode is the status Discogs answered.
+func (e StatusError) StatusCode() int { return e.Code }
+
 // SearchBarcode returns the releases whose barcode Discogs matches with
 // code; none is an empty slice and a nil error.
 func (c *Client) SearchBarcode(ctx context.Context, code string) ([]Release, error) {
@@ -295,4 +298,54 @@ func (c *Client) send(ctx context.Context, method, path string, ok []int, out an
 	}
 	metrics.ObserveSource(Source, metrics.SourceOK)
 	return nil
+}
+
+// inventoryBody waits for the token's budget and returns the body of
+// path's 200 answer, timed under source in the request duration metric
+// and counted in no source health metric: the caller counts it. An answer
+// with another status is a StatusError. A base URL that does not parse is
+// timed like a sent request. Errors name the path without the query.
+func (c *Client) inventoryBody(ctx context.Context, source, path string) ([]byte, error) {
+	base := c.BaseURL
+	if base == "" {
+		base = BaseURL
+	}
+	start := time.Now()
+	u, err := url.Parse(base + path)
+	if err != nil {
+		metrics.ObserveSourceDuration(source, time.Since(start))
+		return nil, errors.New("discogs: build request: invalid URL")
+	}
+	if err := c.Limiter.Wait(ctx, c.Priority); err != nil {
+		return nil, fmt.Errorf("discogs: GET %s: wait for rate budget: %w", u.Path, err)
+	}
+	resp, err := fetch.Do(ctx, c.httpClient(), fetch.Request{
+		Source: source,
+		URL:    base + path,
+		Header: http.Header{
+			"Accept":        {"application/vnd.discogs.v2.discogs+json"},
+			"User-Agent":    {UserAgent},
+			"Authorization": {"Discogs token=" + c.Token},
+		},
+		MaxBody: maxBody,
+	})
+	if err != nil {
+		if se, ok := errors.AsType[fetch.StatusError](err); ok {
+			return nil, StatusError{Code: se.Code}
+		}
+		return nil, fmt.Errorf("discogs: %w", err)
+	}
+	return resp.Body, nil
+}
+
+// InventorySize is how many of a seller's newest listings Inventory reads.
+const InventorySize = 100
+
+// Inventory returns the JSON body of seller's newest listings for sale,
+// newest first, at most InventorySize. It waits for the token's budget as
+// every request does, but counts in no source health metric: the caller
+// counts it under source, which also times it.
+func (c *Client) Inventory(ctx context.Context, source, seller string) ([]byte, error) {
+	q := url.Values{"sort": {"listed"}, "sort_order": {"desc"}, "per_page": {strconv.Itoa(InventorySize)}}
+	return c.inventoryBody(ctx, source, "/users/"+url.PathEscape(seller)+"/inventory?"+q.Encode())
 }

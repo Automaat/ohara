@@ -6,11 +6,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -23,6 +25,7 @@ import (
 	"github.com/Automaat/ohara/backend-go/internal/db"
 	"github.com/Automaat/ohara/backend-go/internal/deals"
 	"github.com/Automaat/ohara/backend-go/internal/discogs"
+	"github.com/Automaat/ohara/backend-go/internal/discogscollection"
 	"github.com/Automaat/ohara/backend-go/internal/export"
 	"github.com/Automaat/ohara/backend-go/internal/lookup"
 	"github.com/Automaat/ohara/backend-go/internal/lookup/books"
@@ -129,6 +132,11 @@ func run() int {
 	syncer := newWantlistSyncer(pool, logger)
 	syncer.Start(huntCtx)
 	defer syncer.Wait()
+	discogsShelf, err := newDiscogsCollection(pool, logger)
+	if err != nil {
+		logger.Error("discogs collection", "err", err)
+		return 2
+	}
 	queue := scanqueue.NewStore(pool)
 	metrics.RegisterScanQueueCollector(queue.Count)
 	searchers := titleSearchers()
@@ -144,14 +152,13 @@ func run() int {
 		wantlist.NewHandler(syncer, logger),
 		export.NewHandler(pool, valuer.Window(), logger),
 		shares,
+		discogsShelf,
 	}
 	if dir := os.Getenv("OHARA_WEB_DIR"); dir != "" {
-		webFS := os.DirFS(dir)
-		if err := web.Check(webFS); err != nil {
+		if deps.Web, err = frontend(dir); err != nil {
 			logger.Error("frontend", "dir", dir, "err", err)
 			return 2
 		}
-		deps.Web = webFS
 	}
 
 	metrics.SetBuildInfo(version)
@@ -376,6 +383,35 @@ func newWantlistSyncer(pool *pgxpool.Pool, logger *slog.Logger) *wantlist.Syncer
 	return wantlist.NewSyncer(store, d, logger)
 }
 
+// frontend is the built SPA in dir, checked to be one.
+func frontend(dir string) (fs.FS, error) {
+	webFS := os.DirFS(dir)
+	if err := web.Check(webFS); err != nil {
+		return nil, err
+	}
+	return webFS, nil
+}
+
+// newDiscogsCollection adds owned album copies to the Discogs collection
+// of the OHARA_DISCOGS_TOKEN owner, in folder OHARA_DISCOGS_FOLDER_ID
+// (Uncategorized unless set); without the token its push answers 503.
+func newDiscogsCollection(pool *pgxpool.Pool, logger *slog.Logger) (*discogscollection.Handler, error) {
+	folder := int64(discogscollection.DefaultFolder)
+	if v := os.Getenv("OHARA_DISCOGS_FOLDER_ID"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || n < 1 {
+			return nil, fmt.Errorf("OHARA_DISCOGS_FOLDER_ID: want a positive folder ID, got %q", v)
+		}
+		folder = n
+	}
+	d := newDiscogs()
+	if d == nil {
+		logger.Info("discogs collection disabled: OHARA_DISCOGS_TOKEN not set")
+	}
+	store := discogscollection.NewStore(pool)
+	return discogscollection.NewHandler(discogscollection.NewPusher(store, d, folder), logger), nil
+}
+
 // newMusicProvider builds the music chain: Discogs when a token is set,
 // then MusicBrainz with Cover Art Archive covers unless switched off, then
 // a Discogs search for Allegro's product name; nil when neither Discogs
@@ -538,6 +574,11 @@ func newHunter(pool *pgxpool.Pool, lane *deals.Lane, logger *slog.Logger) (*deal
 	if envOr("OHARA_TEZEUSZ", "true") == "true" {
 		sources = append(sources, deals.Tezeusz{Client: client, BaseURL: envOr("OHARA_DEALS_TEZEUSZ_URL", deals.TezeuszURL)})
 	}
+	sellers, err := discogsSellers(client)
+	if err != nil {
+		return nil, nil, err
+	}
+	sources = append(sources, sellers...)
 	store := deals.NewStore(pool)
 	var notifier deals.Notifier
 	var poller *deals.TelegramPoller
@@ -553,13 +594,51 @@ func newHunter(pool *pgxpool.Pool, lane *deals.Lane, logger *slog.Logger) (*deal
 	case token != "" || chat != "":
 		return nil, nil, errors.New("set both OHARA_TELEGRAM_BOT_TOKEN and OHARA_TELEGRAM_CHAT_ID, or neither")
 	}
-	logger.Info("deal hunter", "interval", interval, "delay", delay, "telegram", notifier != nil)
+	logger.Info("deal hunter", "interval", interval, "delay", delay, "telegram", notifier != nil,
+		"discogs_sellers", len(sellers))
 	cfg := deals.Config{Interval: interval, Delay: delay, CanaryQuery: envOr("OHARA_DEALS_CANARY_QUERY", "dvd")}
 	hunter := deals.NewHunter(store, sources, notifier, cfg, logger)
 	if poller != nil {
 		hunter.PollTelegram(poller)
 	}
 	return hunter, store, nil
+}
+
+// discogsSeller is a Discogs username.
+var discogsSeller = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// discogsSellers are the deal sources of the Discogs sellers in
+// OHARA_DISCOGS_SELLERS, a comma-separated list of usernames, each once:
+// none without the list or without OHARA_DISCOGS_TOKEN. Their prices turn
+// into złoty at the NBP rates of OHARA_VALUATION_NBP_URL, fetched through
+// client, and their requests yield the token's budget to scans and title
+// searches.
+func discogsSellers(client *http.Client) ([]deals.Source, error) {
+	var names []string
+	for name := range strings.SplitSeq(os.Getenv("OHARA_DISCOGS_SELLERS"), ",") {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if !discogsSeller.MatchString(name) {
+			return nil, fmt.Errorf("OHARA_DISCOGS_SELLERS: %q is not a Discogs username", name)
+		}
+		if !slices.ContainsFunc(names, func(n string) bool { return strings.EqualFold(n, name) }) {
+			names = append(names, name)
+		}
+	}
+	d := newDiscogs()
+	if d == nil || len(names) == 0 {
+		return nil, nil
+	}
+	d.Priority = discogs.Background
+	metrics.InitSource(valuation.SourceNBP)
+	rates := &valuation.NBP{Client: client, BaseURL: envOr("OHARA_VALUATION_NBP_URL", valuation.NBPURL)}
+	sources := make([]deals.Source, 0, len(names))
+	for _, name := range names {
+		sources = append(sources, deals.DiscogsSeller{Client: d, Rates: rates, Seller: name})
+	}
+	return sources, nil
 }
 
 // sourceDelay is the pause between two requests to the deal and valuation

@@ -131,7 +131,8 @@ func TestGeneralOptions(t *testing.T) {
 }
 
 // checkSecurityHeaders asserts the four security headers, with the camera
-// allowed to Ohara's own pages and to nothing else.
+// allowed to Ohara's own pages and to nothing else. Browsers combine every
+// Permissions-Policy field, so the camera check reads all of them.
 func checkSecurityHeaders(t *testing.T, h http.Header) {
 	t.Helper()
 	want := map[string]string{
@@ -144,15 +145,17 @@ func checkSecurityHeaders(t *testing.T, h http.Header) {
 			t.Errorf("%s = %q, want %q", name, got, value)
 		}
 	}
-	policy := h.Get("Permissions-Policy")
+	policies := h.Values("Permissions-Policy")
 	var camera []string
-	for directive := range strings.SplitSeq(policy, ",") {
-		directive = strings.TrimSpace(directive)
-		if feature, _, _ := strings.Cut(directive, "="); feature == "camera" {
-			camera = append(camera, directive)
+	for _, policy := range policies {
+		for directive := range strings.SplitSeq(policy, ",") {
+			directive = strings.TrimSpace(directive)
+			if feature, _, _ := strings.Cut(directive, "="); feature == "camera" {
+				camera = append(camera, directive)
+			}
 		}
 	}
 	if len(camera) != 1 || camera[0] != "camera=(self)" {
-		t.Errorf("Permissions-Policy = %q, want exactly one camera=(self)", policy)
+		t.Errorf("Permissions-Policy = %q, want exactly one camera=(self)", policies)
 	}
 }

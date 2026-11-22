@@ -76,6 +76,7 @@ func newUpstreams(t *testing.T) *upstreams {
 	t.Setenv("OHARA_DEALS_DELAY", "1s")
 	t.Setenv("OHARA_DEALS_CANARY_QUERY", "dvd")
 	t.Setenv("OHARA_DISCOGS_TOKEN", "")
+	t.Setenv("OHARA_DISCOGS_SELLERS", "heyjoerecords")
 	t.Setenv("OHARA_TELEGRAM_BOT_TOKEN", "")
 	t.Setenv("OHARA_TELEGRAM_CHAT_ID", "")
 	return u

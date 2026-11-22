@@ -5,6 +5,7 @@ import (
 
 	"github.com/Automaat/ohara/backend-go/internal/collection"
 	"github.com/Automaat/ohara/backend-go/internal/deals"
+	"github.com/Automaat/ohara/backend-go/internal/discogscollection"
 	"github.com/Automaat/ohara/backend-go/internal/httpx"
 	"github.com/Automaat/ohara/backend-go/internal/lookup"
 	"github.com/Automaat/ohara/backend-go/internal/scanqueue"
@@ -39,7 +40,7 @@ func Ohara() API {
 			{Name: "SleeveGrade", Values: c["SleeveGrade"]},
 			{Name: "VolumeState", Values: c["VolumeState"]},
 			{Name: "QueueReason", Values: []string{scanqueue.ReasonNotFound, scanqueue.ReasonLookupFailed}},
-			{Name: "DealSource", Values: []string{deals.OLX{}.Name(), deals.BlueDVD{}.Name(), deals.SwiatKsiazki{}.Name(), deals.Pepper{}.Name(), deals.Tezeusz{}.Name()}},
+			{Name: "DealSource", Values: []string{deals.OLX{}.Name(), deals.BlueDVD{}.Name(), deals.SwiatKsiazki{}.Name(), deals.Pepper{}.Name(), deals.Tezeusz{}.Name(), deals.DiscogsSource}},
 			{Name: "AlertState", Values: []string{deals.AlertNone, deals.AlertPending, deals.AlertSent, deals.AlertFailed}},
 			{Name: "KeywordKind", Values: []string{deals.KeywordReject, deals.KeywordAccept}},
 			{Name: "ValueSource", Values: []string{valuation.SourceOLX, valuation.SourceSkupSzop, valuation.SourceDiscogs}},
@@ -75,6 +76,7 @@ func Ohara() API {
 			Of[collection.MissingVolume]("MissingVolume"),
 			Of[collection.SeriesDetail]("SeriesDetail"),
 			Of[collection.SeriesTotalInput]("SeriesTotalPayload"),
+			Of[discogscollection.State]("CopyDiscogs"),
 
 			Of[lookup.TitleFields]("CandidateTitle"),
 			Of[lookup.EditionFields]("CandidateEdition"),

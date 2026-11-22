@@ -226,7 +226,85 @@ export const sourceLabels: Record<DealSource, string> = {
 	bluedvd: 'BlueDVD',
 	swiatksiazki: 'Świat Książki',
 	pepper: 'Pepper',
-	tezeusz: 'Tezeusz'
+	tezeusz: 'Tezeusz',
+	discogs_inventory: 'Discogs'
+};
+
+/**
+ * The sources whose listings may be shown only while a recent answer still offers them: the
+ * Discogs API terms let no view show seller inventory more than six hours old.
+ */
+export const expiringSources: ReadonlySet<DealSource> = new Set<DealSource>(['discogs_inventory']);
+
+/**
+ * How long after its request was asked a page may draw a listing of an expiring source. The
+ * server answers with one only while its seller offered it within 5 h 45 min
+ * (deals.discogsShown), so with this and the 30-second checks a drawn card is never older than
+ * six hours, whatever answers fail, overlap or hang.
+ */
+export const unconfirmedAfterMs = 14 * 60_000;
+
+/** The listings without those of expiring sources; the same list when it holds none. */
+export function withoutUnconfirmed<T extends Pick<Observation, 'source'>>(listings: T[]): T[] {
+	return listings.some((o) => expiringSources.has(o.source))
+		? listings.filter((o) => !expiringSources.has(o.source))
+		: listings;
+}
+
+let sampled: { wall: number; mono: number } | null = null;
+let aged = 0;
+
+/**
+ * How far the wall and the monotonic clock may part between two readings of the age clock before
+ * it treats the time between them as unknown.
+ */
+export const clockSlipMs = 2_000;
+
+/**
+ * Milliseconds on the age clock that expires the listings of expiring sources. It never goes
+ * back. Each reading moves it by the larger of the wall and the monotonic clock's steps since the
+ * last one; when the two steps part by more than clockSlipMs (the system clock was set, or the
+ * computer slept and paused the monotonic clock), how long passed is unknown, so it also moves
+ * by unconfirmedAfterMs and every answer asked before expires. Pages read it every 30 seconds
+ * while such a listing shows.
+ */
+export function ageClock(): number {
+	const now = { wall: Date.now(), mono: performance.now() };
+	if (sampled) {
+		const wall = now.wall - sampled.wall;
+		const mono = now.mono - sampled.mono;
+		aged +=
+			Math.max(0, wall, mono) + (Math.abs(wall - mono) > clockSlipMs ? unconfirmedAfterMs : 0);
+	}
+	sampled = now;
+	return aged;
+}
+
+/**
+ * Whether an answer to a request asked at askedAt on the age clock still lets a page draw its
+ * listings of expiring sources at now: less than unconfirmedAfterMs passed. The request's start is
+ * earlier than the server's answer, so a late or slowly handled answer only expires sooner.
+ */
+export function stillConfirmed(askedAt: number, now: number): boolean {
+	return now - askedAt < unconfirmedAfterMs;
+}
+
+/**
+ * The listings of an answer to a request asked at askedAt that a page may draw at now (both on
+ * the age clock): all of them while the answer still confirms them (stillConfirmed), then only
+ * those of sources that do not expire.
+ */
+export function confirmedListings<T extends Pick<Observation, 'source'>>(
+	listings: T[],
+	askedAt: number,
+	now: number
+): T[] {
+	return stillConfirmed(askedAt, now) ? listings : withoutUnconfirmed(listings);
+}
+
+/** The attribution a source's terms require next to its listing, linked to the listing. */
+export const sourceNotices: Partial<Record<DealSource, string>> = {
+	discogs_inventory: 'Data provided by Discogs.'
 };
 
 export const alertLabels: Record<AlertState, string> = {

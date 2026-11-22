@@ -406,6 +406,7 @@ func TestLotsDoNotMatch(t *testing.T) {
 		{"formats of one film", bladeRunner("uhd"), "Blade Runner 4K UHD – zestaw 4K + Blu-ray", true},
 		{"wished set word", Want{Kind: "book", Name: "Wiedźmin komplet", Authors: []string{"Andrzej Sapkowski"}}, "Komplet Wiedźmin Sapkowski 8 tomów", true},
 		{"sequel on discs", Want{Kind: "movie", Name: "Diuna", Format: new("bluray")}, "Diuna część 2 – płyty Blu-ray", false},
+		{"sequel before a disc word", bladeRunner("dvd"), "Blade Runner 2049 — płyty DVD", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

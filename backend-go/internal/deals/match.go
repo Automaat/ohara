@@ -479,9 +479,10 @@ func sequelAfter(text, nameWords []string, lastYear int) bool {
 		if romanParts[next] || (part && ordinalParts[next]) {
 			return true
 		}
-		if !part && j+1 < len(text) && (discWords[text[j+1]] || titleCounts[text[j+1]]) {
+		if !part && j+1 < len(text) && titleCounts[text[j+1]] {
 			// "Trylogia 3 filmy" counts films, it names no sequel, while
-			// "Część 2 płyty" still names the second part.
+			// "Część 2 filmy" still names the second part. A disc count
+			// stays a sequel number: "2049 płyty" names the sequel.
 			continue
 		}
 		if n, ok := number(next); ok && (!part || n != 1) && (n < 1900 || n > lastYear) {

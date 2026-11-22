@@ -213,7 +213,13 @@ export function searchedFor(wishes: number, status: HunterStatus, now: Date): st
 
 export const sourceLabels: Record<DealSource, string> = {
 	olx: 'OLX',
-	pepper: 'Pepper'
+	pepper: 'Pepper',
+	discogs_inventory: 'Discogs'
+};
+
+/** The attribution a source's terms require next to its listing, linked to the listing. */
+export const sourceNotices: Partial<Record<DealSource, string>> = {
+	discogs_inventory: 'Data provided by Discogs.'
 };
 
 export const alertLabels: Record<AlertState, string> = {

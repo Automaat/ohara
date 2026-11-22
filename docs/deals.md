@@ -154,6 +154,55 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   `deal_run`: after a restart the status shows it and the first scheduled
   run comes one interval after it started, at least 5 minutes on.
 
+## Discogs sellers
+
+- With `OHARA_DISCOGS_TOKEN` and `OHARA_DISCOGS_SELLERS` (Discogs
+  usernames, comma-separated, each kept once), every run reads each
+  seller's 100 newest listings
+  (`GET /users/{seller}/inventory?sort=listed&sort_order=desc&per_page=100`)
+  as a feed source of its own, `deals.DiscogsSeller`, all under the
+  source name `discogs_inventory` (label "Discogs"). Without either
+  variable no such source exists, so `/metrics` has no series for it.
+  Each request waits `OHARA_DEALS_DELAY` after the run's previous one and
+  its turn in the token's Discogs budget (background priority), and counts
+  in `ohara_source_requests_total` under `discogs_inventory`, not under
+  the Discogs client's `discogs`. A 429 or 403 stops only that seller
+  until the next run; a body that is no inventory (`{}`, HTML) is a
+  `parse_error`. The sellers share the canary and results gauges: the
+  canary holds once any seller answered with listings, and results count
+  them all.
+- Each listing "For Sale" becomes one listing: the Discogs listing ID,
+  the release description as its title ("Pink Floyd - A Momentary Lapse Of
+  Reason (LP, Album, Gat)"), `https://www.discogs.com/sell/item/<id>` and
+  the release thumbnail. Its price turns into grosze at the NBP table A
+  mid rate (`valuation.NBP`, `OHARA_VALUATION_NBP_URL`); a currency
+  without a rate leaves the listing out, so a foreign amount is never
+  stored as złoty. A `Mint (M)` copy has no condition, every other grade
+  is used.
+- The listing's medium comes from the Discogs format, not its title
+  (`Listing.Medium`, `deals.discogsMedium`): LP, vinyl and 7", 10" or 12"
+  discs are vinyl, CD, CDr, SACD and HDCD a CD, Cass a cassette, the first
+  of them in a box set's parts; anything else (DVD, File) is no album
+  medium. Such a listing matches album wants only, a CD want only a CD
+  and a vinyl want only vinyl. Listings of other sources still take their
+  medium from the title.
+- The Discogs API Terms of Use make seller inventory Restricted Data:
+  no commercial use, no transfer to third parties, never shown more than
+  six hours older than discogs.com, kept no longer than needed. So a
+  stored listing of a seller whose answer no longer holds it is gone at
+  once (`Store.UpdateGone`, scoped to the seller through the listing's
+  query), a listing gone or not offered by an answer for 6 hours leaves
+  Okazje and its alert is not sent (`freshListing`), and every run first
+  deletes the Discogs listings no answer has offered for 30 days, alerts,
+  dismissals and purchases included (`Store.ForgetStale`). The 30 days
+  keep a listing's dismissal and sent alert while its seller cannot be
+  read. Every Telegram alert for one ends with "Data provided by
+  Discogs." under its link, and its card in Okazje carries the same
+  notice as a followable link to the listing. The purchase happens on
+  discogs.com.
+- The valuation never reads `discogs_inventory`, and wants are not
+  matched by Discogs release ID.
+
 ## Wishlist share link
 
 - `internal/wishshare` keeps at most one read-only link to the wishlist

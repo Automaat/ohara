@@ -278,6 +278,16 @@ type run struct {
 	// tried holds the observations whose alert this run sent or failed to
 	// send; a failed one waits for the next run.
 	tried map[int64]bool
+	// feeds sums the answers of the feed sources that share a name (one
+	// Discogs seller each), by name.
+	feeds map[string]feedTally
+}
+
+// feedTally is what the feed sources of one name answered in a run: how
+// many listings, and whether any answered with listings.
+type feedTally struct {
+	listings int
+	ok       bool
 }
 
 // Run searches every source for every wishlist copy, records matching
@@ -293,6 +303,9 @@ func (h *Hunter) Run(ctx context.Context) (RunResult, error) {
 		return RunResult{}, err
 	}
 	defer release()
+	if _, err := h.store.ForgetStale(ctx); err != nil {
+		return RunResult{}, err
+	}
 	asOf, err := h.store.Now(ctx)
 	if err != nil {
 		return RunResult{}, err
@@ -311,7 +324,7 @@ func (h *Hunter) Run(ctx context.Context) (RunResult, error) {
 	}
 	r := &run{
 		h: h, wants: wants, rules: rules, titles: titles, asOf: asOf, first: true, tried: map[int64]bool{},
-		missed: map[string]Listing{},
+		missed: map[string]Listing{}, feeds: map[string]feedTally{},
 	}
 	for i := range wants {
 		wants[i].Prepare()
@@ -368,11 +381,17 @@ func (r *run) pause(ctx context.Context) error {
 
 // search asks src for the canary query and every wishlist query, then
 // publishes the listing count and canary outcome. A feed source is asked
-// once: that answer is both its canary and, with a wishlist, its listings.
+// once: that answer is both its canary and, with a wishlist, its listings;
+// feed sources of one name publish the sum of their listings and a canary
+// that holds once any of them found some.
 func (r *run) search(ctx context.Context, src Source, queries []string) error {
 	var f Refused
 	err := r.searchAll(ctx, src, &f, queries)
-	if msg := f.Message(src.Name(), "queries"); msg != "" {
+	site := src.Name()
+	if e, ok := src.(Expiring); ok {
+		site += " " + e.Scope()
+	}
+	if msg := f.Message(site, "queries"); msg != "" {
 		r.res.Errors = append(r.res.Errors, msg)
 	}
 	return err
@@ -385,10 +404,15 @@ func (r *run) searchAll(ctx context.Context, src Source, f *Refused, queries []s
 		if err != nil {
 			return err
 		}
+		t := r.feeds[src.Name()]
+		t.listings += len(listings)
+		t.ok = t.ok || ok && len(listings) > 0
+		r.feeds[src.Name()] = t
 		if canary != "" {
 			r.canary(src, ok, len(listings))
+			metrics.SetSourceCanary(src.Name(), t.ok)
 		}
-		metrics.SetSourceResults(src.Name(), len(listings))
+		metrics.SetSourceResults(src.Name(), t.listings)
 		if ok && len(r.wants) > 0 {
 			return r.record(ctx, listings)
 		}
@@ -425,8 +449,9 @@ func (r *run) searchAll(ctx context.Context, src Source, f *Refused, queries []s
 // false; a refusal is kept once, when the source is done. A source that
 // refused is not asked again: the query is skipped without a pause. Every
 // offer a successful answer holds, priced or not, matching or not, is
-// recorded as offered (Store.MarkOffered) before ask returns. err is the
-// run's cancellation or a database failure.
+// recorded as offered (Store.MarkOffered) before ask returns; for an
+// Expiring source, a stored listing of its scope the answer lacks is gone
+// (Store.UpdateGone). err is the run's cancellation or a database failure.
 func (r *run) ask(ctx context.Context, src Source, f *Refused, query string) ([]Listing, bool, error) {
 	if f.Skip() {
 		return nil, false, ctx.Err()
@@ -446,7 +471,11 @@ func (r *run) ask(ctx context.Context, src Source, f *Refused, query string) ([]
 		}
 		return nil, false, nil
 	}
-	if err := r.h.store.MarkOffered(ctx, src.Name(), page.Seen); err != nil {
+	if e, ok := src.(Expiring); ok {
+		if _, err := r.h.store.UpdateGone(ctx, src.Name(), []string{QueryKey(e.Scope())}, page.Seen, r.asOf); err != nil {
+			return nil, false, err
+		}
+	} else if err := r.h.store.MarkOffered(ctx, src.Name(), page.Seen); err != nil {
 		return nil, false, err
 	}
 	return page.Listings, true, nil
@@ -638,7 +667,7 @@ var (
 		"dvd": "DVD", "bluray": "Blu-ray", "uhd": "4K UHD",
 		"cd": "CD", "vinyl": "Winyl", "cassette": "Kaseta", FormatAudiobook: "Audiobook",
 	}
-	sourceLabels = map[string]string{"olx": "OLX", "pepper": "Pepper"}
+	sourceLabels = map[string]string{"olx": "OLX", "pepper": "Pepper", DiscogsSource: "Discogs"}
 	stateLabels  = map[string]string{"new": "nowy", "used": "używany"}
 )
 
@@ -669,7 +698,11 @@ func alertText(a *Alert) string {
 	if a.AcquiredAs != nil {
 		price += " · " + stateLabels[*a.AcquiredAs]
 	}
-	return strings.Join([]string{head, price, a.ListingTitle, a.URL}, "\n")
+	lines := []string{head, price, a.ListingTitle, a.URL}
+	if a.Source == DiscogsSource {
+		lines = append(lines, discogsNotice)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // formatPLN writes grosze as "1 234,50 zł".

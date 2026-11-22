@@ -379,6 +379,9 @@ type ListingText struct {
 	leads      []int
 	// details are the edition details the listing names (namedDetails).
 	details []string
+	// medium is the album medium the listing's source names
+	// (Listing.Medium), empty when only its title does.
+	medium string
 }
 
 // NewListingText readies a listing title for matching under rules.
@@ -851,15 +854,28 @@ func qualifies(w *Want, p *wantText, l *ListingText) bool {
 	if w.Kind == "book" && p.surname != "" && !namesSurname(text, p.surname) {
 		return false
 	}
+	if l.medium != "" && w.Kind != "music" {
+		return false
+	}
 	if w.Kind == "music" {
 		if !containsAll(text, p.artist) {
 			return false
 		}
-		if w.Format != nil && !p.albumFormatMatches(*w.Format, text) {
+		if w.Format != nil && !l.albumMedium(p, *w.Format) {
 			return false
 		}
 	}
 	return true
+}
+
+// albumMedium reports whether the listing can be the wanted album format:
+// the medium its source names, else the one its title names
+// (albumFormatMatches).
+func (l *ListingText) albumMedium(p *wantText, want string) bool {
+	if l.medium != "" {
+		return l.medium == want
+	}
+	return p.albumFormatMatches(want, l.words)
 }
 
 // carriedBy reports whether a listing carries n (carriedAt).
@@ -1179,6 +1195,7 @@ func carriesPhrase(significant, req []string) bool {
 // want for the same title has a lower limit.
 func pick(wants []Want, l *Listing, rules Rules, titles Titles) *Want {
 	text := NewListingText(l.Title, rules)
+	text.medium = l.Medium
 	var first *Want
 	for i := range wants {
 		w := &wants[i]

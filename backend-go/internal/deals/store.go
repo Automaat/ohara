@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -45,7 +46,19 @@ const MaxAttempts = 5
 const alertWindow = `interval '7 days'`
 
 // sources are the price_observation sources this package writes.
-var sources = []string{"olx", "pepper"}
+var sources = []string{"olx", "pepper", DiscogsSource}
+
+// expiringSources are the sources whose stored listings only a fresh
+// answer lets the deals view show (freshListing) and which are deleted
+// once no answer has offered them for discogsKeep (ForgetStale).
+var expiringSources = []string{DiscogsSource}
+
+// freshListing holds for a listing o the deals view may show and alert
+// on: one of a source that does not expire, or one an answer still holds
+// (not gone) and offered within discogsFresh.
+var freshListing = fmt.Sprintf(`(o.source <> ALL ('{%s}'::text[])
+	OR o.gone_at IS NULL AND o.last_offered_at > now() - make_interval(secs => %d))`,
+	strings.Join(expiringSources, ","), int(discogsFresh.Seconds()))
 
 // Store is the Postgres access layer for deal hunting.
 type Store struct {
@@ -483,6 +496,20 @@ func (s *Store) MarkOffered(ctx context.Context, source string, externalIDs []st
 	return nil
 }
 
+// ForgetStale deletes the listings of expiring sources that no answer has
+// offered for discogsKeep, with their alerts and purchases, dismissed or
+// not: the source's terms let them be kept only while they serve. It
+// reports how many it deleted.
+func (s *Store) ForgetStale(ctx context.Context) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM price_observation
+		WHERE source = ANY ($1) AND greatest(last_seen_at, last_offered_at) < now() - make_interval(secs => $2)`,
+		expiringSources, discogsKeep.Seconds())
+	if err != nil {
+		return 0, fmt.Errorf("forget stale listings: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
 // pruneBatch bounds the listings one delete of Prune removes, so no
 // statement holds many rows or runs long.
 const pruneBatch = 1000
@@ -665,9 +692,9 @@ type Alert struct {
 // PendingAlerts returns undelivered alerts with attempts left, oldest
 // first. Alerts for copies no longer on the wishlist, alerts that meet
 // neither the copy's current maximum price nor its share of the current
-// market price, alerts for dismissed listings, alerts older than a week and
-// repeat alerts whose listing is no longer under the price its last sent
-// alert named are skipped.
+// market price, alerts for dismissed listings or ones not fresh
+// (freshListing), alerts older than a week and repeat alerts whose listing
+// is no longer under the price its last sent alert named are skipped.
 func (s *Store) PendingAlerts(ctx context.Context) ([]Alert, error) {
 	markets, err := s.marketTable(ctx)
 	if err != nil {
@@ -743,7 +770,7 @@ func pendingAlerts(ctx context.Context, q querier, markets marketTable, only *in
 		`+marketJoin("e", 3)+`
 		WHERE a.sent_at IS NULL AND a.attempts < $1 AND a.created_at > now() - `+alertWindow+`
 			AND (o.price_cents <= c.max_price_cents OR o.price_cents * 100 <= m.cents * c.max_market_percent)
-			AND o.dismissed_at IS NULL AND `+wishNamedBy("c")+` AND `+huntedWish("c")+`
+			AND o.dismissed_at IS NULL AND `+freshListing+` AND `+wishNamedBy("c")+` AND `+huntedWish("c")+`
 			AND (a.alerted_price_cents IS NULL OR o.price_cents < a.alerted_price_cents)
 			AND ($2::bigint IS NULL OR a.observation_id = $2)
 		ORDER BY a.created_at, a.observation_id`, MaxAttempts, only, markets.titles, markets.formats, markets.cents)
@@ -826,7 +853,7 @@ type Observation struct {
 // wished for is not matched. Matched keeps the matched listings, with or without a price limit;
 // UnderLimit keeps those at or under the matched wish's limit or its share of the market price;
 // Sent keeps those whose alert was sent for a wish that still has a limit or a market percent.
-// Dismissed listings are always left out. Filters apply before the row limit, so newer listings
+// Dismissed listings and those not fresh (freshListing) are always left out. Filters apply before the row limit, so newer listings
 // that fail them, such as listings for owned editions, never push older ones out.
 type RecentFilter struct {
 	Limit      int
@@ -855,11 +882,11 @@ var (
 		LEFT JOIN copy w ON w.status = 'wishlist' AND w.id = coalesce(o.wishlist_copy_id, a.copy_id)
 			AND (o.wishlist_copy_id IS NOT NULL OR ` + wishOfListingTitle + `) AND ` + wishNamedBy("w") + `
 			AND ` + huntedWish("w") + `
-		WHERE o.dismissed_at IS NULL`
+		WHERE o.dismissed_at IS NULL AND ` + freshListing
 	wishedListings = `SELECT o.id, o.observed_at, o.price_cents, o.source, a.sent_at, w.id AS wish_id, w.max_price_cents,
 			w.max_market_percent, w.edition_id AS wish_edition_id
 		FROM copy w
-		JOIN price_observation o ON o.wishlist_copy_id = w.id AND o.dismissed_at IS NULL
+		JOIN price_observation o ON o.wishlist_copy_id = w.id AND o.dismissed_at IS NULL AND ` + freshListing + `
 		LEFT JOIN deal_alert a ON a.observation_id = o.id
 		WHERE w.status = 'wishlist' AND ` + wishNamedBy("w") + ` AND ` + huntedWish("w") + `
 		UNION ALL
@@ -868,7 +895,7 @@ var (
 		FROM copy w
 		JOIN deal_alert a ON a.copy_id = w.id
 		JOIN price_observation o ON o.id = a.observation_id AND o.wishlist_copy_id IS NULL
-			AND o.dismissed_at IS NULL
+			AND o.dismissed_at IS NULL AND ` + freshListing + `
 		WHERE w.status = 'wishlist' AND ` + wishOfListingTitle + ` AND ` + wishNamedBy("w") + ` AND ` + huntedWish("w")
 )
 

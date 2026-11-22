@@ -93,6 +93,9 @@ type StatusError struct{ Code int }
 
 func (e StatusError) Error() string { return "discogs: unexpected status " + strconv.Itoa(e.Code) }
 
+// StatusCode is the status Discogs answered.
+func (e StatusError) StatusCode() int { return e.Code }
+
 // SearchBarcode returns the releases whose barcode Discogs matches with
 // code; none is an empty slice and a nil error.
 func (c *Client) SearchBarcode(ctx context.Context, code string) ([]Release, error) {
@@ -229,38 +232,14 @@ func (b cancelOnClose) Close() error {
 // not parse counts as an error and is timed like a sent request. Errors name the
 // path without the query.
 func (c *Client) get(ctx context.Context, path string, out any, check func() error) error {
-	base := c.BaseURL
-	if base == "" {
-		base = BaseURL
-	}
-	start := time.Now()
-	u, err := url.Parse(base + path)
+	body, err := c.send(ctx, Source, path)
 	if err != nil {
-		metrics.ObserveSource(Source, metrics.SourceError)
-		metrics.ObserveSourceDuration(Source, time.Since(start))
-		return errors.New("discogs: build request: invalid URL")
-	}
-	if err := c.Limiter.Wait(ctx, c.Priority); err != nil {
-		return fmt.Errorf("discogs: GET %s: wait for rate budget: %w", u.Path, err)
-	}
-	resp, err := fetch.Do(ctx, c.httpClient(), fetch.Request{
-		Source: Source,
-		URL:    base + path,
-		Header: http.Header{
-			"Accept":        {"application/vnd.discogs.v2.discogs+json"},
-			"User-Agent":    {UserAgent},
-			"Authorization": {"Discogs token=" + c.Token},
-		},
-		MaxBody: maxBody,
-	})
-	if err != nil {
-		metrics.ObserveSource(Source, fetch.Outcome(err))
-		if se, ok := errors.AsType[fetch.StatusError](err); ok {
-			return StatusError{Code: se.Code}
+		if _, ok := errors.AsType[notSentError](err); !ok {
+			metrics.ObserveSource(Source, outcome(err))
 		}
-		return fmt.Errorf("discogs: %w", err)
+		return err
 	}
-	if err := json.Unmarshal(resp.Body, out); err != nil {
+	if err := json.Unmarshal(body, out); err != nil {
 		metrics.ObserveSource(Source, metrics.SourceParseError)
 		return fmt.Errorf("discogs: parse: %w", err)
 	}
@@ -272,4 +251,70 @@ func (c *Client) get(ctx context.Context, path string, out any, check func() err
 	}
 	metrics.ObserveSource(Source, metrics.SourceOK)
 	return nil
+}
+
+// notSentError is a request the budget kept back: it never reached Discogs.
+type notSentError struct{ err error }
+
+func (e notSentError) Error() string { return e.err.Error() }
+
+func (e notSentError) Unwrap() error { return e.err }
+
+// outcome is the source health status of a request send failed.
+func outcome(err error) string {
+	if se, ok := errors.AsType[StatusError](err); ok {
+		return "http_" + strconv.Itoa(se.Code)
+	}
+	return fetch.Outcome(err)
+}
+
+// send waits for the token's budget and returns the body of path's 200
+// answer, timed under source in the request duration metric. An answer
+// with another status is a StatusError; a request the budget kept back
+// is a notSentError. A base URL that does not
+// parse is timed like a sent request. Errors name the path without the
+// query.
+func (c *Client) send(ctx context.Context, source, path string) ([]byte, error) {
+	base := c.BaseURL
+	if base == "" {
+		base = BaseURL
+	}
+	start := time.Now()
+	u, err := url.Parse(base + path)
+	if err != nil {
+		metrics.ObserveSourceDuration(source, time.Since(start))
+		return nil, errors.New("discogs: build request: invalid URL")
+	}
+	if err := c.Limiter.Wait(ctx, c.Priority); err != nil {
+		return nil, notSentError{fmt.Errorf("discogs: GET %s: wait for rate budget: %w", u.Path, err)}
+	}
+	resp, err := fetch.Do(ctx, c.httpClient(), fetch.Request{
+		Source: source,
+		URL:    base + path,
+		Header: http.Header{
+			"Accept":        {"application/vnd.discogs.v2.discogs+json"},
+			"User-Agent":    {UserAgent},
+			"Authorization": {"Discogs token=" + c.Token},
+		},
+		MaxBody: maxBody,
+	})
+	if err != nil {
+		if se, ok := errors.AsType[fetch.StatusError](err); ok {
+			return nil, StatusError{Code: se.Code}
+		}
+		return nil, fmt.Errorf("discogs: %w", err)
+	}
+	return resp.Body, nil
+}
+
+// InventorySize is how many of a seller's newest listings Inventory reads.
+const InventorySize = 100
+
+// Inventory returns the JSON body of seller's newest listings for sale,
+// newest first, at most InventorySize. It waits for the token's budget as
+// every request does, but counts in no source health metric: the caller
+// counts it under source, which also times it.
+func (c *Client) Inventory(ctx context.Context, source, seller string) ([]byte, error) {
+	q := url.Values{"sort": {"listed"}, "sort_order": {"desc"}, "per_page": {strconv.Itoa(InventorySize)}}
+	return c.send(ctx, source, "/users/"+url.PathEscape(seller)+"/inventory?"+q.Encode())
 }

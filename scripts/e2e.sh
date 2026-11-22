@@ -15,7 +15,7 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
-compose=(docker compose -f e2e/compose.yaml)
+compose=(docker compose -p ohara-e2e -f e2e/compose.yaml)
 up=(up --detach --wait --wait-timeout 120)
 if [[ $# -gt 0 && $1 != -* ]]; then
     export OHARA_E2E_IMAGE="$1"
@@ -35,7 +35,7 @@ if ! docker network create --label "ohara.e2e.pid=$$" "$lock" >/dev/null 2>&1; t
 fi
 
 cleanup() {
-    status=$?
+    local status=$1
     trap - EXIT INT TERM
     if [[ $status -ne 0 ]]; then
         "${compose[@]}" logs --no-color app app-discogs >&2 || true
@@ -44,7 +44,9 @@ cleanup() {
     docker network rm "$lock" >/dev/null 2>&1 || true
     exit "$status"
 }
-trap cleanup EXIT INT TERM
+trap 'cleanup "$?"' EXIT
+trap 'cleanup 130' INT
+trap 'cleanup 143' TERM
 
 "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
 "${compose[@]}" "${up[@]}"

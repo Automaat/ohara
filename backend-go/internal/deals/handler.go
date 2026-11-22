@@ -69,6 +69,8 @@ func (h *Handler) Mount(r chi.Router) {
 	r.Get("/deals/keywords", h.listKeywords)
 	r.Post("/deals/keywords", h.addKeyword)
 	r.Delete("/deals/keywords/{id}", h.deleteKeyword)
+	r.Post("/deals/{id}/dismissal", h.dismiss)
+	r.Delete("/deals/{id}/dismissal", h.undismiss)
 }
 
 // View is the GET /api/deals body. Wishes counts the copies on the wishlist.
@@ -175,6 +177,37 @@ func (h *Handler) deleteKeyword(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, h.logger, http.StatusNotFound, "not found")
 	case err != nil:
 		httpx.WriteInternal(w, r, h.logger, "delete keyword", err)
+	default:
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// dismiss hides a listing from Okazje; 204 also when it already was.
+func (h *Handler) dismiss(w http.ResponseWriter, r *http.Request) {
+	h.setDismissed(w, r, true)
+}
+
+// undismiss brings a dismissed listing back; 204 also when it was shown.
+func (h *Handler) undismiss(w http.ResponseWriter, r *http.Request) {
+	h.setDismissed(w, r, false)
+}
+
+func (h *Handler) setDismissed(w http.ResponseWriter, r *http.Request, dismissed bool) {
+	id, ok := httpx.PathID(w, r, h.logger, "id")
+	if !ok {
+		return
+	}
+	var err error
+	if dismissed {
+		err = h.store.Dismiss(r.Context(), id)
+	} else {
+		err = h.store.Undismiss(r.Context(), id)
+	}
+	switch {
+	case errors.Is(err, ErrNotFound):
+		httpx.WriteError(w, h.logger, http.StatusNotFound, "not found")
+	case err != nil:
+		httpx.WriteInternal(w, r, h.logger, "set dismissal", err)
 	default:
 		w.WriteHeader(http.StatusNoContent)
 	}

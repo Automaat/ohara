@@ -10,15 +10,20 @@
 		FormError,
 		PageHeader,
 		Section,
-		SegmentedControl
+		SegmentedControl,
+		Toaster,
+		dismiss,
+		toast
 	} from '@smykla-skalski/sui';
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 	import { ApiError, errorMessage, request } from '#lib/api.js';
-	import { dealBadge, loadUnderLimit } from '#lib/deal-badge.svelte.js';
+	import { dealBadge, forgetDealListing, loadUnderLimit } from '#lib/deal-badge.svelte.js';
 	import { options, type FormIssue } from '#lib/collection.js';
 	import DealCard from '#lib/components/DealCard.svelte';
+	import { DealDismissals } from '#lib/deal-dismissals.svelte.js';
 	import {
 		dealsSummary,
+		dismissalPath,
 		intervalLabel,
 		keywordKindLabels,
 		keywordPayload,
@@ -28,6 +33,7 @@
 		searchedFor,
 		segmentLabel,
 		sentPath,
+		withoutDismissed,
 		type DealSegment,
 		type DealsView,
 		type HunterStatus,
@@ -94,6 +100,30 @@
 		if (deals?.status.running) poll = setTimeout(load, 3000);
 	}
 
+	const dismissals = new DealDismissals({
+		toast,
+		dismiss,
+		send: (method, id) => request(fetch, method, dismissalPath(id)),
+		forget: forgetDealListing,
+		reload: load
+	});
+
+	/**
+	 * The card's "Ignoruj" goes with its card, so focus moves to the next card's "Ignoruj", or the
+	 * previous one's, or the segments when the list is empty.
+	 */
+	async function dismissDeal(deal: Observation) {
+		const at = shown.findIndex((o) => o.id === deal.id);
+		const next = shown[at + 1] ?? shown[at - 1];
+		const done = dismissals.dismiss(deal);
+		await tick();
+		const target = next
+			? document.querySelector<HTMLElement>(`[data-dismiss="${next.id}"]`)
+			: document.querySelector<HTMLElement>('.content input[type="radio"]:checked');
+		target?.focus();
+		await done;
+	}
+
 	async function loadKeywords() {
 		try {
 			keywords = await request<Keyword[]>(fetch, 'GET', '/api/deals/keywords');
@@ -112,6 +142,7 @@
 		};
 		document.addEventListener('visibilitychange', onvisibility);
 		return () => {
+			dismissals.destroy();
 			clearTimeout(poll);
 			clearInterval(clock);
 			document.removeEventListener('visibilitychange', onvisibility);
@@ -164,9 +195,9 @@
 
 	const status = $derived(deals?.status);
 	const lists = $derived<Record<DealSegment, Observation[]>>({
-		under: deals ? (dealBadge.listings ?? []) : [],
-		all: deals?.all ?? [],
-		sent: deals?.sent ?? []
+		under: withoutDismissed(deals ? (dealBadge.listings ?? []) : [], dismissals.hidden),
+		all: withoutDismissed(deals?.all ?? [], dismissals.hidden),
+		sent: withoutDismissed(deals?.sent ?? [], dismissals.hidden)
 	});
 	const segments = $derived(
 		(['under', 'all', 'sent'] as const).map((value) => ({
@@ -246,7 +277,7 @@
 			{#if shown.length > 0}
 				<ul class="deals" aria-label={segmentLabel(segment, shown.length)}>
 					{#each shown as deal (deal.id)}
-						<li><DealCard {deal} /></li>
+						<li><DealCard {deal} ondismiss={() => void dismissDeal(deal)} /></li>
 					{/each}
 				</ul>
 			{:else if segment === 'under' && lists.all.length > 0}
@@ -342,6 +373,10 @@
 	</Disclosure>
 </div>
 
+<div class="toasts">
+	<Toaster label="Powiadomienia" dismissLabel="Zamknij" />
+</div>
+
 <style>
 	.content {
 		display: grid;
@@ -379,5 +414,9 @@
 		gap: 1rem;
 		max-width: 40rem;
 		margin-top: 1.5rem;
+	}
+	/* On a phone the undo toast stands above the floating tab bar instead of covering it. */
+	:global(.ohara-phone) .toasts :global(.sui-toaster) {
+		inset-block-end: calc(4rem + max(env(safe-area-inset-bottom, 0px), 0.75rem));
 	}
 </style>

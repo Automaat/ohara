@@ -50,8 +50,19 @@ export function samples(text: string, metric: string): Map<string, number> {
 }
 
 /**
+ * The book providers e2e/compose.yaml points at its in-network double, so their requests never
+ * leave the stack.
+ */
+const doubled = ['bn', 'openlibrary'];
+
+function isDoubled(labels: string, label: 'source' | 'provider'): boolean {
+	return doubled.some((name) => labels.includes(`${label}="${name}"`));
+}
+
+/**
  * Checks on /metrics that the server sent no request to an outside source (book, movie, music,
- * deal or valuation) and asked no lookup provider but the stub.
+ * deal or valuation) and asked no lookup provider but the stub. The book providers answered by
+ * the double are left out.
  */
 export async function expectNoSourceRequests(request: APIRequestContext) {
 	const res = await request.get('/metrics');
@@ -59,9 +70,11 @@ export async function expectNoSourceRequests(request: APIRequestContext) {
 	const text = await res.text();
 	const sources = samples(text, 'ohara_source_requests_total');
 	expect(sources.size, 'source counters exist').toBeGreaterThan(0);
-	for (const [labels, n] of sources) expect(n, `ohara_source_requests_total${labels}`).toBe(0);
+	for (const [labels, n] of sources) {
+		if (!isDoubled(labels, 'source')) expect(n, `ohara_source_requests_total${labels}`).toBe(0);
+	}
 	for (const [labels, n] of samples(text, 'ohara_lookup_provider_requests_total')) {
-		if (!labels.includes('provider="stub"')) {
+		if (!labels.includes('provider="stub"') && !isDoubled(labels, 'provider')) {
 			expect(n, `ohara_lookup_provider_requests_total${labels}`).toBe(0);
 		}
 	}

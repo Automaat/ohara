@@ -426,6 +426,56 @@ func TestLookupMergedAudiobookHasNoBinding(t *testing.T) {
 	}
 }
 
+func TestLookupMergedBookTakesOneSourcesSeries(t *testing.T) {
+	const code = "9788375780635"
+	tests := []struct {
+		name         string
+		first, later lookup.TitleFields
+		series       string
+		number       *int
+	}{
+		{
+			name:   "earlier series wins without a number",
+			first:  lookup.TitleFields{SeriesName: new("Wiedźmin")},
+			later:  lookup.TitleFields{SeriesName: new("Saga o wiedźminie"), SeriesNumber: new(1)},
+			series: "Wiedźmin",
+		},
+		{
+			name:   "later source fills a missing series",
+			later:  lookup.TitleFields{SeriesName: new("Saga o wiedźminie"), SeriesNumber: new(1)},
+			series: "Saga o wiedźminie",
+			number: new(1),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			first, later := book(code, "Ostatnie życzenie", 0.9), book(code, "Ostatnie życzenie", 0.8)
+			first.Title.SeriesName, first.Title.SeriesNumber = tt.first.SeriesName, tt.first.SeriesNumber
+			later.Title.SeriesName, later.Title.SeriesNumber = tt.later.SeriesName, tt.later.SeriesNumber
+			r := &lookup.Registry{}
+			for _, p := range []*fixedProvider{
+				{name: "national", cands: []lookup.Candidate{first}},
+				{name: "library", cands: []lookup.Candidate{later}},
+			} {
+				if err := r.Register(p, 0); err != nil {
+					t.Fatal(err)
+				}
+			}
+			res := lookup.NewService(r, nil, discard()).Lookup(context.Background(), code)
+			if len(res.Candidates) != 1 {
+				t.Fatalf("candidates = %+v", res.Candidates)
+			}
+			got := res.Candidates[0].Title
+			if got.SeriesName == nil || *got.SeriesName != tt.series {
+				t.Errorf("series_name = %v, want %q", got.SeriesName, tt.series)
+			}
+			if (got.SeriesNumber == nil) != (tt.number == nil) || (tt.number != nil && *got.SeriesNumber != *tt.number) {
+				t.Errorf("series_number = %v, want %v", got.SeriesNumber, tt.number)
+			}
+		})
+	}
+}
+
 func TestLookupKeepsSingleBookAnswer(t *testing.T) {
 	const code = "9780140449136"
 	r := &lookup.Registry{}

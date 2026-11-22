@@ -237,8 +237,8 @@ func newLookup(pool *pgxpool.Pool, logger *slog.Logger) (*lookup.Service, error)
 	registry := &lookup.Registry{}
 	client := &http.Client{}
 	providers := []lookup.Provider{
-		books.BN{Client: client},
-		books.OpenLibrary{Client: client},
+		books.BN{Client: client, BaseURL: envOr("OHARA_BN_URL", books.BNBaseURL)},
+		books.OpenLibrary{Client: client, BaseURL: openLibraryURL()},
 	}
 	if key := os.Getenv("OHARA_GOOGLE_BOOKS_API_KEY"); key != "" {
 		providers = append(providers, books.GoogleBooks{APIKey: key, Client: client})
@@ -269,6 +269,10 @@ func newLookup(pool *pgxpool.Pool, logger *slog.Logger) (*lookup.Service, error)
 	logger.Info("lookup providers", "providers", strings.Join(registry.Names(), ","))
 	return lookup.NewService(registry, lookup.NewPGCache(pool), logger), nil
 }
+
+// openLibraryURL is where the barcode lookup and the title search ask
+// Open Library.
+func openLibraryURL() string { return envOr("OHARA_OPENLIBRARY_URL", books.OpenLibraryBaseURL) }
 
 // sourceClient is shared by the external sources; the lookup service bounds
 // each provider call too.
@@ -305,7 +309,7 @@ func newMovieProvider(allegro *movie.Allegro, logger *slog.Logger) *movie.Provid
 // TMDB for films and TV series and Discogs for albums when their keys are
 // set, Google Books for books with a key and Open Library without one.
 func titleSearchers() map[string]lookup.TextSearcher {
-	s := map[string]lookup.TextSearcher{"book": books.OpenLibrary{Client: sourceClient}}
+	s := map[string]lookup.TextSearcher{"book": books.OpenLibrary{Client: sourceClient, BaseURL: openLibraryURL()}}
 	if key := os.Getenv("OHARA_GOOGLE_BOOKS_API_KEY"); key != "" {
 		s["book"] = books.GoogleBooks{APIKey: key, Client: sourceClient}
 	}

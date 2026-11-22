@@ -773,10 +773,7 @@ async function titleFor(
 	}
 	made.titleUnanswered = true;
 	try {
-		const title = await request<Title>(fetchFn, 'POST', '/api/titles', {
-			...body,
-			request_key: requestKey
-		});
+		const title = await postTitle(fetchFn, body, requestKey);
 		made.titleUnanswered = false;
 		remember(made.titles, title.id);
 		return title;
@@ -786,6 +783,24 @@ async function titleFor(
 		if (!reused) throw err;
 		made.titleUnanswered = false;
 		return reused;
+	}
+}
+
+/**
+ * Creates the title. A series number another title of the series already holds (a reprint under a
+ * new ISBN, or the same book saved at once from another tab) leaves the new title in the series
+ * without one, so the save goes on: a lookup never takes a number from a title the reader keeps.
+ */
+async function postTitle(fetchFn: typeof fetch, body: TitlePayload, requestKey: string) {
+	const send = (b: TitlePayload) =>
+		request<Title>(fetchFn, 'POST', '/api/titles', { ...b, request_key: requestKey });
+	try {
+		return await send(body);
+	} catch (err) {
+		const numberTaken =
+			err instanceof ApiError && err.status === 409 && err.field === 'series_number';
+		if (!numberTaken || body.series_number == null) throw err;
+		return send({ ...body, series_number: null });
 	}
 }
 

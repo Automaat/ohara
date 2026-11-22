@@ -34,10 +34,25 @@ services:
       OHARA_LOOKUP_STUB: 'true'
       # The only provider a non-ISBN code reaches without keys.
       OHARA_MUSICBRAINZ: 'false'
+      OHARA_BN_URL: http://books:8080
+      OHARA_OPENLIBRARY_URL: http://books:8080
     networks: [internal]
     depends_on:
       postgres:
         condition: service_healthy
+      books:
+        condition: service_started
+
+  # The book providers' double: BN answers every ISBN with its recorded
+  # search for 9788375780635, whose record matches that ISBN only, and Open
+  # Library with no match.
+  books:
+    image: busybox:1.37.0@sha256:a7dbc319b1438115a207e11930dc4bb3e643dcb3ec0bdd694bb36cd8fad289ec
+    command: ['httpd', '-f', '-p', '8080', '-h', '/www']
+    volumes:
+      - ../backend-go/internal/lookup/books/testdata/bn/9788375780635.json:/www/api/institutions/bibs.json:ro
+      - ./book-double/openlibrary-no-match.json:/www/api/books:ro
+    networks: [internal]
 
   proxy:
     image: alpine/socat:1.8.1.3@sha256:5aa280c6fc5bee94dbd2bbdf2a58d30f50396eaa110be84b03636945b157ae68

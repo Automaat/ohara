@@ -2,11 +2,15 @@ package deals
 
 import (
 	"context"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/Automaat/ohara/backend-go/internal/dbtest"
+	"github.com/Automaat/ohara/backend-go/internal/server"
 )
 
 // wishTVSeason stores a wished Blu-ray of a TV season named name, with a
@@ -33,6 +37,28 @@ func TestWantsLeaveTVSeasonsOut(t *testing.T) {
 	wants, err := NewStore(pool).Wants(context.Background())
 	if err != nil || len(wants) != 1 || wants[0].CopyID != movie {
 		t.Fatalf("Wants = %+v, %v, want only the film", wants, err)
+	}
+}
+
+func TestSearchedWishesLeaveTVSeasonsOut(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	wishTVSeason(t, pool, "Dark")
+	store := NewStore(pool)
+	logger := slog.New(slog.DiscardHandler)
+	hunter := NewHunter(store, nil, nil, Config{}, logger)
+	srv := httptest.NewServer(server.New(server.Config{}, logger, server.Deps{
+		DB: pool, API: []server.Mounter{NewHandler(store, hunter, logger)},
+	}))
+	t.Cleanup(srv.Close)
+	var view View
+	if code := call(t, http.MethodGet, srv.URL+"/api/deals", nil, &view); code != http.StatusOK ||
+		view.Wishes != 1 || view.SearchedWishes != 0 {
+		t.Fatalf("GET deals = %d, wishes %d, searched %d, want 1 wish and none searched", code, view.Wishes, view.SearchedWishes)
+	}
+	wishlist(t, pool, wantBluray(nil))
+	if code := call(t, http.MethodGet, srv.URL+"/api/deals", nil, &view); code != http.StatusOK ||
+		view.Wishes != 2 || view.SearchedWishes != 1 {
+		t.Fatalf("GET deals = %d, wishes %d, searched %d, want 2 wishes and the film searched", code, view.Wishes, view.SearchedWishes)
 	}
 }
 

@@ -109,7 +109,7 @@ func TestTVTitleSearch(t *testing.T) {
 	}{
 		{name: "without a TMDB key", status: http.StatusServiceUnavailable},
 		{name: "every season of the shows found", searcher: &fakeSearcher{n: 25}, status: http.StatusOK, results: 25},
-		{name: "capped at forty seasons", searcher: &fakeSearcher{n: 60}, status: http.StatusOK, results: 40},
+		{name: "capped at five hundred seasons", searcher: &fakeSearcher{n: 600}, status: http.StatusOK, results: 500},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			h := &lookup.SearchHandler{Searchers: map[string]lookup.TextSearcher{"movie": &fakeSearcher{n: 1}}}

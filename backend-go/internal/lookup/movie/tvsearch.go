@@ -91,7 +91,9 @@ func (TVSearch) Name() string { return "tmdb" }
 
 // SearchText searches TMDB shows in Polish and answers one candidate per
 // season of the first shows found, in season order with the specials last;
-// a picked DVD, Blu-ray or 4K format stays on every candidate's edition.
+// a picked DVD, Blu-ray or 4K format stays on every candidate's edition. A
+// show whose seasons cannot be read is left out; the search fails only when
+// no show's seasons could be read.
 func (s TVSearch) SearchText(ctx context.Context, query, format string) ([]lookup.Candidate, error) {
 	shows, err := s.TMDB.SearchTV(ctx, query)
 	if err != nil {
@@ -103,10 +105,12 @@ func (s TVSearch) SearchText(ctx context.Context, query, format string) ([]looku
 		edition.Format = &f
 	}
 	out := []lookup.Candidate{}
+	var failed error
 	for _, show := range shows {
 		seasons, err := s.TMDB.Seasons(ctx, show.ID)
 		if err != nil {
-			return nil, err
+			failed = cmp.Or(failed, err)
+			continue
 		}
 		seasons = slices.DeleteFunc(slices.Clone(seasons), func(se TMDBSeason) bool {
 			return se.SeasonNumber < 0 || se.SeasonNumber > maxSeason
@@ -117,6 +121,9 @@ func (s TVSearch) SearchText(ctx context.Context, query, format string) ([]looku
 		for _, se := range seasons {
 			out = append(out, seasonCandidate(show, se, edition))
 		}
+	}
+	if len(out) == 0 && failed != nil {
+		return nil, failed
 	}
 	return out, nil
 }
@@ -137,7 +144,7 @@ func seasonCandidate(show TMDBShow, se TMDBSeason, edition lookup.EditionFields)
 	}
 	id, number := show.ID, se.SeasonNumber
 	title := lookup.TitleFields{Name: name, TMDBID: &id, Season: &number, Year: dateYear(se.AirDate)}
-	if title.Year == nil {
+	if title.Year == nil && number == 1 {
 		title.Year = dateYear(show.FirstAirDate)
 	}
 	if show.OriginalName != "" {

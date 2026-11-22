@@ -1092,6 +1092,18 @@ func setDismissed(ctx context.Context, q querier, id int64, dismissed bool) erro
 	return nil
 }
 
+// SearchedWishCount returns how many wishlist copies the hunter looks for:
+// every wish but those of TV series, as Wants reads them.
+func (s *Store) SearchedWishCount(ctx context.Context) (int, error) {
+	var n int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM copy c JOIN edition e ON e.id = c.edition_id
+		JOIN title t ON t.id = e.title_id
+		WHERE c.status = 'wishlist' AND t.kind <> 'tv'`).Scan(&n); err != nil {
+		return 0, fmt.Errorf("searched wish count: %w", err)
+	}
+	return n, nil
+}
+
 // WishCount returns how many copies are on the wishlist.
 func (s *Store) WishCount(ctx context.Context) (int, error) {
 	var n int

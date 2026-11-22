@@ -39,7 +39,8 @@ func tmdbTV(t *testing.T, asked *[]string) *TMDB {
 				{"season_number":1,"name":"Sezon 1","air_date":"2017-12-01","episode_count":10,"poster_path":"/s1.jpg"},
 				{"season_number":2,"name":"Sezon 2","air_date":"2019-06-21","episode_count":8}]}`))
 		case "/3/tv/1405":
-			_, _ = w.Write([]byte(`{"id":1405,"seasons":[{"season_number":1,"name":"Sezon 1","episode_count":12}]}`))
+			_, _ = w.Write([]byte(`{"id":1405,"seasons":[{"season_number":1,"name":"Sezon 1","episode_count":12},
+				{"season_number":2,"name":"Sezon 2","episode_count":12}]}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -76,6 +77,7 @@ func TestTVSearchListsEachSeasonOfTheShowsFound(t *testing.T) {
 		{70523, 2, "2019", "https://image.tmdb.org/t/p/w342/dark.jpg"},
 		{70523, 0, "2019", "https://image.tmdb.org/t/p/w342/dark.jpg"},
 		{1405, 1, "2006", ""},
+		{1405, 2, "", ""},
 	}
 	if fmt.Sprint(seasons) != fmt.Sprint(want) {
 		t.Fatalf("seasons = %v, want %v", seasons, want)
@@ -114,12 +116,57 @@ func TestSearchEndpointAnswersTVSeasons(t *testing.T) {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body)
 	}
 	var res lookup.SearchResult
-	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil || len(res.Candidates) != 4 {
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil || len(res.Candidates) != 5 {
 		t.Fatalf("body %s, err %v", rec.Body, err)
 	}
 	c := res.Candidates[1]
 	if c.Type != "tv" || c.Title.Name != "Dark" || *c.Title.Season != 2 || *c.Title.TMDBID != 70523 ||
 		*c.Title.Year != 2019 || c.Edition.Barcode != "5906619080172" || c.Provider != "tmdb" {
 		t.Fatalf("candidate = %+v", c)
+	}
+}
+
+func TestTVSearchKeepsTheSeasonsOfShowsItCouldRead(t *testing.T) {
+	s := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/3/search/tv":
+			_, _ = w.Write([]byte(`{"results":[{"id":7,"name":"Dark"},{"id":8,"name":"Dark Shadows"}]}`))
+		case "/3/tv/7":
+			_, _ = w.Write([]byte(`{"seasons":[{"season_number":1},{"season_number":2}]}`))
+		default:
+			http.Error(w, "down", http.StatusServiceUnavailable)
+		}
+	})
+	got, err := TVSearch{TMDB: TMDB{Client: s.Client(), BaseURL: s.URL, Key: "k"}}.SearchText(t.Context(), "Dark", "")
+	if err != nil || len(got) != 2 || *got[0].Title.TMDBID != 7 || *got[1].Title.Season != 2 {
+		t.Fatalf("SearchText = %+v, %v, want Dark's 2 seasons", got, err)
+	}
+}
+
+func TestTVSearchListsEverySeasonOfALongShow(t *testing.T) {
+	var seasons []string
+	for n := range 42 {
+		seasons = append(seasons, fmt.Sprintf(`{"season_number":%d}`, n))
+	}
+	s := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/3/search/tv" {
+			_, _ = w.Write([]byte(`{"results":[{"id":9,"name":"Klan"}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"seasons":[` + strings.Join(seasons, ",") + `]}`))
+	})
+	h := &lookup.SearchHandler{Searchers: map[string]lookup.TextSearcher{
+		"tv": TVSearch{TMDB: TMDB{Client: s.Client(), BaseURL: s.URL, Key: "k"}},
+	}}
+	r := chi.NewRouter()
+	h.Mount(r)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/search?kind=tv&q=Klan", http.NoBody))
+	var res lookup.SearchResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil || len(res.Candidates) != 42 {
+		t.Fatalf("status %d, %d candidates, %v", rec.Code, len(res.Candidates), err)
+	}
+	if last := res.Candidates[41].Title; *last.Season != 0 || *res.Candidates[40].Title.Season != 41 {
+		t.Fatalf("last seasons = %d, %d, want 41 then the specials", *res.Candidates[40].Title.Season, *last.Season)
 	}
 }

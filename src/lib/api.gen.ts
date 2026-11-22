@@ -461,6 +461,7 @@ export type HunterStatus = {
 export type DealsView = {
 	status: HunterStatus;
 	wishes: number;
+	searched_wishes: number;
 	observations: Observation[];
 };
 

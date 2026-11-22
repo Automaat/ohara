@@ -2,10 +2,15 @@ package collection_test
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/Automaat/ohara/backend-go/internal/collection"
+	"github.com/Automaat/ohara/backend-go/internal/dbtest"
+	"github.com/Automaat/ohara/backend-go/internal/lookup"
+	"github.com/Automaat/ohara/backend-go/internal/server"
 )
 
 func TestTVTitleNeedsItsSeason(t *testing.T) {
@@ -100,5 +105,52 @@ func TestTVEditionsFollowTheFilmRules(t *testing.T) {
 	a.mustDo(http.MethodGet, "/api/collection?kind=tv&format=bluray", nil, &view, http.StatusOK)
 	if len(view.Items) != 1 || view.Items[0].Kind != "tv" || view.Items[0].Season == nil || *view.Items[0].Season != 2 {
 		t.Fatalf("TV view = %+v", view.Items)
+	}
+}
+
+func TestTVTitleTakesOnlyItsOwnSeasonsCover(t *testing.T) {
+	const firstCover = "https://example.org/s1.jpg"
+	const secondCover = "https://example.org/s2.jpg"
+	season := func(n int, cover string) lookup.Candidate {
+		show := int64(70523)
+		return lookup.Candidate{
+			Type: collection.KindTV, CoverURL: cover,
+			Title: lookup.TitleFields{Name: "Dark", TMDBID: &show, Season: &n},
+		}
+	}
+	for _, tt := range []struct {
+		name   string
+		found  []lookup.Candidate
+		tmdbID *int64
+		want   string
+	}{
+		{name: "by name, only another season found", found: []lookup.Candidate{season(1, firstCover)}},
+		{name: "by TMDB ID, only another season found", found: []lookup.Candidate{season(1, firstCover)}, tmdbID: new(int64(70523))},
+		{name: "by name, its season among others", found: []lookup.Candidate{season(1, firstCover), season(2, secondCover)}, want: secondCover},
+		{
+			name: "by TMDB ID, its season among others", found: []lookup.Candidate{season(1, firstCover), season(2, secondCover)},
+			tmdbID: new(int64(70523)), want: secondCover,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			pool := dbtest.Migrated(t)
+			logger := slog.New(slog.DiscardHandler)
+			service := lookup.NewService(&lookup.Registry{}, lookup.NewPGCache(pool), logger)
+			searchers := map[string]lookup.TextSearcher{collection.KindTV: coverCatalog{results: tt.found}}
+			handler := collection.NewHandler(collection.NewStore(pool), logger).WithCatalogCovers(searchers, service)
+			srv := httptest.NewServer(server.New(server.Config{}, logger, server.Deps{DB: pool, API: []server.Mounter{handler}}))
+			t.Cleanup(srv.Close)
+			a := &api{t: t, url: srv.URL}
+
+			var created collection.Title
+			a.mustDo(http.MethodPost, "/api/titles", obj{"kind": "tv", "name": "Dark", "season": 2, "tmdb_id": tt.tmdbID}, &created, http.StatusCreated)
+			got := ""
+			if created.CoverURL != nil {
+				got = *created.CoverURL
+			}
+			if got != tt.want {
+				t.Fatalf("season 2 cover = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }

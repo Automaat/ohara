@@ -511,6 +511,17 @@ function fitCoverURL(value: string | null | undefined): string | undefined {
 	return raw && byteLength(raw) <= maxURLBytes && coverURL.test(raw) ? raw : undefined;
 }
 
+/**
+ * Whether the form still names the picked candidate's season. A TV pick whose season was changed
+ * is another season of the same show: the show's names and TMDB ID still fit it, the picked
+ * season's year and poster do not.
+ */
+function sameSeason(f: QuickForm, candidate: Candidate | null): boolean {
+	if (f.kind !== 'tv') return true;
+	const typed = trimSpace(f.season ?? '');
+	return /^\d+$/.test(typed) && Number(typed) === candidate?.title.season;
+}
+
 /** The POST /api/titles body: the form's kind and name over the candidate's other fields. */
 export function scanTitlePayload(f: QuickForm, candidate: Candidate | null): Parsed<TitlePayload> {
 	// Postgres text takes no NUL, which a provider's name can carry into the form.
@@ -528,7 +539,7 @@ export function scanTitlePayload(f: QuickForm, candidate: Candidate | null): Par
 			name,
 			original_title: fitText(t?.original_title),
 			polish_title: fitText(t?.polish_title),
-			year: fitYear(t?.year),
+			year: sameSeason(f, candidate) ? fitYear(t?.year) : null,
 			tmdb_id: movie ? fitID(t?.tmdb_id) : null,
 			season: season.value ?? undefined,
 			authors: movie ? [] : fitAuthors(t?.authors),
@@ -574,7 +585,7 @@ export function scanEditionPayload(
 			binding: f.kind === 'book' ? fitEnum<Binding>(bindingLabels, f.binding) : null,
 			// The release is one pressing on its own medium; another or an unknown medium is not it.
 			discogs_release_id: music && e?.format === f.format ? fitID(e?.discogs_release_id) : null,
-			cover_url: fitCoverURL(selected?.cover_url),
+			cover_url: sameSeason(f, selected) ? fitCoverURL(selected?.cover_url) : undefined,
 			notes: ''
 		}
 	};

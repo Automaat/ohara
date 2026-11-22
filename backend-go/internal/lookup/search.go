@@ -24,11 +24,12 @@ type TextSearcher interface {
 
 // maxQuery bounds the search text, in characters; maxSearchResults the
 // candidates one search answers, and maxSeasonResults those of a TV search,
-// which lists every season of the shows it finds.
+// which lists every season of the few shows it finds, so even a long-running
+// show's last seasons and specials stay among them.
 const (
 	maxQuery         = 200
 	maxSearchResults = 10
-	maxSeasonResults = 40
+	maxSeasonResults = 500
 )
 
 // SearchHandler serves GET /api/search?kind=&q=&barcode=&format=. The

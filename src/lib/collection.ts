@@ -1,6 +1,6 @@
 import { trimSpace } from './go-text';
 import { tagKey, tagMatches, tagTerm } from './tags';
-import { editionCount, orderedCount, purchaseDate } from './polish';
+import { editionCount, orderedCount, purchaseDate, titleCount } from './polish';
 import type {
 	AcquiredAs,
 	Binding,
@@ -19,11 +19,14 @@ import type {
 	MovieFormat,
 	MusicFormat,
 	Packaging,
+	Series,
+	SeriesTotalPayload,
 	SleeveGrade,
 	Title,
 	TitlePayload,
 	Totals,
-	TriState
+	TriState,
+	VolumeState
 } from './api.gen';
 
 export type {
@@ -50,15 +53,21 @@ export type {
 	MovieFormat,
 	MusicFormat,
 	Packaging,
+	MissingVolume,
 	RatingPayload,
 	ReturnPayload,
+	Series,
+	SeriesDetail,
+	SeriesTotalPayload,
+	SeriesVolume,
 	SleeveGrade,
 	TagCount,
 	Title,
 	TitleDetail,
 	TitlePayload,
 	Totals,
-	TriState
+	TriState,
+	VolumeState
 } from './api.gen';
 
 export const kindLabels: Record<Kind, string> = {
@@ -575,6 +584,14 @@ export type TitleForm = {
 	tags: string[];
 	/** A tag typed but not added yet; saving adds it. */
 	tag: string;
+	series_name: string;
+	series_number: string;
+	/**
+	 * The series fields as the title was loaded. A save that leaves both as they were sends
+	 * neither, so the server keeps the series as stored: one another save gave the title since the
+	 * form opened stays, with its total.
+	 */
+	loaded_series: { name: string; number: string };
 };
 
 /** The editable form of a title, or an empty one of kind. */
@@ -593,7 +610,13 @@ export function titleToForm(t: TitlePayload | null, kind: Kind = 'movie'): Title
 		cover_url: t?.cover_url ?? '',
 		notes: t?.notes ?? '',
 		tags: [...(t?.tags ?? [])],
-		tag: ''
+		tag: '',
+		series_name: t?.series_name ?? '',
+		series_number: t?.series_number?.toString() ?? '',
+		loaded_series: {
+			name: t?.series_name ?? '',
+			number: t?.series_number?.toString() ?? ''
+		}
 	};
 }
 
@@ -610,6 +633,8 @@ export function titlePayload(f: TitleForm): Parsed<TitlePayload> {
 	if (!tmdb.ok) return tmdb;
 	const season = parseSeason(f.kind, f.season);
 	if (!season.ok) return season;
+	const series = seriesPayload(f);
+	if (!series.ok) return series;
 	return {
 		ok: true,
 		value: {
@@ -630,9 +655,81 @@ export function titlePayload(f: TitleForm): Parsed<TitlePayload> {
 			openlibrary_id: book ? optText(f.openlibrary_id) : null,
 			cover_url: f.cover_url.trim(),
 			notes: f.notes.trim(),
-			tags: addTag(f.tags, f.tag)
+			tags: addTag(f.tags, f.tag),
+			...series.value
 		}
 	};
+}
+
+/** The series fields of a title body: none when the form left both as loaded. */
+function seriesPayload(f: TitleForm): Parsed<Pick<TitlePayload, 'series_name' | 'series_number'>> {
+	if (
+		f.series_name.trim() === f.loaded_series.name.trim() &&
+		f.series_number.trim() === f.loaded_series.number.trim()
+	) {
+		return { ok: true, value: {} };
+	}
+	const seriesName = optText(f.series_name);
+	const seriesNumber = parseOptInt(f.series_number, 'series_number', volumeMessage);
+	if (!seriesNumber.ok) return seriesNumber;
+	if (seriesNumber.value !== null && (seriesNumber.value < 1 || seriesNumber.value > maxVolume)) {
+		return { ok: false, issue: { field: 'series_number', message: volumeMessage } };
+	}
+	if (seriesNumber.value !== null && seriesName === null) {
+		return {
+			ok: false,
+			issue: { field: 'series_name', message: 'Podaj serię, do której należy tom.' }
+		};
+	}
+	return { ok: true, value: { series_name: seriesName, series_number: seriesNumber.value } };
+}
+
+/** The highest volume number and series total the server takes. */
+export const maxVolume = 10000;
+const volumeMessage = `Tom to liczba całkowita od 1 do ${maxVolume}, np. 3.`;
+
+/** A title's place in its series, as "Wiedźmin · tom 3", or null outside one. */
+export function seriesLine(t: Pick<Title, 'series_name' | 'series_number'>): string | null {
+	if (!t.series_name) return null;
+	return t.series_number == null ? t.series_name : `${t.series_name} · tom ${t.series_number}`;
+}
+
+/** What a series volume has on the shelf, as the series page says it. */
+export const volumeStateLabels: Record<VolumeState, string> = {
+	owned: 'Na półce',
+	ordered: 'Zamówiony',
+	wishlist: 'Na liście życzeń',
+	none: 'Bez egzemplarza'
+};
+
+/**
+ * A series' size in the list: its titles and, when any, the volumes it lacks. None missing is no
+ * claim of a full set: without a total or numbers nothing can be missing.
+ */
+export function seriesSummary(s: Pick<Series, 'title_count' | 'missing_count'>): string {
+	const titles = titleCount(s.title_count);
+	return s.missing_count === 0 ? titles : `${titles} · brakuje ${s.missing_count}`;
+}
+
+/** The series names of kind, for the title form's suggestions. */
+export function seriesNames(
+	series: readonly Pick<Series, 'kind' | 'name'>[],
+	kind: Kind
+): string[] {
+	return series.filter((s) => s.kind === kind).map((s) => s.name);
+}
+
+/** The total-of-volumes field's request body: a whole number or, when blank, null. */
+export function seriesTotalPayload(input: string): Parsed<SeriesTotalPayload> {
+	const total = parseOptInt(input, 'total_volumes', `Liczba tomów to liczba od 1 do ${maxVolume}.`);
+	if (!total.ok) return total;
+	if (total.value !== null && (total.value < 1 || total.value > maxVolume)) {
+		return {
+			ok: false,
+			issue: { field: 'total_volumes', message: `Liczba tomów to liczba od 1 do ${maxVolume}.` }
+		};
+	}
+	return { ok: true, value: { total_volumes: total.value } };
 }
 
 /** The highest season number the API takes. */

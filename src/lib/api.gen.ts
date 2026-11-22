@@ -37,6 +37,8 @@ export type SleeveGrade =
 	| 'not_graded'
 	| 'no_cover';
 
+export type VolumeState = 'owned' | 'ordered' | 'wishlist' | 'none';
+
 export type QueueReason = 'not_found' | 'lookup_failed';
 
 export type DealSource = 'olx' | 'pepper';
@@ -70,6 +72,8 @@ export type TitlePayload = {
 	finished_on?: string | null;
 	rating?: number | null;
 	tags?: string[];
+	series_name?: string | null;
+	series_number?: number | null;
 	request_key?: string;
 };
 
@@ -90,8 +94,11 @@ export type Title = {
 	finished?: boolean | null;
 	finished_on?: string | null;
 	rating?: number | null;
+	series_name?: string | null;
+	series_number?: number | null;
 	request_key?: string;
 	tags: string[];
+	series_id?: number | null;
 	edition_count: number;
 	copy_count: number;
 	in_owned_box_set?: boolean;
@@ -247,8 +254,11 @@ export type TitleDetail = {
 	finished?: boolean | null;
 	finished_on?: string | null;
 	rating?: number | null;
+	series_name?: string | null;
+	series_number?: number | null;
 	request_key?: string;
 	tags: string[];
+	series_id?: number | null;
 	edition_count: number;
 	copy_count: number;
 	in_owned_box_set?: boolean;
@@ -394,6 +404,47 @@ export type TagCount = {
 	title_count: number;
 };
 
+export type Series = {
+	id: number;
+	kind: Kind;
+	name: string;
+	total_volumes: number | null;
+	title_count: number;
+	missing_count: number;
+};
+
+export type SeriesVolume = {
+	title_id: number;
+	name: string;
+	polish_title: string | null;
+	year: number | null;
+	authors: string[];
+	cover_url: string | null;
+	number: number | null;
+	state: VolumeState;
+};
+
+export type MissingVolume = {
+	number: number;
+	title_id: number | null;
+	state: VolumeState;
+};
+
+export type SeriesDetail = {
+	id: number;
+	kind: Kind;
+	name: string;
+	total_volumes: number | null;
+	title_count: number;
+	missing_count: number;
+	volumes: SeriesVolume[];
+	missing: MissingVolume[];
+};
+
+export type SeriesTotalPayload = {
+	total_volumes: number | null;
+};
+
 export type CandidateTitle = {
 	name: string;
 	original_title?: string | null;
@@ -404,6 +455,8 @@ export type CandidateTitle = {
 	authors?: string[];
 	bn_id?: string | null;
 	openlibrary_id?: string | null;
+	series_name?: string | null;
+	series_number?: number | null;
 };
 
 export type CandidateEdition = {

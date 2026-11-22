@@ -56,6 +56,12 @@ describe('request', () => {
 			'barcode'
 		],
 		[
+			409,
+			'{"error":"another title of this series has this number","field":"series_number"}',
+			'Inny tytuł tej serii ma już ten numer tomu.',
+			'series_number'
+		],
+		[
 			422,
 			'{"error":"bad","field":"barcode"}',
 			'Nieprawidłowy kod kreskowy: sprawdź cyfry.',

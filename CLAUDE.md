@@ -325,10 +325,23 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   adds stay out of the scanner's recent scans. Okazje's "Dodaj pozycję"
   opens it as `/titles/new?from=deals`: the item starts as a wish and the
   page leads back to `/deals`.
-- Kolekcja (`/`) lists copies. Its filter sheet's "Bez egzemplarzy"
+- Kolekcja (`/`) lists copies. It loads all of `GET /api/collection` once
+  per visit and filters, searches and counts it in the browser
+  (`src/lib/collection-filter.ts`, the server's `Store.Collection` filter
+  with the search normalized by barcode.Normalize's rules), so a chip, the
+  sheet or a search sends no request; Back draws the kept collection and
+  refreshes it once. Its filter sheet's "Bez egzemplarzy"
   (`?status=none`) lists titles without one instead, filtered in the client
   from `GET /api/titles`; `/titles` redirects to `/`. `?add=copy` on a title
   or edition page opens the form for its next copy.
+- "Zmień okładkę" shrinks the chosen photo in the browser before upload
+  (`shrinkPhoto` in `src/lib/edition-cover.ts`): `createImageBitmap` turns
+  it upright from its EXIF orientation, a canvas at most 1600 px on the
+  long edge draws it on white and sends it as JPEG, lowering the quality
+  until it fits under 1 MB. A file that is no JPEG or PNG, or one the
+  browser cannot decode, sends nothing, and a photo still shrinking when
+  its sheet is gone is never sent. The server's 8 MiB and 16 megapixel
+  limits stay as a backstop.
 - Discogs data carries `DiscogsCredit`: "Data provided by Discogs." linked
   to its release page, never `nofollow`, under a quick confirm candidate
   with a `discogs_release_id` and a copy priced from Discogs on Wartość.
@@ -349,8 +362,11 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
 - The smoke suite (`e2e/`, `npm run test:e2e`) drives the production image
   in Chromium at 390 × 844 with touch: a wedge scan, quick confirm and
   "Cofnij", "Dodaj tytuł" by hand, the scan sheet sending no deals or queue
-  read, and the queue count following a queued scan, its add and undo. `scripts/e2e.sh` builds the image
-  (or takes one as its first argument), starts it from `e2e/compose.yaml`
+  read, the queue count following a queued scan, its add and undo,
+  Kolekcja's filters, which also run at 1440 × 900, and its sort orders
+  under active filters, and cover photo uploads. `scripts/e2e.sh` builds
+  the image (or takes one as its first argument), starts it from
+  `e2e/compose.yaml`
   with Postgres, `OHARA_LOOKUP_STUB=true`, `OHARA_MUSICBRAINZ=false` and no
   provider keys, and removes it afterwards. App and Postgres sit on an
   internal network, so no public provider is reachable; each test also

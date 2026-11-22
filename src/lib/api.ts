@@ -1,3 +1,5 @@
+import type { FormIssue } from './collection';
+
 /** An API failure with a Polish message and, for validation errors, the field it names. */
 export class ApiError extends Error {
 	constructor(
@@ -16,6 +18,10 @@ export const invalidBarcodeMessage = 'Nieprawidłowy kod kreskowy: sprawdź cyfr
 
 /** What the server's 413 for a cover photo means. */
 export const coverTooLargeMessage = 'Wybierz plik o rozmiarze do 8 MiB.';
+
+/** What the server's 422 for a cover photo means, and what a photo the browser cannot read says. */
+export const invalidCoverMessage =
+	'Wybierz prawidłowe zdjęcie JPEG lub PNG o rozdzielczości do 16 megapikseli.';
 
 /** What a request that never got an answer says. */
 export const noAnswerMessage = 'Serwer nie odpowiada.';
@@ -39,7 +45,7 @@ const fieldMessages: Record<string, Record<number, string>> = {
 	cover_photo: {
 		400: 'Przesyłanie zdjęcia zostało przerwane. Spróbuj ponownie.',
 		413: coverTooLargeMessage,
-		422: 'Wybierz prawidłowe zdjęcie JPEG lub PNG o rozdzielczości do 16 megapikseli.'
+		422: invalidCoverMessage
 	}
 };
 
@@ -168,4 +174,9 @@ export function isSessionExpired(err: unknown): boolean {
 /** The message to show for any thrown value. */
 export function errorMessage(err: unknown): string {
 	return err instanceof ApiError ? err.message : 'Nieznany błąd.';
+}
+
+/** The form issue for a failed save: the field the API named, if any, and the message. */
+export function issueFrom(err: unknown): FormIssue {
+	return { field: err instanceof ApiError ? (err.field ?? '') : '', message: errorMessage(err) };
 }

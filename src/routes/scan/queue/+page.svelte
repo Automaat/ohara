@@ -16,6 +16,7 @@
 	import { deleteQueueEntry, queueDeletesSettled } from '#lib/queue-deletes.js';
 	import { QueueRemovals } from '#lib/queue.svelte.js';
 	import type { QueueEntry } from '#lib/scan.js';
+	import { toastHeld } from '#lib/toast-hold.js';
 
 	let entries = $state<QueueEntry[] | null>(null);
 	let failure = $state<string | null>(null);
@@ -24,10 +25,7 @@
 	const removals = new QueueRemovals({
 		toast,
 		dismiss,
-		holding: (id) => {
-			const shown = document.querySelector(`[data-toast="${id}"]`);
-			return shown !== null && (shown.matches(':hover') || shown.contains(document.activeElement));
-		},
+		holding: (id) => toastHeld(document, id),
 		send: (entry) => deleteQueueEntry(entry.id),
 		removed: (entry) => {
 			entries = (entries ?? []).filter((e) => e.id !== entry.id);

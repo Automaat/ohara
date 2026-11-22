@@ -15,7 +15,7 @@
 	import { SvelteSet } from 'svelte/reactivity';
 	import { goto, replaceState } from '$app/navigation';
 	import { page } from '$app/state';
-	import { ApiError, errorMessage, request } from '#lib/api.js';
+	import { errorMessage, issueFrom, request } from '#lib/api.js';
 	import {
 		acquiredLabels,
 		conditionLabels,
@@ -150,10 +150,6 @@
 		editionIssue = null;
 		editionEdits++;
 		editing = true;
-	}
-
-	function issueFrom(err: unknown): FormIssue {
-		return { field: err instanceof ApiError ? (err.field ?? '') : '', message: errorMessage(err) };
 	}
 
 	async function saveEdition(d: EditionDetail) {

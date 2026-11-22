@@ -138,20 +138,23 @@ func TestAllegroColdLoadPanicReachesTheLookup(t *testing.T) {
 		_, _ = a.Products(context.Background(), "5906190326195")
 	}()
 	<-store.started
-	waiter := make(chan error, 1)
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		_, err := a.Products(ctx, "5906190326195")
-		waiter <- err
-	}()
-	time.Sleep(100 * time.Millisecond)
+	a.mu.Lock()
+	op := a.op
+	a.mu.Unlock()
 	close(store.release)
 	if r := <-recovered; r != "token store" {
 		t.Fatalf("loading lookup recovered %v, want the store's panic", r)
 	}
-	if err := <-waiter; err == nil || errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("waiting lookup err = %v, want the aborted load", err)
+	select {
+	case <-op.done:
+	default:
+		t.Fatal("the panicked load left its waiters waiting")
+	}
+	a.mu.Lock()
+	pending := a.op != nil
+	a.mu.Unlock()
+	if pending || op.err == nil || op.abandoned {
+		t.Fatalf("pending %v, load err %v, abandoned %v; want a failed load waiters return", pending, op.err, op.abandoned)
 	}
 	if _, err := a.Products(context.Background(), "5906190326195"); err != nil {
 		t.Fatalf("lookup after the panic: %v", err)

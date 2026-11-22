@@ -268,7 +268,8 @@ describe('PendingScans.send', () => {
 		const saved = new Map<string, string>();
 		const storage = {
 			getItem: (key: string) => saved.get(key) ?? null,
-			setItem: (key: string, value: string) => void saved.set(key, value)
+			setItem: (key: string, value: string) => void saved.set(key, value),
+			removeItem: (key: string) => void saved.delete(key)
 		};
 		const device = memory([a, b]);
 		const s = api({ [a]: 'none' });
@@ -293,6 +294,9 @@ describe('PendingScans.send', () => {
 			},
 			setItem: () => {
 				throw new DOMException('full', 'QuotaExceededError');
+			},
+			removeItem: () => {
+				throw new DOMException('denied', 'SecurityError');
 			}
 		};
 		const device = memory([a, b]);
@@ -315,6 +319,41 @@ describe('PendingScans.send', () => {
 		await missing.send();
 		await missing.send();
 		expect(s.codes()).toEqual([a, b, a, a, b, a]);
+	});
+
+	it('follows a start another tab stored after this tab could not store its own', async () => {
+		const saved = new Map<string, string>([['ohara-pending-scans-unanswered', c]]);
+		const state = { full: true };
+		const storage = {
+			getItem: (key: string) => saved.get(key) ?? null,
+			setItem: (key: string, value: string) => {
+				if (state.full) throw new DOMException('full', 'QuotaExceededError');
+				saved.set(key, value);
+			},
+			removeItem: (key: string) => void saved.delete(key)
+		};
+		const device = memory([a, b, c]);
+		const tab = (answers: Record<string, Answer>) => {
+			const s = api(answers);
+			const pending = new PendingScans(
+				s.fetchFn,
+				device.open,
+				undefined,
+				storageCursor(() => storage)
+			);
+			return { s, pending };
+		};
+		const first = tab({ [a]: 'none', [b]: 503, [c]: 503 });
+		await first.pending.send();
+		expect(first.s.codes()).toEqual([a]);
+		expect(saved.size).toBe(0);
+		state.full = false;
+		const second = tab({ [a]: 503, [b]: 'none', [c]: 503 });
+		await second.pending.send();
+		expect(second.s.codes()).toEqual([a, b]);
+		await first.pending.send();
+		expect(first.s.codes()).toEqual([a, c, a]);
+		expect(device.kept.size).toBe(3);
 	});
 
 	it('starts again from the first code after the sign-in turned one away', async () => {

@@ -46,7 +46,7 @@ export type SendCursor = {
 	set(barcode: string): void;
 };
 
-type CursorStorage = Pick<Storage, 'getItem' | 'setItem'>;
+type CursorStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 
 const cursorKey = 'ohara-pending-scans-unanswered';
 
@@ -54,20 +54,34 @@ function browserStorage(): CursorStorage | undefined {
 	return globalThis.localStorage;
 }
 
-function writeCursor(storage: () => CursorStorage | undefined, barcode: string): boolean {
+/** Takes an older cursor out of storage, so it cannot win over the one this tab keeps. */
+function dropCursor(target: CursorStorage | undefined): boolean {
 	try {
-		const target = storage();
-		if (!target) return false;
-		target.setItem(cursorKey, barcode);
+		target?.removeItem(cursorKey);
 		return true;
 	} catch {
 		return false;
 	}
 }
 
+/** Stores the cursor; false when storage is missing or refused it, with any older one dropped. */
+function writeCursor(storage: () => CursorStorage | undefined, barcode: string): boolean {
+	let target: CursorStorage | undefined;
+	try {
+		target = storage();
+		if (!target) return false;
+		target.setItem(cursorKey, barcode);
+		return true;
+	} catch {
+		dropCursor(target);
+		return false;
+	}
+}
+
 /**
  * The cursor in localStorage, shared by the app's tabs and kept across reloads; where storage is
- * missing or refuses, this tab keeps it in memory.
+ * missing or refuses, this tab keeps it in memory until storage holds a cursor again, as one
+ * another tab stored later.
  */
 export function storageCursor(
 	storage: () => CursorStorage | undefined = browserStorage
@@ -75,11 +89,10 @@ export function storageCursor(
 	let memory: string | null = null;
 	return {
 		get: () => {
-			if (memory !== null) return memory;
 			try {
-				return storage()?.getItem(cursorKey) ?? null;
+				return storage()?.getItem(cursorKey) ?? memory;
 			} catch {
-				return null;
+				return memory;
 			}
 		},
 		set: (barcode) => {

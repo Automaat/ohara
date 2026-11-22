@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -19,6 +20,7 @@ import (
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
 	"github.com/Automaat/ohara/backend-go/internal/reqlog"
 	"github.com/Automaat/ohara/backend-go/internal/web"
+	"github.com/Automaat/ohara/backend-go/internal/wishshare"
 )
 
 const requestTimeout = 30 * time.Second
@@ -46,11 +48,13 @@ type Mounter interface {
 
 // Deps are the runtime dependencies. A nil DB reports the database as
 // unconfigured; a nil Web serves no frontend. API holds the domain handlers
-// mounted under /api.
+// mounted under /api. Share serves the public wishlist pages under
+// wishshare.Prefix; nil leaves that prefix to the frontend and guarded.
 type Deps struct {
-	DB  Pinger
-	Web fs.FS
-	API []Mounter
+	DB    Pinger
+	Web   fs.FS
+	API   []Mounter
+	Share http.Handler
 }
 
 // New returns the router: probes, metrics, the JSON API and the frontend.
@@ -73,7 +77,7 @@ func newRouter(cfg Config, logger *slog.Logger, deps Deps, timeout time.Duration
 	r.Use(recoverer(logger))
 	r.Use(timeoutAfter(timeout, logger))
 	if cfg.RequireRemoteUser {
-		r.Use(remoteUserGuard(logger))
+		r.Use(remoteUserGuard(logger, deps.Share != nil))
 	}
 	r.Use(crossOriginGuard(logger))
 	r.Use(jsonMethodNotAllowed(r, logger))
@@ -91,6 +95,9 @@ func newRouter(cfg Config, logger *slog.Logger, deps Deps, timeout time.Duration
 		})
 	})
 
+	if deps.Share != nil {
+		r.Mount(wishshare.Prefix, deps.Share)
+	}
 	if deps.Web != nil {
 		r.Handle("/*", web.Handler(deps.Web))
 	}
@@ -167,7 +174,7 @@ func recoverer(logger *slog.Logger) func(http.Handler) http.Handler {
 				logger.Error("handler panic",
 					"request_id", middleware.GetReqID(r.Context()),
 					"method", r.Method,
-					"path", r.URL.Path,
+					"path", logPath(r.URL.Path),
 					"panic", rvr,
 					"stack", string(debug.Stack()),
 				)
@@ -233,7 +240,7 @@ func requestID(next http.Handler) http.Handler {
 	assign := middleware.RequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := middleware.GetReqID(r.Context())
 		w.Header().Set(middleware.RequestIDHeader, id)
-		next.ServeHTTP(w, r.WithContext(reqlog.WithRequest(r.Context(), id, r.Method, r.URL.Path)))
+		next.ServeHTTP(w, r.WithContext(reqlog.WithRequest(r.Context(), id, r.Method, logPath(r.URL.Path))))
 	}))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get(middleware.RequestIDHeader) != "" {
@@ -290,11 +297,14 @@ func generalOptions(requireRemoteUser bool) func(http.Handler) http.Handler {
 // Authelia gets nothing. The guard checks only that the header is there, so it
 // is worth as much as the proxy that sets it and the firewall that keeps
 // everyone else off the port; the name in it is not used. The Docker
-// healthcheck and Prometheus reach /health and /metrics directly and stay open.
-func remoteUserGuard(logger *slog.Logger) func(http.Handler) http.Handler {
+// healthcheck and Prometheus reach /health and /metrics directly and stay open,
+// and with share on so do the public wishlist pages, which anyone with the
+// link may read.
+func remoteUserGuard(logger *slog.Logger, share bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Header.Get("Remote-User") == "" && !probePath(r) {
+			open := probePath(r) || share && sharePath(r)
+			if r.Header.Get("Remote-User") == "" && !open {
 				httpx.WriteError(w, logger, http.StatusUnauthorized, "authentication required")
 				return
 			}
@@ -317,6 +327,36 @@ func probePath(r *http.Request) bool {
 		path = r.URL.Path
 	}
 	return path == "/health" || path == "/metrics"
+}
+
+// sharePath reports a GET under wishshare.Prefix, the public wishlist pages.
+// The path is read the way chi routes it, as probePath does, so a request
+// exempt here always reaches the share handler and nothing else; only GET is
+// exempt because the share handler answers nothing else.
+func sharePath(r *http.Request) bool {
+	if r.Method != http.MethodGet {
+		return false
+	}
+	path := r.URL.RawPath
+	if path == "" {
+		path = r.URL.Path
+	}
+	return strings.HasPrefix(path, wishshare.Prefix+"/")
+}
+
+// logPath is a request path as logs record it: a share link's token, which
+// opens the wishlist to whoever reads it, becomes {token}. The access log,
+// the panic log and every *Context log line take the path from here.
+func logPath(path string) string {
+	rest, ok := strings.CutPrefix(path, wishshare.Prefix+"/")
+	if !ok || rest == "" {
+		return path
+	}
+	_, tail, more := strings.Cut(rest, "/")
+	if more {
+		return wishshare.Prefix + "/{token}/" + tail
+	}
+	return wishshare.Prefix + "/{token}"
 }
 
 // crossOriginGuard answers 403 to a cross-origin write. Authelia's session
@@ -379,7 +419,7 @@ func requestObserver(logger *slog.Logger, accessLog bool) func(http.Handler) htt
 			logger.Info("request",
 				"request_id", middleware.GetReqID(r.Context()),
 				"method", r.Method,
-				"path", r.URL.Path,
+				"path", logPath(r.URL.Path),
 				"route", route,
 				"status", status,
 				"bytes", ww.BytesWritten(),

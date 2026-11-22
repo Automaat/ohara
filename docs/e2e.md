@@ -17,19 +17,25 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   a book edition marked as an audiobook in its form, on the shelf and in
   the "Nośnik" filter, series from the title form and Kolekcja to the
   series page, cover photo uploads, the collection export, Statystyki with
-  its value sections, and the insurance report
-  with its A4 printout. `scripts/e2e.sh` builds
+  its value sections, the insurance report
+  with its A4 printout, and the wishlist share link from Okazje with its
+  public page, opened in a context without cookies and asking nothing
+  outside `/share/`. `scripts/e2e.sh` builds
   the image (or takes one as its first argument), starts it from
   `e2e/compose.yaml`
   with Postgres, `OHARA_LOOKUP_STUB=true`, `OHARA_MUSICBRAINZ=false` and no
   provider keys, and removes it afterwards. App and Postgres sit on an
-  internal network, so no public provider is reachable; each test also
-  fails on a browser request to another origin and checks that
-  `ohara_source_requests_total` stayed 0. The Discogs collection flow
+  internal network, so no public provider is reachable; BN and Open
+  Library point at the `books` double there (busybox `httpd`), which
+  answers every BN search with the recorded one for 9788375780635 and Open
+  Library with no match, so a scan of that ISBN puts the book in its BN
+  series. Each test also fails on a browser request to another origin and
+  checks that `ohara_source_requests_total` stayed 0 for every source but
+  those two. The Discogs collection flow
   (`e2e/discogs-collection.spec.ts`) runs instead against `app-discogs` on
   127.0.0.1:8101: the same image with its own database (`ohara_discogs`,
   from `e2e/postgres-init.sql`), a Discogs token and `OHARA_DISCOGS_URL`
-  pointing at `scripts/e2e-discogs-double.mjs`, an in-memory Discogs double that
-  already holds release 2000002. The camera starts only on "Włącz
+  pointing at `scripts/e2e-discogs-double.mjs`, an in-memory Discogs
+  double that already holds release 2000002. The camera starts only on "Włącz
   aparat" or a remembered choice, so a fresh browser gets no camera prompt.
   Needs `npx playwright install chromium` once.

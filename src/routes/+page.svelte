@@ -18,15 +18,7 @@
 	import { MediaQuery } from 'svelte/reactivity';
 	import { afterNavigate, replaceState } from '$app/navigation';
 	import { page } from '$app/state';
-	import { errorMessage, request } from '#lib/api.js';
-	import {
-		keepListing,
-		keepOverview,
-		keptListing,
-		keptOverview,
-		type Listing,
-		type Overview
-	} from '#lib/collection-cache.js';
+	import { CollectionLoad } from '#lib/collection-load.svelte.js';
 	import SettingsSheet from '#lib/components/SettingsSheet.svelte';
 	import {
 		collectionSearch,
@@ -35,7 +27,6 @@
 		editionSummary,
 		formatLabels,
 		formatPLN,
-		kindCounts,
 		kindLabels,
 		readCollectionFilter,
 		shelfSummary,
@@ -44,11 +35,8 @@
 		uncopiedTitles,
 		unpricedCount,
 		unpricedLabel,
-		withoutCopies,
 		type CollectionFilter,
-		type CollectionItem,
-		type CollectionView,
-		type Title
+		type CollectionItem
 	} from '#lib/collection.js';
 	import { filterCollection } from '#lib/collection-filter.js';
 	import {
@@ -57,10 +45,7 @@
 		sortTitles,
 		type CollectionSort
 	} from '#lib/collection-sort.js';
-	import { coversPlaced } from '#lib/cover-transition.js';
 	import { purchaseDate, queuedCodes, resultCount } from '#lib/polish.js';
-	import { queueDeletesSettled } from '#lib/queue-deletes.js';
-	import type { QueueEntry } from '#lib/scan.js';
 	import CollectionFilterSheet from '#lib/components/CollectionFilterSheet.svelte';
 	import CollectionShelf from '#lib/components/CollectionShelf.svelte';
 	import type { ShelfPlace } from '#lib/shelf-drawing.js';
@@ -104,24 +89,7 @@
 	}
 
 	const emptyFilter: CollectionFilter = { q: '', kind: '', format: '', status: '' };
-	let filter = $state(untrack(() => readCollectionFilter(page.url.searchParams)));
-	let query = $state(untrack(() => filter.q));
-	/** The whole collection, loaded once per visit; the filter narrows it in the browser. */
-	let collection = $state<CollectionView | null>(null);
-	/** Every title without a copy, from the last load that listed them. */
-	let uncopied = $state<Title[] | null>(null);
-	let overview = $state<Overview | null>(null);
-	let queued = $state(0);
-	let failure = $state<string | null>(null);
-	let loading = $state(true);
 	let sheetOpen = $state(false);
-	let seq = 0;
-	/** Set once the reader leaves, so an answer that arrives later changes nothing kept. */
-	let left = false;
-	let restoreScroll: [number, number] | undefined;
-	let pendingCollection: Promise<CollectionView> | undefined;
-	let pendingQueue: Promise<void> | undefined;
-	let pendingUncopied: Promise<void> | undefined;
 
 	let results = $state<HTMLElement>();
 	let shelf = $state<CollectionShelf>();
@@ -131,195 +99,44 @@
 		return results ? results.getBoundingClientRect().top + window.scrollY : 0;
 	}
 
+	const loader = new CollectionLoad(
+		untrack(() => readCollectionFilter(page.url.searchParams)),
+		{
+			screen: {
+				scrollX: () => window.scrollX,
+				scrollY: () => window.scrollY,
+				scrollHeight: () => document.documentElement.scrollHeight,
+				scrollTo: (x, y) => window.scrollTo(x, y),
+				resultsTop,
+				drawTo: (y) => shelf?.drawTo(y)
+			}
+		}
+	);
+	const filter = $derived(loader.filter);
+	let query = $state(untrack(() => loader.filter.q));
+	const collection = $derived(loader.collection);
+	const uncopied = $derived(loader.uncopied);
+	const overview = $derived(loader.overview);
+	const queued = $derived(loader.queued);
+	const failure = $derived(loader.failure);
+	const loading = $derived(loader.loading);
+	const load = loader.load;
+
 	export const snapshot: Snapshot<[number, number]> = {
-		capture: () => [window.scrollX, window.scrollY - resultsTop()],
-		restore: (position) => (restoreScroll = position)
+		capture: () => loader.capture(),
+		restore: (position) => loader.restoreFrom(position)
 	};
 
-	function overviewOf(full: CollectionView): Overview {
-		return { totals: full.totals, kinds: kindCounts(full.items) };
-	}
-
-	/** Shows the whole collection and its counts. */
-	function showCollection(full: CollectionView) {
-		collection = full;
-		overview = overviewOf(full);
-		keepOverview(overview);
-	}
-
-	/**
-	 * Asks for the whole collection and shows the answer whatever the filter lists by then, so a
-	 * refresh that a switch to "Bez egzemplarzy" and back outlived still lands. An ask while one
-	 * is on its way shares its answer.
-	 */
-	function askCollection(): Promise<CollectionView> {
-		pendingCollection ??= request<CollectionView>(fetch, 'GET', '/api/collection')
-			.then((full) => {
-				if (!left) showCollection(full);
-				return full;
-			})
-			.finally(() => {
-				pendingCollection = undefined;
-			});
-		return pendingCollection;
-	}
-
-	/**
-	 * Loads the whole collection for the counts while titles are listed, once, or again when
-	 * `again` asks for fresh ones.
-	 */
-	function loadOverview(again = false) {
-		if (overview && !again) return;
-		return askCollection().then(
-			() => undefined,
-			() => undefined
-		);
-	}
-
-	/** What the filter lists from: the titles for "Bez egzemplarzy", else the whole collection. */
-	function sourceURL(f: CollectionFilter): Listing['url'] {
-		return f.status === 'none' ? '/api/titles' : '/api/collection';
-	}
-
-	// Going back draws the collection as the reader left it, the filter applied to what was
-	// loaded. Loads it left pending never keep what they bring, which would replace what a
-	// newer visit kept.
-	onDestroy(() => {
-		seq += 1;
-		left = true;
-		if (listsTitles) {
-			if (uncopied) keepListing({ url: '/api/titles', titles: uncopied, pending: loading });
-		} else if (collection) {
-			keepListing({ url: '/api/collection', view: collection, pending: loading });
-		}
-	});
-
-	/** Counts the scan queue once per visit; a failed count is asked again on the next load. */
-	function loadQueue() {
-		pendingQueue ??= queueDeletesSettled()
-			.then(() => request<QueueEntry[]>(fetch, 'GET', '/api/scan-queue'))
-			.then((entries) => showQueue(entries.length))
-			.catch(() => {
-				pendingQueue = undefined;
-			});
-		return pendingQueue;
-	}
-
-	/**
-	 * Shows the queue count. A notice that appears above a scrolled view pushes the view down by
-	 * its height, so the copies on screen stay where the reader left them.
-	 */
-	async function showQueue(count: number) {
-		const scrolled = window.scrollY;
-		const before = document.documentElement.scrollHeight;
-		queued = count;
-		await tick();
-		const grown = document.documentElement.scrollHeight - before;
-		if (scrolled > 0 && grown !== 0) window.scrollTo(window.scrollX, scrolled + grown);
-	}
-
-	/**
-	 * Counts the titles without a copy while the collection holds none, for the empty collection's
-	 * link to them; a failed count leaves the link without a number.
-	 */
-	function loadUncopied() {
-		pendingUncopied ??= request<Title[]>(fetch, 'GET', '/api/titles')
-			.then((titles) => {
-				uncopied ??= withoutCopies(titles);
-			})
-			.catch(() => undefined)
-			.finally(() => (pendingUncopied = undefined));
-	}
+	onDestroy(() => loader.leave());
 
 	$effect(() => {
-		if (overview?.totals.copies === 0 && untrack(() => uncopied) === null) loadUncopied();
+		if (overview?.totals.copies === 0 && untrack(() => uncopied) === null) loader.loadUncopied();
 	});
 
-	/** Shows a listing and keeps it for the way back. */
-	function show(listing: Listing) {
-		if ('titles' in listing) uncopied = listing.titles;
-		else showCollection(listing.view);
-		keepListing(listing);
-	}
-
-	/**
-	 * Scrolls back to where the reader left the copies, once they are drawn: the shelf draws its
-	 * tiles in parts, so it first draws down to that place. The position is kept from the
-	 * copies' top, so the header's counts and a queue notice that arrives later cannot move the
-	 * restored row.
-	 */
-	async function restore(mine: number, overviewReady?: Promise<void>) {
-		if (!restoreScroll) return;
-		await overviewReady;
-		await tick();
-		if (mine === seq && restoreScroll) await shelf?.drawTo(resultsTop() + restoreScroll[1]);
-		if (mine === seq && restoreScroll) {
-			const [x, fromResults] = restoreScroll;
-			window.scrollTo(x, resultsTop() + fromResults);
-			restoreScroll = undefined;
-		}
-	}
-
-	/**
-	 * Draws a kept listing at once, restores the scroll position and places the covers, so a
-	 * cover carried back from a title lands on its tile while the listing reloads.
-	 */
-	async function redraw(mine: number, kept: Listing) {
-		show(kept);
-		overview ??= keptOverview();
-		failure = null;
-		loading = kept.pending ?? false;
-		// SvelteKit hands the page its snapshot only after the navigation's callbacks have run.
-		await new Promise((resolve) => setTimeout(resolve));
-		await restore(mine);
-		await tick();
-		if (mine === seq) coversPlaced();
-	}
-
-	/** Loads the whole collection, or the titles the filter lists. */
-	function load() {
-		return loadListing(null);
-	}
-
-	/**
-	 * Loads the whole collection, or the titles the filter lists, first drawing `kept` when
-	 * given. The covers count as placed only after the restored scroll moves them, so a cover
-	 * carried back from a title lands on its tile.
-	 */
-	async function loadListing(kept: Listing | null) {
-		const mine = ++seq;
-		const titles = filter.status === 'none';
-		if (kept) void redraw(mine, kept);
-		else loading = true;
-		const overviewReady = titles ? loadOverview(kept !== null) : undefined;
-		void loadQueue();
-		try {
-			if (titles) {
-				const got = await request<Title[]>(fetch, 'GET', '/api/titles');
-				if (mine !== seq) return;
-				show({ url: '/api/titles', titles: withoutCopies(got) });
-			} else {
-				const got = await askCollection();
-				if (mine !== seq) return;
-				keepListing({ url: '/api/collection', view: got });
-			}
-			failure = null;
-		} catch (err) {
-			if (mine === seq) failure = errorMessage(err);
-		} finally {
-			if (mine === seq) loading = false;
-		}
-		if (kept) return;
-		if (mine === seq && !failure) await restore(mine, overviewReady);
-		await tick();
-		if (mine === seq) coversPlaced();
-	}
-
 	afterNavigate((navigation) => {
-		filter = readCollectionFilter(new URLSearchParams(window.location.search));
-		query = filter.q;
-		const back = navigation.type === 'popstate';
-		void loadListing(back ? keptListing(sourceURL(filter)) : null);
+		const read = readCollectionFilter(new URLSearchParams(window.location.search));
+		query = read.q;
+		void loader.navigated(read, navigation.type === 'popstate');
 	});
 
 	// The search filters once the reader pauses typing, so the shelf is not redrawn per key.
@@ -345,33 +162,13 @@
 	 * it, trimmed, so the shelf lists what the address lists after a reload.
 	 */
 	function updateFilter(changed: CollectionFilter) {
-		const next = { ...changed, q: changed.q.trim() };
-		const from = sourceURL(filter);
-		filter = next;
-		const search = collectionSearch(next);
-		const { pathname, search: current, hash } = window.location;
-		if (current === search) return;
-		replaceState(`${pathname}${search}${hash}`, page.state);
-		restoreScroll = undefined;
-		const to = sourceURL(next);
-		if (needsLoad(from, to)) {
-			void load();
-		} else if (from !== to) {
-			// The collection is already here: drop the titles' load and show it.
-			seq += 1;
-			loading = false;
-			failure = null;
-		}
-	}
-
-	/**
-	 * Whether a new filter needs a request: the titles each time "Bez egzemplarzy" is chosen or
-	 * after their load failed, the collection only until one has loaded. A failed refresh keeps
-	 * the collection on screen, and "Spróbuj ponownie" asks again.
-	 */
-	function needsLoad(from: Listing['url'], to: Listing['url']): boolean {
-		if (to === '/api/titles') return from !== to || failure !== null;
-		return collection === null;
+		loader.select({ ...changed, q: changed.q.trim() }, (next) => {
+			const search = collectionSearch(next);
+			const { pathname, search: current, hash } = window.location;
+			if (current === search) return false;
+			replaceState(`${pathname}${search}${hash}`, page.state);
+			return true;
+		});
 	}
 
 	const columns: DataTableColumn<Row>[] = [
@@ -412,7 +209,7 @@
 		sortCopies(filterCollection(collection?.items ?? [], filter) as Row[], sort)
 	);
 	/** "Bez egzemplarzy": the view lists titles that have no copy instead of copies. */
-	const listsTitles = $derived(filter.status === 'none');
+	const listsTitles = $derived(loader.listsTitles);
 
 	/** Whether the copies showed as the shelf rather than the table. */
 	let shelfBefore: boolean | undefined;

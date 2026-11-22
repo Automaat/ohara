@@ -17,7 +17,8 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   pushed to the Discogs collection and a release the collection already
   holds,
   a book edition marked as an audiobook in its form, on the shelf and in
-  the "Nośnik" filter, series from the title form and Kolekcja to the
+  the "Nośnik" filter, wishes kept out of Kolekcja and listed in
+  Okazje's "Lista życzeń", series from the title form and Kolekcja to the
   series page, cover photo uploads, the collection export, Statystyki with
   its value sections, the insurance report
   with its A4 printout, and the wishlist share link from Okazje with its

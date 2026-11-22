@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+	wishFacts,
+	wishesPath,
 	dealPrice,
 	dealsSummary,
 	dismissalPath,
@@ -294,6 +296,41 @@ describe('wishLimit', () => {
 		[null, 'bez limitu']
 	] as const)('%s → %s', (limit, expected) => {
 		expect(wishLimit(limit)).toBe(expected);
+	});
+});
+
+describe('the wish list', () => {
+	it('asks for every wish in the collection', () => {
+		expect(wishesPath).toBe('/api/collection?status=wishlist');
+	});
+
+	it.each([
+		[
+			'a film with a format and a limit',
+			{ kind: 'movie', format: 'bluray', max_price_cents: 8000 },
+			'Film · Blu-ray · limit 80 zł'
+		],
+		[
+			'a book with authors and no limit names none',
+			{
+				kind: 'book',
+				authors: ['Stanisław Lem', 'Jan Kowalski'],
+				format: null,
+				max_price_cents: null
+			},
+			'Książka · Stanisław Lem, Jan Kowalski'
+		],
+		[
+			'an album with an odd limit',
+			{ kind: 'music', authors: [], format: 'vinyl', max_price_cents: 4999 },
+			'Muzyka · Winyl · limit 49,99 zł'
+		]
+	] as const)('describes %s', (_name, wish, expected) => {
+		const facts = wishFacts({
+			...wish,
+			authors: 'authors' in wish ? [...wish.authors] : undefined
+		});
+		expect(facts.replace(/\s/g, ' ')).toBe(expected);
 	});
 });
 

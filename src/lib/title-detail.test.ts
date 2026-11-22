@@ -3,6 +3,7 @@ import type { Copy, TitleDetail } from './collection';
 import {
 	addCopyHref,
 	addCopyStart,
+	applyFinish,
 	copyFacts,
 	copyLine,
 	copyRequest,
@@ -248,6 +249,25 @@ describe('finished titles', () => {
 			ok: false,
 			issue: { field: 'finished_on', message: 'Data nie może być późniejsza niż dziś.' }
 		});
+	});
+
+	it('takes only the finish state from an answer, keeping a newer name and notes', () => {
+		const shown = title({ name: 'Nowa nazwa', notes: 'Nowe notatki', finished: false });
+		applyFinish(shown, {
+			...title({ name: 'Stara nazwa', notes: '' }),
+			finished: true,
+			finished_on: '2026-05-01'
+		});
+		expect(shown).toMatchObject({
+			name: 'Nowa nazwa',
+			notes: 'Nowe notatki',
+			finished: true,
+			finished_on: '2026-05-01'
+		});
+		applyFinish(shown, { finished: true });
+		expect(shown).toMatchObject({ finished: true, finished_on: null });
+		applyFinish(shown, { finished: false });
+		expect(shown).toMatchObject({ name: 'Nowa nazwa', finished: false, finished_on: null });
 	});
 
 	it('sends only the finished state, never the rest of the title', () => {

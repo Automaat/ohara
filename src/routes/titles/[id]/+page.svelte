@@ -45,6 +45,7 @@
 	import {
 		addCopyHref,
 		addCopyStart,
+		applyFinish,
 		copyFacts,
 		copyLine,
 		copyRequest,
@@ -311,9 +312,10 @@
 				`/api/titles/${t.id}/finished`,
 				finishPayload(finished, day)
 			);
-			// The answer leaves out a day it does not know, so the day shown is cleared first.
-			if (detail?.id === saved.id) Object.assign(detail, { finished_on: null }, saved);
+			if (detail?.id === saved.id) applyFinish(detail, saved);
 			finishSheet = false;
+			// A refresh started before this answer would bring the old state back; a newer one wins.
+			if (requested === saved.id) void load(saved.id);
 		} catch (err) {
 			finishIssue = issueFrom(err);
 		} finally {

@@ -182,6 +182,19 @@ function dayIssue(message: string): { ok: false; issue: FormIssue } {
 }
 
 /**
+ * Takes the finished state and day from a finish answer onto the title the page shows, and
+ * nothing else: the answer may come after a rename saved meanwhile, whose name it must not undo.
+ * An unknown day is absent from the answer, so it clears the day shown.
+ */
+export function applyFinish(
+	shown: Pick<Title, 'finished' | 'finished_on'>,
+	answer: Pick<Title, 'finished' | 'finished_on'>
+): void {
+	shown.finished = answer.finished ?? false;
+	shown.finished_on = answer.finished_on ?? null;
+}
+
+/**
  * The `PUT /api/titles/{id}/finished` body that records a title as finished on a day (null when
  * unknown) or not finished. It carries nothing else, so a page holding an older title never
  * writes its name or notes back.

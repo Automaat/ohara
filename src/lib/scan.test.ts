@@ -656,6 +656,18 @@ describe('scan payloads', () => {
 		}
 	});
 
+	it("carries BN's series without a volume number into the new title", () => {
+		const f = form({ kind: 'book', name: 'Ostatnie życzenie', format: '', binding: '' });
+		const fromBN = {
+			...book,
+			title: { ...book.title, name: 'Ostatnie życzenie', series_name: 'Wiedźmin' }
+		};
+		expect(scanTitlePayload(f, fromBN)).toMatchObject({
+			ok: true,
+			value: { kind: 'book', series_name: 'Wiedźmin', series_number: null }
+		});
+	});
+
 	it('drops the candidate when the kind was switched', () => {
 		const f = form({ kind: 'book', name: 'Seksmisja', format: '', binding: '' });
 		expect(scanTitlePayload(f, movie)).toMatchObject({

@@ -21,8 +21,12 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   `e2e/compose.yaml`
   with Postgres, `OHARA_LOOKUP_STUB=true`, `OHARA_MUSICBRAINZ=false` and no
   provider keys, and removes it afterwards. App and Postgres sit on an
-  internal network, so no public provider is reachable; each test also
-  fails on a browser request to another origin and checks that
-  `ohara_source_requests_total` stayed 0. The camera starts only on "Włącz
+  internal network, so no public provider is reachable; BN and Open
+  Library point at the `books` double there (busybox `httpd`), which
+  answers every BN search with the recorded one for 9788375780635 and Open
+  Library with no match, so a scan of that ISBN puts the book in its BN
+  series. Each test also fails on a browser request to another origin and
+  checks that `ohara_source_requests_total` stayed 0 for every source but
+  those two. The camera starts only on "Włącz
   aparat" or a remembered choice, so a fresh browser gets no camera prompt.
   Needs `npx playwright install chromium` once.

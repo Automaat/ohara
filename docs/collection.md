@@ -80,8 +80,10 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   (`title_series_lock_for_delete`), so a create taking its number answers
   409 instead of a deadlock. A series page reads the series and its titles
   in one snapshot. Lookup candidates' `title` carries the same optional
-  `series_name` and `series_number` (no provider fills them yet), which the
-  scanner's add forwards when the API would take them; the title form sends
+  `series_name` and `series_number` (BN fills them, see
+  [lookup](lookup.md)), which the scanner's add forwards when the API would
+  take them, so a scanned book joins or creates its series; a lookup only
+  creates titles and never changes an existing title's series; the title form sends
   the two fields only when the reader changed them, so a form opened
   before another save gave the title its series keeps it. Kolekcja's
   desktop header links to `/series`, the list, and a phone's summary line

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -144,7 +145,8 @@ func bnCandidate(code, isbn10 string, bib bnBib) (lookup.Candidate, bool) {
 	if !ok {
 		return lookup.Candidate{}, false
 	}
-	var name, originalTitle, label, publisher, imprint string
+	var name, originalTitle, label, publisher, imprint, series string
+	var seriesNumber *int
 	var authors []string
 	for _, f := range fields {
 		switch f.Tag {
@@ -163,6 +165,12 @@ func bnCandidate(code, isbn10 string, bib bnBib) (lookup.Candidate, bool) {
 		case "700":
 			if len(f.sub("t")) == 0 && isAuthorRole(f.sub("e"), f.sub("4")) {
 				authors = append(authors, personName(f.first("a")))
+			}
+		case "800":
+			// An author's series; BN puts publishers' lines in 490 and 830,
+			// which are not the title's series.
+			if t := clean(f.first("t")); series == "" && t != "" {
+				series, seriesNumber = t, volumeNumber(f.first("v"))
 			}
 		case "250":
 			if label == "" {
@@ -203,6 +211,9 @@ func bnCandidate(code, isbn10 string, bib bnBib) (lookup.Candidate, bool) {
 	if originalTitle != "" && originalTitle != name {
 		title.OriginalTitle = &originalTitle
 	}
+	if series != "" {
+		title.SeriesName, title.SeriesNumber = &series, seriesNumber
+	}
 	if y, err := strconv.Atoi(strings.TrimSpace(bib.TimePeriodOfCreation)); err == nil && y >= 1800 && y <= 2200 {
 		title.Year = &y
 	}
@@ -212,6 +223,18 @@ func bnCandidate(code, isbn10 string, bib bnBib) (lookup.Candidate, bool) {
 		Edition:    edition,
 		Confidence: 0.9,
 	}, true
+}
+
+var wholeNumberRe = regexp.MustCompile(`\d+`)
+
+// volumeNumber reads the first whole number in an 800 $v ("1", "t. 2",
+// "2a"); one without digits gives none.
+func volumeNumber(v string) *int {
+	n, err := strconv.Atoi(wholeNumberRe.FindString(v))
+	if err != nil {
+		return nil
+	}
+	return &n
 }
 
 // matchISBN finds the 020 field whose $a is this book's ISBN. A $z is a

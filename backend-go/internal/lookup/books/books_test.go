@@ -112,7 +112,8 @@ type want struct {
 	authors, sources       []string
 	titleYear, editionYear int
 	binding, bnID, olID    string
-	format                 string
+	format, series         string
+	seriesNumber           int
 	cover, description     bool
 }
 
@@ -125,6 +126,7 @@ func TestBookChainFixtures(t *testing.T) {
 			name: "Ostatnie życzenie", authors: []string{"Andrzej Sapkowski"},
 			publisher: "SuperNowa", label: "Wydanie I w tej edycji", titleYear: 1993, editionYear: 2014,
 			binding: "paperback", bnID: "5382027", olID: "OL2577485W", cover: true, description: true,
+			series:  "Wiedźmin",
 			sources: []string{"bn", "openlibrary", "google_books"},
 		}},
 		{"9788308049396", &want{
@@ -152,6 +154,7 @@ func TestBookChainFixtures(t *testing.T) {
 		{"9788375780420", &want{
 			name: "Ostatnie życzenie. Cz. 1", authors: []string{"Andrzej Sapkowski"},
 			publisher: "SuperNowa", titleYear: 1993, editionYear: 2011, format: "audiobook", bnID: "2704411",
+			series:  "Wiedźmin",
 			sources: []string{"bn"},
 		}},
 		{"9788300000005", nil},
@@ -209,6 +212,9 @@ func checkBook(t *testing.T, isbn string, c lookup.Candidate, w *want) {
 	}
 	if got := deref(c.Title.BNID); got != w.bnID {
 		t.Errorf("bn_id = %q, want %q", got, w.bnID)
+	}
+	if got, n := deref(c.Title.SeriesName), deref(c.Title.SeriesNumber); got != w.series || n != w.seriesNumber {
+		t.Errorf("series = %q %d, want %q %d", got, n, w.series, w.seriesNumber)
 	}
 	if got := deref(c.Title.OpenLibraryID); got != w.olID {
 		t.Errorf("openlibrary_id = %q, want %q", got, w.olID)
@@ -504,5 +510,110 @@ func TestBNAuthorsFollowRelatorCodes(t *testing.T) {
 	want := []string{"Fyodor Dostoyevsky", "Jane Smith", "Anna Nowak", "Kim Lee"}
 	if got := cands[0].Title.Authors; !slices.Equal(got, want) {
 		t.Fatalf("authors = %q, want %q", got, want)
+	}
+}
+
+// bnSeriesRecord is a BN answer for 9788375780635 with the given series
+// fields after its ISBN and title.
+func bnSeriesRecord(fields ...string) json.RawMessage {
+	var b strings.Builder
+	for _, f := range fields {
+		b.WriteString(",\n" + f)
+	}
+	return json.RawMessage(`{"bibs":[{"id":7,"publicationYear":"2014","marc":{"fields":[
+		{"020":{"ind1":" ","ind2":" ","subfields":[{"a":"9788375780635"}]}},
+		{"245":{"ind1":"1","ind2":"0","subfields":[{"a":"Ostatnie życzenie /"}]}}` + b.String() + `]}}]}`)
+}
+
+func TestBNSeriesFromAuthorSeries(t *testing.T) {
+	tests := []struct {
+		name   string
+		fields []string
+		series string
+		number *int
+	}{
+		{"no volume", []string{`{"800":{"ind1":"1","ind2":" ","subfields":[{"a":"Sapkowski, Andrzej"},{"t":"Wiedźmin ;"}]}}`}, "Wiedźmin", nil},
+		{"plain volume", []string{`{"800":{"ind1":"1","ind2":" ","subfields":[{"a":"Sapkowski, Andrzej"},{"t":"Wiedźmin ;"},{"v":"1"}]}}`}, "Wiedźmin", new(1)},
+		{"volume with prefix", []string{`{"800":{"ind1":"1","ind2":" ","subfields":[{"t":"Wiedźmin"},{"v":"t. 2"}]}}`}, "Wiedźmin", new(2)},
+		{"volume with suffix", []string{`{"800":{"ind1":"1","ind2":" ","subfields":[{"t":"Wiedźmin"},{"v":"2a"}]}}`}, "Wiedźmin", new(2)},
+		{"volume without digits", []string{`{"800":{"ind1":"1","ind2":" ","subfields":[{"t":"Wiedźmin"},{"v":"t. pierwszy"}]}}`}, "Wiedźmin", nil},
+		{"first author series wins", []string{
+			`{"800":{"ind1":"1","ind2":" ","subfields":[{"a":"Sapkowski, Andrzej"}]}}`,
+			`{"800":{"ind1":"1","ind2":" ","subfields":[{"t":"Wiedźmin"},{"v":"3"}]}}`,
+			`{"800":{"ind1":"1","ind2":" ","subfields":[{"t":"Saga o wiedźminie"},{"v":"5"}]}}`,
+		}, "Wiedźmin", new(3)},
+		{"publisher lines only", []string{
+			`{"490":{"ind1":"1","ind2":" ","subfields":[{"a":"Kanon ;"},{"v":"4"}]}}`,
+			`{"830":{"ind1":" ","ind2":"0","subfields":[{"a":"Kanon"},{"v":"4"}]}}`,
+		}, "", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cands, err := books.BN{}.Parse("9788375780635", bnSeriesRecord(tt.fields...))
+			if err != nil || len(cands) != 1 {
+				t.Fatalf("parse = %+v, %v", cands, err)
+			}
+			got := cands[0].Title
+			if deref(got.SeriesName) != tt.series || (got.SeriesName == nil) != (tt.series == "") {
+				t.Errorf("series_name = %v, want %q", got.SeriesName, tt.series)
+			}
+			if (got.SeriesNumber == nil) != (tt.number == nil) || (tt.number != nil && *got.SeriesNumber != *tt.number) {
+				t.Errorf("series_number = %v, want %v", got.SeriesNumber, tt.number)
+			}
+		})
+	}
+}
+
+func TestBNIgnoresPublishersLines(t *testing.T) {
+	raw, err := os.ReadFile("testdata/bn/830802534X.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cands, err := books.BN{}.Parse("9788308025345", raw)
+	if err != nil || len(cands) != 1 {
+		t.Fatalf("parse = %+v, %v", cands, err)
+	}
+	if s := cands[0].Title; s.SeriesName != nil || s.SeriesNumber != nil {
+		t.Fatalf("a publisher's line (490, 830) became the series: %v %v", s.SeriesName, s.SeriesNumber)
+	}
+}
+
+// fixtureCache answers every provider from what Put stored.
+type fixtureCache struct {
+	mu      sync.Mutex
+	entries map[string]json.RawMessage
+}
+
+func (c *fixtureCache) Get(_ context.Context, provider, code string, _ time.Duration) (json.RawMessage, bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	raw, ok := c.entries[provider+"/"+code]
+	return raw, ok, nil
+}
+
+func (c *fixtureCache) Put(_ context.Context, provider, code string, raw json.RawMessage) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.entries[provider+"/"+code] = raw
+	return nil
+}
+
+func TestBNSeriesFromCachedAnswer(t *testing.T) {
+	raw, err := os.ReadFile("testdata/bn/9788375780635.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, srv := newCatalog(t)
+	r := &lookup.Registry{}
+	if err := r.Register(books.BN{BaseURL: srv.URL, Client: srv.Client()}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	cache := &fixtureCache{entries: map[string]json.RawMessage{"bn/9788375780635": raw}}
+	res := lookup.NewService(r, cache, slog.New(slog.DiscardHandler)).Lookup(context.Background(), "9788375780635")
+	if n := c.hitCount("bn"); n != 0 {
+		t.Fatalf("bn queried %d times for a cached answer", n)
+	}
+	if len(res.Candidates) != 1 || deref(res.Candidates[0].Title.SeriesName) != "Wiedźmin" || res.Candidates[0].Title.SeriesNumber != nil {
+		t.Fatalf("candidates = %+v, errors = %+v", res.Candidates, res.Errors)
 	}
 }

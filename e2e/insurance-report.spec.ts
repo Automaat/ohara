@@ -107,7 +107,8 @@ const reportTable = (page: Page) => page.getByRole('table', { name: 'Egzemplarze
 
 /**
  * A test that ends on a page change still has the new page's `GET /api/valuation` in its route
- * handler; closing the context then disposes the response the handler reads (#494).
+ * handler; closing the context then disposes the response the handler reads (#494). A test that
+ * holds a route releases it in `finally`, or this would wait for it.
  */
 test.afterEach(async ({ page }) => {
 	await page.unrouteAll({ behavior: 'wait' });
@@ -437,11 +438,14 @@ test('Raport dla ubezpieczyciela offers printing only once every cover has loade
 		await held;
 		await route.continue();
 	});
-	await page.goto('/valuation/report');
-	await expect(reportTable(page).locator('tbody tr')).toHaveCount(60);
-	await expect(page.getByRole('button', { name: 'Wczytywanie okładek…' })).toBeVisible();
-	await expect(page.getByRole('button', { name: 'Drukuj' })).toHaveCount(0);
-	release();
+	try {
+		await page.goto('/valuation/report');
+		await expect(reportTable(page).locator('tbody tr')).toHaveCount(60);
+		await expect(page.getByRole('button', { name: 'Wczytywanie okładek…' })).toBeVisible();
+		await expect(page.getByRole('button', { name: 'Drukuj' })).toHaveCount(0);
+	} finally {
+		release();
+	}
 	await expect(page.getByRole('button', { name: 'Drukuj' })).toBeEnabled();
 	await expect.poll(() => reportTable(page).locator('tbody img').evaluateAll(loaded)).toBe(true);
 });

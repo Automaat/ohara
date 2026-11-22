@@ -47,6 +47,8 @@ func seed(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	exec(t, pool, `INSERT INTO title (id, kind, name, original_title, year) OVERRIDING SYSTEM VALUE
 		VALUES (1, 'movie', '=HYPERLINK("x")', 'Dune', 2021)`)
+	exec(t, pool, `INSERT INTO tag (name, key) VALUES ('klasyka', 'klasyka'), ('sci-fi', 'sci-fi')`)
+	exec(t, pool, `INSERT INTO title_tag (title_id, tag_id, position) SELECT 1, id, id FROM tag`)
 	exec(t, pool, `INSERT INTO title (id, kind, name, authors) OVERRIDING SYSTEM VALUE
 		VALUES (2, 'book', 'Katedra', '{"Jacek Dukaj"}'), (3, 'music', 'Album', '{"A","B"}'),
 		       (4, 'movie', 'Solaris', '{}')`)
@@ -150,7 +152,7 @@ func TestExportCSV(t *testing.T) {
 		owned, wished = wished, owned
 	}
 	for name, want := range map[string]string{
-		"Rodzaj": "Film", "Tytuł oryginalny": "Dune", "Rok": "2021", "Nośnik lub oprawa": "DVD",
+		"Rodzaj": "Film", "Tytuł oryginalny": "Dune", "Rok": "2021", "Tagi": "klasyka, sci-fi", "Nośnik lub oprawa": "DVD",
 		"Wydanie": "Wydanie kolekcjonerskie", "Wydawca": "Galapagos", "Kod kreskowy": "5902600069706",
 		"Status": "Na półce", "Cena zakupu (zł)": "49,99", "Data zakupu": "2026-01-02", "Sklep": "Empik",
 		"Nowy czy używany": "Używany", "Stan": "Bardzo dobry", "Miejsce": "Regał 2", "Notatki": trickyNote,
@@ -201,7 +203,7 @@ func TestExportCSV(t *testing.T) {
 		t.Fatalf("title without copies rows = %q", bare)
 	}
 	for i, cell := range bare[0] {
-		if i > col("Rok") && cell != "" {
+		if i > col("Tagi") && cell != "" {
 			t.Errorf("title without copies has %s = %q, want blank", header[i], cell)
 		}
 	}

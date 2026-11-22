@@ -38,7 +38,7 @@ var (
 
 // header names the CSV's columns, in the order row fills them.
 var header = []string{
-	"Rodzaj", "Tytuł", "Tytuł oryginalny", "Tytuł polski", "Twórcy", "Rok",
+	"Rodzaj", "Tytuł", "Tytuł oryginalny", "Tytuł polski", "Twórcy", "Rok", "Tagi",
 	"Nośnik lub oprawa", "Wydanie", "Wydawca", "Kod kreskowy",
 	"Status", "Cena zakupu (zł)", "Data zakupu", "Sklep", "Nowy czy używany", "Stan", "Miejsce", "Notatki",
 	"Cena maksymalna (zł)", "Maks. % ceny rynkowej", "Data sprzedaży", "Cena sprzedaży (zł)",
@@ -93,7 +93,7 @@ func writeCSV(w io.Writer, titles []Title) error {
 func titleCells(t *Title) []string {
 	return []string{
 		label(kindLabels, t.Kind), t.Name, deref(t.OriginalTitle), deref(t.PolishTitle),
-		strings.Join(t.Authors, ", "), intText(t.Year),
+		strings.Join(t.Authors, ", "), intText(t.Year), strings.Join(t.Tags, ", "),
 	}
 }
 

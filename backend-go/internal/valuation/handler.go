@@ -3,7 +3,9 @@ package valuation
 import (
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -114,14 +116,10 @@ type MarketView struct {
 }
 
 func (h *Handler) market(w http.ResponseWriter, r *http.Request) {
-	var id int64
-	if raw := r.URL.Query().Get("title_id"); raw != "" {
-		var err error
-		id, err = strconv.ParseInt(raw, 10, 64)
-		if err != nil || id <= 0 {
-			httpx.WriteFieldError(w, h.logger, &httpx.FieldError{Field: "title_id", Msg: "must be a positive integer"})
-			return
-		}
+	id, ok := marketTitle(r.URL.RawQuery)
+	if !ok {
+		httpx.WriteFieldError(w, h.logger, &httpx.FieldError{Field: "title_id", Msg: "must be a positive integer"})
+		return
 	}
 	window := h.runner.Window()
 	markets, err := h.store.Markets(r.Context(), window, id)
@@ -133,6 +131,29 @@ func (h *Handler) market(w http.ResponseWriter, r *http.Request) {
 		WindowDays: int(window.Hours() / 24),
 		Markets:    markets,
 	})
+}
+
+// marketTitle reads the market route's optional title_id: 0 without one,
+// the title when it is given once as a positive integer. A blank,
+// malformed or repeated title_id, or a query that does not parse where it
+// names title_id, is refused rather than read as no filter.
+func marketTitle(rawQuery string) (int64, bool) {
+	q, err := url.ParseQuery(rawQuery)
+	if err != nil && strings.Contains(rawQuery, "title_id") {
+		return 0, false
+	}
+	values, given := q["title_id"]
+	if !given {
+		return 0, true
+	}
+	if len(values) != 1 {
+		return 0, false
+	}
+	id, err := strconv.ParseInt(values[0], 10, 64)
+	if err != nil || id <= 0 {
+		return 0, false
+	}
+	return id, true
 }
 
 func (h *Handler) run(w http.ResponseWriter, _ *http.Request) {

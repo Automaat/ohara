@@ -221,7 +221,7 @@ func TestWishMarketPrice(t *testing.T) {
 		t.Fatalf("markets after the wished edition changed = %+v, want none", edited.Markets)
 	}
 
-	for _, raw := range []string{"0", "-1", "abc", "1.5", "99999999999999999999"} {
+	for _, raw := range []string{"", "0", "-1", "abc", "1.5", "99999999999999999999", "%ZZ", "2&title_id=%ZZ", "2&title_id=3"} {
 		var body map[string]string
 		code := get(t, srv.URL+"/api/valuation/market?title_id="+raw, &body)
 		if code != http.StatusUnprocessableEntity || body["field"] != "title_id" {

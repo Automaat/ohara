@@ -1654,26 +1654,26 @@ func TestRunsDoNotWaitForEachOther(t *testing.T) {
 // TestBackToBackRunsKeepTheirPacing runs two valuations in a row without
 // their own pauses, through a pacer lane whose gap is an hour, and checks
 // that each run asked OLX every query its owned editions need: a lane never
-// waits for its own requests. A lane that waited for itself would hold the
-// next request past the deadline, so the run would miss queries. Nothing
-// is timed, so slower database work cannot fail the test.
+// waits for its own requests. Each request, its wait in the lane included,
+// has the client's 5 s, so a lane that waited for itself would make the run
+// miss queries. The runs themselves have no deadline, so slower database
+// work between requests cannot fail the test.
 func TestBackToBackRunsKeepTheirPacing(t *testing.T) {
 	pool := dbtest.Migrated(t)
 	seed(t, pool)
 	log := &requestLog{}
 	olxURL, _ := olxSite(t, log, "")
 	client := deals.NewHTTPClient()
+	client.Timeout = 5 * time.Second
 	client.Transport = deals.NewPacer(time.Hour).Lane().Transport(nil)
 	runner := NewRunner(NewStore(pool), []deals.Source{deals.OLX{Client: client, BaseURL: olxURL}},
 		[]BuyBack{&timedBuyBack{log: log}}, nil, Config{Delay: runDelay, Window: 90 * 24 * time.Hour},
 		slog.New(slog.DiscardHandler))
 	runner.sleep = func(ctx context.Context, _ time.Duration) error { return ctx.Err() }
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
 	want := []string{"Diuna blu-ray", "Dune blu-ray", "Katedra dukaj"}
 	for i := range 2 {
 		before := len(log.queriesSince(0))
-		if _, err := runner.Run(ctx); err != nil {
+		if _, err := runner.Run(t.Context()); err != nil {
 			t.Fatalf("run %d: %v", i, err)
 		}
 		if got := log.queriesSince(before); !slices.Equal(got, want) {

@@ -110,6 +110,20 @@ func TestGenerateWrapsLongUnions(t *testing.T) {
 	}
 }
 
+func TestGenerateKeepsAUnionThatFitsItsOwnLineOnIt(t *testing.T) {
+	// One tab and these values with their separators make 100 columns, prettier's printWidth.
+	values := []string{"aaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbb", "ccccccccccccccccccccc", "ddddddddddddddddd"}
+	got, err := generate(t, API{Enums: []Enum{{Name: "Wide", Values: values}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "// header\n\nexport type Wide =\n\t'aaaaaaaaaaaaaaaaaaaaa' | 'bbbbbbbbbbbbbbbbbbbbb' | " +
+		"'ccccccccccccccccccccc' | 'ddddddddddddddddd';\n"
+	if got != want {
+		t.Errorf("got\n%s\nwant\n%s", got, want)
+	}
+}
+
 type unknownEnum struct {
 	Kind string `json:"kind" ts:"Nope"`
 }

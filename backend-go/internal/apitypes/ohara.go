@@ -10,6 +10,7 @@ import (
 	"github.com/Automaat/ohara/backend-go/internal/scanqueue"
 	"github.com/Automaat/ohara/backend-go/internal/server"
 	"github.com/Automaat/ohara/backend-go/internal/valuation"
+	"github.com/Automaat/ohara/backend-go/internal/wantlist"
 )
 
 // Header opens the generated file.
@@ -98,6 +99,9 @@ func Ohara() API {
 			Of[valuation.CopyHistory]("CopyValueHistory"),
 			Of[valuation.Market]("MarketPrice"),
 			Of[valuation.MarketView]("MarketView"),
+
+			Of[wantlist.Result]("WantlistSyncResult"),
+			Of[wantlist.Status]("WantlistStatus"),
 
 			Of[server.Status]("Status"),
 			Of[httpx.Error]("ErrorBody"),

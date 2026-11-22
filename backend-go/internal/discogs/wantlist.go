@@ -1,0 +1,99 @@
+package discogs
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/url"
+	"strconv"
+)
+
+// wantsPerPage is the longest page Discogs serves of a wantlist.
+const wantsPerPage = 100
+
+// maxWantPages bounds the pages one wantlist read follows: 10,000 wants.
+const maxWantPages = 100
+
+// ErrWantlistTooLong is a wantlist longer than maxWantPages pages.
+var ErrWantlistTooLong = errors.New("discogs: wantlist longer than 10000 wants")
+
+// Identity returns the username of the token's owner.
+func (c *Client) Identity(ctx context.Context) (string, error) {
+	var r struct {
+		Username string `json:"username"`
+	}
+	err := c.get(ctx, "/oauth/identity", &r, func() error {
+		if r.Username == "" {
+			return errors.New("no username")
+		}
+		return nil
+	})
+	return r.Username, err
+}
+
+// Wants returns the release IDs on the wantlist of username, every page
+// of it.
+func (c *Client) Wants(ctx context.Context, username string) ([]int64, error) {
+	var ids []int64
+	for page := 1; ; page++ {
+		if page > maxWantPages {
+			return nil, ErrWantlistTooLong
+		}
+		q := url.Values{"page": {strconv.Itoa(page)}, "per_page": {strconv.Itoa(wantsPerPage)}}
+		var r struct {
+			Pagination *struct {
+				Pages int `json:"pages"`
+			} `json:"pagination"`
+			Wants []struct {
+				ID int64 `json:"id"`
+			} `json:"wants"`
+		}
+		if err := c.get(ctx, wantsPath(username)+"?"+q.Encode(), &r, func() error {
+			if r.Pagination == nil {
+				return errors.New("no pagination field")
+			}
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+		for _, w := range r.Wants {
+			if w.ID > 0 {
+				ids = append(ids, w.ID)
+			}
+		}
+		if page >= r.Pagination.Pages {
+			return ids, nil
+		}
+	}
+}
+
+// AddWant puts release id on the wantlist of username, with no notes or
+// rating.
+func (c *Client) AddWant(ctx context.Context, username string, id int64) error {
+	err := c.send(ctx, http.MethodPut, wantPath(username, id),
+		[]int{http.StatusOK, http.StatusCreated, http.StatusNoContent}, nil, nil)
+	if err != nil {
+		return fmt.Errorf("add want %d: %w", id, err)
+	}
+	return nil
+}
+
+// RemoveWant takes release id off the wantlist of username; a want
+// already gone (404) counts as removed.
+func (c *Client) RemoveWant(ctx context.Context, username string, id int64) error {
+	err := c.send(ctx, http.MethodDelete, wantPath(username, id),
+		[]int{http.StatusOK, http.StatusNoContent, http.StatusNotFound}, nil, nil)
+	if err != nil {
+		return fmt.Errorf("remove want %d: %w", id, err)
+	}
+	return nil
+}
+
+func wantsPath(username string) string {
+	return "/users/" + url.PathEscape(username) + "/wants"
+}
+
+func wantPath(username string, id int64) string {
+	return wantsPath(username) + "/" + strconv.FormatInt(id, 10)
+}

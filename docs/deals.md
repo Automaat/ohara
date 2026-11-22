@@ -149,3 +149,29 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   The last run, scheduled, manual or cut short by shutdown, is kept in
   `deal_run`: after a restart the status shows it and the first scheduled
   run comes one interval after it started, at least 5 minutes on.
+
+## Discogs wantlist
+
+- `internal/wantlist` mirrors the album wishes to the Discogs wantlist of
+  the `OHARA_DISCOGS_TOKEN` owner (`GET /oauth/identity`), push only. Okazje
+  shows "Synchronizuj z Discogs" when `GET /api/discogs/wantlist` says
+  `enabled`; `POST /api/discogs/wantlist/sync` answers 202 and runs the sync
+  in the background, 409 while one runs and 503 without the token. The page
+  asks for the status every 2 s while a sync runs and shows its counts.
+- A sync reads the whole wantlist (every page of
+  `GET /users/{username}/wants`, at most 10,000 wants), then puts on it
+  (`PUT .../wants/{release_id}`, no notes or rating) every distinct
+  `discogs_release_id` of a music wishlist copy's edition that is not
+  there yet. It counts those added, those already there and the wished
+  album editions without a release ID (skipped).
+- `discogs_want` records each want Ohara added, per username. A recorded
+  want whose release no wish holds any more (the copy deleted or no
+  longer a wish) is taken off (`DELETE`) and forgotten; a want Ohara did
+  not add is never removed, even when its wish goes. A sync with nothing
+  to change sends no write.
+- Each write is recorded as soon as Discogs accepts it. The first failure
+  (a 429, a timeout) stops the sync; the status keeps the counts so far
+  and the failure, and the next sync retries the rest. The last sync's
+  status lives until the process restarts. Sync requests wait in the
+  Discogs budget as `Background` ([lookup.md](lookup.md)); deal runs never
+  start a sync, and the sync never changes matching, limits or alerts.

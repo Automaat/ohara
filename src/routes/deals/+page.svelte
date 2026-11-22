@@ -35,6 +35,8 @@
 		searchedFor,
 		segmentLabel,
 		sentPath,
+		wantlistPath,
+		wantlistSummary,
 		withoutDismissed,
 		type DealSegment,
 		type DealsView,
@@ -43,7 +45,8 @@
 		type KeywordKind,
 		type MarketPrice,
 		type MarketView,
-		type Observation
+		type Observation,
+		type WantlistStatus
 	} from '#lib/deals.js';
 
 	type Deals = {
@@ -71,7 +74,12 @@
 	let issue = $state<FormIssue | null>(null);
 	let adding = $state(false);
 
+	let wantlist = $state<WantlistStatus | null>(null);
+	let syncError = $state<string | null>(null);
+	let syncStarting = $state(false);
+
 	let poll: ReturnType<typeof setTimeout> | undefined;
+	let wantlistPoll: ReturnType<typeof setTimeout> | undefined;
 	let issued = 0;
 
 	/**
@@ -159,9 +167,39 @@
 		}
 	}
 
+	/**
+	 * The Discogs wantlist sync's state, asked again every 2 s while a sync runs. Without a Discogs
+	 * token the server says it is disabled and the page offers no sync.
+	 */
+	async function loadWantlist() {
+		try {
+			wantlist = await request<WantlistStatus>(fetch, 'GET', wantlistPath);
+		} catch (err) {
+			syncError = errorMessage(err);
+		}
+		clearTimeout(wantlistPoll);
+		if (wantlist?.running) wantlistPoll = setTimeout(loadWantlist, 2000);
+	}
+
+	async function syncWantlist() {
+		syncStarting = true;
+		syncError = null;
+		try {
+			await request<WantlistStatus>(fetch, 'POST', `${wantlistPath}/sync`);
+		} catch (err) {
+			syncError =
+				err instanceof ApiError && err.status === 409
+					? 'Synchronizacja już trwa.'
+					: errorMessage(err);
+		}
+		await loadWantlist();
+		syncStarting = false;
+	}
+
 	onMount(() => {
 		void load();
 		void loadKeywords();
+		void loadWantlist();
 		const clock = setInterval(() => (now = new Date()), 30_000);
 		const onvisibility = () => {
 			if (document.visibilityState === 'visible') void load();
@@ -170,6 +208,7 @@
 		return () => {
 			dismissals.destroy();
 			clearTimeout(poll);
+			clearTimeout(wantlistPoll);
 			clearInterval(clock);
 			document.removeEventListener('visibilitychange', onvisibility);
 		};
@@ -242,6 +281,9 @@
 			? `Kolejne wyszukiwanie ${intervalLabel(status)}.`
 			: 'Wyszukaj oferty przyciskiem „Szukaj teraz”.'
 	);
+
+	const syncSummary = $derived(wantlistSummary(wantlist?.last_result ?? null));
+	const syncing = $derived(syncStarting || !!wantlist?.running);
 
 	/** The add page started as a wish, searching titles the same way the scanner does. */
 	const addWish = '/titles/new?from=deals';
@@ -357,6 +399,23 @@
 				</Callout>
 			{/if}
 		{/if}
+	{/if}
+
+	{#if wantlist?.enabled}
+		<Section
+			title="Lista życzeń Discogs"
+			description="Dodaje albumy z listy życzeń, które mają wydanie Discogs, do Twojej listy życzeń na Discogs. Usuwa tylko te, które dodała Ohara, gdy znikną z listy życzeń."
+		>
+			<FormError message={syncError} />
+			<div>
+				<Button loading={syncing} onclick={syncWantlist}>
+					{wantlist.running ? 'Synchronizuję…' : 'Synchronizuj z Discogs'}
+				</Button>
+			</div>
+			{#if syncSummary}
+				<p class="status metadata" role="status">{syncSummary}</p>
+			{/if}
+		</Section>
 	{/if}
 
 	<Disclosure summary="Ustawienia wyszukiwania">

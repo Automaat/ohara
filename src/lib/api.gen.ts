@@ -643,6 +643,22 @@ export type MarketView = {
 	markets: MarketPrice[];
 };
 
+export type WantlistSyncResult = {
+	added: number;
+	already: number;
+	removed: number;
+	skipped: number;
+	failure?: string;
+};
+
+export type WantlistStatus = {
+	enabled: boolean;
+	running: boolean;
+	last_started_at: string | null;
+	last_finished_at: string | null;
+	last_result: WantlistSyncResult | null;
+};
+
 export type Status = {
 	status: ServiceState;
 	version: string;

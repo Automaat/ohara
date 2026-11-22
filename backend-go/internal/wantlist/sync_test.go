@@ -23,15 +23,22 @@ import (
 const owner = "collector"
 
 // fakeDiscogs is a Discogs API double holding one user's wantlist. A
-// write numbered failWrite (from 1) answers 429 instead.
+// write numbered failWrite (from 1) answers failStatus (429 when 0)
+// instead, after making the change when failCommitted is set. With
+// redirectPut a PUT is redirected to the identity page, and with truncate
+// a PUT's answer is cut short.
 type fakeDiscogs struct {
 	t *testing.T
 
-	mu        sync.Mutex
-	wants     []int64
-	writes    []string
-	pages     []int
-	failWrite int
+	mu            sync.Mutex
+	wants         []int64
+	writes        []string
+	pages         []int
+	failWrite     int
+	failStatus    int
+	failCommitted bool
+	redirectPut   bool
+	truncate      bool
 }
 
 func newFakeDiscogs(t *testing.T, wants ...int64) (*fakeDiscogs, *discogs.Client) {
@@ -85,8 +92,13 @@ func (f *fakeDiscogs) write(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.writes = append(f.writes, r.Method+" "+strconv.FormatInt(id, 10))
-	if len(f.writes) == f.failWrite {
-		http.Error(w, `{"message": "You are making requests too quickly."}`, http.StatusTooManyRequests)
+	if r.Method == http.MethodPut && f.redirectPut {
+		http.Redirect(w, r, "/oauth/identity", http.StatusFound)
+		return
+	}
+	failing := len(f.writes) == f.failWrite
+	if failing && !f.failCommitted {
+		f.fail(w)
 		return
 	}
 	at := slices.Index(f.wants, id)
@@ -95,16 +107,36 @@ func (f *fakeDiscogs) write(w http.ResponseWriter, r *http.Request) {
 		if at < 0 {
 			f.wants = append(f.wants, id)
 		}
+		if failing {
+			f.fail(w)
+			return
+		}
+		body := `{"id": ` + strconv.FormatInt(id, 10) + `, "rating": 0}`
+		if f.truncate {
+			w.Header().Set("Content-Length", strconv.Itoa(len(body)+100))
+		}
 		w.WriteHeader(http.StatusCreated)
-		_, _ = io.WriteString(w, `{"id": `+strconv.FormatInt(id, 10)+`, "rating": 0}`)
+		_, _ = io.WriteString(w, body)
 	case http.MethodDelete:
 		if at < 0 {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
 		f.wants = slices.Delete(f.wants, at, at+1)
+		if failing {
+			f.fail(w)
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+func (f *fakeDiscogs) fail(w http.ResponseWriter) {
+	status := f.failStatus
+	if status == 0 {
+		status = http.StatusTooManyRequests
+	}
+	http.Error(w, `{"message": "You are making requests too quickly."}`, status)
 }
 
 // took returns the writes since the last call and the wantlist now.
@@ -360,5 +392,143 @@ func TestSyncFailureKeepsWhatSucceeded(t *testing.T) {
 	}
 	if got := recorded(t, store); !slices.Equal(got, []int64{11, 12, 13}) {
 		t.Fatalf("recorded %v", got)
+	}
+}
+
+// rejectWrites makes the database refuse op (INSERT or DELETE) on
+// discogs_want.
+func rejectWrites(t *testing.T, pool *pgxpool.Pool, op string) {
+	t.Helper()
+	exec(t, pool, `CREATE OR REPLACE FUNCTION reject_want() RETURNS trigger LANGUAGE plpgsql AS
+		$$ BEGIN RAISE EXCEPTION 'injected failure'; END $$`)
+	exec(t, pool, `CREATE TRIGGER reject_want BEFORE `+op+` ON discogs_want
+		FOR EACH ROW EXECUTE FUNCTION reject_want()`)
+}
+
+func TestSyncSendsNoWriteItCannotRecord(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	fake, client := newFakeDiscogs(t)
+	store := NewStore(pool)
+	syncer := NewSyncer(store, client, nil)
+	copyID := wish(t, pool, "music", 31)
+
+	rejectWrites(t, pool, "INSERT")
+	if res, err := syncer.Sync(context.Background()); err == nil || res.Added != 0 {
+		t.Fatalf("sync with a failing record = %+v, %v", res, err)
+	}
+	if writes, wants := fake.took(); len(writes) != 0 || len(wants) != 0 {
+		t.Fatalf("an add Ohara could not record was sent: writes %v, wantlist %v", writes, wants)
+	}
+
+	exec(t, pool, `DROP TRIGGER reject_want ON discogs_want`)
+	mustSync(t, syncer)
+	fake.took()
+	exec(t, pool, `DELETE FROM copy WHERE id = $1`, copyID)
+	rejectWrites(t, pool, "DELETE")
+	if res, err := syncer.Sync(context.Background()); err == nil || res.Removed != 0 {
+		t.Fatalf("sync with a failing forget = %+v, %v", res, err)
+	}
+	if writes, wants := fake.took(); len(writes) != 0 || !slices.Equal(wants, []int64{31}) {
+		t.Fatalf("a removal Ohara could not record was sent: writes %v, wantlist %v", writes, wants)
+	}
+	if got := recorded(t, store); !slices.Equal(got, []int64{31}) {
+		t.Fatalf("recorded %v", got)
+	}
+}
+
+func TestRefusedRemovalIsRetried(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	fake, client := newFakeDiscogs(t)
+	store := NewStore(pool)
+	syncer := NewSyncer(store, client, nil)
+	copyID := wish(t, pool, "music", 41)
+	mustSync(t, syncer)
+	fake.took()
+
+	exec(t, pool, `DELETE FROM copy WHERE id = $1`, copyID)
+	fake.failWrite = 1
+	if res, err := syncer.Sync(context.Background()); err == nil || res.Removed != 0 {
+		t.Fatalf("refused removal = %+v, %v", res, err)
+	}
+	if got := recorded(t, store); !slices.Equal(got, []int64{41}) {
+		t.Fatalf("recorded %v after a refused removal, want it kept for the retry", got)
+	}
+	fake.failWrite = 0
+	if got, want := mustSync(t, syncer), (Result{Removed: 1}); got != want {
+		t.Fatalf("retry = %+v, want %+v", got, want)
+	}
+	if _, wants := fake.took(); len(wants) != 0 {
+		t.Fatalf("wantlist %v", wants)
+	}
+}
+
+func TestAddWithUnknownOutcomeStaysOharas(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	fake, client := newFakeDiscogs(t)
+	store := NewStore(pool)
+	syncer := NewSyncer(store, client, nil)
+	copyID := wish(t, pool, "music", 51)
+	fake.failWrite, fake.failStatus, fake.failCommitted = 1, http.StatusBadGateway, true
+
+	if _, err := syncer.Sync(context.Background()); err == nil {
+		t.Fatal("a 502 on the add did not fail the sync")
+	}
+	if got := recorded(t, store); !slices.Equal(got, []int64{51}) {
+		t.Fatalf("recorded %v, want the add whose outcome is unknown", got)
+	}
+	fake.failWrite = 0
+	if got, want := mustSync(t, syncer), (Result{Already: 1}); got != want {
+		t.Fatalf("retry = %+v, want %+v", got, want)
+	}
+	exec(t, pool, `DELETE FROM copy WHERE id = $1`, copyID)
+	if got, want := mustSync(t, syncer), (Result{Removed: 1}); got != want {
+		t.Fatalf("sync after the wish went = %+v, want %+v", got, want)
+	}
+}
+
+func TestRedirectedAddIsNotAnAdd(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	fake, client := newFakeDiscogs(t)
+	store := NewStore(pool)
+	syncer := NewSyncer(store, client, nil)
+	wish(t, pool, "music", 61)
+	fake.redirectPut = true
+
+	res, err := syncer.Sync(context.Background())
+	if err == nil || res.Added != 0 || !strings.Contains(err.Error(), "302") {
+		t.Fatalf("redirected add = %+v, %v", res, err)
+	}
+	if got := recorded(t, store); len(got) != 0 {
+		t.Fatalf("recorded %v for an add Discogs never made", got)
+	}
+}
+
+func TestAddWithCutShortAnswerCounts(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	fake, client := newFakeDiscogs(t)
+	store := NewStore(pool)
+	syncer := NewSyncer(store, client, nil)
+	wish(t, pool, "music", 71)
+	fake.truncate = true
+
+	if got, want := mustSync(t, syncer), (Result{Added: 1}); got != want {
+		t.Fatalf("sync = %+v, want %+v", got, want)
+	}
+	if got := recorded(t, store); !slices.Equal(got, []int64{71}) {
+		t.Fatalf("recorded %v", got)
+	}
+}
+
+func TestSkippedCountsWishes(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	_, client := newFakeDiscogs(t)
+	syncer := NewSyncer(NewStore(pool), client, nil)
+	copyID := wish(t, pool, "music", 0)
+	exec(t, pool, `INSERT INTO copy (edition_id, status) SELECT edition_id, 'wishlist' FROM copy WHERE id = $1`, copyID)
+	again := wish(t, pool, "music", 81)
+	exec(t, pool, `INSERT INTO copy (edition_id, status) SELECT edition_id, 'wishlist' FROM copy WHERE id = $1`, again)
+
+	if got, want := mustSync(t, syncer), (Result{Added: 1, Skipped: 2}); got != want {
+		t.Fatalf("sync = %+v, want %+v", got, want)
 	}
 }

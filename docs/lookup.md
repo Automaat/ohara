@@ -52,6 +52,8 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   over the caller's cap fails (`fetch.Outcome` counts it a parse error),
   a status the caller does not accept is a `fetch.StatusError` returned
   with the response headers, and errors never carry the URL's query.
+  With `SkipBody` an accepted answer returns unread, for a write judged by
+  its status (the Discogs wantlist sync).
   Browser-like sites get `fetch.BrowserUserAgent`.
   When some of its sources fail but others answered, it returns a
   `*lookup.PartialError`: the lookup reports the failure next to the

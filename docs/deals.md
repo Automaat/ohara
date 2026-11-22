@@ -162,16 +162,23 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   `GET /users/{username}/wants`, at most 10,000 wants), then puts on it
   (`PUT .../wants/{release_id}`, no notes or rating) every distinct
   `discogs_release_id` of a music wishlist copy's edition that is not
-  there yet. It counts those added, those already there and the wished
-  album editions without a release ID (skipped).
+  there yet. It counts those added, those already there and the album
+  wishes (wishlist copies) whose edition has no release ID (skipped).
 - `discogs_want` records each want Ohara added, per username. A recorded
   want whose release no wish holds any more (the copy deleted or no
   longer a wish) is taken off (`DELETE`) and forgotten; a want Ohara did
   not add is never removed, even when its wish goes. A sync with nothing
   to change sends no write.
-- Each write is recorded as soon as Discogs accepts it. The first failure
-  (a 429, a timeout) stops the sync; the status keeps the counts so far
-  and the failure, and the next sync retries the rest. The last sync's
+- `discogs_want` changes before each request: an add is recorded first,
+  a removal forgets the want first, so a database failure stops the sync
+  before a write it could not record. Discogs refusing the write (a
+  redirect or a 4xx, 429 included) undoes that change; an unknown outcome
+  (a 5xx, a lost answer) keeps a recorded add and a forgotten removal, so
+  a want the collector re-adds by hand is never taken. A write is judged
+  by its status alone, its body unread, and a redirect that would turn it
+  into a GET is not followed. The first failure stops the sync; the status
+  keeps the counts so far and the failure, and the next sync retries the
+  rest. The last sync's
   status lives until the process restarts. Sync requests wait in the
   Discogs budget as `Background` ([lookup.md](lookup.md)); deal runs never
   start a sync, and the sync never changes matching, limits or alerts.

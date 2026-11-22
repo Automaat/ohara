@@ -21,8 +21,8 @@ type Store struct {
 func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
 
 // Wished is what the album wishes ask of the wantlist: the distinct
-// Discogs releases of their editions, and how many wished editions have
-// none.
+// Discogs releases of their editions, and how many album wishes (wishlist
+// copies) have an edition without one.
 type Wished struct {
 	Releases []int64
 	Skipped  int
@@ -30,24 +30,19 @@ type Wished struct {
 
 // Wished reads the editions of the album copies on the wishlist.
 func (s *Store) Wished(ctx context.Context) (Wished, error) {
-	rows, err := s.pool.Query(ctx, `SELECT DISTINCT e.id, e.discogs_release_id
+	rows, err := s.pool.Query(ctx, `SELECT e.discogs_release_id
 		FROM copy c JOIN edition e ON e.id = c.edition_id JOIN title t ON t.id = e.title_id
-		WHERE c.status = 'wishlist' AND t.kind = 'music' ORDER BY e.id`)
+		WHERE c.status = 'wishlist' AND t.kind = 'music' ORDER BY c.id`)
 	if err != nil {
 		return Wished{}, fmt.Errorf("wished releases: %w", err)
 	}
-	editions, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (*int64, error) {
-		var id int64
-		var release *int64
-		err := row.Scan(&id, &release)
-		return release, err
-	})
+	releases, err := pgx.CollectRows(rows, pgx.RowTo[*int64])
 	if err != nil {
 		return Wished{}, fmt.Errorf("wished releases: %w", err)
 	}
 	var w Wished
 	seen := map[int64]bool{}
-	for _, release := range editions {
+	for _, release := range releases {
 		switch {
 		case release == nil:
 			w.Skipped++

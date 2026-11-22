@@ -179,6 +179,11 @@ func (c *Client) httpClient() *http.Client {
 	paced.Transport = hopTimeout{next: client.Transport}
 	check := client.CheckRedirect
 	paced.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if req.Method != via[0].Method {
+			// net/http turns a PUT or DELETE answered 301, 302 or 303 into a
+			// GET; that GET's answer would say nothing about the write.
+			return http.ErrUseLastResponse
+		}
 		if check != nil {
 			if err := check(req, via); err != nil {
 				return err
@@ -230,7 +235,9 @@ func (c *Client) get(ctx context.Context, path string, out any, check func() err
 
 // send waits for the token's budget, sends method to path and, when out
 // is not nil, decodes the JSON body into out and runs check on it. ok
-// lists the accepted statuses, 200 when empty. The outcome counts in the
+// lists the accepted statuses, 200 when empty; with out nil the body is
+// not read. A redirect that would change the method is not followed, so it
+// answers with its own status. The outcome counts in the
 // source health metrics: ok only once the body decodes and passes check; a
 // request the budget kept back was never sent and does not count. A base
 // URL that does not parse counts as an error and is timed like a sent
@@ -259,8 +266,9 @@ func (c *Client) send(ctx context.Context, method, path string, ok []int, out an
 			"User-Agent":    {UserAgent},
 			"Authorization": {"Discogs token=" + c.Token},
 		},
-		MaxBody: maxBody,
-		OK:      ok,
+		MaxBody:  maxBody,
+		OK:       ok,
+		SkipBody: out == nil,
 	})
 	if err != nil {
 		metrics.ObserveSource(Source, fetch.Outcome(err))

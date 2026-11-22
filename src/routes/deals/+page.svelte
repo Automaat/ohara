@@ -80,6 +80,7 @@
 
 	let poll: ReturnType<typeof setTimeout> | undefined;
 	let wantlistPoll: ReturnType<typeof setTimeout> | undefined;
+	let left = false;
 	let issued = 0;
 
 	/**
@@ -169,7 +170,8 @@
 
 	/**
 	 * The Discogs wantlist sync's state, asked again every 2 s while a sync runs. Without a Discogs
-	 * token the server says it is disabled and the page offers no sync.
+	 * token the server says it is disabled and the page offers no sync. An answer that arrives
+	 * after the page is left asks nothing more.
 	 */
 	async function loadWantlist() {
 		try {
@@ -177,6 +179,7 @@
 		} catch (err) {
 			syncError = errorMessage(err);
 		}
+		if (left) return;
 		clearTimeout(wantlistPoll);
 		if (wantlist?.running) wantlistPoll = setTimeout(loadWantlist, 2000);
 	}
@@ -208,6 +211,7 @@
 		return () => {
 			dismissals.destroy();
 			clearTimeout(poll);
+			left = true;
 			clearTimeout(wantlistPoll);
 			clearInterval(clock);
 			document.removeEventListener('visibilitychange', onvisibility);

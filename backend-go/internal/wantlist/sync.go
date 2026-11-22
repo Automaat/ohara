@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/Automaat/ohara/backend-go/internal/discogs"
 	"github.com/Automaat/ohara/backend-go/internal/recovery"
 )
 
@@ -22,8 +24,8 @@ type Discogs interface {
 
 // Result is what one sync did. Added counts the wished releases it put on
 // the wantlist, Already those that were there, Removed the wants Ohara had
-// added whose wish is gone, and Skipped the wished album editions without
-// a Discogs release. Failure is why the sync stopped early; the counts
+// added whose wish is gone, and Skipped the album wishes whose edition has
+// no Discogs release. Failure is why the sync stopped early; the counts
 // then hold what it did before.
 type Result struct {
 	Added   int    `json:"added"`
@@ -61,13 +63,13 @@ type Syncer struct {
 
 // NewSyncer wires the store and the Discogs client; a nil client leaves
 // the sync disabled.
-func NewSyncer(store *Store, discogs Discogs, logger *slog.Logger) *Syncer {
+func NewSyncer(store *Store, client Discogs, logger *slog.Logger) *Syncer {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &Syncer{
-		store: store, discogs: discogs, logger: logger, base: context.Background(),
-		status: Status{Enabled: discogs != nil},
+		store: store, discogs: client, logger: logger, base: context.Background(),
+		status: Status{Enabled: client != nil},
 	}
 }
 
@@ -130,10 +132,16 @@ var errDisabled = errors.New("discogs wantlist sync disabled: no Discogs token")
 // Sync reads the whole wantlist of the token's owner, then puts every
 // wished release that is not on it there and takes off every want Ohara
 // added whose wish is gone. A want on the wantlist that Ohara did not add
-// is never removed. Each write is recorded as soon as it succeeds; the
-// first failure stops the sync with the counts so far, and the next sync
-// retries what is left. Nothing is written when the wantlist already
-// matches.
+// is never removed. Nothing is written when the wantlist already matches.
+//
+// The record of a want Ohara owns changes before the request to Discogs,
+// so a database failure stops the sync before a write it could not record:
+// an add is recorded first and dropped again only when Discogs refuses it,
+// a removal forgets the want first and records it again only when Discogs
+// refuses. A write whose outcome is unknown (a lost answer, a server
+// error) keeps the record of an add and forgets a removal, so a want the
+// collector put back by hand is never taken. The first failure stops the
+// sync with the counts so far, and the next sync retries what is left.
 func (s *Syncer) Sync(ctx context.Context) (Result, error) {
 	var res Result
 	if s.discogs == nil {
@@ -164,10 +172,7 @@ func (s *Syncer) Sync(ctx context.Context) (Result, error) {
 			res.Already++
 			continue
 		}
-		if err := s.discogs.AddWant(ctx, username, id); err != nil {
-			return res, err
-		}
-		if err := s.store.RecordAdded(ctx, username, id); err != nil {
+		if err := s.add(ctx, username, id); err != nil {
 			return res, err
 		}
 		res.Added++
@@ -176,17 +181,58 @@ func (s *Syncer) Sync(ctx context.Context) (Result, error) {
 		if wanted[id] {
 			continue
 		}
-		if on[id] {
-			if err := s.discogs.RemoveWant(ctx, username, id); err != nil {
-				return res, err
-			}
-			res.Removed++
-		}
-		if err := s.store.Forget(ctx, username, id); err != nil {
+		removed, err := s.remove(ctx, username, id, on[id])
+		if err != nil {
 			return res, err
+		}
+		if removed {
+			res.Removed++
 		}
 	}
 	return res, nil
+}
+
+// add records release id as Ohara's, then puts it on the wantlist.
+func (s *Syncer) add(ctx context.Context, username string, id int64) error {
+	if err := s.store.RecordAdded(ctx, username, id); err != nil {
+		return err
+	}
+	err := s.discogs.AddWant(ctx, username, id)
+	if err != nil && refused(err) {
+		if ferr := s.store.Forget(ctx, username, id); ferr != nil {
+			return errors.Join(err, ferr)
+		}
+	}
+	return err
+}
+
+// remove forgets release id, then takes it off the wantlist when it is
+// there, and says whether it did.
+func (s *Syncer) remove(ctx context.Context, username string, id int64, listed bool) (bool, error) {
+	if err := s.store.Forget(ctx, username, id); err != nil {
+		return false, err
+	}
+	if !listed {
+		return false, nil
+	}
+	err := s.discogs.RemoveWant(ctx, username, id)
+	if err != nil {
+		if refused(err) {
+			if rerr := s.store.RecordAdded(ctx, username, id); rerr != nil {
+				return false, errors.Join(err, rerr)
+			}
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// refused says Discogs answered with a status that leaves the wantlist as
+// it was: a redirect or a client error, 429 included. A server error or a
+// lost answer can follow a write Discogs made.
+func refused(err error) bool {
+	se, ok := errors.AsType[discogs.StatusError](err)
+	return ok && se.Code < http.StatusInternalServerError
 }
 
 func set(ids []int64) map[int64]bool {

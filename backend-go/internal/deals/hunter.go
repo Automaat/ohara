@@ -486,27 +486,23 @@ func (r *run) deliver(ctx context.Context, only map[string]bool) error {
 			}
 		}
 		r.tried[a.ObservationID] = true
-		err := r.h.notifier.Send(ctx, alertText(a))
-		r.h.sent()
-		metrics.ObserveDealAlert(err)
-		if err != nil {
-			r.h.logger.Warn("telegram alert failed", "observation", a.ObservationID, "err", err)
-			if err := r.h.store.MarkFailed(ctx, a.ObservationID, a.PriceCents, err.Error()); err != nil {
-				return err
+		delivered, err := r.h.store.SendAlert(ctx, a.ObservationID, func(due *Alert) error {
+			err := r.h.notifier.Send(ctx, alertText(due))
+			r.h.sent()
+			metrics.ObserveDealAlert(err)
+			if err != nil {
+				r.h.logger.Warn("telegram alert failed", "observation", due.ObservationID, "err", err)
 			}
-			continue
-		}
-		// The message is out: record it even when ctx was canceled during
-		// the send, or the next run sends it again.
-		markCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), markSentTimeout)
-		err = r.h.store.MarkSent(markCtx, a.ObservationID, a.PriceCents)
-		cancel()
+			return err
+		})
 		if err != nil {
 			return err
 		}
-		// A later sighting in this run may queue it again at a lower price.
-		delete(r.tried, a.ObservationID)
-		r.res.Sent++
+		if delivered {
+			// A later sighting in this run may queue it again at a lower price.
+			delete(r.tried, a.ObservationID)
+			r.res.Sent++
+		}
 	}
 	return nil
 }

@@ -239,6 +239,17 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   (`queued_price_cents`). An unsent alert whose wish is gone moves to the
   wish that now matches, keeping its attempts and age. Alerts sent before
   migration 0016 have no stored price and never repeat.
+  Okazje's "Ignoruj" (`POST /api/deals/{id}/dismissal`, undone by `DELETE`,
+  both 204 when repeated, 404 for an id no OLX or Pepper listing has) sets
+  the listing's `dismissed_at`, for every wish it matches: it leaves every
+  deals list and the badge, its unsent alert is never sent and a run that
+  sees it again keeps it dismissed and queues no alert. The hunter sends
+  each alert holding the listing's row from its last check until the
+  outcome is stored (`Store.SendAlert`), so a dismissal waits for a
+  message already on its way. The observation, its alert and its price
+  for the valuation stay. The page's toasts (`src/lib/deal-dismissals.svelte.ts`)
+  offer "Cofnij", or "Spróbuj ponownie" after a failed request, and are
+  taken back when the page goes away.
   The wish a listing was recorded for (`raw.wishlist_copy_id`) is also the
   generated, indexed column `wishlist_copy_id`, so the deals list's filters
   start from wished listings instead of reading every observation.
@@ -279,7 +290,11 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   quote, so movie discs have no floor. A title page reads
   `GET /api/valuation/copies?title_id=`: that title's owned copies valued
   as `GET /api/valuation` values them, from that title's prices only,
-  with no summary or history. `GET /api/valuation/market` gives each
+  with no summary or history. The summary's `gain` sums the used value
+  and the price paid over the copies that have both; the Wartość hero's
+  difference reads only that, and names its coverage when it counts
+  fewer copies than the collection. History keeps no gain.
+  `GET /api/valuation/market` gives each
   wished title and format that used middle from stored listings, owned
   or not (`?title_id=`: every format of one title), and sends no request
   out: Okazje's deal cards and a wish form's "Cena maksymalna" show it as

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	dealPrice,
 	dealsSummary,
+	dismissalPath,
 	intervalLabel,
 	isUnderLimit,
 	keywordPayload,
@@ -17,6 +18,7 @@ import {
 	underLimitCount,
 	underLimitLabel,
 	wishLimit,
+	withoutDismissed,
 	type HunterStatus,
 	type Keyword,
 	type MarketPrice,
@@ -237,6 +239,23 @@ describe('segments', () => {
 		expect(segmentLabel('under', 3)).toBe('Pod limitem · 3');
 		expect(segmentLabel('all', 0)).toBe('Wszystkie · 0');
 		expect(segmentLabel('sent', 12)).toBe('Wysłane · 12');
+	});
+});
+
+describe('dismissal', () => {
+	it("addresses the listing's dismissal", () => {
+		expect(dismissalPath(42)).toBe('/api/deals/42/dismissal');
+	});
+
+	it('leaves out the dismissed listings and keeps the order of the rest', () => {
+		const listings = [{ id: 3 }, { id: 1 }, { id: 2 }];
+		expect(withoutDismissed(listings, new Set([1]))).toEqual([{ id: 3 }, { id: 2 }]);
+		expect(withoutDismissed(listings, new Set([9]))).toEqual(listings);
+	});
+
+	it('hands back the same list when nothing is dismissed', () => {
+		const listings = [{ id: 1 }];
+		expect(withoutDismissed(listings, new Set())).toBe(listings);
 	});
 });
 

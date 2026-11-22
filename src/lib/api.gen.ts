@@ -419,6 +419,12 @@ export type Bound = {
 	copies: number;
 };
 
+export type Gain = {
+	copies: number;
+	mid_cents: number;
+	spent_cents: number;
+};
+
 export type Summary = {
 	copies: number;
 	spent_cents: number;
@@ -426,6 +432,7 @@ export type Summary = {
 	mid: Bound;
 	ceiling: Bound;
 	low_confidence: number;
+	gain: Gain;
 };
 
 export type HistoryPoint = {

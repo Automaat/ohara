@@ -163,18 +163,18 @@ func TestRunValuesOwnedCopies(t *testing.T) {
 	if movie.Floor != nil || movie.Mid == nil || movie.Mid.Cents != 4000 || movie.Mid.Count != 1 || !movie.LowConfidence {
 		t.Fatalf("movie value = %+v %+v low=%v", movie.Floor, movie.Mid, movie.LowConfidence)
 	}
-	wantSum := Summary{
+	wantSum := Totals{
 		Copies: 3, SpentCents: 8000,
 		Floor:         Bound{Cents: 537, Copies: 1},
 		Mid:           Bound{Cents: 2500 + 4000 + 4000, Copies: 3},
 		LowConfidence: 2,
 	}
-	if sum != wantSum {
+	if sum.Totals != wantSum {
 		t.Fatalf("summary = %+v, want %+v", sum, wantSum)
 	}
 
 	history, err := r.store.History(ctx, 30)
-	if err != nil || len(history) != 1 || history[0].Summary != wantSum {
+	if err != nil || len(history) != 1 || history[0].Totals != wantSum {
 		t.Fatalf("history = %+v, %v", history, err)
 	}
 	body := scrape(t)

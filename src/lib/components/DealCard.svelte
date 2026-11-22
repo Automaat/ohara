@@ -13,7 +13,11 @@
 		type Observation
 	} from '#lib/deals.js';
 
-	let { deal, market = null }: { deal: Observation; market?: MarketPrice | null } = $props();
+	let {
+		deal,
+		market = null,
+		ondismiss
+	}: { deal: Observation; market?: MarketPrice | null; ondismiss?: () => void } = $props();
 	const marketLine = $derived(marketLabel(market));
 	let failed = $state<string[]>([]);
 
@@ -87,15 +91,24 @@
 				{alertLabels[deal.alert]}
 			</span>
 		</span>
-		<span class="open">
-			<Button href={deal.url} target="_blank" rel="noopener noreferrer" tone="signal">
-				Otwórz<VisuallyHidden>
-					ofertę {deal.listing_title || deal.url} w nowej karcie
-				</VisuallyHidden>
-				{#snippet trailing()}
-					<Icon name="arrow-up-right" />
-				{/snippet}
-			</Button>
+		<span class="actions">
+			{#if ondismiss}
+				<Button tone="ghost" data-dismiss={deal.id} onclick={ondismiss}>
+					Ignoruj<VisuallyHidden>
+						ofertę {deal.listing_title || deal.url}
+					</VisuallyHidden>
+				</Button>
+			{/if}
+			<span class="open">
+				<Button href={deal.url} target="_blank" rel="noopener noreferrer" tone="signal">
+					Otwórz<VisuallyHidden>
+						ofertę {deal.listing_title || deal.url} w nowej karcie
+					</VisuallyHidden>
+					{#snippet trailing()}
+						<Icon name="arrow-up-right" />
+					{/snippet}
+				</Button>
+			</span>
 		</span>
 	</div>
 </article>
@@ -175,6 +188,7 @@
 
 	.foot {
 		display: flex;
+		flex-wrap: wrap;
 		align-items: center;
 		gap: 0.625rem;
 		padding-block-start: 0.625rem;
@@ -228,8 +242,12 @@
 		--sui-brand-action-hover: var(--ohara-selected-hover);
 		--sui-brand-action-pressed: var(--ohara-selected-pressed);
 		--sui-on-brand-action: var(--ohara-on-selected);
+	}
 
+	.actions {
+		display: flex;
 		flex: none;
+		gap: 0.5rem;
 		margin-inline-start: auto;
 	}
 </style>

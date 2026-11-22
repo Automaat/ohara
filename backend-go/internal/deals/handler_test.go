@@ -556,3 +556,212 @@ func TestRecentClearsPhotoOnRepeatObservation(t *testing.T) {
 		}
 	}
 }
+
+func TestDismissDeal(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	logger := slog.New(slog.DiscardHandler)
+	store := NewStore(pool)
+	ctx := context.Background()
+	wishlist(t, pool, wantBluray(new(int64(5000))))
+	srv := httptest.NewServer(server.New(server.Config{}, logger, server.Deps{
+		DB: pool, API: []server.Mounter{NewHandler(store, NewHunter(store, nil, nil, Config{}, logger), logger)},
+	}))
+	t.Cleanup(srv.Close)
+
+	listing := func(id string, price int64) Listing {
+		return Listing{Source: "olx", ExternalID: id, Title: "Blade Runner Blu-ray", URL: "https://www.olx.pl/d/oferta/" + id, PriceCents: price}
+	}
+	src := &fakeSource{name: "olx", listings: []Listing{listing("pending", 4000), listing("sent", 3000), listing("over", 6000)}}
+	notifier := &fakeNotifier{fail: 1}
+	h := newTestHunter(pool, notifier, src)
+	if res := mustRun(t, h); res.Alerts != 2 || res.Sent != 1 {
+		t.Fatalf("first run = %+v, want 2 alerts, 1 sent", res)
+	}
+	ids := map[string]int64{}
+	rows, err := pool.Query(ctx, `SELECT external_id, id FROM price_observation`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var ext string
+		var id int64
+		if err := rows.Scan(&ext, &id); err != nil {
+			t.Fatal(err)
+		}
+		ids[ext] = id
+	}
+	if rows.Err() != nil || len(ids) != 3 {
+		t.Fatalf("observations = %v, %v", ids, rows.Err())
+	}
+	pending, err := store.PendingAlerts(ctx)
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("pending before dismissal = %+v, %v", pending, err)
+	}
+	unsent := pending[0].ExternalID
+	if n := count(t, pool, `SELECT count(*) FROM deal_alert WHERE sent_at IS NOT NULL`); n != 1 {
+		t.Fatalf("sent alerts = %d, want 1", n)
+	}
+
+	dismissal := func(ext string) string {
+		return srv.URL + "/api/deals/" + strconv.FormatInt(ids[ext], 10) + "/dismissal"
+	}
+	for _, ext := range []string{"pending", "sent", "over"} {
+		for range 2 {
+			if code := call(t, http.MethodPost, dismissal(ext), nil, nil); code != http.StatusNoContent {
+				t.Fatalf("POST dismissal of %s = %d, want 204", ext, code)
+			}
+		}
+	}
+	listed := func() map[string][]string {
+		got := map[string][]string{}
+		for _, q := range []string{"", "?under_limit=true", "?matched=true", "?sent=true"} {
+			var view View
+			if code := call(t, http.MethodGet, srv.URL+"/api/deals"+q, nil, &view); code != http.StatusOK {
+				t.Fatalf("GET deals%s = %d", q, code)
+			}
+			got[q] = externalIDs(view.Observations)
+		}
+		return got
+	}
+	for q, got := range listed() {
+		if len(got) != 0 {
+			t.Errorf("GET deals%s lists dismissed listings %v", q, got)
+		}
+	}
+	if pending, err := store.PendingAlerts(ctx); err != nil || len(pending) != 0 {
+		t.Fatalf("pending after dismissal = %+v, %v, want none", pending, err)
+	}
+	if n := count(t, pool, `SELECT count(*) FROM price_observation`); n != 3 {
+		t.Fatalf("observations after dismissal = %d, want 3 kept for the valuation", n)
+	}
+	if n := count(t, pool, `SELECT count(*) FROM deal_alert`); n != 2 {
+		t.Fatalf("alerts after dismissal = %d, want 2 kept", n)
+	}
+
+	src.mu.Lock()
+	src.listings = []Listing{listing("pending", 1000), listing("sent", 1000), listing("over", 1000)}
+	src.mu.Unlock()
+	if res := mustRun(t, h); res.Alerts != 0 || res.Sent != 0 {
+		t.Fatalf("run seeing dismissed listings under the limit = %+v, want no alert", res)
+	}
+	if got := notifier.messages(); len(got) != 1 {
+		t.Fatalf("messages = %v, want only the one sent before the dismissal", got)
+	}
+	if n := count(t, pool, `SELECT count(*) FROM deal_alert`); n != 2 {
+		t.Fatalf("alerts after a run = %d, want no new alert for a dismissed listing", n)
+	}
+	if n := count(t, pool, `SELECT count(*) FROM price_observation WHERE dismissed_at IS NULL OR price_cents <> 1000`); n != 0 {
+		t.Fatalf("%d listings lost their dismissal or kept an old price after a run", n)
+	}
+	for q, got := range listed() {
+		if len(got) != 0 {
+			t.Errorf("GET deals%s lists dismissed listings %v after a run", q, got)
+		}
+	}
+
+	for range 2 {
+		if code := call(t, http.MethodDelete, dismissal(unsent), nil, nil); code != http.StatusNoContent {
+			t.Fatalf("DELETE dismissal = %d, want 204", code)
+		}
+	}
+	if got := listed()["?under_limit=true"]; !slices.Equal(got, []string{unsent}) {
+		t.Fatalf("under limit after undo = %v, want %s back", got, unsent)
+	}
+	if pending, err := store.PendingAlerts(ctx); err != nil || len(pending) != 1 || pending[0].ExternalID != unsent {
+		t.Fatalf("pending after undo = %+v, %v", pending, err)
+	}
+
+	var valuationID int64
+	if err := pool.QueryRow(ctx, `INSERT INTO price_observation (source, external_id, price_cents, url)
+		VALUES ('skupszop', 'quote', 500, '') RETURNING id`).Scan(&valuationID); err != nil {
+		t.Fatal(err)
+	}
+	paths := []string{
+		"/api/deals/999999/dismissal", "/api/deals/x/dismissal",
+		"/api/deals/" + strconv.FormatInt(valuationID, 10) + "/dismissal",
+	}
+	for _, path := range paths {
+		for _, method := range []string{http.MethodPost, http.MethodDelete} {
+			if code := call(t, method, srv.URL+path, nil, nil); code != http.StatusNotFound {
+				t.Errorf("%s %s = %d, want 404", method, path, code)
+			}
+		}
+	}
+}
+
+func TestDismissDuringDeliveryStopsAlert(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	wishlist(t, pool, wantBluray(new(int64(5000))))
+	src := &fakeSource{name: "olx", listings: []Listing{
+		{Source: "olx", ExternalID: "a", Title: "Blade Runner Blu-ray", URL: "https://www.olx.pl/d/oferta/a", PriceCents: 4000},
+		{Source: "olx", ExternalID: "b", Title: "Blade Runner Blu-ray", URL: "https://www.olx.pl/d/oferta/b", PriceCents: 4000},
+	}}
+	notifier := &fakeNotifier{}
+	h := newTestHunter(pool, notifier, src)
+	h.sleep = func(ctx context.Context, _ time.Duration) error {
+		_, err := pool.Exec(ctx, `UPDATE price_observation o SET dismissed_at = now()
+			WHERE NOT EXISTS (SELECT 1 FROM deal_alert a WHERE a.observation_id = o.id AND a.sent_at IS NOT NULL)`)
+		return err
+	}
+	if res := mustRun(t, h); res.Alerts != 2 || res.Sent != 1 || len(notifier.messages()) != 1 {
+		t.Fatalf("run = %+v, %d messages, want the alert dismissed during the pause unsent", res, len(notifier.messages()))
+	}
+	if pending, err := store.PendingAlerts(ctx); err != nil || len(pending) != 0 {
+		t.Fatalf("pending = %+v, %v", pending, err)
+	}
+}
+
+// dismissingNotifier dismisses the listing it is sending, as a collector
+// pressing "Ignoruj" while the message is on its way does, and reports
+// whether that dismissal finished before the message went out.
+type dismissingNotifier struct {
+	store         *Store
+	observationID func() int64
+	dismissed     chan error
+	early         bool
+}
+
+func (n *dismissingNotifier) Send(ctx context.Context, _ string) error {
+	go func() { n.dismissed <- n.store.Dismiss(context.WithoutCancel(ctx), n.observationID()) }()
+	select {
+	case <-n.dismissed:
+		n.early = true
+	case <-time.After(300 * time.Millisecond):
+	}
+	return nil
+}
+
+func TestDismissWaitsForAlertBeingSent(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	wishlist(t, pool, wantBluray(new(int64(5000))))
+	src := &fakeSource{name: "olx", listings: []Listing{
+		{Source: "olx", ExternalID: "a", Title: "Blade Runner Blu-ray", URL: "https://www.olx.pl/d/oferta/a", PriceCents: 4000},
+	}}
+	notifier := &dismissingNotifier{store: store, dismissed: make(chan error, 1), observationID: func() int64 {
+		var id int64
+		if err := pool.QueryRow(ctx, `SELECT id FROM price_observation`).Scan(&id); err != nil {
+			t.Error(err)
+		}
+		return id
+	}}
+	h := newTestHunter(pool, notifier, src)
+	if res := mustRun(t, h); res.Sent != 1 {
+		t.Fatalf("run = %+v, want the alert sent", res)
+	}
+	if notifier.early {
+		t.Fatal("a dismissal committed while its listing's alert was being sent")
+	}
+	if err := <-notifier.dismissed; err != nil {
+		t.Fatalf("dismiss after the send: %v", err)
+	}
+	if n := count(t, pool, `SELECT count(*) FROM deal_alert WHERE sent_at IS NOT NULL`); n != 1 {
+		t.Fatalf("sent alerts = %d, want the message that went out recorded", n)
+	}
+	if n := count(t, pool, `SELECT count(*) FROM price_observation WHERE dismissed_at IS NOT NULL`); n != 1 {
+		t.Fatalf("dismissed listings = %d, want the dismissal applied after the send", n)
+	}
+}

@@ -135,3 +135,36 @@ describe('loadUnderLimit', () => {
 		expect(badge.dealBadge.count).toBe(1);
 	});
 });
+
+describe('forgetDealListing', () => {
+	it('takes the listing out of the badge and its listings at once', async () => {
+		await badge.loadUnderLimit(deals([listing(3500, 4000), listing(3900, 4000)]));
+		badge.forgetDealListing(3500);
+		expect(badge.dealBadge.count).toBe(1);
+		expect(badge.dealBadge.listings?.map((l) => l.id)).toEqual([3900]);
+	});
+
+	it('ignores an answer to a request sent before the dismissal', async () => {
+		await badge.loadUnderLimit(deals([listing(3500, 4000), listing(3900, 4000)]));
+		const older = Promise.withResolvers<Response>();
+		const stale = badge.refreshDealBadge(vi.fn(() => older.promise));
+		badge.forgetDealListing(3500);
+		older.resolve(dealsResponse([listing(3500, 4000), listing(3900, 4000)]));
+		await stale;
+		expect(badge.dealBadge.count).toBe(1);
+	});
+
+	it('lets a request sent after the dismissal move the badge', async () => {
+		await badge.loadUnderLimit(deals([listing(3500, 4000)]));
+		badge.forgetDealListing(3500);
+		expect(badge.dealBadge.count).toBe(0);
+		await badge.refreshDealBadge(deals([listing(3500, 4000)]));
+		expect(badge.dealBadge.count).toBe(1);
+	});
+
+	it('does nothing before the first answer', () => {
+		badge.forgetDealListing(1);
+		expect(badge.dealBadge.listings).toBeNull();
+		expect(badge.dealBadge.count).toBe(0);
+	});
+});

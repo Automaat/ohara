@@ -8,7 +8,8 @@
 		name,
 		wish = false,
 		lent = false,
-		ordered = false
+		ordered = false,
+		eager = false
 	}: {
 		kind: Kind;
 		url?: string;
@@ -21,6 +22,8 @@
 		lent?: boolean;
 		/** A copy on order: the cover carries a parcel. */
 		ordered?: boolean;
+		/** Load the image at once, as a page meant for printing needs every cover. */
+		eager?: boolean;
 	} = $props();
 	let failedURL = $state<string>();
 	let loadedURL = $state<string>();
@@ -49,7 +52,7 @@
 				src={thumbnail}
 				class:loaded={loadedURL === thumbnail}
 				alt=""
-				loading="lazy"
+				loading={eager ? 'eager' : 'lazy'}
 				decoding="async"
 				referrerpolicy="no-referrer"
 				onload={() => (loadedURL = thumbnail)}

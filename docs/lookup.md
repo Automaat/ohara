@@ -114,7 +114,8 @@ Moved from `CLAUDE.md`, whose conventions still apply.
 
 - Discogs data carries `DiscogsCredit`: "Data provided by Discogs." linked
   to its release page, never `nofollow`, under a quick confirm candidate
-  with a `discogs_release_id` and a copy priced from Discogs on Wartość.
+  with a `discogs_release_id`, a copy priced from Discogs on Wartość and,
+  once per release, a Statystyki value group with such a copy.
   `/informacje` shows the API terms' non-affiliation notice. Both stay in
   English, word for word (`src/lib/discogs.ts`).
 

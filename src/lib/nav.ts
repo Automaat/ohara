@@ -49,7 +49,7 @@ export const tabs: Tab[] = [
 		href: '/',
 		label: 'Kolekcja',
 		icon: 'grid',
-		paths: ['/', '/titles', '/editions', '/copies']
+		paths: ['/', '/titles', '/editions', '/copies', '/series']
 	},
 	{ href: '/deals', label: 'Okazje', icon: 'tag', paths: ['/deals'] },
 	{ href: '/valuation', label: 'Wartość', icon: 'trend', paths: ['/valuation'] }

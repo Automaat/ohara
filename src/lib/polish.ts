@@ -24,6 +24,10 @@ export function copyCount(count: number): string {
 	return counted(count, 'egzemplarz', 'egzemplarze', 'egzemplarzy');
 }
 
+export function titleCount(count: number): string {
+	return counted(count, 'tytuł', 'tytuły', 'tytułów');
+}
+
 /** Copies on their way, such as "2 zamówione". */
 export function orderedCount(count: number): string {
 	return counted(count, 'zamówiony', 'zamówione', 'zamówionych');

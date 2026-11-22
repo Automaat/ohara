@@ -628,6 +628,34 @@ describe('scan payloads', () => {
 		});
 	});
 
+	it('carries a series the candidate names, dropping values the API would refuse', () => {
+		const f = form({ kind: 'book', name: 'Lalka', format: '', binding: '' });
+		const inSeries = {
+			...book,
+			title: { ...book.title, series_name: ' Pozytywizm ', series_number: 2 }
+		};
+		expect(scanTitlePayload(f, inSeries)).toMatchObject({
+			ok: true,
+			value: { series_name: 'Pozytywizm', series_number: 2 }
+		});
+		const badNumber = {
+			...book,
+			title: { ...book.title, series_name: 'Saga', series_number: 2.5 }
+		};
+		expect(scanTitlePayload(f, badNumber)).toMatchObject({
+			ok: true,
+			value: { series_name: 'Saga', series_number: null }
+		});
+		for (const series_name of ['Sa\nga', ' ', null]) {
+			const dropped = scanTitlePayload(f, {
+				...book,
+				title: { ...book.title, series_name, series_number: 4 }
+			});
+			expect(dropped.ok && 'series_name' in dropped.value).toBe(false);
+			expect(dropped.ok && 'series_number' in dropped.value).toBe(false);
+		}
+	});
+
 	it('drops the candidate when the kind was switched', () => {
 		const f = form({ kind: 'book', name: 'Seksmisja', format: '', binding: '' });
 		expect(scanTitlePayload(f, movie)).toMatchObject({

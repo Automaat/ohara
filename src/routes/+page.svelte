@@ -359,6 +359,7 @@
 		{/snippet}
 		{#snippet actions()}
 			{#if !emptyShelf}
+				<Button href="/series">Serie</Button>
 				<Button tone="signal" href="/titles/new">Dodaj tytuł</Button>
 			{/if}
 			<ExportMenu toolbar />
@@ -389,6 +390,10 @@
 				>
 					{unpricedLabel(unpriced)}
 				</button>
+			{/if}
+			{#if !emptyShelf}
+				·
+				<a class="series-link" href="/series">Serie</a>
 			{/if}
 		</p>
 	</header>
@@ -932,6 +937,26 @@
 		margin: 0.25rem 0 0;
 		color: var(--sui-text-secondary);
 		font-size: 0.875rem;
+	}
+
+	/* The series list's link in the summary line, beside the header's two controls. */
+	.series-link {
+		position: relative;
+		color: var(--sui-brand-action-text);
+		font-weight: var(--sui-weight-semibold);
+		text-decoration: underline;
+		text-underline-offset: 0.2em;
+	}
+
+	.series-link::before {
+		content: '';
+		position: absolute;
+		inset: -0.875rem -0.25rem;
+	}
+
+	.series-link:focus-visible {
+		outline: 2px solid var(--sui-focus);
+		outline-offset: 2px;
 	}
 
 	/* A link-like toggle within the summary line, its touch target 44px tall. */

@@ -24,6 +24,8 @@ import {
 	spentLabel,
 	uncopiedLine,
 	uncopiedTitles,
+	unpricedCount,
+	unpricedLabel,
 	wishLine,
 	withoutCopies,
 	type Title
@@ -122,6 +124,12 @@ describe('collection search links', () => {
 				new URLSearchParams('kind=constructor&format=bad&status=owned&q=Solaris')
 			)
 		).toEqual({ kind: '', format: '', status: 'owned', q: 'Solaris' });
+	});
+
+	it('keeps the unpriced copies in the address, with kind, format and search', () => {
+		const filter = { kind: 'movie', format: 'dvd', status: 'unpriced', q: 'Alien' } as const;
+		expect(collectionSearch(filter)).toBe('?kind=movie&format=dvd&status=unpriced&q=Alien');
+		expect(readCollectionFilter(new URLSearchParams(collectionSearch(filter)))).toEqual(filter);
 	});
 
 	it('keeps titles without copies in the address, with no format', () => {
@@ -480,6 +488,17 @@ describe('spentLabel', () => {
 		}
 	])('$name', ({ totals, want }) => {
 		expect(spentLabel(totals)).toMatch(want);
+	});
+});
+
+describe('unpriced copies', () => {
+	it.each([
+		{ owned: 3, priced: 1, want: 2, label: '2 bez ceny' },
+		{ owned: 3, priced: 3, want: 0, label: '0 bez ceny' },
+		{ owned: 12345, priced: 0, want: 12345, label: /^12\s345 bez ceny$/ }
+	])('$owned owned, $priced priced', ({ owned, priced, want, label }) => {
+		expect(unpricedCount({ owned, priced })).toBe(want);
+		expect(unpricedLabel(want)).toMatch(label);
 	});
 });
 

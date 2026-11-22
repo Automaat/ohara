@@ -286,6 +286,7 @@ func (h *Hunter) Run(ctx context.Context) (RunResult, error) {
 	}
 	r := &run{h: h, wants: wants, rules: rules, titles: titles, first: true, tried: map[int64]bool{}}
 	for i := range wants {
+		wants[i].Prepare()
 		r.percent = r.percent || wants[i].MaxMarketPercent != nil
 	}
 	r.res.Wants = len(wants)

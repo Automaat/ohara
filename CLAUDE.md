@@ -383,7 +383,10 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   sheet or a search sends no request; Back draws the kept collection and
   refreshes it once. Its filter sheet's "Bez egzemplarzy"
   (`?status=none`) lists titles without one instead, filtered in the client
-  from `GET /api/titles`; `/titles` redirects to `/`. `?add=copy` on a title
+  from `GET /api/titles`; `/titles` redirects to `/`. Its "Bez ceny"
+  (`?status=unpriced`, client only) lists owned copies without a purchase
+  price; a phone's header shows their count as its toggle, hidden at 0.
+  `?add=copy` on a title
   or edition page opens the form for its next copy. The shelf draws its
   tiles in parts (`src/lib/shelf-drawing.ts`): 60 with the page, then 150
   a task, each tile carrying `aria-setsize`. Until the last part lands the

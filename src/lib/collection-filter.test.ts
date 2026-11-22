@@ -160,6 +160,31 @@ describe('filterCollection', () => {
 	});
 });
 
+describe('the unpriced status', () => {
+	/** Owned copies with and without a price, a free one, and a wish that has no price either. */
+	const priced: CollectionItem[] = [
+		item({ copy_id: 1, kind: 'movie', format: 'dvd', name: 'Alien', price_cents: 2999 }),
+		item({ copy_id: 2, kind: 'movie', format: 'dvd', name: 'Aliens' }),
+		item({ copy_id: 3, kind: 'book', name: 'Solaris', authors: ['Stanisław Lem'] }),
+		item({ copy_id: 4, kind: 'book', name: 'Eden', price_cents: 0 }),
+		item({ copy_id: 5, kind: 'movie', format: 'bluray', name: 'Alien³', status: 'wishlist' }),
+		item({ copy_id: 6, kind: 'music', format: 'vinyl', name: 'Kind of Blue' })
+	];
+
+	it.each([
+		['lists owned copies without a price, never a wish', {}, [2, 3, 6]],
+		['a price of 0 zł is a price', { kind: 'book' }, [3]],
+		['with a kind', { kind: 'movie' }, [2]],
+		['with a medium', { format: 'vinyl' }, [6]],
+		['with a search', { q: 'lem' }, [3]],
+		['with a kind whose only unpriced copy is of another kind', { kind: 'movie', q: 'lem' }, []],
+		['with a medium no unpriced copy has', { format: 'bluray' }, []]
+	] as [string, Partial<CollectionFilter>, number[]][])('%s', (_name, filter, copies) => {
+		const listed = filterCollection(priced, { ...none, status: 'unpriced', ...filter });
+		expect(listed.map((i) => i.copy_id)).toEqual(copies);
+	});
+});
+
 describe('searchBarcode', () => {
 	it.each([
 		['9788374690997', '9788374690997'],

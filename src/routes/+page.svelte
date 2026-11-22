@@ -42,6 +42,8 @@
 		spentLabel,
 		statusLabels,
 		uncopiedTitles,
+		unpricedCount,
+		unpricedLabel,
 		withoutCopies,
 		type CollectionFilter,
 		type CollectionItem,
@@ -404,6 +406,8 @@
 
 	// A no-break space keeps the line's height until the counts arrive, so nothing below moves.
 	const summary = $derived(overview ? shelfSummary(overview.totals) : '\u00a0');
+	/** Owned copies without a purchase price; the phone's header links to them. */
+	const unpriced = $derived(overview ? unpricedCount(overview.totals) : 0);
 	const rows = $derived(
 		sortCopies(filterCollection(collection?.items ?? [], filter) as Row[], sort)
 	);
@@ -431,8 +435,16 @@
 	});
 	const titleRows = $derived(sortTitles(uncopiedTitles(uncopied ?? [], filter), sort));
 	const listed = $derived(listsTitles ? uncopied : collection);
+	/**
+	 * An empty collection greets the reader whatever the filter, except "Bez ceny", which keeps
+	 * "Nic nie pasuje" and its "Wyczyść filtry" like any filter that lists nothing.
+	 */
 	const emptyShelf = $derived(
-		!failure && !listsTitles && overview?.totals.copies === 0 && rows.length === 0
+		!failure &&
+			!listsTitles &&
+			filter.status !== 'unpriced' &&
+			overview?.totals.copies === 0 &&
+			rows.length === 0
 	);
 	const activeFilters = $derived(
 		(
@@ -462,11 +474,13 @@
 				label: formatLabels[filter.format],
 				remove: () => set('format', '')
 			},
-			(filter.status === 'owned' || filter.status === 'none') && {
-				key: 'status',
-				label: collectionStatusLabels[filter.status],
-				remove: () => set('status', '')
-			}
+			// The wishlist has its own chip beside the list.
+			filter.status &&
+				filter.status !== 'wishlist' && {
+					key: 'status',
+					label: collectionStatusLabels[filter.status],
+					remove: () => set('status', '')
+				}
 		].filter((choice) => choice !== false && choice !== '')
 	);
 </script>
@@ -500,7 +514,20 @@
 			{/if}
 			<SettingsSheet />
 		</div>
-		<p class="summary">{summary}</p>
+		<p class="summary">
+			{summary}
+			{#if unpriced > 0}
+				·
+				<button
+					type="button"
+					class="unpriced"
+					aria-pressed={filter.status === 'unpriced'}
+					onclick={() => setStatus(filter.status === 'unpriced' ? '' : 'unpriced')}
+				>
+					{unpricedLabel(unpriced)}
+				</button>
+			{/if}
+		</p>
 	</header>
 
 	{#if emptyShelf}
@@ -983,6 +1010,9 @@
 	}
 
 	.phone-add {
+		/* Above the touch target of the summary's "bez ceny" toggle where the two meet. */
+		position: relative;
+		z-index: 1;
 		align-items: center;
 		display: flex;
 		gap: var(--sui-space-2);
@@ -1005,6 +1035,37 @@
 		margin: 0.25rem 0 0;
 		color: var(--sui-text-secondary);
 		font-size: 0.875rem;
+	}
+
+	/* A link-like toggle within the summary line, its touch target 44px tall. */
+	.unpriced {
+		position: relative;
+		padding: 0;
+		border: 0;
+		background: none;
+		color: var(--sui-brand-action-text);
+		font: inherit;
+		font-weight: var(--sui-weight-semibold);
+		text-decoration: underline;
+		text-underline-offset: 0.2em;
+		cursor: pointer;
+	}
+
+	.unpriced::before {
+		content: '';
+		position: absolute;
+		inset: -0.875rem -0.25rem;
+	}
+
+	.unpriced[aria-pressed='true'] {
+		color: var(--sui-text-primary);
+		text-decoration: none;
+	}
+
+	.unpriced:focus-visible {
+		outline: 2px solid var(--sui-focus);
+		outline-offset: 2px;
+		border-radius: 2px;
 	}
 
 	.title-details {

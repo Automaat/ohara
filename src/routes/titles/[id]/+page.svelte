@@ -52,12 +52,14 @@
 		previewHero,
 		soleCopy,
 		titleHero,
+		trendHeight,
+		trendWidth,
 		valueCard,
 		type Hero
 	} from '#lib/title-detail.js';
 	import { newRequestKey } from '#lib/scan.js';
 	import { TitleMarkets } from '#lib/title-market.svelte.js';
-	import type { CopyValue, TitleValues } from '#lib/valuation.js';
+	import type { CopyValue, CopyValueDay, CopyValueHistory, TitleValues } from '#lib/valuation.js';
 
 	/**
 	 * The copy sheet edits a copy or adds one to an edition. An add keeps one request key for every
@@ -79,6 +81,7 @@
 	let preview = $state<Hero | null>(null);
 	const hero = $derived(detail ? titleHero(detail) : preview);
 	let values = $state<CopyValue[]>([]);
+	let valueDays = $state<CopyValueDay[]>([]);
 	let failure = $state<string | null>(null);
 	/** A failed refresh of the title already on the page, which stays in view. */
 	let refreshError = $state<string | null>(null);
@@ -126,7 +129,7 @@
 		const editionID = target.mode === 'edit' ? target.copy.edition_id : target.editionID;
 		return detail?.editions.find((e) => e.id === editionID);
 	});
-	const value = $derived(sole ? valueCard(sole.copy, values) : null);
+	const value = $derived(sole ? valueCard(sole.copy, values, valueDays) : null);
 
 	/** The wish's market price, asked once the copy sheet shows a wish's limit. */
 	const markets = new TitleMarkets(fetch);
@@ -140,6 +143,7 @@
 			detail = null;
 			preview = null;
 			values = [];
+			valueDays = [];
 			failure = null;
 			refreshError = null;
 			titleSheet = false;
@@ -175,14 +179,17 @@
 	}
 
 	/**
-	 * Today's values, asked only when the page leads with one owned copy. A failed request leaves
-	 * the copy without a value card, as a copy the valuation has not priced yet.
+	 * Today's values and the copy's daily ones, asked only when the page leads with one owned copy.
+	 * A failed request for today's leaves the copy without a value card, as a copy the valuation has
+	 * not priced yet; a failed one for the days leaves the card without its trend.
 	 */
 	async function loadValues(t: TitleDetail, current: number) {
 		if (soleCopy(t)?.copy.status !== 'owned') {
 			values = [];
+			valueDays = [];
 			return;
 		}
+		void loadValueDays(t, current);
 		try {
 			const answer = await request<TitleValues>(
 				fetch,
@@ -192,6 +199,19 @@
 			if (current === loads) values = answer.copies;
 		} catch {
 			if (current === loads) values = [];
+		}
+	}
+
+	async function loadValueDays(t: TitleDetail, current: number) {
+		try {
+			const answer = await request<CopyValueHistory>(
+				fetch,
+				'GET',
+				`/api/valuation/copies/history?title_id=${t.id}`
+			);
+			if (current === loads) valueDays = answer.history;
+		} catch {
+			if (current === loads) valueDays = [];
 		}
 	}
 
@@ -415,6 +435,20 @@
 						{/if}
 						{#if value.delta}
 							<p class="delta">{value.delta}</p>
+						{/if}
+						{#if value.trend}
+							<svg
+								class="trend"
+								width={trendWidth}
+								height={trendHeight}
+								viewBox={`0 0 ${trendWidth} ${trendHeight}`}
+								aria-hidden="true"
+							>
+								<path d={value.trend.path} />
+								{#each value.trend.dots as dot (dot.x)}
+									<circle cx={dot.x} cy={dot.y} r="0.9" />
+								{/each}
+							</svg>
 						{/if}
 					</div>
 					<div class="range" aria-hidden="true">
@@ -654,6 +688,20 @@
 		font-weight: 600;
 		letter-spacing: -0.02em;
 		font-variant-numeric: tabular-nums;
+	}
+	.trend {
+		flex: none;
+		margin-inline-start: auto;
+		fill: none;
+	}
+	.trend path {
+		stroke: var(--sui-brand-action);
+		stroke-width: 2.4;
+		stroke-linecap: butt;
+		stroke-linejoin: round;
+	}
+	.trend circle {
+		fill: var(--sui-brand-action);
 	}
 	.delta {
 		display: inline-flex;

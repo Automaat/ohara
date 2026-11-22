@@ -1,4 +1,5 @@
 import { queueDeletesSettled } from './queue-deletes';
+import { queueWaiting } from './recent.svelte';
 import { canonicalBarcode } from './scan';
 
 /** What the sheet says about a code the check got no answer for, once the device kept it. */
@@ -143,8 +144,11 @@ export function openPendingStore(
 	});
 }
 
-/** How one waiting code's POST ended: in the queue, kept for the next try, or the run stops. */
-type Outcome = 'settled' | 'kept' | 'stop';
+/**
+ * How one waiting code's POST ended: in the queue, off the device for another reason, kept for the
+ * next try, or the run stops.
+ */
+type Outcome = 'queued' | 'settled' | 'kept' | 'stop';
 
 /**
  * Barcodes scanned while the check got no answer, kept on the device until the scan queue takes
@@ -277,7 +281,8 @@ export class PendingScans {
 		if (barcode === undefined) return;
 		const outcome = await this.#post(barcode);
 		if (outcome === 'stop') return;
-		if (outcome === 'settled') await store.remove(barcode);
+		if (outcome !== 'kept') await store.remove(barcode);
+		if (outcome === 'queued') queueWaiting(barcode);
 		await this.#sendEach(store, rest);
 	}
 
@@ -296,19 +301,19 @@ export class PendingScans {
 
 	/**
 	 * What the scan queue's answer means for the code. A 422 can never succeed, so it settles by its
-	 * status; a 409 settles only as the API's own conflict on the barcode.
+	 * status; a 409 settles only as the API's own conflict on the barcode. A 200 or 201 puts the
+	 * code in the queue, so its waiting scans read as queued.
 	 */
 	async #outcome(res: Response): Promise<Outcome> {
 		if (res.type === 'opaqueredirect' || res.status === 401) {
 			this.expired = true;
 			return 'stop';
 		}
+		const queued = res.status === 200 || res.status === 201;
 		const settled =
-			res.status === 200 ||
-			res.status === 201 ||
-			res.status === 422 ||
-			(res.status === 409 && (await errorField(res)) === 'barcode');
+			queued || res.status === 422 || (res.status === 409 && (await errorField(res)) === 'barcode');
 		if (settled) this.expired = false;
+		if (queued) return 'queued';
 		return settled ? 'settled' : 'kept';
 	}
 

@@ -1,7 +1,10 @@
 # The production image with Postgres for the Playwright smoke suite
 # (scripts/e2e.sh). The app and Postgres sit on an internal network with no
 # way out, so a request to a public provider fails instead of reaching it;
-# only the proxy, on both networks, publishes the app to the host.
+# only the proxy, on both networks, publishes the app to the host. A second
+# app, app-discogs, has a Discogs token and reaches only the Discogs double,
+# with its own database, so the other flows keep a token-less app whose
+# sources are never asked.
 name: ohara-e2e
 
 services:
@@ -13,6 +16,8 @@ services:
       POSTGRES_DB: ohara
     tmpfs:
       - /var/lib/postgresql
+    volumes:
+      - ./postgres-init.sql:/docker-entrypoint-initdb.d/discogs.sql:ro
     networks: [internal]
     healthcheck:
       # Over TCP: during initdb the entrypoint's temporary server answers on
@@ -50,6 +55,45 @@ services:
     networks: [internal, edge]
     depends_on:
       app:
+        condition: service_healthy
+
+  # The Discogs API double app-discogs pushes collection copies to.
+  discogs:
+    image: node:26-alpine
+    command: ['node', '/double/discogs-double.mjs']
+    volumes:
+      - ../scripts/e2e-discogs-double.mjs:/double/discogs-double.mjs:ro
+    networks: [internal]
+
+  app-discogs:
+    image: ${OHARA_E2E_IMAGE:-ohara:e2e}
+    environment:
+      PGHOST: postgres
+      PGUSER: ohara
+      PGPASSWORD: ohara
+      PGDATABASE: ohara_discogs
+      PGSSLMODE: disable
+      OHARA_LOOKUP_STUB: 'true'
+      OHARA_MUSICBRAINZ: 'false'
+      OHARA_DISCOGS_TOKEN: e2e-discogs-token
+      OHARA_DISCOGS_URL: http://discogs:8080
+    networks: [internal]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      discogs:
+        condition: service_started
+      app:
+        condition: service_healthy
+
+  proxy-discogs:
+    image: alpine/socat:1.8.1.3@sha256:5aa280c6fc5bee94dbd2bbdf2a58d30f50396eaa110be84b03636945b157ae68
+    command: tcp-listen:8000,fork,reuseaddr,backlog=128 tcp-connect:app-discogs:8000
+    ports:
+      - '127.0.0.1:8101:8000'
+    networks: [internal, edge]
+    depends_on:
+      app-discogs:
         condition: service_healthy
 
 networks:

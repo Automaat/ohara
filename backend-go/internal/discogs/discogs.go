@@ -179,6 +179,11 @@ func (c *Client) httpClient() *http.Client {
 	paced.Transport = hopTimeout{next: client.Transport}
 	check := client.CheckRedirect
 	paced.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if req.Method != via[0].Method {
+			// net/http turns a PUT or DELETE answered 301, 302 or 303 into a
+			// GET; that GET's answer would say nothing about the write.
+			return http.ErrUseLastResponse
+		}
 		if check != nil {
 			if err := check(req, via); err != nil {
 				return err
@@ -223,12 +228,21 @@ func (b cancelOnClose) Close() error {
 }
 
 // get waits for the token's budget, fetches path, decodes the JSON body
-// into out and runs check on it. The outcome counts in the source health
-// metrics: ok only once the body decodes and passes check; a request the
-// budget kept back was never sent and does not count. A base URL that does
-// not parse counts as an error and is timed like a sent request. Errors name the
-// path without the query.
+// into out and runs check on it; see send.
 func (c *Client) get(ctx context.Context, path string, out any, check func() error) error {
+	return c.send(ctx, http.MethodGet, path, nil, out, check)
+}
+
+// send waits for the token's budget, sends method to path and, when out
+// is not nil, decodes the JSON body into out and runs check on it. ok
+// lists the accepted statuses, 200 when empty; with out nil the body is
+// not read. A redirect that would change the method is not followed, so it
+// answers with its own status. The outcome counts in the
+// source health metrics: ok only once the body decodes and passes check; a
+// request the budget kept back was never sent and does not count. A base
+// URL that does not parse counts as an error and is timed like a sent
+// request. Errors name the path without the query.
+func (c *Client) send(ctx context.Context, method, path string, ok []int, out any, check func() error) error {
 	base := c.BaseURL
 	if base == "" {
 		base = BaseURL
@@ -241,17 +255,20 @@ func (c *Client) get(ctx context.Context, path string, out any, check func() err
 		return errors.New("discogs: build request: invalid URL")
 	}
 	if err := c.Limiter.Wait(ctx, c.Priority); err != nil {
-		return fmt.Errorf("discogs: GET %s: wait for rate budget: %w", u.Path, err)
+		return fmt.Errorf("discogs: %s %s: wait for rate budget: %w", method, u.Path, err)
 	}
 	resp, err := fetch.Do(ctx, c.httpClient(), fetch.Request{
 		Source: Source,
+		Method: method,
 		URL:    base + path,
 		Header: http.Header{
 			"Accept":        {"application/vnd.discogs.v2.discogs+json"},
 			"User-Agent":    {UserAgent},
 			"Authorization": {"Discogs token=" + c.Token},
 		},
-		MaxBody: maxBody,
+		MaxBody:  maxBody,
+		OK:       ok,
+		SkipBody: out == nil,
 	})
 	if err != nil {
 		metrics.ObserveSource(Source, fetch.Outcome(err))
@@ -260,9 +277,11 @@ func (c *Client) get(ctx context.Context, path string, out any, check func() err
 		}
 		return fmt.Errorf("discogs: %w", err)
 	}
-	if err := json.Unmarshal(resp.Body, out); err != nil {
-		metrics.ObserveSource(Source, metrics.SourceParseError)
-		return fmt.Errorf("discogs: parse: %w", err)
+	if out != nil {
+		if err := json.Unmarshal(resp.Body, out); err != nil {
+			metrics.ObserveSource(Source, metrics.SourceParseError)
+			return fmt.Errorf("discogs: parse: %w", err)
+		}
 	}
 	if check != nil {
 		if err := check(); err != nil {

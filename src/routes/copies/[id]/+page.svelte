@@ -31,6 +31,7 @@
 		type Loan
 	} from '#lib/collection.js';
 	import CopyFormFields from '#lib/components/CopyFormFields.svelte';
+	import { discogsShelf, type CopyDiscogs } from '#lib/discogs-collection.js';
 	import { LatestLoad } from '#lib/scan.js';
 	import { TitleMarkets } from '#lib/title-market.svelte.js';
 
@@ -65,6 +66,12 @@
 		loanIssue && !loanFields.includes(loanIssue.field) ? loanIssue.message : null
 	);
 
+	/** The copy's place in the owner's Discogs collection; null until read or when unreadable. */
+	let discogs = $state<CopyDiscogs | null>(null);
+	const shelf = $derived(discogsShelf(discogs));
+	let pushing = $state(false);
+	let discogsError = $state<string | null>(null);
+
 	/** The copy the page was last asked for; another one's answers and forms are dropped. */
 	let requested: number | undefined;
 	/** A slower answer for an earlier load never replaces a newer one. */
@@ -87,6 +94,8 @@
 			lending = false;
 			loanIssue = null;
 			loanError = null;
+			discogs = null;
+			discogsError = null;
 		}
 		const isLatest = loads.start();
 		busy = true;
@@ -96,6 +105,7 @@
 			detail = next;
 			if (!keepForm) form = copyToForm(next);
 			failure = null;
+			void loadDiscogs(copyID);
 		} catch (err) {
 			if (!isLatest()) return;
 			failure = errorMessage(err);
@@ -113,6 +123,31 @@
 	$effect(() => {
 		if (detail && form.status === 'wishlist') void markets.load(detail.title.id);
 	});
+
+	/** Reads the copy's Discogs state; a failure only leaves the Discogs part out. */
+	async function loadDiscogs(copyID: number) {
+		try {
+			const next = await request<CopyDiscogs>(fetch, 'GET', `/api/copies/${copyID}/discogs`);
+			if (copyID === requested) discogs = next;
+		} catch {
+			if (copyID === requested) discogs = null;
+		}
+	}
+
+	/** "Dodaj do kolekcji Discogs": adds the copy, or updates the grades of the instance it made. */
+	async function pushDiscogs(d: CopyDetail) {
+		if (pushing) return;
+		pushing = true;
+		discogsError = null;
+		try {
+			const next = await request<CopyDiscogs>(fetch, 'POST', `/api/copies/${d.id}/discogs`);
+			if (d.id === requested) discogs = next;
+		} catch (err) {
+			if (d.id === requested) discogsError = errorMessage(err);
+		} finally {
+			pushing = false;
+		}
+	}
 
 	async function save(d: CopyDetail) {
 		const parsed = copyPayload(form, d.edition_id);
@@ -283,6 +318,22 @@
 				</ul>
 			</section>
 		{/if}
+		{#if shelf}
+			<section class="discogs" aria-labelledby="discogs-heading">
+				<h2 id="discogs-heading">Discogs</h2>
+				{#if shelf.releaseUrl}
+					<p>
+						<a href={shelf.releaseUrl} target="_blank" rel="noopener noreferrer">
+							W kolekcji Discogs
+						</a>
+					</p>
+				{/if}
+				<FormError message={discogsError} />
+				{#if shelf.action}
+					<Button loading={pushing} onclick={() => pushDiscogs(d)}>{shelf.action}</Button>
+				{/if}
+			</section>
+		{/if}
 		{#if saved}
 			<p role="status">Zapisano.</p>
 		{/if}
@@ -353,9 +404,20 @@
 		padding: var(--sui-pane-gutter, 1.5rem);
 	}
 
-	.loans h2 {
+	.loans h2,
+	.discogs h2 {
 		margin: 0 0 0.5rem;
 		font-size: 1rem;
+	}
+
+	.discogs {
+		display: grid;
+		justify-items: start;
+		gap: 0.5rem;
+	}
+
+	.discogs p {
+		margin: 0;
 	}
 
 	/* A borrower is free text up to 500 bytes, often without a space to break at. */

@@ -79,6 +79,24 @@ describe('request', () => {
 			'Nie można usunąć: pozycja ma powiązane wydania lub egzemplarze.',
 			undefined
 		],
+		[
+			409,
+			'{"error":"To wydanie jest już w Twojej kolekcji Discogs.","field":"discogs_collection"}',
+			'To wydanie jest już w Twojej kolekcji Discogs.',
+			'discogs_collection'
+		],
+		[
+			502,
+			'{"error":"Discogs odrzucił token (HTTP 401).","field":"discogs_collection"}',
+			'Discogs odrzucił token (HTTP 401).',
+			'discogs_collection'
+		],
+		[
+			502,
+			'{"error":7,"field":"discogs_collection"}',
+			'Serwer zwrócił błąd 502.',
+			'discogs_collection'
+		],
 		[404, '{"error":"not found"}', 'Nie znaleziono.', undefined],
 		[500, '{"error":"internal server error"}', 'Serwer zwrócił błąd 500.', undefined],
 		[502, '<html>', 'Serwer zwrócił błąd 502.', undefined],

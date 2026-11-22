@@ -188,6 +188,37 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   that only grades loses nothing. Deals and valuation ignore the grades. The album copy form adds "Stan nośnika" and "Stan
   okładki" with the English names ("Very Good Plus (VG+)"), and the copy's
   facts show "Gradacja: Nośnik VG+ · Okładka NM".
+- `POST /api/copies/{id}/discogs` (`internal/discogscollection`) adds an
+  owned album copy whose edition has a `discogs_release_id` to the Discogs
+  collection of the `OHARA_DISCOGS_TOKEN` owner, in folder
+  `OHARA_DISCOGS_FOLDER_ID` (1, "Uncategorized", unless set). It reads
+  the owner from `/oauth/identity`, the field IDs and options of "Media
+  Condition" and "Sleeve Condition" from the collection's fields, and the
+  release's instances in every folder. Without a stored instance it adds
+  one (POST to the folder), stores its ID with the release on the copy
+  (`discogs_instance_id`, `discogs_instance_release_id`), then sets each
+  grade the copy has to its Discogs option ("Very Good Plus (VG+)"); a
+  missing grade leaves its field unset. A later push finds the stored
+  instance in whatever folder the owner moved it to and only sets its
+  conditions. An instance the copy stored that Discogs no longer has, or
+  one of a release the edition no longer names, is forgotten and a new
+  one made. A release already held in an instance the copy did not make
+  answers 409 "To wydanie jest już w Twojej kolekcji Discogs." with
+  nothing added or edited. A copy that is not owned, not an album, or
+  whose edition has no release answers 409 before any Discogs request;
+  without the token 503; a Discogs error (401, 429, 5xx, no answer) or a
+  fields list without the field or option a grade needs answers 502 with
+  a Polish message and logs a warning naming no token. The instance ID is
+  stored as soon as Discogs makes it, so a failed field edit retried adds
+  nothing. Those error answers carry `field: "discogs_collection"`, whose
+  message the SPA shows as it is. Pushes run one at a time. Ohara never
+  removes or edits another instance, sends no rating or notes, and leaves
+  Discogs alone when a copy is sold or deleted. `GET` on the same path
+  answers `enabled` (a token is set), `pushable`, and `instance_id` with
+  `release_url` once the copy made an instance of its edition's release.
+  The copy page shows a "Discogs" part for a pushable or pushed copy:
+  "Dodaj do kolekcji Discogs", then "W kolekcji Discogs" linking the
+  release and "Zaktualizuj stan w Discogs".
 
 ## Frontend
 

@@ -27,7 +27,8 @@ Same layout and tooling as `../baratie`. `package.json` and
       /books/          # BN, Open Library, Google Books providers (fixtures in testdata/)
       /movie/          # movie chain: Allegro catalog, UPCitemdb → product name → TMDB search
       /music/          # music chain: Discogs barcode search → MusicBrainz + Cover Art Archive
-    /discogs/          # Discogs API client: barcode search, marketplace stats, price suggestions
+    /discogs/          # Discogs API client: barcode search, marketplace stats, price suggestions, collection writes
+    /discogscollection/ # POST /api/copies/{id}/discogs: an owned album copy into the Discogs collection
     /scanqueue/        # /api/scan-queue: barcodes the scanner could not resolve
     /deals/            # wishlist deal hunter: OLX, Pepper sources, matcher, Telegram alerts
     /valuation/        # daily value of owned copies: OLX, SkupSzop buy-back, Discogs; value history
@@ -200,6 +201,7 @@ browser's `Host` (`changeOrigin: false`) so dev writes pass this check.
 | `OHARA_ALLEGRO_USER_AGENT`                               | `Ohara/1.0.0 (+https://github.com/Automaat/ohara)` | User-Agent sent on every Allegro request; must match the one registered for the app                       |
 | `OHARA_UPCITEMDB`                                        | `true`                                             | UPCitemdb free-tier source (100 requests a day) in the movie chain                                        |
 | `OHARA_DISCOGS_TOKEN`                                    | unset                                              | Discogs personal access token; enables the Discogs music lookup and album valuation                       |
+| `OHARA_DISCOGS_FOLDER_ID`                                | `1` (Uncategorized)                                | Discogs collection folder an album copy push adds to; a positive folder ID                                |
 | `OHARA_DISCOGS_PRICE_SUGGESTIONS`                        | `true`                                             | Ask Discogs price suggestions (need the token owner's seller settings) for album mid and ceiling          |
 | `OHARA_MUSICBRAINZ`                                      | `true`                                             | MusicBrainz + Cover Art Archive in the music chain                                                        |
 | `OHARA_{DISCOGS,MUSICBRAINZ,COVERART}_URL`               | public endpoints                                   | Point the music sources at test doubles                                                                   |

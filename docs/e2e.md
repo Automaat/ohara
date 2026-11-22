@@ -12,7 +12,8 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   read, the queue count following a queued scan, its add and undo,
   Kolekcja's filters, which also run at 1440 × 900, and its sort orders
   under active filters, tags from the title form to Kolekcja's filter,
-  an album copy's grades (none on a film copy),
+  an album copy's grades (none on a film copy), an album copy pushed to
+  the Discogs collection and a release the collection already holds,
   a book edition marked as an audiobook in its form, on the shelf and in
   the "Nośnik" filter, series from the title form and Kolekcja to the
   series page, cover photo uploads, the collection export, Statystyki with
@@ -24,6 +25,11 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   provider keys, and removes it afterwards. App and Postgres sit on an
   internal network, so no public provider is reachable; each test also
   fails on a browser request to another origin and checks that
-  `ohara_source_requests_total` stayed 0. The camera starts only on "Włącz
+  `ohara_source_requests_total` stayed 0. The Discogs collection flow
+  (`e2e/discogs-collection.spec.ts`) runs instead against `app-discogs` on
+  127.0.0.1:8101: the same image with its own database (`ohara_discogs`,
+  from `e2e/postgres-init.sql`), a Discogs token and `OHARA_DISCOGS_URL`
+  pointing at `scripts/e2e-discogs-double.mjs`, an in-memory Discogs double that
+  already holds release 2000002. The camera starts only on "Włącz
   aparat" or a remembered choice, so a fresh browser gets no camera prompt.
   Needs `npx playwright install chromium` once.

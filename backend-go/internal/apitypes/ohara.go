@@ -5,6 +5,7 @@ import (
 
 	"github.com/Automaat/ohara/backend-go/internal/collection"
 	"github.com/Automaat/ohara/backend-go/internal/deals"
+	"github.com/Automaat/ohara/backend-go/internal/discogscollection"
 	"github.com/Automaat/ohara/backend-go/internal/httpx"
 	"github.com/Automaat/ohara/backend-go/internal/lookup"
 	"github.com/Automaat/ohara/backend-go/internal/scanqueue"
@@ -73,6 +74,7 @@ func Ohara() API {
 			Of[collection.MissingVolume]("MissingVolume"),
 			Of[collection.SeriesDetail]("SeriesDetail"),
 			Of[collection.SeriesTotalInput]("SeriesTotalPayload"),
+			Of[discogscollection.State]("CopyDiscogs"),
 
 			Of[lookup.TitleFields]("CandidateTitle"),
 			Of[lookup.EditionFields]("CandidateEdition"),

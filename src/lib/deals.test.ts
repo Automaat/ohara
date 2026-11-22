@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+	clockTime,
 	confirmedListings,
 	dealPrice,
 	dealsSummary,
@@ -345,16 +346,28 @@ describe('confirmedListings', () => {
 		{ id: 1, source: 'olx' as const },
 		{ id: 2, source: 'discogs_inventory' as const }
 	];
-	const answeredAt = Date.parse('2026-11-22T10:00:00Z');
+	const at = { wall: Date.parse('2026-11-22T10:00:00Z'), mono: 1_000 };
+	const later = (wall: number, mono: number) => ({ wall: at.wall + wall, mono: at.mono + mono });
+	const limit = 14 * 60_000;
 
-	it('keeps every listing within 14 minutes of its answer', () => {
-		expect(confirmedListings(listings, answeredAt, answeredAt + 14 * 60_000 - 1)).toBe(listings);
+	it('keeps every listing while both clocks are within 14 minutes of the answer', () => {
+		expect(confirmedListings(listings, at, later(limit - 1, limit - 1))).toBe(listings);
 	});
 
-	it('leaves out the Discogs listings from 14 minutes on', () => {
-		expect(
-			confirmedListings(listings, answeredAt, answeredAt + 14 * 60_000).map((o) => o.id)
-		).toEqual([1]);
+	it.each([
+		['the wall clock', later(limit, 0)],
+		['the monotonic clock, after the system clock was set back', later(-3_600_000, limit)]
+	])('leaves out the Discogs listings once %s passes 14 minutes', (_, now) => {
+		expect(confirmedListings(listings, at, now).map((o) => o.id)).toEqual([1]);
+	});
+});
+
+describe('clockTime', () => {
+	it('reads the wall and the monotonic clock', () => {
+		const before = Date.now();
+		const t = clockTime();
+		expect(t.wall).toBeGreaterThanOrEqual(before);
+		expect(t.mono).toBeGreaterThan(0);
 	});
 });
 

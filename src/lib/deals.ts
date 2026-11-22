@@ -241,16 +241,37 @@ export function withoutUnconfirmed<T extends Pick<Observation, 'source'>>(listin
 }
 
 /**
- * The listings of an answer that arrived at answeredAt (milliseconds) that a page may draw at
- * now: all of them within unconfirmedAfterMs of the answer, then only those of sources that do
- * not expire.
+ * A moment on the wall clock and on the monotonic clock (performance.now): a system clock set
+ * back does not move the second, and a sleep that pauses the second still moves the first.
+ */
+export type ClockTime = { wall: number; mono: number };
+
+export function clockTime(): ClockTime {
+	return { wall: Date.now(), mono: performance.now() };
+}
+
+/**
+ * Whether an answer that arrived at answeredAt still lets a page draw its listings of expiring
+ * sources at now: less than unconfirmedAfterMs passed on both clocks.
+ */
+export function stillConfirmed(answeredAt: ClockTime, now: ClockTime): boolean {
+	return (
+		now.wall - answeredAt.wall < unconfirmedAfterMs &&
+		now.mono - answeredAt.mono < unconfirmedAfterMs
+	);
+}
+
+/**
+ * The listings of an answer that arrived at answeredAt that a page may draw at now: all of them
+ * while the answer still confirms them (stillConfirmed), then only those of sources that do not
+ * expire.
  */
 export function confirmedListings<T extends Pick<Observation, 'source'>>(
 	listings: T[],
-	answeredAt: number,
-	now: number
+	answeredAt: ClockTime,
+	now: ClockTime
 ): T[] {
-	return now - answeredAt < unconfirmedAfterMs ? listings : withoutUnconfirmed(listings);
+	return stillConfirmed(answeredAt, now) ? listings : withoutUnconfirmed(listings);
 }
 
 /** The attribution a source's terms require next to its listing, linked to the listing. */

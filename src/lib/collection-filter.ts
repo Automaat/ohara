@@ -4,13 +4,14 @@
  * `GET /api/collection` would for the same filter: the `WHERE` clause of `Store.Collection` in
  * backend-go/internal/collection/store.go, with the search normalized as the handler does.
  * The `unpriced` status, the owned copies without a purchase price, exists only here, and
- * without a status the page leaves out the sold copies the server lists, which only "Sprzedane"
- * shows.
+ * without a status the page lists only the copies on the shelf or on order (`shelved`): it leaves
+ * out the sold copies the server lists, which only "Sprzedane" shows, and the wishes, which live
+ * in Okazje.
  */
-import type { CollectionFilter, CollectionItem } from './collection';
+import { shelved, type CollectionFilter, type CollectionItem } from './collection';
 import { lowerCase, trimSpace } from './go-text';
 import { canonicalBarcode, checkDigitMatches } from './scan';
-import { tagMatches } from './tags';
+import { tagMatches, tagTerm } from './tags';
 
 export { lowerCase };
 
@@ -75,11 +76,11 @@ function searchedText(item: CollectionItem): string {
 
 /**
  * Whether a copy has the filter's status; `unpriced` is an owned copy without a price, and no
- * status is any copy not sold.
+ * status is a copy on the shelf or on order. No status lists a wish.
  */
 function hasStatus(item: CollectionItem, status: CollectionFilter['status']): boolean {
 	if (status === 'unpriced') return item.status === 'owned' && item.price_cents === null;
-	if (!status) return item.status !== 'sold';
+	if (!status) return shelved(item.status);
 	return item.status === status;
 }
 
@@ -111,6 +112,33 @@ export function filterCollection(
 				searchedText(item).includes(words) ||
 				(item.location != null && lowerCase(item.location).includes(typed)) ||
 				lowerCase(contentsText(item) ?? '').includes(typed))
+	);
+}
+
+/**
+ * The copies some Kolekcja filter can list: every copy but the wishes, which live in Okazje. What
+ * the sheet offers to filter by comes from these, so it offers nothing that only a wish carries.
+ */
+export function listableCopies<T extends Pick<CollectionItem, 'status'>>(items: readonly T[]): T[] {
+	return items.filter((item) => item.status !== 'wishlist');
+}
+
+/**
+ * Whether only wishes carry the tag: a wish has it, but no other copy and no title without
+ * copies does, so Kolekcja lists nothing for it and the wish waits in Okazje.
+ */
+export function onlyWishesCarry(
+	tag: string,
+	items: readonly Pick<CollectionItem, 'status' | 'tags'>[],
+	titles: readonly { tags?: string[] }[]
+): boolean {
+	if (!tagTerm(tag)) return false;
+	const carries = (list: readonly { tags?: string[] }[]) =>
+		list.some((entry) => tagMatches(entry.tags, tag));
+	return (
+		carries(items.filter((item) => item.status === 'wishlist')) &&
+		!carries(listableCopies(items)) &&
+		!carries(titles)
 	);
 }
 

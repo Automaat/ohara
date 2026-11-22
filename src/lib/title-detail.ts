@@ -7,6 +7,7 @@ import {
 	formatPLN,
 	gradeLine,
 	kindLabels,
+	marksLine,
 	statusLabels,
 	type Copy,
 	type FinishPayload,
@@ -288,9 +289,11 @@ export type CopyFact = { label: string; value: string };
 
 /**
  * A copy's facts for its card: what was paid, when and where, the sale or the expected delivery,
- * its state, an album's grades and where it is kept.
+ * its state, an album's grades, its collector marks against its edition's run and where it is
+ * kept.
  */
-export function copyFacts(c: Copy): CopyFact[] {
+export function copyFacts(c: Copy, run?: number | null): CopyFact[] {
+	const marks = marksLine(c, run);
 	const grades = gradeLine(c);
 	const graded = grades ? [{ label: 'Gradacja', value: grades }] : [];
 	const state =
@@ -334,6 +337,7 @@ export function copyFacts(c: Copy): CopyFact[] {
 		...delivery,
 		{ label: 'Stan', value: state },
 		...graded,
+		...(marks ? [{ label: 'Cechy', value: marks }] : []),
 		...(c.location ? [{ label: 'Miejsce', value: c.location }] : [])
 	];
 }

@@ -509,7 +509,9 @@ func newRuns(pool *pgxpool.Pool, logger *slog.Logger) (*deals.Hunter, *deals.Sto
 // newHunter configures the deal hunter from the environment. Polling stays
 // off until OHARA_DEALS_INTERVAL is set; alerts, and the poller for their
 // "Ignoruj" button, need both Telegram variables. The *_URL variables
-// point the sources at test doubles. lane spaces its requests from the
+// point the sources at test doubles; OHARA_BLUEDVD=false leaves the BlueDVD
+// shop out. Tezeusz, a used-book shop the valuation does not ask, is
+// searched unless OHARA_TEZEUSZ is false. lane spaces its requests from the
 // valuation's.
 func newHunter(pool *pgxpool.Pool, lane *deals.Lane, logger *slog.Logger) (*deals.Hunter, *deals.Store, error) {
 	interval, err := time.ParseDuration(envOr("OHARA_DEALS_INTERVAL", "0s"))
@@ -525,7 +527,13 @@ func newHunter(pool *pgxpool.Pool, lane *deals.Lane, logger *slog.Logger) (*deal
 	}
 	client := pacedClient(lane)
 	sources := usedSources(client)
+	if envOr("OHARA_BLUEDVD", "true") == "true" {
+		sources = append(sources, deals.BlueDVD{Client: client, BaseURL: envOr("OHARA_DEALS_BLUEDVD_URL", deals.BlueDVDURL)})
+	}
 	sources = append(sources, deals.Pepper{Client: client, BaseURL: envOr("OHARA_DEALS_PEPPER_URL", deals.PepperURL)})
+	if envOr("OHARA_TEZEUSZ", "true") == "true" {
+		sources = append(sources, deals.Tezeusz{Client: client, BaseURL: envOr("OHARA_DEALS_TEZEUSZ_URL", deals.TezeuszURL)})
+	}
 	sellers, err := discogsSellers(client)
 	if err != nil {
 		return nil, nil, err

@@ -43,7 +43,7 @@ export type VolumeState = 'owned' | 'ordered' | 'wishlist' | 'none';
 
 export type QueueReason = 'not_found' | 'lookup_failed';
 
-export type DealSource = 'olx' | 'pepper' | 'discogs_inventory';
+export type DealSource = 'olx' | 'bluedvd' | 'pepper' | 'tezeusz' | 'discogs_inventory';
 
 export type AlertState = 'none' | 'pending' | 'sent' | 'failed';
 
@@ -187,6 +187,8 @@ export type CopyPayload = {
 	sale_price_cents?: number | null;
 	expected_on?: string | null;
 	location?: string | null;
+	signed?: boolean;
+	copy_number?: number | null;
 	request_key?: string;
 };
 
@@ -209,6 +211,8 @@ export type Copy = {
 	sale_price_cents?: number | null;
 	expected_on?: string | null;
 	location?: string | null;
+	signed?: boolean;
+	copy_number?: number | null;
 	request_key?: string;
 	created_at: string;
 	updated_at: string;
@@ -352,6 +356,8 @@ export type CopyDetail = {
 	sale_price_cents?: number | null;
 	expected_on?: string | null;
 	location?: string | null;
+	signed?: boolean;
+	copy_number?: number | null;
 	request_key?: string;
 	created_at: string;
 	updated_at: string;
@@ -376,6 +382,8 @@ export type CollectionItem = {
 	sale_price_cents?: number | null;
 	expected_on?: string | null;
 	location?: string | null;
+	signed?: boolean;
+	copy_number?: number | null;
 	edition_id: number;
 	barcode: string | null;
 	label: string;

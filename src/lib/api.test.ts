@@ -62,6 +62,24 @@ describe('request', () => {
 			'series_number'
 		],
 		[
+			409,
+			'{"error":"another copy of this edition has this number","field":"copy_number"}',
+			'Inny egzemplarz tego wydania ma już ten numer.',
+			'copy_number'
+		],
+		[
+			422,
+			'{"error":"must be at most 500, the edition\'s run","field":"copy_number"}',
+			'Numer egzemplarza nie może przekraczać nakładu wydania.',
+			'copy_number'
+		],
+		[
+			422,
+			'{"error":"must be at least 123, the highest copy number","field":"limited_to"}',
+			'Nakład nie może być mniejszy niż numer egzemplarza tego wydania.',
+			'limited_to'
+		],
+		[
 			422,
 			'{"error":"bad","field":"barcode"}',
 			'Nieprawidłowy kod kreskowy: sprawdź cyfry.',

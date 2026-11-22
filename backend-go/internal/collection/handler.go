@@ -91,6 +91,8 @@ func (h *Handler) writeErr(w http.ResponseWriter, r *http.Request, op string, er
 		httpx.WriteJSON(w, h.logger, http.StatusConflict, httpx.Error{Error: err.Error(), Field: "request_key"})
 	case errors.Is(err, ErrDuplicateSeriesNumber):
 		httpx.WriteJSON(w, h.logger, http.StatusConflict, httpx.Error{Error: err.Error(), Field: "series_number"})
+	case errors.Is(err, ErrDuplicateCopyNumber):
+		httpx.WriteJSON(w, h.logger, http.StatusConflict, httpx.Error{Error: err.Error(), Field: "copy_number"})
 	case errors.Is(err, ErrKindLocked):
 		httpx.WriteJSON(w, h.logger, http.StatusConflict, httpx.Error{Error: err.Error(), Field: "kind"})
 	case errors.Is(err, ErrNotOrdered):
@@ -645,7 +647,7 @@ func (c *sentCondition) UnmarshalJSON(b []byte) error {
 
 func (h *Handler) decodeCopy(w http.ResponseWriter, r *http.Request) (*CopyInput, bool) {
 	var body copyBody
-	fields := []string{"sale_price_cents", "media_grade", "sleeve_grade", "condition"}
+	fields := []string{"sale_price_cents", "media_grade", "sleeve_grade", "condition", "signed", "copy_number"}
 	if !httpx.DecodeJSONFields(w, r, h.logger, &body, fields...) {
 		return nil, false
 	}

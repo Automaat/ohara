@@ -2,6 +2,7 @@
 	import {
 		Button,
 		Callout,
+		Card,
 		Chip,
 		Disclosure,
 		EmptyState,
@@ -18,7 +19,14 @@
 	import { onMount, tick } from 'svelte';
 	import { ApiError, errorMessage, request } from '#lib/api.js';
 	import { dealBadge, forgetDealListing, loadUnderLimit } from '#lib/deal-badge.svelte.js';
-	import { options, type FormIssue } from '#lib/collection.js';
+	import {
+		displayName,
+		options,
+		type CollectionItem,
+		type CollectionView,
+		type FormIssue
+	} from '#lib/collection.js';
+	import { sortCopies } from '#lib/collection-sort.js';
 	import DealCard from '#lib/components/DealCard.svelte';
 	import { WantlistSync } from '#lib/wantlist-sync.svelte.js';
 	import WishlistShare from '#lib/components/WishlistShare.svelte';
@@ -41,6 +49,8 @@
 		wantlistSummary,
 		ageClock,
 		confirmedListings,
+		wishFacts,
+		wishesPath,
 		withoutDismissed,
 		type DealSegment,
 		type DealsView,
@@ -75,6 +85,10 @@
 	let runError = $state<string | null>(null);
 	let starting = $state(false);
 
+	/** Every wish, title A–Z; null until the first answer. */
+	let wishes = $state<CollectionItem[] | null>(null);
+	let wishesFailure = $state<string | null>(null);
+
 	let keywords = $state<Keyword[]>([]);
 	let keywordFailure = $state<string | null>(null);
 	let kind = $state<KeywordKind>('reject');
@@ -101,6 +115,7 @@
 		loading = true;
 		try {
 			void loadMarkets();
+			void loadWishes();
 			const askedAt = ageClock();
 			const [under, all, sent] = await Promise.all([
 				loadUnderLimit(fetch),
@@ -141,6 +156,26 @@
 		if (view && ticket > marketsDrawn) {
 			marketsDrawn = ticket;
 			markets = view.markets;
+		}
+	}
+
+	/**
+	 * The wishes themselves, asked beside the offers so the list shows whether or not the hunter
+	 * found anything. A failed request keeps the last list, and an answer older than one already
+	 * drawn is dropped.
+	 */
+	let wishesAsked = 0;
+	let wishesDrawn = 0;
+	async function loadWishes() {
+		const ticket = ++wishesAsked;
+		try {
+			const view = await request<CollectionView>(fetch, 'GET', wishesPath);
+			if (ticket < wishesDrawn) return;
+			wishesDrawn = ticket;
+			wishes = sortCopies(view.items, 'title');
+			wishesFailure = null;
+		} catch (err) {
+			if (ticket >= wishesDrawn) wishesFailure = errorMessage(err);
 		}
 	}
 
@@ -415,6 +450,46 @@
 		{/if}
 	{/if}
 
+	{#if wishes === null || wishes.length > 0 || wishesFailure}
+		<Section title="Lista życzeń" count={wishes?.length}>
+			{#if wishesFailure}
+				<ErrorState
+					title="Nie udało się wczytać listy życzeń"
+					description={wishesFailure}
+					onretry={loadWishes}
+					overContent={wishes !== null}
+					retryLabel="Spróbuj ponownie"
+					retryingLabel="Ponawianie…"
+				/>
+			{/if}
+			{#if wishes === null}
+				{#if !wishesFailure}<p role="status">Wczytywanie listy życzeń…</p>{/if}
+			{:else}
+				<ul class="wishes" aria-label="Lista życzeń">
+					{#each wishes as wish (wish.copy_id)}
+						<li>
+							<Card
+								title={displayName(wish)}
+								description={wishFacts(wish)}
+								level={3}
+								href={`/titles/${wish.title_id}`}
+							>
+								{#snippet actions()}
+									<Button
+										href={`/copies/${wish.copy_id}`}
+										aria-label={`Edytuj: ${displayName(wish)}`}
+									>
+										Edytuj
+									</Button>
+								{/snippet}
+							</Card>
+						</li>
+					{/each}
+				</ul>
+			{/if}
+		</Section>
+	{/if}
+
 	{#if wantlist.status?.enabled}
 		<Section
 			title="Lista życzeń Discogs"
@@ -500,6 +575,14 @@
 		padding: var(--sui-pane-gutter, 1.5rem);
 	}
 	.deals {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(min(100%, 24rem), 1fr));
+		gap: 0.75rem;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+	.wishes {
 		display: grid;
 		grid-template-columns: repeat(auto-fill, minmax(min(100%, 24rem), 1fr));
 		gap: 0.75rem;

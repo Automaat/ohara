@@ -13,8 +13,10 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   Kolekcja's filters, which also run at 1440 × 900, and its sort orders
   under active filters, tags from the title form to Kolekcja's filter,
   an album copy's grades (none on a film copy),
+  a copy's autograph and number against its edition's run,
   a book edition marked as an audiobook in its form, on the shelf and in
-  the "Nośnik" filter, series from the title form and Kolekcja to the
+  the "Nośnik" filter, wishes kept out of Kolekcja and listed in
+  Okazje's "Lista życzeń", series from the title form and Kolekcja to the
   series page, cover photo uploads, the collection export, Statystyki with
   its value sections, the insurance report
   with its A4 printout, and the wishlist share link from Okazje with its

@@ -1194,11 +1194,20 @@ func carriesPhrase(significant, req []string) bool {
 // share the listing meets, so a cheap listing alerts even when an earlier
 // want for the same title has a lower limit.
 func pick(wants []Want, l *Listing, rules Rules, titles Titles) *Want {
+	return pickOf(wants, nil, l, rules, titles)
+}
+
+// pickOf is pick among the wants of kinds, or among every want when kinds
+// is nil.
+func pickOf(wants []Want, kinds []string, l *Listing, rules Rules, titles Titles) *Want {
 	text := NewListingText(l.Title, rules)
 	text.medium = l.Medium
 	var first *Want
 	for i := range wants {
 		w := &wants[i]
+		if kinds != nil && !slices.Contains(kinds, w.Kind) {
+			continue
+		}
 		if !text.Belongs(w, titles) {
 			continue
 		}

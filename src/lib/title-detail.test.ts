@@ -452,6 +452,32 @@ describe('copyFacts of an album copy', () => {
 	});
 });
 
+describe('copyFacts of a signed or numbered copy', () => {
+	const marks = (c: Partial<Copy>, run?: number | null) =>
+		copyFacts(copy(c), run).find((f) => f.label === 'Cechy')?.value;
+
+	it('shows the autograph and the number against the run', () => {
+		expect(marks({ signed: true, copy_number: 123 }, 500)).toBe(
+			'Z autografem · Egzemplarz nr 123/500'
+		);
+		expect(marks({ signed: true })).toBe('Z autografem');
+	});
+
+	it('shows the number alone without a run', () => {
+		expect(marks({ copy_number: 123 })).toBe('Egzemplarz nr 123');
+		expect(marks({ copy_number: 123 }, null)).toBe('Egzemplarz nr 123');
+	});
+
+	it('puts the marks after the state and before the location', () => {
+		const labels = copyFacts(copy({ signed: true, location: 'Regał 2' })).map((f) => f.label);
+		expect(labels.slice(-3)).toEqual(['Stan', 'Cechy', 'Miejsce']);
+	});
+
+	it('leaves the marks out of an unmarked copy', () => {
+		expect(copyFacts(copy(), 500).map((f) => f.label)).not.toContain('Cechy');
+	});
+});
+
 describe('copyFacts with a location', () => {
 	it('shows where an owned copy is kept, last', () => {
 		const facts = copyFacts(copy({ location: 'Regał 2' }));

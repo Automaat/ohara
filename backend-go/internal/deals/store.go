@@ -18,13 +18,18 @@ var (
 	ErrDuplicateKeyword = errors.New("this phrase is already on the list")
 )
 
-// ErrPressReplayed reports a Telegram button press DismissPress or
-// BuyPress already applied.
+// ErrPressReplayed reports a Telegram button press DismissPress already
+// applied.
 var ErrPressReplayed = errors.New("press already applied")
 
-// ErrNotWished reports a "Kupione" press for an alert whose copy is no
-// longer on the wishlist: bought already or deleted.
+// ErrNotWished reports a "Kupione" press for a copy no longer on the
+// wishlist, bought or deleted, that the press did not buy.
 var ErrNotWished = errors.New("copy no longer on the wishlist")
+
+// ErrAlreadyBought reports a "Kupione" press, sent again or pressed again,
+// for a copy already owned whose listing is dismissed: the purchase it
+// records is in place.
+var ErrAlreadyBought = errors.New("copy already bought")
 
 // MaxAttempts bounds Telegram deliveries per alert; after that the alert is
 // reported as failed and no longer retried.
@@ -231,6 +236,8 @@ func queueAlert(ctx context.Context, tx pgx.Tx, id, copyID, priceCents int64) (b
 // Alert is a queued Telegram message with what it reports.
 type Alert struct {
 	ObservationID int64
+	// CopyID is the wishlist copy the alert is for.
+	CopyID        int64
 	Source        string
 	ExternalID    string
 	URL           string
@@ -304,7 +311,7 @@ type querier interface {
 
 // pendingAlerts is PendingAlerts limited to one listing when only is set.
 func pendingAlerts(ctx context.Context, q querier, only *int64) ([]Alert, error) {
-	rows, err := q.Query(ctx, `SELECT o.id, o.source, coalesce(o.external_id, ''), o.url, coalesce(o.raw->>'title', ''),
+	rows, err := q.Query(ctx, `SELECT o.id, c.id, o.source, coalesce(o.external_id, ''), o.url, coalesce(o.raw->>'title', ''),
 			o.price_cents, o.acquired_as, t.name, e.format, c.max_price_cents, a.alerted_price_cents
 		FROM deal_alert a
 		JOIN price_observation o ON o.id = a.observation_id
@@ -321,7 +328,7 @@ func pendingAlerts(ctx context.Context, q querier, only *int64) ([]Alert, error)
 	}
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Alert, error) {
 		var a Alert
-		err := row.Scan(&a.ObservationID, &a.Source, &a.ExternalID, &a.URL, &a.ListingTitle, &a.PriceCents,
+		err := row.Scan(&a.ObservationID, &a.CopyID, &a.Source, &a.ExternalID, &a.URL, &a.ListingTitle, &a.PriceCents,
 			&a.AcquiredAs, &a.TitleName, &a.Format, &a.MaxPriceCents, &a.AlertedPriceCents)
 		return a, err
 	})
@@ -483,88 +490,123 @@ func (s *Store) Undismiss(ctx context.Context, id int64) error {
 // Telegram sends again after a restart does not undo an Okazje "Cofnij"
 // made in between.
 func (s *Store) DismissPress(ctx context.Context, callbackQueryID string, id int64) error {
-	return s.press(ctx, "dismiss press", callbackQueryID, func(tx pgx.Tx) error {
-		return setDismissed(ctx, tx, id, true)
-	})
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("dismiss press: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	fresh, err := recordPress(ctx, tx, callbackQueryID)
+	if err != nil {
+		return err
+	}
+	if !fresh {
+		return ErrPressReplayed
+	}
+	if err := setDismissed(ctx, tx, id, true); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("dismiss press: commit: %w", err)
+	}
+	return nil
 }
 
 // BuyPress applies the press callbackQueryID of a Telegram alert's
-// "Kupione" button for the listing id: the alert's wishlist copy becomes
-// an owned copy bought today (in Poland) at the listing's price, in the
-// source's shop, new or used as the listing says (the copy's own value
-// when it says nothing), with its limit cleared; it keeps its id, edition,
-// condition and notes, and the listing is dismissed. Applied once, like
-// DismissPress (ErrPressReplayed). ErrNotFound when no alerted deal
-// listing has the id, ErrNotWished when its copy is no longer on the
-// wishlist; neither changes anything.
-func (s *Store) BuyPress(ctx context.Context, callbackQueryID string, id int64) error {
-	return s.press(ctx, "buy press", callbackQueryID, func(tx pgx.Tx) error {
-		var (
-			copyID     *int64
-			priceCents int64
-			acquiredAs *string
-			source     string
-		)
-		err := tx.QueryRow(ctx, `SELECT a.copy_id, o.price_cents, o.acquired_as, o.source
-			FROM price_observation o
-			JOIN deal_alert a ON a.observation_id = o.id
-			WHERE o.id = $1 AND o.source = ANY ($2)
-			FOR UPDATE OF o`, id, sources).Scan(&copyID, &priceCents, &acquiredAs, &source)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrNotFound
-		}
-		if err != nil {
-			return fmt.Errorf("buy press: listing: %w", err)
-		}
-		if copyID == nil {
-			return ErrNotWished
-		}
-		shop, ok := sourceLabels[source]
-		if !ok {
-			shop = source
-		}
-		tag, err := tx.Exec(ctx, `UPDATE copy SET status = 'owned', price_cents = $2,
-				purchased_on = (now() AT TIME ZONE 'Europe/Warsaw')::date, shop = $3,
-				acquired_as = coalesce($4, acquired_as), max_price_cents = NULL, updated_at = now()
-			WHERE id = $1 AND status = 'wishlist'`, *copyID, priceCents, shop, acquiredAs)
-		if err != nil {
-			return fmt.Errorf("buy press: copy: %w", err)
-		}
-		if tag.RowsAffected() == 0 {
-			return ErrNotWished
-		}
-		return setDismissed(ctx, tx, id, true)
-	})
-}
-
-// press runs apply for the Telegram press callbackQueryID in one
-// transaction with its record in telegram_press, so a press Telegram sends
-// again is applied once: ErrPressReplayed, with nothing changed. An error
-// from apply leaves nothing behind, the press's record included.
-func (s *Store) press(ctx context.Context, op, callbackQueryID string, apply func(pgx.Tx) error) error {
+// "Kupione" button for the listing id and the wishlist copy copyID the
+// alert named: the copy becomes an owned copy bought today (in Poland) at
+// the listing's price, in the source's shop, new or used as the listing
+// says (the copy's own value when it says nothing), with its limit
+// cleared; it keeps its id, edition, condition and notes, and the listing
+// is dismissed.
+//
+// Only a press's first delivery can buy. Every press is recorded, refused
+// ones too, so one Telegram sends again only reports the state: a copy
+// owned with the listing dismissed is ErrAlreadyBought, anything else
+// ErrNotWished, as for a fresh press of a copy no longer on the wishlist.
+// ErrNotFound when no alerted deal listing has the id. Neither error
+// changes the copy or the listing.
+func (s *Store) BuyPress(ctx context.Context, callbackQueryID string, id, copyID int64) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("%s: begin: %w", op, err)
+		return fmt.Errorf("buy press: begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	outcome := buyInTx(ctx, tx, callbackQueryID, id, copyID)
+	if outcome != nil && !errors.Is(outcome, ErrNotFound) && !errors.Is(outcome, ErrNotWished) &&
+		!errors.Is(outcome, ErrAlreadyBought) {
+		return outcome
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("buy press: commit: %w", err)
+	}
+	return outcome
+}
+
+// buyInTx is BuyPress inside its transaction; the press's record commits
+// with the purchase or a refusal.
+func buyInTx(ctx context.Context, tx pgx.Tx, callbackQueryID string, id, copyID int64) error {
+	fresh, err := recordPress(ctx, tx, callbackQueryID)
+	if err != nil {
+		return err
+	}
+	var (
+		priceCents int64
+		acquiredAs *string
+		source     string
+		dismissed  bool
+	)
+	err = tx.QueryRow(ctx, `SELECT o.price_cents, o.acquired_as, o.source, o.dismissed_at IS NOT NULL
+		FROM price_observation o
+		WHERE o.id = $1 AND o.source = ANY ($2)
+			AND EXISTS (SELECT 1 FROM deal_alert a WHERE a.observation_id = o.id)
+		FOR UPDATE`, id, sources).Scan(&priceCents, &acquiredAs, &source, &dismissed)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("buy press: listing: %w", err)
+	}
+	var status string
+	err = tx.QueryRow(ctx, `SELECT status FROM copy WHERE id = $1 FOR UPDATE`, copyID).Scan(&status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotWished
+	}
+	if err != nil {
+		return fmt.Errorf("buy press: copy: %w", err)
+	}
+	if !fresh || status != "wishlist" {
+		if status == "owned" && dismissed {
+			return ErrAlreadyBought
+		}
+		return ErrNotWished
+	}
+	shop, ok := sourceLabels[source]
+	if !ok {
+		shop = source
+	}
+	if _, err := tx.Exec(ctx, `UPDATE copy SET status = 'owned', price_cents = $2,
+			purchased_on = (now() AT TIME ZONE 'Europe/Warsaw')::date, shop = $3,
+			acquired_as = coalesce($4, acquired_as), max_price_cents = NULL, updated_at = now()
+		WHERE id = $1`, copyID, priceCents, shop, acquiredAs); err != nil {
+		return fmt.Errorf("buy press: copy: %w", err)
+	}
+	return setDismissed(ctx, tx, id, true)
+}
+
+// recordPress stores the Telegram press callbackQueryID and reports
+// whether it is new, so a press Telegram sends again is applied once.
+// Records older than two days, long after Telegram dropped the press,
+// are pruned.
+func recordPress(ctx context.Context, tx pgx.Tx, callbackQueryID string) (bool, error) {
 	if _, err := tx.Exec(ctx, `DELETE FROM telegram_press WHERE pressed_at < now() - interval '2 days'`); err != nil {
-		return fmt.Errorf("%s: prune: %w", op, err)
+		return false, fmt.Errorf("press: prune: %w", err)
 	}
 	tag, err := tx.Exec(ctx, `INSERT INTO telegram_press (callback_query_id) VALUES ($1)
 		ON CONFLICT DO NOTHING`, callbackQueryID)
 	if err != nil {
-		return fmt.Errorf("%s: record: %w", op, err)
+		return false, fmt.Errorf("press: record: %w", err)
 	}
-	if tag.RowsAffected() == 0 {
-		return ErrPressReplayed
-	}
-	if err := apply(tx); err != nil {
-		return err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("%s: commit: %w", op, err)
-	}
-	return nil
+	return tag.RowsAffected() == 1, nil
 }
 
 func (s *Store) setDismissed(ctx context.Context, id int64, dismissed bool) error {

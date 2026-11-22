@@ -523,7 +523,7 @@ func (r *run) deliver(ctx context.Context, only map[string]bool) error {
 // notifier can attach one.
 func (h *Hunter) notify(ctx context.Context, a *Alert) error {
 	if n, ok := h.notifier.(AlertNotifier); ok {
-		return n.SendAlert(ctx, alertText(a), a.ObservationID)
+		return n.SendAlert(ctx, alertText(a), a.ObservationID, a.CopyID)
 	}
 	return h.notifier.Send(ctx, alertText(a))
 }

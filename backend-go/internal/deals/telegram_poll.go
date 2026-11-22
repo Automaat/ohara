@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
+	"unicode/utf16"
 
 	"github.com/Automaat/ohara/backend-go/internal/recovery"
 )
@@ -42,7 +42,8 @@ const telegramBatch = 20
 // purchase.
 const boughtNote = "\n\n✅ Kupione: zapisano w kolekcji"
 
-// telegramTextLimit is the most characters a message's text may hold.
+// telegramTextLimit is the most a message's text may hold, in UTF-16 code
+// units, the measure Telegram applies.
 const telegramTextLimit = 4096
 
 // PressStore applies a press of an alert's buttons, once per press
@@ -50,7 +51,7 @@ const telegramTextLimit = 4096
 // the purchase of the alert's wish; *Store is one.
 type PressStore interface {
 	DismissPress(ctx context.Context, callbackQueryID string, id int64) error
-	BuyPress(ctx context.Context, callbackQueryID string, id int64) error
+	BuyPress(ctx context.Context, callbackQueryID string, id, copyID int64) error
 }
 
 // TelegramPoller long-polls the bot's updates and acts on presses of an
@@ -263,8 +264,8 @@ func (p *TelegramPoller) apply(ctx context.Context, q *callbackQuery) pressOutco
 		logger.Warn("telegram: press from another chat ignored")
 		return pressOutcome{answer: "Ten czat nie obsługuje tego przycisku"}
 	}
-	if id, ok := boughtListing(q.Data); ok {
-		return p.buy(ctx, q, id)
+	if id, copyID, ok := boughtListing(q.Data); ok {
+		return p.buy(ctx, q, id, copyID)
 	}
 	id, ok := ignoredListing(q.Data)
 	if !ok {
@@ -282,30 +283,66 @@ func (p *TelegramPoller) apply(ctx context.Context, q *callbackQuery) pressOutco
 	return pressOutcome{answer: "Zignorowano", edit: q.Message}
 }
 
-// buy records the purchase a "Kupione" press for listing id names. The
-// message then says so and loses its buttons; a press for a wish already
-// bought or deleted changes nothing and keeps the message.
-func (p *TelegramPoller) buy(ctx context.Context, q *callbackQuery, id int64) pressOutcome {
-	logger := p.logger()
-	switch err := p.Store.BuyPress(ctx, q.ID, id); {
-	case errors.Is(err, ErrPressReplayed):
-		logger.Info("telegram: press already applied", "observation", id)
+// buy records the purchase a "Kupione" press for listing id and wish
+// copyID names. The message then says so and loses its buttons, also when
+// the press finds the purchase already recorded, so a message whose edit
+// failed is fixed by the next press. A press for a wish no longer on the
+// wishlist that it did not buy changes nothing and keeps the message.
+func (p *TelegramPoller) buy(ctx context.Context, q *callbackQuery, id, copyID int64) pressOutcome {
+	out := pressOutcome{answer: "Zapisano jako kupione", edit: q.Message, editText: withBoughtNote(q.Message.Text)}
+	switch err := p.Store.BuyPress(ctx, q.ID, id, copyID); {
+	case err == nil:
+	case errors.Is(err, ErrAlreadyBought):
+		out.answer = "Już zapisano jako kupione"
 	case errors.Is(err, ErrNotFound):
 		return pressOutcome{answer: "Nie ma już tego ogłoszenia"}
 	case errors.Is(err, ErrNotWished):
 		return pressOutcome{answer: "Tej pozycji nie ma już na liście życzeń"}
-	case err != nil:
-		logger.Warn("telegram: record purchase, trying again", "observation", id, "err", err)
+	default:
+		p.logger().Warn("telegram: record purchase, trying again", "observation", id, "err", err)
 		return pressOutcome{retry: true}
 	}
-	out := pressOutcome{answer: "Zapisano jako kupione", edit: q.Message}
-	// A message Telegram no longer shows the bot has no text; one at the
-	// length limit has no room for the note. Both only lose their buttons.
-	if text := q.Message.Text; text != "" &&
-		utf8.RuneCountInString(text)+utf8.RuneCountInString(boughtNote) <= telegramTextLimit {
-		out.editText = text + boughtNote
-	}
 	return out
+}
+
+// withBoughtNote is an alert's text with boughtNote after it, cut short
+// with "…" where the whole would pass Telegram's limit. A message Telegram
+// no longer shows the bot has no text: it gets none and only loses its
+// buttons.
+func withBoughtNote(text string) string {
+	if text == "" {
+		return ""
+	}
+	room := telegramTextLimit - utf16Len(boughtNote)
+	if utf16Len(text) > room {
+		room -= utf16Len("…")
+		var b strings.Builder
+		for _, r := range text {
+			if n := utf16.RuneLen(r); n > 0 {
+				room -= n
+			} else {
+				room--
+			}
+			if room < 0 {
+				break
+			}
+			b.WriteRune(r)
+		}
+		text = b.String() + "…"
+	}
+	return text + boughtNote
+}
+
+func utf16Len(s string) int {
+	n := 0
+	for _, r := range s {
+		if l := utf16.RuneLen(r); l > 0 {
+			n += l
+		} else {
+			n++
+		}
+	}
+	return n
 }
 
 // ignoredListing reads the observation id from an "Ignoruj" button's data.
@@ -313,9 +350,20 @@ func ignoredListing(data string) (int64, bool) {
 	return buttonListing(data, ignoreData)
 }
 
-// boughtListing reads the observation id from a "Kupione" button's data.
-func boughtListing(data string) (int64, bool) {
-	return buttonListing(data, boughtData)
+// boughtListing reads the observation and copy ids from a "Kupione"
+// button's data.
+func boughtListing(data string) (int64, int64, bool) {
+	rest, ok := strings.CutPrefix(data, boughtData)
+	if !ok {
+		return 0, 0, false
+	}
+	listing, wish, ok := strings.Cut(rest, ":")
+	if !ok {
+		return 0, 0, false
+	}
+	id, idErr := strconv.ParseInt(listing, 10, 64)
+	copyID, copyErr := strconv.ParseInt(wish, 10, 64)
+	return id, copyID, idErr == nil && copyErr == nil && id > 0 && copyID > 0
 }
 
 func buttonListing(data, prefix string) (int64, bool) {

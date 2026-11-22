@@ -251,15 +251,23 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   offer "Cofnij", or "Spróbuj ponownie" after a failed request, and are
   taken back when the page goes away.
   Every Telegram alert carries inline "Ignoruj" and "Kupione" buttons
-  (callback data `ignore:` or `bought:` and the observation id). A
-  "Kupione" press (`Store.BuyPress`) turns the alert's wish into an owned
-  copy, with no confirmation: the listing's price, bought today in
-  Poland, the source's label as the shop, new or used from the listing
-  (the wish's own value when it says nothing), the limit cleared; the copy
-  keeps its id, edition, condition and notes and the listing is
-  dismissed. The message then gets a "Kupione" line and loses its
-  buttons. A press for a wish already bought or deleted changes nothing
-  and is only answered. With Telegram configured, the hunter's
+  (callback data `ignore:<observation id>` and
+  `bought:<observation id>:<copy id>`, the wish the message was sent
+  for, even after its alert moves to another wish). A "Kupione" press
+  (`Store.BuyPress`) turns that wish into an owned copy, with no
+  confirmation: the listing's price, bought today in Poland, the source's
+  label as the shop, new or used from the listing (the wish's own value
+  when it says nothing), the limit cleared; the copy keeps its id,
+  edition, condition and notes and the listing is dismissed. The message
+  then gets a "Kupione" line (its text cut short with "…" when the line
+  would pass Telegram's 4096 characters) and loses its buttons. Only a
+  press's first delivery can buy: every "Kupione" press is recorded in
+  `telegram_press`, refused ones too, and a press sent again or pressed
+  again only reads the state. A copy already owned whose listing is
+  dismissed is answered "Już zapisano jako kupione" and its message is
+  edited again, so a message whose edits failed is fixed by the next
+  press; a wish no longer on the wishlist otherwise changes nothing and
+  is only answered. With Telegram configured, the hunter's
   `TelegramPoller` long-polls `getUpdates` (no webhook: Telegram cannot
   reach the LAN) for callback queries only, 20 per call (halved after a
   reply over 1 MiB); a press in the alert chat dismisses the listing as
@@ -270,9 +278,8 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   press Telegram still holds when polling resumes is handled then
   (Telegram keeps a callback only minutes, not the 24 hours it keeps
   other updates), and one sent again is applied once:
-  `Store.DismissPress` and `Store.BuyPress` record its callback id in
-  `telegram_press` in the press's transaction, so a replay never undoes a
-  later "Cofnij"; it
+  `Store.DismissPress` records its callback id in `telegram_press` in the
+  dismissal's transaction, so a replay never undoes a later "Cofnij"; it
   is only answered and its button taken off again. A keyboard edit the
   Bot API fails for now (no answer, 5xx, 429) is tried 3 times; a button
   still left works, since a new press answers and edits again. A dismissal that fails

@@ -45,6 +45,7 @@ func Ohara() API {
 		Types: []Named{
 			Of[collection.TitleInput]("TitlePayload"),
 			Of[collection.Title]("Title"),
+			Of[collection.RatingInput]("RatingPayload"),
 			Of[collection.EditionInput]("EditionPayload"),
 			Of[collection.Edition]("Edition"),
 			Of[collection.CopyInput]("CopyPayload"),

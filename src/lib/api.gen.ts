@@ -15,7 +15,7 @@ export type TriState = 'yes' | 'no' | 'unknown';
 
 export type Packaging = 'steelbook' | 'slipcover' | 'digipak' | 'mediabook';
 
-export type CopyStatus = 'owned' | 'wishlist' | 'sold';
+export type CopyStatus = 'owned' | 'wishlist' | 'sold' | 'ordered';
 
 export type AcquiredAs = 'new' | 'used';
 
@@ -51,6 +51,7 @@ export type TitlePayload = {
 	cover_url?: string;
 	finished?: boolean | null;
 	finished_on?: string | null;
+	rating?: number | null;
 	tags?: string[];
 	request_key?: string;
 };
@@ -70,12 +71,17 @@ export type Title = {
 	cover_url?: string;
 	finished?: boolean | null;
 	finished_on?: string | null;
+	rating?: number | null;
 	request_key?: string;
 	tags: string[];
 	edition_count: number;
 	copy_count: number;
 	created_at: string;
 	updated_at: string;
+};
+
+export type RatingPayload = {
+	rating: number | null;
 };
 
 export type EditionPayload = {
@@ -130,6 +136,7 @@ export type CopyPayload = {
 	max_market_percent?: number | null;
 	sold_on?: string | null;
 	sale_price_cents?: number | null;
+	expected_on?: string | null;
 	location?: string | null;
 	request_key?: string;
 };
@@ -148,6 +155,7 @@ export type Copy = {
 	max_market_percent?: number | null;
 	sold_on?: string | null;
 	sale_price_cents?: number | null;
+	expected_on?: string | null;
 	location?: string | null;
 	request_key?: string;
 	created_at: string;
@@ -192,6 +200,7 @@ export type TitleDetail = {
 	cover_url?: string;
 	finished?: boolean | null;
 	finished_on?: string | null;
+	rating?: number | null;
 	request_key?: string;
 	tags: string[];
 	edition_count: number;
@@ -265,6 +274,7 @@ export type CopyDetail = {
 	max_market_percent?: number | null;
 	sold_on?: string | null;
 	sale_price_cents?: number | null;
+	expected_on?: string | null;
 	location?: string | null;
 	request_key?: string;
 	created_at: string;
@@ -286,6 +296,7 @@ export type CollectionItem = {
 	condition: Condition | null;
 	sold_on?: string | null;
 	sale_price_cents?: number | null;
+	expected_on?: string | null;
 	location?: string | null;
 	edition_id: number;
 	barcode: string | null;
@@ -300,6 +311,7 @@ export type CollectionItem = {
 	year: number | null;
 	cover_url?: string;
 	authors?: string[];
+	rating?: number;
 	loan_borrower?: string;
 	loan_due_on?: string;
 	finished: boolean;
@@ -310,6 +322,7 @@ export type CollectionItem = {
 export type Totals = {
 	copies: number;
 	owned: number;
+	ordered?: number;
 	wishlist: number;
 	priced: number;
 	spent_cents: number;

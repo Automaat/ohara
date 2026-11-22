@@ -81,8 +81,8 @@ func wishlist(t *testing.T, pool *pgxpool.Pool, w *Want) int64 {
 		w.Kind, w.Name, w.PolishTitle, w.OriginalTitle, append([]string{}, w.Authors...)).Scan(&titleID); err != nil {
 		t.Fatalf("title: %v", err)
 	}
-	if err := pool.QueryRow(ctx, `INSERT INTO edition (title_id, format) VALUES ($1, $2) RETURNING id`,
-		titleID, w.Format).Scan(&editionID); err != nil {
+	if err := pool.QueryRow(ctx, `INSERT INTO edition (title_id, format, barcode) VALUES ($1, $2, $3) RETURNING id`,
+		titleID, w.Format, w.Barcode).Scan(&editionID); err != nil {
 		t.Fatalf("edition: %v", err)
 	}
 	if err := pool.QueryRow(ctx, `INSERT INTO copy (edition_id, status, max_price_cents)
@@ -450,6 +450,29 @@ func TestRunWithEmptyWishlistAsksNoSource(t *testing.T) {
 	olx := olxFixture(t)
 	if res := mustRun(t, newTestHunter(pool, &fakeNotifier{}, olx)); res.Wants != 0 || len(olx.queries) != 0 {
 		t.Fatalf("run = %+v, queries %q", res, olx.queries)
+	}
+}
+
+// TestRunSkipsOrderedCopies turns the only copy of a wished Blu-ray into one
+// on order: the run has nothing to search for and alerts on no listing.
+func TestRunSkipsOrderedCopies(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	copyID := wishlist(t, pool, wantBluray(new(int64(5000))))
+	if _, err := pool.Exec(context.Background(), `UPDATE copy SET status = 'ordered', max_price_cents = NULL,
+		price_cents = 4500, purchased_on = current_date, expected_on = current_date + 7 WHERE id = $1`, copyID); err != nil {
+		t.Fatal(err)
+	}
+	olx := olxFixture(t)
+	notifier := &fakeNotifier{}
+	res := mustRun(t, newTestHunter(pool, notifier, olx))
+	if res.Wants != 0 || res.Matched != 0 || res.Alerts != 0 || len(olx.queries) != 0 {
+		t.Fatalf("run = %+v, queries %q, want no search for an ordered copy", res, olx.queries)
+	}
+	if msgs := notifier.messages(); len(msgs) != 0 {
+		t.Fatalf("messages = %q", msgs)
+	}
+	if n := count(t, pool, `SELECT count(*) FROM deal_alert`); n != 0 {
+		t.Fatalf("deal alerts = %d", n)
 	}
 }
 

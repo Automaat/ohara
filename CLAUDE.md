@@ -101,12 +101,29 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
 - Money is integer grosze (`price_cents`). Barcodes are stored normalized
   (`barcode.Normalize`: EAN-8, EAN-13 or GTIN-14; a UPC-A becomes its
   EAN-13 with a leading 0, ISBN-10 becomes ISBN-13), one edition per barcode.
-- A copy is `owned`, `wishlist` or `sold`. A sold copy keeps its purchase
-  price, date and shop and needs `sold_on`; `sale_price_cents` is optional.
-  Only a sold copy carries either, so setting it back to `owned` clears
-  them. Sold copies count in no owned total or `spent_cents`, and the
+- A copy is `owned`, `wishlist`, `sold` or `ordered`. A sold copy keeps its
+  purchase price, date and shop and needs `sold_on`; `sale_price_cents` is
+  optional. Only a sold copy carries either, so setting it back to `owned`
+  clears them. Sold copies count in no owned total or `spent_cents`, and the
   valuation and deal hunter never read them. `GET /api/collection` lists
   them without a status, for the page that filters in the browser.
+- An `ordered` copy is bought but not delivered: it takes a price, its
+  order date as `purchased_on`, a shop and an optional `expected_on`, which
+  no other status takes (422); a wish's limits and a location stay off it.
+  Its price counts in `spent_cents` and `totals.ordered` counts it apart
+  from `owned` (left out at 0); the valuation (value, spend, copy count)
+  and the deal hunter never read it. Kolekcja's default shelf keeps it,
+  with a parcel on the cover and "Dostawa <date>" ("po terminie" once the
+  day has passed, local time) or "Zamówiony"; the filter sheet's
+  "Zamówione" switch (`?status=ordered`) lists them alone. The shelf's day
+  (`src/lib/local-day.svelte.ts`) moves on at local midnight and when the
+  page is shown again, for late deliveries and loans alike. The copy
+  form marks an order with a "Zamówiony" switch under "Na półce". The copy
+  page's "Odebrano" sends `POST /api/copies/{id}/receipt`, which turns the
+  stored ordered copy `owned` and drops `expected_on`, keeping every other
+  field as stored (409 on `status` for a copy not on order), so a page read
+  before another save cannot put old values back. No reminder goes out for
+  a late delivery.
 - `POST /api/titles`, `/api/editions` and `/api/copies` take an optional
   `request_key`: a repeat with the same key answers 200 with the row the
   first request created. The scanner sends one key per add, so a retry
@@ -123,6 +140,21 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   refused save and before saving another valid pick over a key that may
   have written; a pick's provider values the API would refuse are left
   out of the save. A key is at most 100 bytes of UTF-8 without NUL.
+- A title's `rating` is the owner's own, a whole number from 1 to 10, on
+  any title, a wish's too; `null` clears it and 0, 11 or a fraction
+  answers 422 on `rating`. A `PUT /api/titles/{id}` without `rating`
+  keeps the stored one, so the edit form leaves it alone. The title
+  page's "Ocena" select sends `PUT /api/titles/{id}/rating`
+  (`{"rating": n | null}`, the key required), which changes only the
+  rating, so a page loaded before another edit never writes the rest
+  back. Picks are stored one after another in one queue for the whole
+  app (`src/lib/title-rating.ts`), so a visit's late saves never land
+  after a later visit's:
+  only the latest pick's failure shows, with the last confirmed rating,
+  and a title read that began before a pick or during one keeps the
+  shown rating. `GET /api/collection` items carry it (absent while unrated),
+  and Kolekcja's "Ocena malejąco" lists rated copies from 10 down,
+  unrated ones last, ties in title order.
 - A loan (`loan`) records who has an owned copy: `POST /api/copies/{id}/loans`
   (`borrower` trimmed, at most 500 bytes; `lent_on` today in Poland when
   null; optional `due_on`, not before it) answers 201, 409 for a wish or a
@@ -258,7 +290,12 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
 - Deal sources implement `deals.Source`. Matching folds every Latin
   letter with a diacritic to its base letter ("Bjork" for "Björk") in
   names, listing titles and phrases; search queries keep the want's
-  spelling. A run matches listing titles to wishlist copies (all title
+  spelling. A want's names are its Polish title, original title and
+  name; a Polish book edition (`deals.PolishBookEdition`: an ISBN-13
+  starting `97883`, or no barcode)
+  drops the original title, which names foreign editions, from both its
+  matching and its queries, in hunts and valuations alike. A run
+  matches listing titles to wishlist copies (all title
   words; a name of words of at most two letters ("M", "Up", "It") only
   where it stands as the title: at the start, after a separator, a media
   word or the author (in any case), and before the end, a separator, a
@@ -382,7 +419,11 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   its edition's latest SkupSzop offer (0 when the shop does not buy it);
   mid = median of OLX prices not marked new, outliers beyond 1.5 IQR
   dropped, pooled over every edition of the same title and format, owned,
-  wished or without copies; an unowned edition's prices count only when
+  wished or without copies, a title's Polish book editions apart from its
+  other ones (the used market of a wish still pools both), and a Polish
+  book edition's stored OLX price only while its listing title still
+  matches the edition (a barcode that turned Polish drops the foreign
+  listings matched before); an unowned edition's prices count only when
   first seen, or moved to it from another title (`moved_at`), after its
   last change. A mid from fewer than 3 prices is low
   confidence. Only a Discogs release has a ceiling. A stored OLX listing

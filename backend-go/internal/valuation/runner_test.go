@@ -866,6 +866,63 @@ func TestSoldCopiesAreNotValued(t *testing.T) {
 	}
 }
 
+// TestOrderedCopiesAreNotValued orders a second copy of the Blu-ray, which an
+// owned copy still holds, and the only copy of a book edition: neither
+// ordered copy is valued or counted in the spend, and the edition with no
+// owned copy gets no search or quote.
+func TestOrderedCopiesAreNotValued(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	seed(t, pool)
+	exec(t, pool, `INSERT INTO title (id, kind, name, authors) OVERRIDING SYSTEM VALUE
+		VALUES (3, 'book', 'Lód', '{"Jacek Dukaj"}')`)
+	exec(t, pool, `INSERT INTO edition (id, title_id, barcode, binding) OVERRIDING SYSTEM VALUE
+		VALUES (30, 3, '9788308041239', 'hardcover')`)
+	exec(t, pool, `INSERT INTO copy (edition_id, status, price_cents, purchased_on, expected_on) VALUES
+		(30, 'ordered', 7000, current_date, current_date + 14), (20, 'ordered', 4000, current_date, NULL)`)
+	logger := slog.New(slog.DiscardHandler)
+	olx := &fakeSource{name: "olx", listings: []deals.Listing{
+		listing("1", "Katedra Jacek Dukaj", 2000, used()),
+		listing("2", "Lód Jacek Dukaj", 3000, used()),
+	}}
+	bb := &fakeBuyBack{quotes: map[string]Quote{
+		"9788308073209": {Offered: true, Cents: 537},
+		"9788308041239": {Offered: true, Cents: 900},
+	}}
+	r := newTestRunner(pool, bb, olx)
+	h := NewHandler(r.store, r, logger)
+	srv := httptest.NewServer(server.New(server.Config{}, logger, server.Deps{DB: pool, API: []server.Mounter{h}}))
+	t.Cleanup(srv.Close)
+
+	res, err := r.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Editions != 2 {
+		t.Fatalf("Run valued %d editions, want the 2 with an owned copy", res.Editions)
+	}
+	if strings.Join(bb.asked, ",") != "9788308073209" {
+		t.Fatalf("buy-back asked for %v, want the owned book only", bb.asked)
+	}
+	for _, q := range olx.queries {
+		if strings.Contains(q, "Lód") {
+			t.Fatalf("OLX asked %q for the ordered edition", q)
+		}
+	}
+
+	var view View
+	if code := get(t, srv.URL+"/api/valuation", &view); code != http.StatusOK {
+		t.Fatalf("GET = %d", code)
+	}
+	if len(view.Copies) != 3 || view.Summary.Copies != 3 || view.Summary.SpentCents != 8000 {
+		t.Fatalf("view copies %d, summary %+v, want the 3 owned copies", len(view.Copies), view.Summary)
+	}
+	for _, c := range view.Copies {
+		if c.EditionID == 30 || c.PriceCents != nil && *c.PriceCents == 4000 {
+			t.Fatalf("valuation lists an ordered copy: %+v", c)
+		}
+	}
+}
+
 func get(t *testing.T, url string, out any) int {
 	t.Helper()
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, http.NoBody)
@@ -1453,12 +1510,13 @@ func TestRunKeepsTheRefusalBeyondTheErrorCap(t *testing.T) {
 	}
 }
 
-// requestLog keeps when each site was asked and how many requests a fake
-// site received.
+// requestLog keeps when each site was asked, how many requests a fake
+// site received and the OLX queries it received.
 type requestLog struct {
-	mu       sync.Mutex
-	times    map[string][]time.Time
-	received map[string]int
+	mu         sync.Mutex
+	times      map[string][]time.Time
+	received   map[string]int
+	olxQueries []string
 }
 
 func (l *requestLog) add(site string) {
@@ -1477,6 +1535,19 @@ func (l *requestLog) receive(site string) {
 		l.received = map[string]int{}
 	}
 	l.received[site]++
+}
+
+func (l *requestLog) receiveOLXQuery(query string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.olxQueries = append(l.olxQueries, query)
+}
+
+// queriesSince is the OLX queries received after the first n, sorted.
+func (l *requestLog) queriesSince(n int) []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Sorted(slices.Values(l.olxQueries[n:]))
 }
 
 func (l *requestLog) count(site string) int {
@@ -1509,6 +1580,7 @@ func olxSite(t *testing.T, log *requestLog, heldQuery string) (string, <-chan st
 	held := make(chan struct{}, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		log.receive(SourceOLX)
+		log.receiveOLXQuery(r.URL.Query().Get("query"))
 		if heldQuery != "" && strings.Contains(strings.ToLower(r.URL.Query().Get("query")), heldQuery) {
 			select {
 			case held <- struct{}{}:
@@ -1636,23 +1708,34 @@ func TestRunsDoNotWaitForEachOther(t *testing.T) {
 	}
 }
 
+// TestBackToBackRunsKeepTheirPacing runs two valuations in a row without
+// their own pauses, through a pacer lane whose gap is an hour, and checks
+// that each run asked OLX every query its owned editions need: a lane never
+// waits for its own requests. Each request, its wait in the lane included,
+// has the client's 5 s, so a lane that waited for itself would make the run
+// miss queries. The runs themselves have no deadline, so slower database
+// work between requests cannot fail the test.
 func TestBackToBackRunsKeepTheirPacing(t *testing.T) {
 	pool := dbtest.Migrated(t)
 	seed(t, pool)
 	log := &requestLog{}
 	olxURL, _ := olxSite(t, log, "")
-	_, runner := pacedRuns(pool, olxURL, log)
+	client := deals.NewHTTPClient()
+	client.Timeout = 5 * time.Second
+	client.Transport = deals.NewPacer(time.Hour).Lane().Transport(nil)
+	runner := NewRunner(NewStore(pool), []deals.Source{deals.OLX{Client: client, BaseURL: olxURL}},
+		[]BuyBack{&timedBuyBack{log: log}}, nil, Config{Delay: runDelay, Window: 90 * 24 * time.Hour},
+		slog.New(slog.DiscardHandler))
 	runner.sleep = func(ctx context.Context, _ time.Duration) error { return ctx.Err() }
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	start := time.Now()
+	want := []string{"Diuna blu-ray", "Dune blu-ray", "Katedra dukaj"}
 	for i := range 2 {
-		if _, err := runner.Run(ctx); err != nil {
+		before := len(log.queriesSince(0))
+		if _, err := runner.Run(t.Context()); err != nil {
 			t.Fatalf("run %d: %v", i, err)
 		}
-	}
-	if d := time.Since(start); d >= runDelay/2 {
-		t.Fatalf("two valuations without their own pauses took %v, want them not to wait for each other's requests", d)
+		if got := log.queriesSince(before); !slices.Equal(got, want) {
+			t.Fatalf("run %d asked OLX %q, want the owned book's and Blu-ray's %q", i, got, want)
+		}
 	}
 }
 
@@ -1716,5 +1799,86 @@ func TestRunSkipsLots(t *testing.T) {
 	}
 	if !slices.Equal(priced, []string{"one"}) {
 		t.Fatalf("priced the owned DVD from %v, want only [one]", priced)
+	}
+}
+
+func TestPolishBookHoldings(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		barcode  string
+		priced   []string
+		original bool
+	}{
+		{"Polish ISBN", "'9788381880206'", []string{"pl"}, false},
+		{"no barcode", "NULL", []string{"pl"}, false},
+		{"English ISBN", "'9780441013593'", []string{"en", "pl"}, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			pool := dbtest.Migrated(t)
+			exec(t, pool, `INSERT INTO title (id, kind, name, original_title, authors) OVERRIDING SYSTEM VALUE
+				VALUES (7, 'book', 'Diuna', 'Dune', '{"Frank Herbert"}')`)
+			exec(t, pool, `INSERT INTO edition (id, title_id, barcode, binding) OVERRIDING SYSTEM VALUE
+				VALUES (70, 7, `+tt.barcode+`, 'paperback')`)
+			exec(t, pool, `INSERT INTO copy (edition_id, status) VALUES (70, 'owned')`)
+			olx := &fakeSource{name: "olx", listings: []deals.Listing{
+				listing("en", "Dune Frank Herbert paperback English", 3000, used()),
+				listing("pl", "Diuna Frank Herbert Rebis", 4000, used()),
+			}}
+			if _, err := newTestRunner(pool, &fakeBuyBack{}, olx).Run(context.Background()); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			var priced []string
+			if err := pool.QueryRow(context.Background(), `SELECT coalesce(array_agg(external_id ORDER BY external_id), '{}')
+				FROM price_observation WHERE edition_id = 70`).Scan(&priced); err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(priced, tt.priced) {
+				t.Errorf("priced the owned Diuna from %v, want %v", priced, tt.priced)
+			}
+			if got := slices.Contains(olx.queries, "Dune herbert"); got != tt.original {
+				t.Errorf("asked %q; asked the original title = %v, want %v", olx.queries, got, tt.original)
+			}
+		})
+	}
+}
+
+func TestPolishBookBarcodeEditDropsForeignPrices(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	ctx := context.Background()
+	exec(t, pool, `INSERT INTO title (id, kind, name, original_title, authors) OVERRIDING SYSTEM VALUE
+		VALUES (7, 'book', 'Diuna', 'Dune', '{"Frank Herbert"}')`)
+	exec(t, pool, `INSERT INTO edition (id, title_id, barcode, binding) OVERRIDING SYSTEM VALUE
+		VALUES (70, 7, '9780441013593', 'paperback')`)
+	exec(t, pool, `INSERT INTO copy (edition_id, status) VALUES (70, 'owned')`)
+	olx := &fakeSource{name: "olx", listings: []deals.Listing{
+		listing("en", "Dune Frank Herbert paperback English", 8000, used()),
+		listing("pl", "Diuna Frank Herbert Rebis", 4000, used()),
+	}}
+	store := NewStore(pool)
+	if _, err := newTestRunner(pool, &fakeBuyBack{}, olx).Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	mid := func() any {
+		t.Helper()
+		owned, _, err := store.Valued(ctx, 90*24*time.Hour)
+		if err != nil {
+			t.Fatalf("Valued: %v", err)
+		}
+		if len(owned) != 1 || owned[0].Mid == nil {
+			return nil
+		}
+		return owned[0].Mid.Cents
+	}
+	if got := mid(); got != int64(6000) {
+		t.Fatalf("English edition mid = %v, want 6000 from both listings", got)
+	}
+
+	exec(t, pool, `UPDATE edition SET barcode = '9788381880206', updated_at = now() WHERE id = 70`)
+	olx.listings = nil
+	if _, err := newTestRunner(pool, &fakeBuyBack{}, olx).Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := mid(); got != int64(4000) {
+		t.Errorf("mid after the edition turned Polish = %v, want 4000 from the Polish listing only", got)
 	}
 }

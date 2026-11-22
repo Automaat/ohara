@@ -59,9 +59,10 @@
 	const all = 'all';
 	const formatOptions = [{ value: all, label: 'Każdy' }, ...options(formatLabels)];
 	// "Bez egzemplarzy" lists titles instead of copies, and a title has no format of its own.
-	// "Sprzedane" is a switch of its own: the segments hold five options before they turn into
-	// a select, and sold copies are the ones no other choice lists.
-	const { sold, ...shelfStatuses } = collectionStatusLabels;
+	// "Zamówione" and "Sprzedane" are switches of their own: the segments hold five options before
+	// they turn into a select. Sold copies are the ones no other choice lists; ordered ones show
+	// on the default shelf too, the switch lists them alone.
+	const { ordered, sold, ...shelfStatuses } = collectionStatusLabels;
 	const statusOptions = [{ value: all, label: 'Każdy' }, ...options(shelfStatuses)];
 	// A location is trimmed text, so a lone space can never be one, unlike a word such as "all".
 	const anyPlace = ' ';
@@ -151,9 +152,13 @@
 			label="Status"
 			options={statusOptions}
 			bind:value={
-				() => (status === 'sold' ? null : status || all),
+				() => (status === 'sold' || status === 'ordered' ? null : status || all),
 				(v) => onstatus(v === all || v === null ? '' : (v as CollectionFilter['status']))
 			}
+		/>
+		<Switch
+			label={ordered}
+			bind:checked={() => status === 'ordered', (on) => onstatus(on ? 'ordered' : '')}
 		/>
 		<Switch
 			label={sold}

@@ -6,6 +6,7 @@
 		FormError,
 		SegmentedControl,
 		Select,
+		Switch,
 		Textarea
 	} from '@smykla-skalski/sui';
 	import {
@@ -57,6 +58,11 @@
 	});
 	const locationOptions = $derived((locations ?? []).map((l) => ({ value: l, label: l })));
 
+	// An ordered copy is a purchase still on its way: "Na półce" with the "Zamówiony" switch on.
+	// The segments keep three options, which fit a phone's width before they turn into a select.
+	const { ordered: orderedLabel, ...segmentLabels } = statusLabels;
+	const statusOptions = options(segmentLabels);
+
 	const errorFor = (field: string) => (issue?.field === field ? issue.message : undefined);
 	const fieldKeys = [
 		'price_cents',
@@ -69,6 +75,7 @@
 		'max_market_percent',
 		'sold_on',
 		'sale_price_cents',
+		'expected_on',
 		'location'
 	];
 	const general = $derived(issue && !fieldKeys.includes(issue.field) ? issue.message : null);
@@ -83,7 +90,22 @@
 	}}
 >
 	<FormError message={general} />
-	<SegmentedControl label="Status" options={options(statusLabels)} bind:value={form.status} />
+	<SegmentedControl
+		label="Status"
+		options={statusOptions}
+		bind:value={
+			() => (form.status === 'ordered' ? 'owned' : form.status),
+			(v) => (form.status = v ?? form.status)
+		}
+	/>
+	{#if form.status === 'owned' || form.status === 'ordered'}
+		<Switch
+			label={orderedLabel}
+			bind:checked={
+				() => form.status === 'ordered', (on) => (form.status = on ? 'ordered' : 'owned')
+			}
+		/>
+	{/if}
 	{#if form.status !== 'wishlist'}
 		<Field
 			label="Cena zakupu (zł)"
@@ -94,12 +116,20 @@
 			error={errorFor('price_cents')}
 		/>
 		<Field
-			label="Data zakupu"
+			label={form.status === 'ordered' ? 'Data zamówienia' : 'Data zakupu'}
 			placeholder="RRRR-MM-DD"
 			bind:value={form.purchased_on}
 			error={errorFor('purchased_on')}
 		/>
-		{#if form.status === 'sold'}
+		{#if form.status === 'ordered'}
+			<Field
+				label="Spodziewana dostawa"
+				hint="Nie wiesz? Zostaw puste."
+				placeholder="RRRR-MM-DD"
+				bind:value={form.expected_on}
+				error={errorFor('expected_on')}
+			/>
+		{:else if form.status === 'sold'}
 			<Field
 				label="Data sprzedaży"
 				placeholder="RRRR-MM-DD"

@@ -552,6 +552,17 @@
 			<FormError message={finishIssue?.message ?? null} />
 		{/if}
 
+		{#if t.box_sets?.length}
+			<ul class="box-sets" aria-label="Zestawy z tym tytułem">
+				{#each t.box_sets as box (box.edition_id)}
+					<li>
+						W zestawie: <a href={`/titles/${box.title_id}`}>{box.name}</a>
+						{#if box.owned}<span class="muted"> · na półce</span>{/if}
+					</li>
+				{/each}
+			</ul>
+		{/if}
+
 		{#if sole}
 			{@const s = sole}
 			<Card title={soleCopyHeading[s.copy.status]} level={2}>
@@ -682,6 +693,7 @@
 				<EditionFormFields
 					bind:form={editionForm}
 					kind={t.kind}
+					titleID={t.id}
 					issue={editionIssue}
 					saving={savingEdition}
 					submitLabel="Zapisz wydanie"
@@ -1033,6 +1045,15 @@
 	.muted {
 		margin: 0;
 		color: var(--sui-text-muted);
+	}
+	.box-sets {
+		display: grid;
+		gap: 0.25rem;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+		min-inline-size: 0;
+		overflow-wrap: anywhere;
 	}
 	.notes {
 		margin: 0;

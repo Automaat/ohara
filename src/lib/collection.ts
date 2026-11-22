@@ -8,6 +8,8 @@ import type {
 	Condition,
 	CopyPayload,
 	CopyStatus,
+	ContentTitle,
+	Edition,
 	EditionPayload,
 	Format,
 	Kind,
@@ -28,9 +30,11 @@ import type {
 export type {
 	AcquiredAs,
 	Binding,
+	BoxSet,
 	CollectionItem,
 	CollectionView,
 	Condition,
+	ContentTitle,
 	Copy,
 	CopyDetail,
 	CopyPayload,
@@ -419,9 +423,9 @@ export function tagHref(tag: string): string {
 	return `/${collectionSearch({ kind: '', format: '', status: '', q: '', tag })}`;
 }
 
-/** The titles that have no copy yet. */
+/** The titles that have no copy yet and no owned box set holds. */
 export function withoutCopies(titles: readonly Title[]): Title[] {
-	return titles.filter((t) => t.copy_count === 0);
+	return titles.filter((t) => t.copy_count === 0 && !t.in_owned_box_set);
 }
 
 /**
@@ -664,11 +668,21 @@ export type EditionForm = {
 	discogs_release_id: string;
 	cover_url: string;
 	notes: string;
+	/** The titles a box set holds, in their order; left out while the edition lists none. */
+	contents?: ContentTitle[];
+	/**
+	 * The IDs of the titles the edition listed when the form opened. A save sends the contents
+	 * only once the reader changed them, so it keeps what another save listed meanwhile.
+	 */
+	savedContents?: number[];
 };
 
 /** The editable form of an edition, or an empty one. */
-export function editionToForm(e: EditionPayload | null): EditionForm {
+export function editionToForm(e: Edition | null): EditionForm {
 	return {
+		...(e?.contents?.length
+			? { contents: [...e.contents], savedContents: e.contents.map((c) => c.id) }
+			: {}),
 		barcode: e?.barcode ?? '',
 		label: e?.label ?? '',
 		publisher: e?.publisher ?? '',
@@ -682,6 +696,14 @@ export function editionToForm(e: EditionPayload | null): EditionForm {
 		cover_url: e?.cover_url ?? '',
 		notes: e?.notes ?? ''
 	};
+}
+
+/** The box set contents a save sends: none unless the reader changed the list. */
+function contentsChange(f: EditionForm): { contents?: number[] } {
+	const ids = (f.contents ?? []).map((c) => c.id);
+	const saved = f.savedContents ?? [];
+	const same = ids.length === saved.length && ids.every((id, i) => id === saved[i]);
+	return same ? {} : { contents: ids };
 }
 
 /** The request body for an edition of a title of kind; fields of the other kind are dropped. */
@@ -716,7 +738,8 @@ export function editionPayload(
 			binding: kind === 'book' && f.binding ? f.binding : null,
 			discogs_release_id: discogs.value,
 			cover_url: f.cover_url.trim(),
-			notes: f.notes.trim()
+			notes: f.notes.trim(),
+			...contentsChange(f)
 		}
 	};
 }

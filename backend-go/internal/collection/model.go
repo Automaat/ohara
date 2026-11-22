@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/Automaat/ohara/backend-go/internal/barcode"
@@ -185,6 +186,9 @@ type CopyInput struct {
 	// for, null when unknown.
 	SoldOn         *Date  `json:"sold_on,omitempty" ts:",null"`
 	SalePriceCents *int64 `json:"sale_price_cents,omitempty" ts:",null"`
+	// Location is where an owned copy is stored, such as "Regał 2"; a
+	// wishlist or sold copy has none.
+	Location *string `json:"location,omitempty" ts:",null"`
 	// RequestKey makes a create safe to retry: a second create with the
 	// same key returns the first copy. Updates ignore it.
 	RequestKey *string `json:"request_key,omitempty"`
@@ -234,6 +238,16 @@ func trimOpt(s *string) *string {
 func checkLen(field, value string, limit int) *httpx.FieldError {
 	if len(value) > limit {
 		return fieldErr(field, "is too long")
+	}
+	return nil
+}
+
+// checkText refuses control characters in one-line text: Postgres text
+// cannot hold a NUL, and a line break or tab would not survive the form's
+// one-line field, which would rewrite the value on its next save.
+func checkText(field, value string) *httpx.FieldError {
+	if strings.ContainsFunc(value, unicode.IsControl) {
+		return fieldErr(field, "is not valid")
 	}
 	return nil
 }
@@ -454,6 +468,7 @@ func (in *CopyInput) Normalize() *httpx.FieldError {
 	in.Notes = strings.TrimSpace(in.Notes)
 	in.AcquiredAs = trimOpt(in.AcquiredAs)
 	in.Condition = trimOpt(in.Condition)
+	in.Location = trimOpt(in.Location)
 	key, fe := normalizeRequestKey(in.RequestKey)
 	if fe != nil {
 		return fe
@@ -493,11 +508,16 @@ func (in *CopyInput) Normalize() *httpx.FieldError {
 			return fieldErr("purchased_on", "applies only to owned and sold copies")
 		}
 	}
+	if in.Location != nil && in.Status != StatusOwned {
+		return fieldErr("location", "applies only to owned copies")
+	}
 	if e := in.checkSale(); e != nil {
 		return e
 	}
 	return firstErr(
 		checkLen("shop", in.Shop, maxText),
+		checkLen("location", deref(in.Location), maxText),
+		checkText("location", deref(in.Location)),
 		checkLen("notes", in.Notes, maxNotes),
 		checkEnum("acquired_as", in.AcquiredAs, acquiredAs),
 		checkEnum("condition", in.Condition, conditions),

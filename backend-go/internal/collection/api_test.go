@@ -1067,6 +1067,14 @@ func TestTitleTags(t *testing.T) {
 		a.fails(http.MethodPost, "/api/titles", body, http.StatusUnprocessableEntity, "tags")
 		a.fails(http.MethodPut, path, body, http.StatusUnprocessableEntity, "tags")
 	}
+	for _, tags := range []any{[]any{nil}, []any{"Kult", nil}, []any{"Kult", 1}, "Kult", 7, obj{"name": "Kult"}} {
+		a.fails(http.MethodPost, "/api/titles", obj{"kind": "movie", "name": "Obcy", "tags": tags}, http.StatusUnprocessableEntity, "tags")
+		a.mustDo(http.MethodPut, path, obj{"kind": "movie", "name": "Obcy", "tags": []string{"Horror"}}, nil, http.StatusOK)
+		a.fails(http.MethodPut, path, obj{"kind": "movie", "name": "Obcy", "tags": tags}, http.StatusUnprocessableEntity, "tags")
+		if got := titleTags(a, created.ID); strings.Join(got, ",") != "Horror" {
+			t.Fatalf("tags after a refused PUT with %v = %q, want Horror kept", tags, got)
+		}
+	}
 	a.mustDo(http.MethodPut, path, obj{"kind": "movie", "name": "Obcy", "tags": twenty}, &updated, http.StatusOK)
 	if len(updated.Tags) != 20 {
 		t.Fatalf("20 tags after collapsing a duplicate and a blank = %d", len(updated.Tags))

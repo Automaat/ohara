@@ -270,7 +270,7 @@ func (h *Handler) getTitle(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) decodeTitle(w http.ResponseWriter, r *http.Request) (*TitleInput, bool) {
 	var in TitleInput
-	if !httpx.DecodeJSON(w, r, h.logger, &in) {
+	if !httpx.DecodeJSONFields(w, r, h.logger, &in, "tags") {
 		return nil, false
 	}
 	if fe := in.Normalize(); fe != nil {

@@ -3,8 +3,10 @@
 package collection
 
 import (
+	"encoding/json"
 	"errors"
 	"net/url"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -120,7 +122,7 @@ type TitleInput struct {
 	CoverURL      *string  `json:"cover_url,omitempty"`
 	// Tags are the owner's own groupings of the work. An update without
 	// them (nil) keeps the stored tags; an empty list clears them.
-	Tags []string `json:"tags,omitempty"`
+	Tags TagList `json:"tags,omitempty"`
 	// RequestKey makes a create safe to retry: a second create with the
 	// same key returns the first title. Updates ignore it.
 	RequestKey *string `json:"request_key,omitempty"`
@@ -347,11 +349,42 @@ func (in *TitleInput) Normalize() *httpx.FieldError {
 	return in.checkKindFields()
 }
 
+// TagList is the tags a title body carries: a JSON array of strings or
+// null. An element that is not a string, null included, is refused as a
+// type error on `tags` instead of read as a blank tag, which would drop it
+// and clear the title's tags. encoding/json adds no field to an error an
+// UnmarshalJSON returns, so the type names its one field itself.
+type TagList []string
+
+// UnmarshalJSON reads a JSON array of strings, or null as no list.
+func (l *TagList) UnmarshalJSON(b []byte) error {
+	var raw []*string
+	if err := json.Unmarshal(b, &raw); err != nil {
+		if typeErr, ok := errors.AsType[*json.UnmarshalTypeError](err); ok {
+			typeErr.Field = "tags"
+		}
+		return err
+	}
+	if raw == nil {
+		*l = nil
+		return nil
+	}
+	tags := make(TagList, 0, len(raw))
+	for _, tag := range raw {
+		if tag == nil {
+			return &json.UnmarshalTypeError{Value: "null", Type: reflect.TypeFor[string](), Field: "tags"}
+		}
+		tags = append(tags, *tag)
+	}
+	*l = tags
+	return nil
+}
+
 // normalizeTags trims each tag, drops blank ones and keeps the first of
 // those that differ only in case, in their order. A non-nil input gives a
 // non-nil list, so an empty one still clears a title's tags.
-func normalizeTags(raw []string) ([]string, *httpx.FieldError) {
-	tags := make([]string, 0, len(raw))
+func normalizeTags(raw TagList) (TagList, *httpx.FieldError) {
+	tags := make(TagList, 0, len(raw))
 	seen := make(map[string]bool, len(raw))
 	for _, tag := range raw {
 		tag = strings.TrimSpace(tag)

@@ -64,6 +64,16 @@
 			.map((tag) => ({ value: tag, label: tag }))
 	);
 
+	/**
+	 * The tags in use that hold what the reader typed, compared by tag key as the server compares
+	 * tags: the Combobox's own filter lower-cases by JavaScript's rules, which turn a final Σ into
+	 * ς, so "οσ" would miss "ΟΣ".
+	 */
+	function suggestTags(typed: string) {
+		const key = tagKey(typed);
+		return Promise.resolve(tagChoices.filter((choice) => tagKey(choice.label).includes(key)));
+	}
+
 	let tagInput = $state<HTMLInputElement | null>(null);
 
 	/** Adds a tag and empties the field for the next one. */
@@ -199,7 +209,10 @@
 						bind:value={form.tag}
 						bind:element={tagInput}
 						options={tagChoices}
+						search={suggestTags}
 						onselect={pickTag}
+						searchingLabel="Szukam…"
+						failedLabel="Nie udało się wczytać podpowiedzi"
 						emptyLabel="Brak takiego tagu"
 						useLabel={(text) => `Dodaj tag „${text}”`}
 						countLabel={(n) => `Podpowiedzi: ${n}`}

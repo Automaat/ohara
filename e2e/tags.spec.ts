@@ -37,7 +37,8 @@ test('the title form suggests tags in use, Enter adds one and saving adds the on
 	const run = String(Date.now());
 	const horror = `Horror ${run}`;
 	const kids = `Dla dzieci ${run}`;
-	await seed(request, `Obcy ${run}`, [horror]);
+	const sigma = `ΟΣ ${run}`;
+	await seed(request, `Obcy ${run}`, [horror, sigma]);
 	const thingID = await seed(request, `Coś ${run}`);
 
 	await page.goto(`/titles/${thingID}`);
@@ -46,6 +47,9 @@ test('the title form suggests tags in use, Enter adds one and saving adds the on
 	const form = page.getByRole('dialog', { name: 'Edycja tytułu' });
 	const field = form.getByRole('combobox', { name: 'Tagi' });
 	await field.tap();
+	await field.pressSequentially(`οσ ${run}`);
+	await expect(form.getByRole('option', { name: sigma })).toBeVisible();
+	await field.fill('');
 	await field.pressSequentially(`horror ${run}`);
 	await expect(form.getByRole('option', { name: horror })).toBeVisible();
 	await field.press('Enter');
@@ -86,6 +90,9 @@ test('a tag on the title page and the sheet filter Kolekcja without asking the s
 	await expect(tile(page, alien)).toHaveCount(1);
 	await expect(tile(page, thing)).toHaveCount(1);
 	await expect(tile(page, cruise)).toHaveCount(0);
+	await expect(page.getByRole('button', { name: `Usuń: Tag: ${horror}` })).toBeVisible();
+	await page.goto(`/?tag=${encodeURIComponent(`hORROR ${run}`)}`);
+	await expect(tile(page, alien)).toHaveCount(1);
 	await expect(page.getByRole('button', { name: `Usuń: Tag: ${horror}` })).toBeVisible();
 
 	const sent: string[] = [];

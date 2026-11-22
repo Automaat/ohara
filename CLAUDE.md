@@ -243,8 +243,13 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   letter with a diacritic to its base letter ("Bjork" for "Björk") in
   names, listing titles and phrases; search queries keep the want's
   spelling. A run matches listing titles to wishlist copies (all title
-  words, the edition's format for movies, the author's surname in any case
-  for books ("Andrzeja Sapkowskiego", "Lalka Prusa"), the artist's words
+  words; a name of words of at most two letters ("M", "Up", "It") only
+  where it stands as the title: at the start, after a separator, a media
+  word or the author (in any case), and before the end, a separator, a
+  media word, a release year or the author, or anything right after the
+  author, and a lone letter before a space ("M Fritz Lang"); the
+  edition's format for movies, the author's surname in any case for
+  books ("Andrzeja Sapkowskiego", "Lalka Prusa"), the artist's words
   and a fitting medium for
   albums, where a listing naming no medium counts as a CD, minus the
   editable reject phrases a want's own name or artist does not contain),
@@ -257,7 +262,8 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   skips a want for a listing that names another title of its kind
   (wished, owned or neither) more specifically: one phrase, past media
   words and disc counts, holding every word of a want's name it carries
-  and more ("Alien: Covenant" for an "Alien" want), stores
+  and more ("Alien: Covenant" for an "Alien" want; a short name counts
+  its single letters, "X-Men" for an "X" want), stores
   each listing once in `price_observation` (`source`, `external_id`) and
   queues one `deal_alert` per listing at or below the copy's
   `max_price_cents` or its `max_market_percent` (1 to 100) of the
@@ -431,7 +437,15 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   a title's copy days of the last 90 days, and the title page's "Wartość
   dziś" draws the copy's used value as a trend once two days have one, a
   day without one or without a stored row leaving a gap; the card stays
-  with its trend when the copy's prices left the window. The summary's `gain` sums the used value
+  with its trend when the copy's prices left the window. `GET /api/valuation`'s
+  `moves` pair each copy's stored used value on the last valuation day with
+  its value on `moves_from`, the newest valuation day 30 to 37 days before
+  (one day for every copy, so a skipped run still gives a start; null and no
+  moves without one), and Wartość's "Największe zmiany" lists the 5 owned
+  copies that rose and the 5 that fell most in grosze
+  (`movers` in `src/lib/valuation.ts`), as "+20 zł · +50%" (grosze under
+  half a złoty); a copy without a used value on either day, or with the same
+  value, is in neither, and without any the section is hidden. The summary's `gain` sums the used value
   and the price paid over the copies that have both; the Wartość hero's
   difference reads only that, and names its coverage when it counts
   fewer copies than the collection. History keeps no gain.

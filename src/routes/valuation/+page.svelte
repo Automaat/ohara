@@ -19,6 +19,7 @@
 	import DiscogsCredit from '#lib/components/DiscogsCredit.svelte';
 	import ValuationHero from '#lib/components/ValuationHero.svelte';
 	import ValuationHistory from '#lib/components/ValuationHistory.svelte';
+	import ValuationMovers from '#lib/components/ValuationMovers.svelte';
 	import ValuationRows from '#lib/components/ValuationRows.svelte';
 	import {
 		boundHints,
@@ -33,6 +34,7 @@
 		lastRunSummary,
 		likelySold,
 		likelySoldLabel,
+		movers,
 		offers,
 		pageSummary,
 		realizedLine,
@@ -99,6 +101,7 @@
 		{ key: 'low_confidence', label: 'Pewność' }
 	];
 	const copies = $derived(byValue(view?.copies ?? []));
+	const moved = $derived(movers(view?.copies ?? [], view?.moves ?? []));
 	const rows = $derived(copies as Row[]);
 	const status = $derived(view?.status);
 	const valued = $derived(!!view?.last_valuation);
@@ -198,6 +201,9 @@
 	{:else if view}
 		<ValuationHero summary={view.summary} history={recent} />
 		<ValuationHistory history={recent} lastValuation={view.last_valuation} />
+		{#if view.moves_from && (moved.rising.length > 0 || moved.falling.length > 0)}
+			<ValuationMovers rising={moved.rising} falling={moved.falling} from={view.moves_from} />
+		{/if}
 
 		{#if copies.length === 0}
 			<p class="status">Brak posiadanych egzemplarzy.</p>

@@ -98,6 +98,50 @@ func split(s string) []string {
 	return out
 }
 
+// gap is what stands between two words of a listing, before its first or
+// after its last. gapJoined is punctuation that ties words together
+// ("X-Men", "M:I", "It's", an initial's "M."), gapSpace is spaces alone
+// or nothing, and gapApart sets words apart: a bracket, slash, bar or
+// double quote, or a dash, colon, semicolon or comma next to a space.
+type gap uint8
+
+const (
+	gapJoined gap = iota
+	gapSpace
+	gapApart
+)
+
+// gapOf tells what kind of gap s, the text between two words, is.
+func gapOf(s string) gap {
+	switch {
+	case strings.TrimSpace(s) == "":
+		return gapSpace
+	case strings.ContainsAny(s, "()[]{}/|\"„”“«»"):
+		return gapApart
+	case strings.ContainsAny(s, ":;,-–—") && strings.ContainsFunc(s, unicode.IsSpace):
+		return gapApart
+	}
+	return gapJoined
+}
+
+// splitGaps is split, also telling the gap before each word: gaps[i]
+// stands before words[i], and gaps[len(words)] after the last word.
+// Between the end of one word and the next stand only separators and the
+// marks split drops, and a word starts with neither, so the next word's
+// first occurrence past the previous one is where it stands.
+func splitGaps(s string) ([]string, []gap) {
+	ws := split(s)
+	gaps := make([]gap, len(ws)+1)
+	at := 0
+	for i, w := range ws {
+		start := at + strings.Index(s[at:], w)
+		gaps[i] = gapOf(s[at:start])
+		at = start + len(w)
+	}
+	gaps[len(ws)] = gapOf(s[at:])
+	return ws, gaps
+}
+
 // spelledKey is s's words in its own spelling, to tell names and queries
 // apart that differ in more than case and punctuation: "Amélie" and
 // "Amelie" are two spellings to search for.

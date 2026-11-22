@@ -152,6 +152,17 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   box set's copy. The edition form's "Zawartość zestawu" picks existing
   titles by name; the title page shows "W zestawie: <box set>", marked "na
   półce" when owned.
+- An edition records what every copy of a pressing shares: `disc_count`
+  (1 to 99) on film, TV and album editions, `limited_to` (a limited run,
+  1 to 1 000 000) on any, and `color` (trimmed, one line, at most 500
+  bytes; blank is none) on vinyl only. One on another kind or format, out
+  of range or not a whole number answers 422 on that field. `POST` and
+  `PUT /api/editions` take them, a `PUT` without one clears it, as for the
+  other edition fields; edition and title answers and `GET /api/collection`
+  items carry them, absent when unset. The edition form shows "Liczba płyt"
+  for films, TV and albums, "Kolor winylu" once the medium is vinyl and
+  "Nakład" always. The edition summary adds them after the medium, as in
+  "Winyl · 2 płyty · czerwony · nakład 500 egz."; one disc adds nothing.
 - `GET /api/export?format=csv|json` (any other `format` 422) downloads the
   whole collection as `ohara-YYYY-MM-DD.<format>` (the day in Poland),
   each owned copy with the floor, mid and ceiling `GET /api/valuation`
@@ -170,6 +181,18 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   holds one `v`, the current one, answers
   `Cache-Control: private, max-age=31536000, immutable`; any other `v`, a
   second one, none or an error answers `no-store`.
+- An album copy (an edition of a `music` title, any format) takes the
+  Goldmine grades Discogs uses, both optional: `media_grade` for the disc or
+  tape (`mint`, `near_mint`, `very_good_plus`, `very_good`, `good_plus`,
+  `good`, `fair`, `poor`) and `sleeve_grade` (the same plus `generic`,
+  `not_graded`, `no_cover`). A grade on a copy of any other kind, or an
+  unknown value, answers 422 on its field; a `PUT` without one clears it.
+  They sit beside the five-step `condition`, which stays as stored and
+  which the valuation's Discogs grade still reads: a `PUT /api/copies/{id}`
+  without `condition` keeps the stored one (null clears it), so a client
+  that only grades loses nothing. Deals and valuation ignore the grades. The album copy form adds "Stan nośnika" and "Stan
+  okładki" with the English names ("Very Good Plus (VG+)"), and the copy's
+  facts show "Gradacja: Nośnik VG+ · Okładka NM".
 
 ## Frontend
 

@@ -592,6 +592,104 @@ func TestEditionKindRules(t *testing.T) {
 	}
 }
 
+func TestEditionDetailRules(t *testing.T) {
+	a := newAPI(t)
+	movie := a.title("movie", "Miś")
+	book := a.title("book", "Lalka")
+	album := a.title("music", "Kind of Blue")
+	var show collection.Title
+	a.mustDo(http.MethodPost, "/api/titles", obj{"kind": "tv", "name": "Twin Peaks", "season": 1}, &show, http.StatusCreated)
+
+	refused := []struct {
+		name  string
+		body  obj
+		field string
+	}{
+		{"discs on a book", obj{"title_id": book, "disc_count": 2}, "disc_count"},
+		{"no discs", obj{"title_id": movie, "format": "dvd", "disc_count": 0}, "disc_count"},
+		{"too many discs", obj{"title_id": album, "format": "cd", "disc_count": 100}, "disc_count"},
+		{"half a disc", obj{"title_id": album, "format": "cd", "disc_count": 1.5}, "disc_count"},
+		{"discs past int", obj{"title_id": album, "format": "cd", "disc_count": 1e30}, "disc_count"},
+		{"run of none", obj{"title_id": book, "limited_to": 0}, "limited_to"},
+		{"run too large", obj{"title_id": movie, "format": "dvd", "limited_to": 1_000_001}, "limited_to"},
+		{"run as text", obj{"title_id": movie, "format": "dvd", "limited_to": "500"}, "limited_to"},
+		{"color on a CD", obj{"title_id": album, "format": "cd", "color": "czerwony"}, "color"},
+		{"color on a film", obj{"title_id": movie, "format": "bluray", "color": "czerwony"}, "color"},
+		{"color on a book", obj{"title_id": book, "color": "czerwony"}, "color"},
+		{"color too long", obj{"title_id": album, "format": "vinyl", "color": strings.Repeat("x", 501)}, "color"},
+		{"color on two lines", obj{"title_id": album, "format": "vinyl", "color": "czerwony\nbiały"}, "color"},
+		{"color as number", obj{"title_id": album, "format": "vinyl", "color": 5}, "color"},
+	}
+	for _, tc := range refused {
+		t.Log(tc.name)
+		a.fails(http.MethodPost, "/api/editions", tc.body, http.StatusUnprocessableEntity, tc.field)
+	}
+
+	var vinyl collection.Edition
+	a.mustDo(http.MethodPost, "/api/editions", obj{
+		"title_id": album, "format": "vinyl", "disc_count": 2, "limited_to": 500, "color": "  czerwony ",
+	}, &vinyl, http.StatusCreated)
+	if vinyl.DiscCount == nil || *vinyl.DiscCount != 2 || vinyl.LimitedTo == nil || *vinyl.LimitedTo != 500 ||
+		vinyl.Color == nil || *vinyl.Color != "czerwony" {
+		t.Fatalf("vinyl edition = %+v", vinyl)
+	}
+	a.copyOf(obj{"edition_id": vinyl.ID, "status": "owned"})
+	a.edition(obj{"title_id": book, "limited_to": 1_000_000})
+	var audiobook collection.Edition
+	a.mustDo(http.MethodPost, "/api/editions", obj{"title_id": book, "format": "audiobook", "limited_to": 300}, &audiobook, http.StatusCreated)
+	if deref(audiobook.Format) != "audiobook" || audiobook.LimitedTo == nil || *audiobook.LimitedTo != 300 {
+		t.Fatalf("limited audiobook edition = %+v", audiobook)
+	}
+	a.fails(http.MethodPost, "/api/editions", obj{"title_id": book, "format": "audiobook", "disc_count": 2}, http.StatusUnprocessableEntity, "disc_count")
+	a.fails(http.MethodPost, "/api/editions", obj{"title_id": book, "format": "audiobook", "color": "czerwony"}, http.StatusUnprocessableEntity, "color")
+	a.edition(obj{"title_id": movie, "format": "uhd", "disc_count": 99, "packaging": []string{"steelbook"}})
+	a.edition(obj{"title_id": show.ID, "format": "bluray", "disc_count": 3})
+	a.edition(obj{"title_id": album, "format": "cd", "color": "  "})
+
+	var got collection.EditionDetail
+	a.mustDo(http.MethodGet, fmt.Sprintf("/api/editions/%d", vinyl.ID), nil, &got, http.StatusOK)
+	if got.DiscCount == nil || *got.DiscCount != 2 || got.LimitedTo == nil || *got.LimitedTo != 500 ||
+		got.Color == nil || *got.Color != "czerwony" {
+		t.Fatalf("GET edition = %+v", got.Edition)
+	}
+	var detail collection.TitleDetail
+	a.mustDo(http.MethodGet, fmt.Sprintf("/api/titles/%d", album), nil, &detail, http.StatusOK)
+	if len(detail.Editions) != 2 {
+		t.Fatalf("album editions = %+v", detail.Editions)
+	}
+	for _, e := range detail.Editions {
+		switch e.ID {
+		case vinyl.ID:
+			if e.DiscCount == nil || *e.DiscCount != 2 || e.LimitedTo == nil || *e.LimitedTo != 500 ||
+				e.Color == nil || *e.Color != "czerwony" {
+				t.Fatalf("title's vinyl edition = %+v", e.Edition)
+			}
+		default:
+			if e.DiscCount != nil || e.LimitedTo != nil || e.Color != nil {
+				t.Fatalf("title's CD edition = %+v", e.Edition)
+			}
+		}
+	}
+	var view collection.CollectionView
+	a.mustDo(http.MethodGet, "/api/collection?kind=music", nil, &view, http.StatusOK)
+	if len(view.Items) != 1 {
+		t.Fatalf("music view = %+v", view.Items)
+	}
+	if it := view.Items[0]; it.DiscCount == nil || *it.DiscCount != 2 || it.LimitedTo == nil ||
+		*it.LimitedTo != 500 || it.Color == nil || *it.Color != "czerwony" {
+		t.Fatalf("collection item = %+v", it)
+	}
+
+	a.fails(http.MethodPut, fmt.Sprintf("/api/editions/%d", vinyl.ID), obj{
+		"title_id": album, "format": "cd", "color": "czerwony",
+	}, http.StatusUnprocessableEntity, "color")
+	var cleared collection.Edition
+	a.mustDo(http.MethodPut, fmt.Sprintf("/api/editions/%d", vinyl.ID), obj{"title_id": album, "format": "cd"}, &cleared, http.StatusOK)
+	if cleared.DiscCount != nil || cleared.LimitedTo != nil || cleared.Color != nil {
+		t.Fatalf("edition after a PUT without details = %+v", cleared)
+	}
+}
+
 func TestBookAudiobookFormat(t *testing.T) {
 	a := newAPI(t)
 	book := a.title("book", "Ostatnie życzenie")
@@ -664,6 +762,151 @@ func TestMusicEdition(t *testing.T) {
 	a.mustDo(http.MethodGet, "/api/collection?kind=music&format=vinyl", nil, &view, http.StatusOK)
 	if len(view.Items) != 1 || view.Items[0].Kind != "music" {
 		t.Fatalf("music view = %+v", view.Items)
+	}
+}
+
+func TestMusicCopyGrades(t *testing.T) {
+	a := newAPI(t)
+	album := a.title("music", "Blue Train")
+	vinyl := a.edition(obj{"title_id": album, "format": "vinyl"})
+	film := a.edition(obj{"title_id": a.title("movie", "Alien"), "format": "dvd"})
+	book := a.edition(obj{"title_id": a.title("book", "Lalka")})
+
+	for _, tt := range []struct {
+		name  string
+		body  obj
+		field string
+	}{
+		{"film media grade", obj{"edition_id": film, "status": "owned", "media_grade": "mint"}, "media_grade"},
+		{"film sleeve grade", obj{"edition_id": film, "status": "owned", "sleeve_grade": "no_cover"}, "sleeve_grade"},
+		{"book media grade", obj{"edition_id": book, "status": "wishlist", "media_grade": "good"}, "media_grade"},
+		{"unknown media grade", obj{"edition_id": vinyl, "status": "owned", "media_grade": "VG+"}, "media_grade"},
+		{"sleeve-only grade on media", obj{"edition_id": vinyl, "status": "owned", "media_grade": "generic"}, "media_grade"},
+		{"unknown sleeve grade", obj{"edition_id": vinyl, "status": "owned", "sleeve_grade": "excellent"}, "sleeve_grade"},
+		{"missing edition", obj{"edition_id": 999999, "status": "owned", "media_grade": "mint"}, "edition_id"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sub := &api{t: t, url: a.url}
+			sub.fails(http.MethodPost, "/api/copies", tt.body, http.StatusUnprocessableEntity, tt.field)
+		})
+	}
+
+	// A film copy without grades saves as before.
+	a.copyOf(obj{"edition_id": film, "status": "owned", "media_grade": "", "sleeve_grade": nil})
+
+	// An album copy keeps its condition when a later save adds grades.
+	var c collection.Copy
+	a.mustDo(http.MethodPost, "/api/copies", obj{"edition_id": vinyl, "status": "owned", "condition": "good"},
+		&c, http.StatusCreated)
+	if c.MediaGrade != nil || c.SleeveGrade != nil {
+		t.Fatalf("new copy grades = %v, %v", c.MediaGrade, c.SleeveGrade)
+	}
+	a.mustDo(http.MethodPut, fmt.Sprintf("/api/copies/%d", c.ID), obj{
+		"edition_id": vinyl, "status": "owned", "condition": "good",
+		"media_grade": " very_good_plus ", "sleeve_grade": "good_plus",
+	}, &c, http.StatusOK)
+	if c.Condition == nil || *c.Condition != "good" {
+		t.Fatalf("condition after grading = %v", c.Condition)
+	}
+	wantGrades := func(where string, media, sleeve *string) {
+		t.Helper()
+		if media == nil || *media != "very_good_plus" || sleeve == nil || *sleeve != "good_plus" {
+			t.Fatalf("%s grades = %v, %v", where, media, sleeve)
+		}
+	}
+	wantGrades("PUT answer", c.MediaGrade, c.SleeveGrade)
+
+	var detail collection.CopyDetail
+	a.mustDo(http.MethodGet, fmt.Sprintf("/api/copies/%d", c.ID), nil, &detail, http.StatusOK)
+	wantGrades("GET /api/copies/{id}", detail.MediaGrade, detail.SleeveGrade)
+	if detail.Condition == nil || *detail.Condition != "good" {
+		t.Fatalf("stored condition = %v", detail.Condition)
+	}
+
+	var title collection.TitleDetail
+	a.mustDo(http.MethodGet, fmt.Sprintf("/api/titles/%d", album), nil, &title, http.StatusOK)
+	if len(title.Editions) != 1 || len(title.Editions[0].Copies) != 1 {
+		t.Fatalf("title editions = %+v", title.Editions)
+	}
+	got := title.Editions[0].Copies[0]
+	wantGrades("GET /api/titles/{id}", got.MediaGrade, got.SleeveGrade)
+
+	var view collection.CollectionView
+	a.mustDo(http.MethodGet, "/api/collection?kind=music", nil, &view, http.StatusOK)
+	if len(view.Items) != 1 {
+		t.Fatalf("music view = %+v", view.Items)
+	}
+	wantGrades("GET /api/collection", view.Items[0].MediaGrade, view.Items[0].SleeveGrade)
+
+	// Every sleeve-only grade fits the sleeve; a PUT without grades clears them.
+	for _, grade := range []string{"generic", "not_graded", "no_cover"} {
+		var regraded collection.Copy
+		a.mustDo(http.MethodPut, fmt.Sprintf("/api/copies/%d", c.ID), obj{
+			"edition_id": vinyl, "status": "owned", "media_grade": "near_mint", "sleeve_grade": grade,
+		}, &regraded, http.StatusOK)
+		if regraded.SleeveGrade == nil || *regraded.SleeveGrade != grade {
+			t.Fatalf("sleeve grade = %v, want %s", regraded.SleeveGrade, grade)
+		}
+	}
+	var cleared collection.Copy
+	a.mustDo(http.MethodPut, fmt.Sprintf("/api/copies/%d", c.ID), obj{"edition_id": vinyl, "status": "owned"},
+		&cleared, http.StatusOK)
+	if cleared.MediaGrade != nil || cleared.SleeveGrade != nil {
+		t.Fatalf("cleared grades = %v, %v", cleared.MediaGrade, cleared.SleeveGrade)
+	}
+
+	// A PUT that leaves condition out keeps the stored one; a null clears it.
+	a.mustDo(http.MethodPut, fmt.Sprintf("/api/copies/%d", c.ID), obj{"edition_id": vinyl, "status": "owned", "condition": "fair"},
+		nil, http.StatusOK)
+	var graded collection.Copy
+	a.mustDo(http.MethodPut, fmt.Sprintf("/api/copies/%d", c.ID), obj{
+		"edition_id": vinyl, "status": "owned", "media_grade": "good", "sleeve_grade": "fair",
+	}, &graded, http.StatusOK)
+	if graded.Condition == nil || *graded.Condition != "fair" || graded.MediaGrade == nil || *graded.MediaGrade != "good" {
+		t.Fatalf("grade-only PUT = condition %v, media grade %v", graded.Condition, graded.MediaGrade)
+	}
+	var ungraded collection.Copy
+	a.mustDo(http.MethodPut, fmt.Sprintf("/api/copies/%d", c.ID), obj{"edition_id": vinyl, "status": "owned", "condition": nil},
+		&ungraded, http.StatusOK)
+	if ungraded.Condition != nil {
+		t.Fatalf("condition after a null = %v", ungraded.Condition)
+	}
+
+	// A wrongly typed grade or condition names its field.
+	for _, field := range []string{"media_grade", "sleeve_grade", "condition"} {
+		a.fails(http.MethodPost, "/api/copies", obj{"edition_id": vinyl, "status": "owned", field: []string{"mint"}},
+			http.StatusUnprocessableEntity, field)
+		a.fails(http.MethodPut, fmt.Sprintf("/api/copies/%d", c.ID), obj{"edition_id": vinyl, "status": "owned", field: 1},
+			http.StatusUnprocessableEntity, field)
+	}
+
+	// A repeated condition key cannot hide a wrongly typed first value.
+	a.fails(http.MethodPut, fmt.Sprintf("/api/copies/%d", c.ID),
+		[]byte(fmt.Sprintf(`{"edition_id": %d, "status": "owned", "condition": 1, "condition": "good"}`, vinyl)),
+		http.StatusUnprocessableEntity, "condition")
+
+	// Moving a graded copy to a film edition is refused.
+	a.fails(http.MethodPut, fmt.Sprintf("/api/copies/%d", c.ID), obj{
+		"edition_id": film, "status": "owned", "media_grade": "mint",
+	}, http.StatusUnprocessableEntity, "media_grade")
+}
+
+func TestGradedCopyReplayOutlivesItsEdition(t *testing.T) {
+	a := newAPI(t)
+	album := a.title("music", "Giant Steps")
+	first := a.edition(obj{"title_id": album, "format": "cd"})
+	second := a.edition(obj{"title_id": album, "format": "vinyl"})
+	add := obj{"edition_id": first, "status": "owned", "media_grade": "mint", "request_key": "grades-replay"}
+	var c collection.Copy
+	a.mustDo(http.MethodPost, "/api/copies", add, &c, http.StatusCreated)
+	a.mustDo(http.MethodPut, fmt.Sprintf("/api/copies/%d", c.ID), obj{"edition_id": second, "status": "owned", "media_grade": "mint"},
+		nil, http.StatusOK)
+	a.mustDo(http.MethodDelete, fmt.Sprintf("/api/editions/%d", first), nil, nil, http.StatusNoContent)
+
+	var replay collection.Copy
+	a.mustDo(http.MethodPost, "/api/copies", add, &replay, http.StatusOK)
+	if replay.ID != c.ID || replay.EditionID != second {
+		t.Fatalf("replay = copy %d on edition %d, want copy %d on edition %d", replay.ID, replay.EditionID, c.ID, second)
 	}
 }
 

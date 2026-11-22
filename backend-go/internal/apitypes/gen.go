@@ -48,6 +48,9 @@ type API struct {
 // maxLine is prettier's printWidth in .prettierrc.
 const maxLine = 100
 
+// tabWidth is the width prettier counts for a tab: its default tabWidth.
+const tabWidth = 2
+
 var (
 	marshalerType     = reflect.TypeFor[json.Marshaler]()
 	textMarshalerType = reflect.TypeFor[encoding.TextMarshaler]()
@@ -128,12 +131,18 @@ func writeUnion(b *strings.Builder, name string, values []string) {
 	for i, v := range values {
 		quoted[i] = quote(v)
 	}
-	line := "export type " + name + " = " + strings.Join(quoted, " | ") + ";"
+	joined := strings.Join(quoted, " | ") + ";"
+	line := "export type " + name + " = " + joined
 	if len(line) <= maxLine {
 		b.WriteString(line + "\n")
 		return
 	}
 	b.WriteString("export type " + name + " =\n")
+	if tabWidth+len(joined) <= maxLine {
+		// Prettier keeps a union on one indented line when it fits there.
+		b.WriteString("\t" + joined + "\n")
+		return
+	}
 	for i, q := range quoted {
 		b.WriteString("\t| " + q)
 		if i == len(quoted)-1 {

@@ -131,29 +131,31 @@ const contentsText = `(SELECT string_agg(concat_ws(' ', ct.name, ct.original_tit
 	WHERE ec.edition_id = e.id)`
 
 const editionColumns = `e.id, e.title_id, e.barcode, e.label, e.publisher, e.year, e.format,
-	e.pl_subtitles, e.pl_voiceover, e.packaging, e.binding, e.discogs_release_id, e.notes, e.cover_url,
-	e.created_at, e.updated_at, (SELECT count(*) FROM copy c WHERE c.edition_id = e.id), ` +
+	e.pl_subtitles, e.pl_voiceover, e.packaging, e.binding, e.discogs_release_id, e.disc_count,
+	e.limited_to, e.color, e.notes, e.cover_url, e.created_at, e.updated_at, (SELECT count(*) FROM copy c WHERE c.edition_id = e.id), ` +
 	editionCoverOverrideURL + `, ` + editionContents
 
 func scanEdition(row pgx.Row) (Edition, error) {
 	var e Edition
 	err := row.Scan(&e.ID, &e.TitleID, &e.Barcode, &e.Label, &e.Publisher, &e.Year, &e.Format,
-		&e.PLSubtitles, &e.PLVoiceover, &e.Packaging, &e.Binding, &e.DiscogsReleaseID, &e.Notes, &e.CoverURL,
-		&e.CreatedAt, &e.UpdatedAt, &e.CopyCount, &e.CoverOverrideURL, &e.Contents)
+		&e.PLSubtitles, &e.PLVoiceover, &e.Packaging, &e.Binding, &e.DiscogsReleaseID, &e.DiscCount,
+		&e.LimitedTo, &e.Color, &e.Notes, &e.CoverURL, &e.CreatedAt, &e.UpdatedAt, &e.CopyCount, &e.CoverOverrideURL, &e.Contents)
 	e.EditionInput.Contents = nil
 	return e, err
 }
 
 const copyColumns = `c.id, c.edition_id, c.status, c.price_cents, c.purchased_on, c.shop,
-	c.acquired_as, c.condition, c.notes, c.max_price_cents, c.max_market_percent, c.sold_on,
-	c.sale_price_cents, c.location, c.expected_on, c.exact_edition, c.created_at, c.updated_at`
+	c.acquired_as, c.condition, c.media_grade, c.sleeve_grade, c.notes, c.max_price_cents,
+	c.max_market_percent, c.sold_on, c.sale_price_cents, c.location, c.expected_on, c.exact_edition,
+	c.created_at, c.updated_at`
 
 func scanCopy(row pgx.Row) (Copy, error) {
 	var c Copy
 	var purchased, sold, expected *time.Time
 	err := row.Scan(&c.ID, &c.EditionID, &c.Status, &c.PriceCents, &purchased, &c.Shop,
-		&c.AcquiredAs, &c.Condition, &c.Notes, &c.MaxPriceCents, &c.MaxMarketPercent, &sold,
-		&c.SalePriceCents, &c.Location, &expected, &c.ExactEdition, &c.CreatedAt, &c.UpdatedAt)
+		&c.AcquiredAs, &c.Condition, &c.MediaGrade, &c.SleeveGrade, &c.Notes, &c.MaxPriceCents,
+		&c.MaxMarketPercent, &sold, &c.SalePriceCents, &c.Location, &expected, &c.ExactEdition,
+		&c.CreatedAt, &c.UpdatedAt)
 	c.PurchasedOn = dateOf(purchased)
 	c.SoldOn = dateOf(sold)
 	c.ExpectedOn = dateOf(expected)
@@ -576,12 +578,12 @@ func (s *Store) CreateEdition(ctx context.Context, in *EditionInput) (Edition, b
 		var id int64
 		err := tx.QueryRow(ctx, `INSERT INTO edition (title_id, barcode, label, publisher, year,
 			format, pl_subtitles, pl_voiceover, packaging, binding, discogs_release_id, notes, cover_url,
-			request_key)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NULLIF($13, ''), $14)
+			request_key, disc_count, limited_to, color)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NULLIF($13, ''), $14, $15, $16, $17)
 			ON CONFLICT (request_key) DO NOTHING RETURNING id`,
 			in.TitleID, in.Barcode, in.Label, in.Publisher, in.Year, in.Format, in.PLSubtitles,
 			in.PLVoiceover, in.Packaging, in.Binding, in.DiscogsReleaseID, in.Notes, in.CoverURL,
-			in.RequestKey).Scan(&id)
+			in.RequestKey, in.DiscCount, in.LimitedTo, in.Color).Scan(&id)
 		if errors.Is(err, pgx.ErrNoRows) && in.RequestKey != nil {
 			created = false
 			err = tx.QueryRow(ctx, `SELECT id FROM edition WHERE request_key = $1`, *in.RequestKey).Scan(&id)
@@ -622,10 +624,12 @@ func (s *Store) UpdateEdition(ctx context.Context, id int64, in *EditionInput) (
 		tag, err := tx.Exec(ctx, `UPDATE edition SET title_id = $2, barcode = $3, label = $4,
 			publisher = $5, year = $6, format = $7, pl_subtitles = $8, pl_voiceover = $9,
 			packaging = $10, binding = $11, discogs_release_id = $12, notes = $13,
-			cover_url = NULLIF(COALESCE($14, cover_url), ''), updated_at = now(), edited_at = now()
+			cover_url = NULLIF(COALESCE($14, cover_url), ''), disc_count = $15, limited_to = $16,
+			color = $17, updated_at = now(), edited_at = now()
 			WHERE id = $1`,
 			id, in.TitleID, in.Barcode, in.Label, in.Publisher, in.Year, in.Format, in.PLSubtitles,
-			in.PLVoiceover, in.Packaging, in.Binding, in.DiscogsReleaseID, in.Notes, in.CoverURL)
+			in.PLVoiceover, in.Packaging, in.Binding, in.DiscogsReleaseID, in.Notes, in.CoverURL,
+			in.DiscCount, in.LimitedTo, in.Color)
 		if err != nil {
 			return mapErr(err, ErrEditionNotFound, "update edition")
 		}
@@ -872,14 +876,31 @@ func (s *Store) CreateCopy(ctx context.Context, in *CopyInput) (Copy, bool, erro
 			return err
 		}
 		var id int64
+		if in.RequestKey != nil {
+			// A replay answers with the copy its key made, whatever became
+			// of the edition it named: the key's lock keeps the row stable.
+			err := tx.QueryRow(ctx, `SELECT id FROM copy WHERE request_key = $1`, *in.RequestKey).Scan(&id)
+			switch {
+			case err == nil:
+				created = false
+				c, err = getCopy(ctx, tx, id)
+				return err
+			case !errors.Is(err, pgx.ErrNoRows):
+				return fmt.Errorf("replay copy: %w", err)
+			}
+		}
+		if err := checkGradeKind(ctx, tx, in); err != nil {
+			return err
+		}
 		err := tx.QueryRow(ctx, `INSERT INTO copy (edition_id, status, price_cents, purchased_on,
-			shop, acquired_as, condition, notes, max_price_cents, max_market_percent, sold_on,
-			sale_price_cents, location, expected_on, exact_edition, request_key)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+			shop, acquired_as, condition, media_grade, sleeve_grade, notes, max_price_cents,
+			max_market_percent, sold_on, sale_price_cents, location, expected_on, exact_edition, request_key)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 			ON CONFLICT (request_key) DO NOTHING RETURNING id`,
 			in.EditionID, in.Status, in.PriceCents, timeOf(in.PurchasedOn), in.Shop, in.AcquiredAs,
-			in.Condition, in.Notes, in.MaxPriceCents, in.MaxMarketPercent, timeOf(in.SoldOn),
-			in.SalePriceCents, in.Location, timeOf(in.ExpectedOn), in.ExactEdition, in.RequestKey).Scan(&id)
+			in.Condition, in.MediaGrade, in.SleeveGrade, in.Notes, in.MaxPriceCents, in.MaxMarketPercent,
+			timeOf(in.SoldOn), in.SalePriceCents, in.Location, timeOf(in.ExpectedOn), in.ExactEdition,
+			in.RequestKey).Scan(&id)
 		switch {
 		case errors.Is(err, pgx.ErrNoRows) && in.RequestKey != nil:
 			created = false
@@ -901,6 +922,26 @@ func (s *Store) CreateCopy(ctx context.Context, in *CopyInput) (Copy, bool, erro
 	return c, created, nil
 }
 
+// checkGradeKind refuses Goldmine grades on a copy whose edition is not an
+// album's; ErrEditionNotFound when the edition does not exist. An edition's
+// kind cannot change under the copy: a title with editions keeps its kind,
+// and an album edition's format fits no other kind's title.
+func checkGradeKind(ctx context.Context, tx pgx.Tx, in *CopyInput) error {
+	if in.MediaGrade == nil && in.SleeveGrade == nil {
+		return nil
+	}
+	var kind string
+	err := tx.QueryRow(ctx, `SELECT t.kind FROM edition e JOIN title t ON t.id = e.title_id
+		WHERE e.id = $1`, in.EditionID).Scan(&kind)
+	if err != nil {
+		return mapErr(err, ErrEditionNotFound, "copy edition kind")
+	}
+	if fe := in.CheckGradeKind(kind); fe != nil {
+		return fe
+	}
+	return nil
+}
+
 // UpdateCopy replaces a copy and returns it as this update left it, so an
 // answer never shows what a concurrent update wrote. A lent copy stays owned
 // (ErrLentCopyStays) until it comes back: only owned copies are lent.
@@ -912,14 +953,20 @@ func (s *Store) UpdateCopy(ctx context.Context, id int64, in *CopyInput) (Copy, 
 				return err
 			}
 		}
+		if err := checkGradeKind(ctx, tx, in); err != nil {
+			return err
+		}
 		var err error
 		c, err = scanCopy(tx.QueryRow(ctx, `UPDATE copy c SET edition_id = $2, status = $3, price_cents = $4,
-			purchased_on = $5, shop = $6, acquired_as = $7, condition = $8, notes = $9,
-			max_price_cents = $10, max_market_percent = $11, sold_on = $12, sale_price_cents = $13,
-			location = $14, expected_on = $15, exact_edition = $16, updated_at = now() WHERE c.id = $1 RETURNING `+copyColumns,
+			purchased_on = $5, shop = $6, acquired_as = $7,
+			condition = CASE WHEN $19 THEN c.condition ELSE $8 END, media_grade = $9,
+			sleeve_grade = $10, notes = $11, max_price_cents = $12, max_market_percent = $13, sold_on = $14,
+			sale_price_cents = $15, location = $16, expected_on = $17, exact_edition = $18,
+			updated_at = now() WHERE c.id = $1 RETURNING `+copyColumns,
 			id, in.EditionID, in.Status, in.PriceCents, timeOf(in.PurchasedOn), in.Shop, in.AcquiredAs,
-			in.Condition, in.Notes, in.MaxPriceCents, in.MaxMarketPercent, timeOf(in.SoldOn),
-			in.SalePriceCents, in.Location, timeOf(in.ExpectedOn), in.ExactEdition))
+			in.Condition, in.MediaGrade, in.SleeveGrade, in.Notes, in.MaxPriceCents, in.MaxMarketPercent,
+			timeOf(in.SoldOn), in.SalePriceCents, in.Location, timeOf(in.ExpectedOn), in.ExactEdition,
+			in.KeepCondition))
 		if isFKViolation(err, "copy_edition_id_fkey") {
 			return ErrEditionNotFound
 		}
@@ -1266,6 +1313,8 @@ type Item struct {
 	Shop          string  `json:"shop"`
 	AcquiredAs    *string `json:"acquired_as" ts:"AcquiredAs"`
 	Condition     *string `json:"condition" ts:"Condition"`
+	MediaGrade    *string `json:"media_grade,omitempty" ts:"MediaGrade,null"`
+	SleeveGrade   *string `json:"sleeve_grade,omitempty" ts:"SleeveGrade,null"`
 	// SoldOn and SalePriceCents are a sold copy's sale, ExpectedOn the day an
 	// ordered copy should arrive.
 	SoldOn         *Date   `json:"sold_on,omitempty" ts:",null"`
@@ -1277,12 +1326,17 @@ type Item struct {
 	Label          string  `json:"label"`
 	Format         *string `json:"format" ts:"Format"`
 	Binding        *string `json:"binding" ts:"Binding"`
-	TitleID        int64   `json:"title_id"`
-	Kind           string  `json:"kind" ts:"Kind"`
-	Name           string  `json:"name"`
-	OriginalTitle  *string `json:"original_title"`
-	PolishTitle    *string `json:"polish_title"`
-	Year           *int    `json:"year"`
+	// DiscCount, LimitedTo and Color are the edition's special edition
+	// details, absent when not given.
+	DiscCount     *int    `json:"disc_count,omitempty"`
+	LimitedTo     *int    `json:"limited_to,omitempty"`
+	Color         *string `json:"color,omitempty"`
+	TitleID       int64   `json:"title_id"`
+	Kind          string  `json:"kind" ts:"Kind"`
+	Name          string  `json:"name"`
+	OriginalTitle *string `json:"original_title"`
+	PolishTitle   *string `json:"polish_title"`
+	Year          *int    `json:"year"`
 	// Season is a TV title's season, absent for other kinds.
 	Season   *int     `json:"season,omitempty"`
 	CoverURL *string  `json:"cover_url,omitempty"`
@@ -1308,8 +1362,8 @@ func scanItem(row pgx.Row) (Item, error) {
 	var createdAt time.Time
 	var purchased, sold, due, expected, finishedOn *time.Time
 	err := row.Scan(&it.CopyID, &createdAt, &it.Status, &it.PriceCents, &it.MaxPriceCents, &purchased, &it.Shop,
-		&it.AcquiredAs, &it.Condition, &sold, &it.SalePriceCents, &expected, &it.Location, &it.EditionID, &it.Barcode, &it.Label, &it.Format, &it.Binding,
-		&it.TitleID, &it.Kind, &it.Name, &it.OriginalTitle, &it.PolishTitle, &it.Year, &it.Season, &it.CoverURL, &it.Authors,
+		&it.AcquiredAs, &it.Condition, &it.MediaGrade, &it.SleeveGrade, &sold, &it.SalePriceCents, &expected, &it.Location, &it.EditionID, &it.Barcode, &it.Label, &it.Format, &it.Binding,
+		&it.DiscCount, &it.LimitedTo, &it.Color, &it.TitleID, &it.Kind, &it.Name, &it.OriginalTitle, &it.PolishTitle, &it.Year, &it.Season, &it.CoverURL, &it.Authors,
 		&it.Rating, &it.LoanBorrower, &due,
 		&it.Tags, &it.Finished, &finishedOn, &it.Contents)
 	it.FinishedOn = dateOf(finishedOn)
@@ -1326,8 +1380,9 @@ func scanItem(row pgx.Row) (Item, error) {
 // filter them itself.
 func (s *Store) Collection(ctx context.Context, f Filter) ([]Item, error) {
 	rows, err := s.pool.Query(ctx, `SELECT c.id, c.created_at, c.status, c.price_cents, c.max_price_cents,
-			c.purchased_on, c.shop, c.acquired_as, c.condition, c.sold_on, c.sale_price_cents, c.expected_on,
-			c.location, e.id, e.barcode, e.label, e.format, e.binding,
+			c.purchased_on, c.shop, c.acquired_as, c.condition, c.media_grade, c.sleeve_grade,
+			c.sold_on, c.sale_price_cents, c.expected_on,
+			c.location, e.id, e.barcode, e.label, e.format, e.binding, e.disc_count, e.limited_to, e.color,
 			t.id, t.kind, t.name, t.original_title, t.polish_title, t.year, t.season,
 			`+CoverURL+`, t.authors, t.rating, l.borrower, l.due_on, `+titleTags+`, t.finished, t.finished_on,
 			`+editionContents+`

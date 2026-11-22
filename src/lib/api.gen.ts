@@ -23,6 +23,22 @@ export type AcquiredAs = 'new' | 'used';
 
 export type Condition = 'mint' | 'very_good' | 'good' | 'fair' | 'poor';
 
+export type MediaGrade =
+	'mint' | 'near_mint' | 'very_good_plus' | 'very_good' | 'good_plus' | 'good' | 'fair' | 'poor';
+
+export type SleeveGrade =
+	| 'mint'
+	| 'near_mint'
+	| 'very_good_plus'
+	| 'very_good'
+	| 'good_plus'
+	| 'good'
+	| 'fair'
+	| 'poor'
+	| 'generic'
+	| 'not_graded'
+	| 'no_cover';
+
 export type VolumeState = 'owned' | 'ordered' | 'wishlist' | 'none';
 
 export type QueueReason = 'not_found' | 'lookup_failed';
@@ -108,6 +124,9 @@ export type EditionPayload = {
 	packaging: Packaging[];
 	binding: Binding | null;
 	discogs_release_id: number | null;
+	disc_count?: number | null;
+	limited_to?: number | null;
+	color?: string | null;
 	notes: string;
 	cover_url?: string;
 	contents?: number[];
@@ -137,6 +156,9 @@ export type Edition = {
 	packaging: Packaging[];
 	binding: Binding | null;
 	discogs_release_id: number | null;
+	disc_count?: number | null;
+	limited_to?: number | null;
+	color?: string | null;
 	notes: string;
 	cover_url?: string;
 	request_key?: string;
@@ -155,6 +177,8 @@ export type CopyPayload = {
 	shop: string;
 	acquired_as: AcquiredAs | null;
 	condition: Condition | null;
+	media_grade?: MediaGrade | null;
+	sleeve_grade?: SleeveGrade | null;
 	notes: string;
 	max_price_cents: number | null;
 	max_market_percent?: number | null;
@@ -175,6 +199,8 @@ export type Copy = {
 	shop: string;
 	acquired_as: AcquiredAs | null;
 	condition: Condition | null;
+	media_grade?: MediaGrade | null;
+	sleeve_grade?: SleeveGrade | null;
 	notes: string;
 	max_price_cents: number | null;
 	max_market_percent?: number | null;
@@ -201,6 +227,9 @@ export type EditionWithCopies = {
 	packaging: Packaging[];
 	binding: Binding | null;
 	discogs_release_id: number | null;
+	disc_count?: number | null;
+	limited_to?: number | null;
+	color?: string | null;
 	notes: string;
 	cover_url?: string;
 	request_key?: string;
@@ -263,6 +292,9 @@ export type EditionDetail = {
 	packaging: Packaging[];
 	binding: Binding | null;
 	discogs_release_id: number | null;
+	disc_count?: number | null;
+	limited_to?: number | null;
+	color?: string | null;
 	notes: string;
 	cover_url?: string;
 	request_key?: string;
@@ -310,6 +342,8 @@ export type CopyDetail = {
 	shop: string;
 	acquired_as: AcquiredAs | null;
 	condition: Condition | null;
+	media_grade?: MediaGrade | null;
+	sleeve_grade?: SleeveGrade | null;
 	notes: string;
 	max_price_cents: number | null;
 	max_market_percent?: number | null;
@@ -336,6 +370,8 @@ export type CollectionItem = {
 	shop: string;
 	acquired_as: AcquiredAs | null;
 	condition: Condition | null;
+	media_grade?: MediaGrade | null;
+	sleeve_grade?: SleeveGrade | null;
 	sold_on?: string | null;
 	sale_price_cents?: number | null;
 	expected_on?: string | null;
@@ -345,6 +381,9 @@ export type CollectionItem = {
 	label: string;
 	format: Format | null;
 	binding: Binding | null;
+	disc_count?: number;
+	limited_to?: number;
+	color?: string;
 	title_id: number;
 	kind: Kind;
 	name: string;

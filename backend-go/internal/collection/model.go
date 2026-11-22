@@ -53,6 +53,10 @@ const (
 	MaxRating = 10
 	// MaxSeason bounds a TV title's season number.
 	MaxSeason = 9999
+	// MaxDiscCount bounds the discs one film, TV or album edition holds.
+	MaxDiscCount = 99
+	// MaxLimitedTo bounds the size of a limited edition's run.
+	MaxLimitedTo = 1_000_000
 
 	// MaxSeriesNumber bounds a title's number in its series and a series'
 	// total of volumes.
@@ -79,6 +83,12 @@ var (
 	statuses     = []string{StatusOwned, StatusWishlist, StatusSold, StatusOrdered}
 	acquiredAs   = []string{"new", "used"}
 	conditions   = []string{"mint", "very_good", "good", "fair", "poor"}
+	// mediaGrades is the Goldmine scale Discogs grades records on, best
+	// first: Mint (M), Near Mint (NM or M-), Very Good Plus (VG+), Very
+	// Good (VG), Good Plus (G+), Good (G), Fair (F), Poor (P).
+	mediaGrades = []string{"mint", "near_mint", "very_good_plus", "very_good", "good_plus", "good", "fair", "poor"}
+	// sleeveGrades adds the sleeve-only Discogs grades to the scale.
+	sleeveGrades = slices.Concat(mediaGrades, []string{"generic", "not_graded", "no_cover"})
 	volumeStates = []string{VolumeOwned, VolumeOrdered, VolumeWishlist, VolumeNone}
 )
 
@@ -97,6 +107,8 @@ func Enums() map[string][]string {
 		"CopyStatus":  slices.Clone(statuses),
 		"AcquiredAs":  slices.Clone(acquiredAs),
 		"Condition":   slices.Clone(conditions),
+		"MediaGrade":  slices.Clone(mediaGrades),
+		"SleeveGrade": slices.Clone(sleeveGrades),
 		"VolumeState": slices.Clone(volumeStates),
 	}
 }
@@ -221,9 +233,10 @@ type Title struct {
 
 // EditionInput is the body of POST and PUT /api/editions. Movie and TV
 // fields: pl_subtitles, pl_voiceover, packaging. Book-only: binding.
-// Music-only: discogs_release_id. Format is required for movies and TV
-// series (dvd, bluray, uhd) and music (cd, vinyl, cassette); a book's is
-// audiobook or absent for print, and only print takes a binding.
+// Music-only: discogs_release_id. Movie, TV and music: disc_count. Vinyl
+// only: color. Every kind: limited_to. Format is required for movies and
+// TV series (dvd, bluray, uhd) and music (cd, vinyl, cassette); a book's
+// is audiobook or absent for print, and only print takes a binding.
 type EditionInput struct {
 	TitleID     int64    `json:"title_id"`
 	Barcode     *string  `json:"barcode"`
@@ -237,9 +250,18 @@ type EditionInput struct {
 	Binding     *string  `json:"binding" ts:"Binding"`
 	// DiscogsReleaseID is the Discogs release an album edition is; the
 	// valuation prices it on the Discogs marketplace.
-	DiscogsReleaseID *int64  `json:"discogs_release_id"`
-	Notes            string  `json:"notes"`
-	CoverURL         *string `json:"cover_url,omitempty"`
+	DiscogsReleaseID *int64 `json:"discogs_release_id"`
+	// DiscCount is how many discs a film, TV or album edition holds, 1 to
+	// MaxDiscCount; null when not given.
+	DiscCount *int `json:"disc_count,omitempty" ts:",null"`
+	// LimitedTo is the size of a limited edition's run, 1 to MaxLimitedTo;
+	// null when the run is not limited or not known.
+	LimitedTo *int `json:"limited_to,omitempty" ts:",null"`
+	// Color is a vinyl pressing's color, such as "czerwony"; null for
+	// black or not given.
+	Color    *string `json:"color,omitempty" ts:",null"`
+	Notes    string  `json:"notes"`
+	CoverURL *string `json:"cover_url,omitempty"`
 	// Contents are the IDs of the titles a box set edition holds, in their
 	// order, of any kind but never the edition's own title. A body without
 	// them (nil) keeps the stored list; an empty list clears it.
@@ -283,13 +305,21 @@ type Edition struct {
 // at or below either. So does ExactEdition, which keeps the hunter to
 // listings naming the edition's details.
 type CopyInput struct {
-	EditionID     int64   `json:"edition_id"`
-	Status        string  `json:"status" ts:"CopyStatus"`
-	PriceCents    *int64  `json:"price_cents"`
-	PurchasedOn   *Date   `json:"purchased_on"`
-	Shop          string  `json:"shop"`
-	AcquiredAs    *string `json:"acquired_as" ts:"AcquiredAs"`
-	Condition     *string `json:"condition" ts:"Condition"`
+	EditionID   int64   `json:"edition_id"`
+	Status      string  `json:"status" ts:"CopyStatus"`
+	PriceCents  *int64  `json:"price_cents"`
+	PurchasedOn *Date   `json:"purchased_on"`
+	Shop        string  `json:"shop"`
+	AcquiredAs  *string `json:"acquired_as" ts:"AcquiredAs"`
+	Condition   *string `json:"condition" ts:"Condition"`
+	// KeepCondition makes an update leave the stored condition as it is,
+	// for a PUT body without condition, so grading an album copy keeps
+	// it. Creates ignore it.
+	KeepCondition bool `json:"-"`
+	// MediaGrade and SleeveGrade are an album copy's Goldmine grades of
+	// the disc or tape and of its sleeve; a copy of another kind has none.
+	MediaGrade    *string `json:"media_grade,omitempty" ts:"MediaGrade,null"`
+	SleeveGrade   *string `json:"sleeve_grade,omitempty" ts:"SleeveGrade,null"`
 	Notes         string  `json:"notes"`
 	MaxPriceCents *int64  `json:"max_price_cents"`
 	// MaxMarketPercent is 1 to 100: a listing at or under that percent of
@@ -651,6 +681,9 @@ func (in *EditionInput) Normalize() *httpx.FieldError {
 	if in.DiscogsReleaseID != nil && *in.DiscogsReleaseID <= 0 {
 		return fieldErr("discogs_release_id", "must be positive")
 	}
+	if fe := in.normalizeDetails(); fe != nil {
+		return fe
+	}
 	if fe := in.normalizeContents(); fe != nil {
 		return fe
 	}
@@ -665,6 +698,21 @@ func (in *EditionInput) Normalize() *httpx.FieldError {
 		checkEnum("pl_subtitles", &in.PLSubtitles, triStates),
 		checkEnum("pl_voiceover", &in.PLVoiceover, triStates),
 	)
+}
+
+// normalizeDetails trims the color, blank being none, and checks the
+// special edition details' ranges; CheckKind checks where they apply.
+func (in *EditionInput) normalizeDetails() *httpx.FieldError {
+	in.Color = trimOpt(in.Color)
+	switch {
+	case in.DiscCount != nil && (*in.DiscCount < 1 || *in.DiscCount > MaxDiscCount):
+		return fieldErr("disc_count", "must be a whole number from 1 to 99")
+	case in.LimitedTo != nil && (*in.LimitedTo < 1 || *in.LimitedTo > MaxLimitedTo):
+		return fieldErr("limited_to", "must be a whole number from 1 to 1000000")
+	case in.Color != nil:
+		return firstErr(checkLen("color", *in.Color, maxText), checkText("color", *in.Color))
+	}
+	return nil
 }
 
 // normalizeContents drops repeated title IDs, keeping the first, and refuses
@@ -715,12 +763,18 @@ func (in *EditionInput) CheckKind(kind string) *httpx.FieldError {
 	if kind != KindMusic && in.DiscogsReleaseID != nil {
 		return fieldErr("discogs_release_id", "applies only to music")
 	}
+	if kind == KindBook && in.DiscCount != nil {
+		return fieldErr("disc_count", "applies only to movies, TV series and music")
+	}
 	if screenKind(kind) {
 		if e := checkFormat(in.Format, movieFormats, "movies and TV series"); e != nil {
 			return e
 		}
 		if in.Binding != nil {
 			return fieldErr("binding", "applies only to books")
+		}
+		if in.Color != nil {
+			return colorNotVinyl()
 		}
 		return nil
 	}
@@ -731,8 +785,16 @@ func (in *EditionInput) CheckKind(kind string) *httpx.FieldError {
 		if in.Binding != nil {
 			return fieldErr("binding", "applies only to books")
 		}
-	} else if e := checkBookFormat(in.Format, in.Binding); e != nil {
-		return e
+		if in.Color != nil && (in.Format == nil || *in.Format != "vinyl") {
+			return colorNotVinyl()
+		}
+	} else {
+		if e := checkBookFormat(in.Format, in.Binding); e != nil {
+			return e
+		}
+		if in.Color != nil {
+			return colorNotVinyl()
+		}
 	}
 	switch {
 	case in.PLSubtitles != "unknown":
@@ -743,6 +805,11 @@ func (in *EditionInput) CheckKind(kind string) *httpx.FieldError {
 		return fieldErr("packaging", "applies only to movies and TV series")
 	}
 	return nil
+}
+
+// colorNotVinyl refuses a color on an edition that is no vinyl.
+func colorNotVinyl() *httpx.FieldError {
+	return fieldErr("color", "applies only to vinyl")
 }
 
 // checkBookFormat allows a book no format or bookFormats, and a binding
@@ -778,6 +845,8 @@ func (in *CopyInput) Normalize() *httpx.FieldError {
 	in.Notes = strings.TrimSpace(in.Notes)
 	in.AcquiredAs = trimOpt(in.AcquiredAs)
 	in.Condition = trimOpt(in.Condition)
+	in.MediaGrade = trimOpt(in.MediaGrade)
+	in.SleeveGrade = trimOpt(in.SleeveGrade)
 	in.Location = trimOpt(in.Location)
 	key, fe := normalizeRequestKey(in.RequestKey)
 	if fe != nil {
@@ -837,7 +906,24 @@ func (in *CopyInput) Normalize() *httpx.FieldError {
 		checkLen("notes", in.Notes, maxNotes),
 		checkEnum("acquired_as", in.AcquiredAs, acquiredAs),
 		checkEnum("condition", in.Condition, conditions),
+		checkEnum("media_grade", in.MediaGrade, mediaGrades),
+		checkEnum("sleeve_grade", in.SleeveGrade, sleeveGrades),
 	)
+}
+
+// CheckGradeKind keeps the Goldmine grades to copies of albums: kind is the
+// kind of the copy's title.
+func (in *CopyInput) CheckGradeKind(kind string) *httpx.FieldError {
+	if kind == KindMusic {
+		return nil
+	}
+	switch {
+	case in.MediaGrade != nil:
+		return fieldErr("media_grade", "applies only to albums")
+	case in.SleeveGrade != nil:
+		return fieldErr("sleeve_grade", "applies only to albums")
+	}
+	return nil
 }
 
 // checkSale requires the day of a sold copy's sale and keeps a sale off any

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"reflect"
 	"slices"
 	"strconv"
 
@@ -508,7 +509,7 @@ func (h *Handler) getEdition(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) decodeEdition(w http.ResponseWriter, r *http.Request) (*EditionInput, bool) {
 	var in EditionInput
-	if !httpx.DecodeJSON(w, r, h.logger, &in) {
+	if !httpx.DecodeJSONFields(w, r, h.logger, &in, "disc_count", "limited_to", "color") {
 		return nil, false
 	}
 	if fe := in.Normalize(); fe != nil {
@@ -599,11 +600,46 @@ func (h *Handler) getCopy(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, h.logger, http.StatusOK, CopyDetail{Copy: c, Edition: e, Title: t, Loans: loans})
 }
 
+// copyBody reads a copy's condition as it was sent, since an update
+// without one keeps the stored condition and a null clears it.
+type copyBody struct {
+	CopyInput
+	Condition sentCondition `json:"condition"`
+}
+
+// sentCondition is a condition as a body carries it: whether the key was
+// there and its value, null or a string. Each occurrence of the key is
+// checked as it is read, so a repeated key cannot hide a wrong type.
+type sentCondition struct {
+	sent  bool
+	value *string
+}
+
+// UnmarshalJSON takes null or a string; anything else is a type error
+// naming the field.
+func (c *sentCondition) UnmarshalJSON(b []byte) error {
+	c.sent = true
+	if string(b) == "null" {
+		c.value = nil
+		return nil
+	}
+	var value string
+	if err := json.Unmarshal(b, &value); err != nil {
+		return &json.UnmarshalTypeError{Value: "value", Type: reflect.TypeFor[string](), Field: "condition"}
+	}
+	c.value = &value
+	return nil
+}
+
 func (h *Handler) decodeCopy(w http.ResponseWriter, r *http.Request) (*CopyInput, bool) {
-	var in CopyInput
-	if !httpx.DecodeJSONFields(w, r, h.logger, &in, "sale_price_cents") {
+	var body copyBody
+	fields := []string{"sale_price_cents", "media_grade", "sleeve_grade", "condition"}
+	if !httpx.DecodeJSONFields(w, r, h.logger, &body, fields...) {
 		return nil, false
 	}
+	in := body.CopyInput
+	in.KeepCondition = !body.Condition.sent
+	in.Condition = body.Condition.value
 	if fe := in.Normalize(); fe != nil {
 		httpx.WriteFieldError(w, h.logger, fe)
 		return nil, false

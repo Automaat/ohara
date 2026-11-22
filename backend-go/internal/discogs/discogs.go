@@ -230,7 +230,7 @@ func (b cancelOnClose) Close() error {
 // get waits for the token's budget, fetches path, decodes the JSON body
 // into out and runs check on it; see send.
 func (c *Client) get(ctx context.Context, path string, out any, check func() error) error {
-	return c.send(ctx, http.MethodGet, path, nil, out, check)
+	return c.send(ctx, http.MethodGet, path, nil, out, check, nil)
 }
 
 // send waits for the token's budget, sends method to path and, when out
@@ -241,8 +241,9 @@ func (c *Client) get(ctx context.Context, path string, out any, check func() err
 // source health metrics: ok only once the body decodes and passes check; a
 // request the budget kept back was never sent and does not count. A base
 // URL that does not parse counts as an error and is timed like a sent
-// request. Errors name the path without the query.
-func (c *Client) send(ctx context.Context, method, path string, ok []int, out any, check func() error) error {
+// request. Errors name the path without the query. When sent is not nil
+// it gets the time the request left, after its turn in the budget.
+func (c *Client) send(ctx context.Context, method, path string, ok []int, out any, check func() error, sent *time.Time) error {
 	base := c.BaseURL
 	if base == "" {
 		base = BaseURL
@@ -256,6 +257,9 @@ func (c *Client) send(ctx context.Context, method, path string, ok []int, out an
 	}
 	if err := c.Limiter.Wait(ctx, c.Priority); err != nil {
 		return fmt.Errorf("discogs: %s %s: wait for rate budget: %w", method, u.Path, err)
+	}
+	if sent != nil {
+		*sent = time.Now()
 	}
 	resp, err := fetch.Do(ctx, c.httpClient(), fetch.Request{
 		Source: Source,

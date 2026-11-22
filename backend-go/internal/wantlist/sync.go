@@ -18,7 +18,9 @@ import (
 type Discogs interface {
 	Identity(ctx context.Context) (string, error)
 	Wants(ctx context.Context, username string) ([]discogs.Want, error)
-	AddWant(ctx context.Context, username string, id int64) error
+	// AddWant returns when the request left, after any wait for the
+	// rate budget.
+	AddWant(ctx context.Context, username string, id int64) (time.Time, error)
 	RemoveWant(ctx context.Context, username string, id int64) error
 }
 
@@ -130,10 +132,10 @@ func (s *Syncer) execute(ctx context.Context) {
 var errDisabled = errors.New("discogs wantlist sync disabled: no Discogs token")
 
 // clockSkew is how far the date_added Discogs gives a want may lie outside
-// Ohara's own times of its add and still identify it: the two clocks
-// differ a little. Kept small, since a want the owner re-adds by hand
-// within it, before the sync reads the wantlist again, would pass as
-// Ohara's.
+// Ohara's own times of its add (from the request leaving to its answer)
+// and still identify it: the two clocks differ a little. Kept small, since
+// a want the owner adds by hand within it, before the sync reads the
+// wantlist again, would pass as Ohara's.
 const clockSkew = 10 * time.Second
 
 // Sync reads the whole wantlist of the token's owner, then puts every
@@ -148,12 +150,13 @@ const clockSkew = 10 * time.Second
 // sending and the confirmation (give or take clockSkew); no later sync
 // does, so a want the owner removes and re-adds by hand between syncs
 // never passes as Ohara's. A want is taken off only when the listed one
-// still has that date_added. A want the owner had already, re-added by
-// hand, or whose add has no confirmation (canceled, a lost answer, a
-// server error) is never removed: its record is forgotten instead. A
-// removal is forgotten only once Discogs confirms it, so a failed one is
-// retried by the next sync. The first failure stops the sync with the
-// counts so far.
+// still has that date_added in a wantlist read right before the DELETE,
+// so a want the owner re-adds by hand while the sync runs is seen. A want
+// the owner had already, re-added by hand, or whose add has no
+// confirmation (canceled, a lost answer, a server error) is never
+// removed: its record is forgotten instead. A removal is forgotten only
+// once Discogs confirms it, so a failed one is retried by the next sync.
+// The first failure stops the sync with the counts so far.
 func (s *Syncer) Sync(ctx context.Context) (Result, error) {
 	var res Result
 	if s.discogs == nil {
@@ -206,20 +209,40 @@ func (s *Syncer) Sync(ctx context.Context) (Result, error) {
 				return res, err
 			}
 		default:
-			if err := s.discogs.RemoveWant(ctx, username, o.Release); err != nil {
+			removed, err := s.remove(ctx, username, o)
+			if err != nil {
 				return res, err
 			}
-			if err := s.store.Forget(ctx, username, o.Release); err != nil {
-				return res, err
+			if removed {
+				res.Removed++
 			}
-			res.Removed++
 		}
 	}
 	return res, nil
 }
 
-// added is an add Discogs accepted: the release and Ohara's clock around
-// the request.
+// remove reads the wantlist again and takes o off it when the listed want
+// still has o's date_added, then forgets o; a want that changed since the
+// sync's first read is only forgotten. It says whether it sent a removal.
+func (s *Syncer) remove(ctx context.Context, username string, o Owned) (bool, error) {
+	wants, err := s.discogs.Wants(ctx, username)
+	if err != nil {
+		return false, err
+	}
+	still := provable(o, listing(wants))
+	if still {
+		if err := s.discogs.RemoveWant(ctx, username, o.Release); err != nil {
+			return false, err
+		}
+	}
+	if err := s.store.Forget(ctx, username, o.Release); err != nil {
+		return false, err
+	}
+	return still, nil
+}
+
+// added is an add Discogs accepted: the release and Ohara's clock from
+// the request leaving, after its wait for the rate budget, to its answer.
 type added struct {
 	release    int64
 	sent, done time.Time
@@ -273,8 +296,9 @@ func (s *Syncer) add(ctx context.Context, username string, id int64) (added, err
 	if err := s.store.Pending(ctx, username, id); err != nil {
 		return a, err
 	}
-	a.sent = time.Now()
-	if err := s.discogs.AddWant(ctx, username, id); err != nil {
+	sent, err := s.discogs.AddWant(ctx, username, id)
+	a.sent = sent
+	if err != nil {
 		if refused(err) {
 			if ferr := s.store.Forget(ctx, username, id); ferr != nil {
 				return a, errors.Join(err, ferr)

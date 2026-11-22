@@ -81,21 +81,23 @@ func (c *Client) Wants(ctx context.Context, username string) ([]Want, error) {
 }
 
 // AddWant puts release id on the wantlist of username, with no notes or
-// rating.
-func (c *Client) AddWant(ctx context.Context, username string, id int64) error {
+// rating, and returns when the request left, after its turn in the
+// budget.
+func (c *Client) AddWant(ctx context.Context, username string, id int64) (time.Time, error) {
+	var sent time.Time
 	err := c.send(ctx, http.MethodPut, wantPath(username, id),
-		[]int{http.StatusOK, http.StatusCreated, http.StatusNoContent}, nil, nil)
+		[]int{http.StatusOK, http.StatusCreated, http.StatusNoContent}, nil, nil, &sent)
 	if err != nil {
-		return fmt.Errorf("add want %d: %w", id, err)
+		return sent, fmt.Errorf("add want %d: %w", id, err)
 	}
-	return nil
+	return sent, nil
 }
 
 // RemoveWant takes release id off the wantlist of username; a want
 // already gone (404) counts as removed.
 func (c *Client) RemoveWant(ctx context.Context, username string, id int64) error {
 	err := c.send(ctx, http.MethodDelete, wantPath(username, id),
-		[]int{http.StatusOK, http.StatusNoContent, http.StatusNotFound}, nil, nil)
+		[]int{http.StatusOK, http.StatusNoContent, http.StatusNotFound}, nil, nil, nil)
 	if err != nil {
 		return fmt.Errorf("remove want %d: %w", id, err)
 	}

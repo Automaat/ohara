@@ -534,7 +534,7 @@ type cancelOnAdd struct {
 	cancel context.CancelFunc
 }
 
-func (c cancelOnAdd) AddWant(ctx context.Context, username string, id int64) error {
+func (c cancelOnAdd) AddWant(ctx context.Context, username string, id int64) (time.Time, error) {
 	c.cancel()
 	return c.Discogs.AddWant(ctx, username, id)
 }
@@ -684,5 +684,73 @@ func TestSkippedCountsWishes(t *testing.T) {
 
 	if got, want := mustSync(t, syncer), (Result{Added: 1, Skipped: 2}); got != want {
 		t.Fatalf("sync = %+v, want %+v", got, want)
+	}
+}
+
+// handDuringAdd is the owner acting on discogs.com while the sync adds
+// trigger: re-adding target by hand, or with fresh adding it for the first
+// time, then wait passing before the add leaves, as in the rate budget's
+// queue.
+type handDuringAdd struct {
+	Discogs
+	f       *fakeDiscogs
+	trigger int64
+	target  int64
+	fresh   bool
+	wait    time.Duration
+}
+
+func (h handDuringAdd) AddWant(ctx context.Context, username string, id int64) (time.Time, error) {
+	if id == h.trigger {
+		if h.fresh {
+			h.f.mu.Lock()
+			h.f.wants = append(h.f.wants, h.target)
+			h.f.dates[h.target] = time.Now().Truncate(time.Second)
+			h.f.mu.Unlock()
+		} else {
+			h.f.byHand(h.target)
+		}
+		time.Sleep(h.wait)
+	}
+	return h.Discogs.AddWant(ctx, username, id)
+}
+
+func TestHandReAddDuringTheSyncIsNeverRemoved(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	fake, client := newFakeDiscogs(t)
+	store := NewStore(pool)
+	old := wish(t, pool, "music", 201)
+	mustSync(t, NewSyncer(store, client, nil))
+	fake.took()
+
+	exec(t, pool, `DELETE FROM copy WHERE id = $1`, old)
+	wish(t, pool, "music", 202)
+	hand := handDuringAdd{Discogs: client, f: fake, trigger: 202, target: 201}
+	if got, want := mustSync(t, NewSyncer(store, hand, nil)), (Result{Added: 1}); got != want {
+		t.Fatalf("sync = %+v, want %+v", got, want)
+	}
+	if writes, wants := fake.took(); !slices.Equal(writes, []string{"PUT 202"}) || !slices.Equal(wants, []int64{201, 202}) {
+		t.Fatalf("a want re-added by hand during the sync was removed: writes %v, wantlist %v", writes, wants)
+	}
+}
+
+func TestHandAddWhileTheAddWaitsIsNeverClaimed(t *testing.T) {
+	if testing.Short() {
+		t.Skip("waits past the clock skew")
+	}
+	pool := dbtest.Migrated(t)
+	fake, client := newFakeDiscogs(t)
+	store := NewStore(pool)
+	copyID := wish(t, pool, "music", 301)
+	hand := handDuringAdd{Discogs: client, f: fake, trigger: 301, target: 301, fresh: true, wait: clockSkew + 2*time.Second}
+	mustSync(t, NewSyncer(store, hand, nil))
+	fake.took()
+
+	exec(t, pool, `DELETE FROM copy WHERE id = $1`, copyID)
+	if got, want := mustSync(t, NewSyncer(store, client, nil)), (Result{}); got != want {
+		t.Fatalf("sync = %+v, want %+v", got, want)
+	}
+	if writes, wants := fake.took(); len(writes) != 0 || !slices.Equal(wants, []int64{301}) {
+		t.Fatalf("a want the owner added while Ohara's add waited was removed: writes %v, wantlist %v", writes, wants)
 	}
 }

@@ -280,6 +280,32 @@ func TestNilLimiterSendsAtOnce(t *testing.T) {
 	})
 }
 
+// TestAddWantSentIsAfterTheBudgetWait checks that AddWant reports when its
+// request left, after its turn in the budget, not when it was asked.
+func TestAddWantSentIsAfterTheBudgetWait(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		api := &arrivals{}
+		c := api.client(discogs.NewLimiter())
+		// The budget's burst is 4 requests; the add waits for the fifth turn.
+		for range 4 {
+			if _, err := c.Stats(t.Context(), 1, "EUR"); err != nil {
+				t.Fatalf("stats: %v", err)
+			}
+		}
+		asked := time.Now()
+		sent, err := c.AddWant(t.Context(), "collector", 7)
+		if err != nil {
+			t.Fatalf("add want: %v", err)
+		}
+		api.mu.Lock()
+		arrived := api.times[len(api.times)-1]
+		api.mu.Unlock()
+		if !sent.Equal(arrived) || !sent.After(asked) {
+			t.Fatalf("sent %v, want the arrival %v after the wait from %v", sent, arrived, asked)
+		}
+	})
+}
+
 // stalled holds every request sent before clears until clears, as a
 // network stall that ends at once would, then records its arrival.
 type stalled struct {

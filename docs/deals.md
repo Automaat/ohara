@@ -171,16 +171,22 @@ Moved from `CLAUDE.md`, whose conventions still apply.
 - `discogs_want` records the wants Ohara added, per username. A want is
   removed (`DELETE`) only while it is provably Ohara's: its add was
   confirmed (Discogs answered 2xx) and the row holds the want's
-  `date_added`, and the listed want still has that `date_added`. Right
-  after its adds the same sync reads the wantlist again and keeps each
-  confirmed want's `date_added` when it falls between sending the add and
-  its answer, give or take 10 s of clock skew; no later sync does. A want
-  that was there before, one the owner re-added by hand (a new
-  `date_added`) and one left unidentified (an add with no confirmation:
-  a canceled sync, a lost answer, a 5xx; or a failed second read) is
-  never removed; its row is forgotten instead. Only a manual re-add
-  within those 10 s, before the second read, could pass as Ohara's. A
-  sync with nothing to change sends no write.
+  `date_added`. Right after its adds the same sync reads the wantlist
+  again and keeps each confirmed want's `date_added` when it falls between
+  the add leaving (after its turn in the Discogs budget, which
+  `discogs.Client.AddWant` returns) and its answer, give or take 10 s of
+  clock skew; no later sync does. Before each `DELETE` the sync reads the
+  wantlist once more and sends it only when the listed want still has
+  that `date_added`, so a want the owner re-adds by hand while the sync
+  runs is only forgotten. A want that was there before, one the owner
+  re-added by hand (a new `date_added`) and one left unidentified (an add
+  with no confirmation: a canceled sync, a lost answer, a 5xx; or a
+  failed second read) is never removed; its row is forgotten instead.
+- What can still pass as Ohara's: a hand add or re-add of the same release
+  whose `date_added` lands within 10 s of Ohara's add request (before it
+  left or after its answer), and a hand re-add between the read before a
+  `DELETE` and the `DELETE` itself (one turn in the budget, about 1.2 s
+  when it is busy). A sync with nothing to change sends no write.
 - An add writes its row first, so a database failure stops the sync
   before the request; Discogs refusing it (a redirect or a 4xx, 429
   included) drops the row. A removal forgets the row only after Discogs

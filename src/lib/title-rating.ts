@@ -2,6 +2,13 @@
 export type RatingView = { rating: number | null; failed: unknown };
 
 /**
+ * Every rating save of the app, in the order picked. A title page opened again gets a new saver
+ * while the last visit's picks may still be on their way, so they share this queue: a pick made
+ * later is always stored later.
+ */
+let saves: Promise<void> = Promise.resolve();
+
+/**
  * Stores the ratings a reader picks for one title, one request after another, and says what the
  * page should show: the latest pick while it is on its way, the stored rating once it is stored,
  * and, when the latest pick fails, the last rating the server confirmed with the failure. An
@@ -12,7 +19,6 @@ export class RatingSaver {
 	#pending = 0;
 	#confirmed: number | null;
 	#shown: number | null;
-	#queue: Promise<void> = Promise.resolve();
 
 	constructor(
 		readonly titleID: number,
@@ -50,7 +56,7 @@ export class RatingSaver {
 		this.#pending++;
 		this.#shown = rating;
 		this.show({ rating, failed: null });
-		this.#queue = this.#queue.then(async () => {
+		saves = saves.then(async () => {
 			try {
 				const stored = await this.send(this.titleID, rating);
 				this.#confirmed = stored;
@@ -61,7 +67,7 @@ export class RatingSaver {
 				this.#pending--;
 			}
 		});
-		return this.#queue;
+		return saves;
 	}
 
 	#settle(rating: number | null, failed: unknown) {

@@ -130,7 +130,9 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   page's "Ocena" select sends `PUT /api/titles/{id}/rating`
   (`{"rating": n | null}`, the key required), which changes only the
   rating, so a page loaded before another edit never writes the rest
-  back. Picks are stored one after another (`src/lib/title-rating.ts`):
+  back. Picks are stored one after another in one queue for the whole
+  app (`src/lib/title-rating.ts`), so a visit's late saves never land
+  after a later visit's:
   only the latest pick's failure shows, with the last confirmed rating,
   and a title read that began before a pick or during one keeps the
   shown rating. `GET /api/collection` items carry it (absent while unrated),

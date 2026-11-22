@@ -83,6 +83,31 @@ describe('RatingSaver', () => {
 		expect(h.last()?.rating).toBe(6);
 	});
 
+	it("stores a later visit's pick after the picks of an earlier visit still on their way", async () => {
+		const first = harness(4);
+		first.saver.pick(5);
+		first.saver.pick(7);
+		const sent: (number | null)[] = [];
+		const again = new RatingSaver(
+			7,
+			4,
+			(_, rating) => {
+				sent.push(rating);
+				return Promise.resolve(rating);
+			},
+			() => {}
+		);
+		const done = again.pick(9);
+		await first.settled();
+		expect(sent).toEqual([]);
+		first.calls[0]?.resolve(5);
+		await first.settled();
+		first.calls[1]?.resolve(7);
+		await done;
+		expect(first.calls.map((c) => c.rating)).toEqual([5, 7]);
+		expect(sent).toEqual([9]);
+	});
+
 	it('ignores a read that started before a pick or while one was on its way', async () => {
 		const h = harness(4);
 		const before = h.saver.mark();

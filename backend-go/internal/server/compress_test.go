@@ -6,9 +6,11 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -40,7 +42,7 @@ func compressFS() fstest.MapFS {
 	return fstest.MapFS{
 		"index.html":                  {Data: []byte("<!doctype html><title>Ohara</title>" + text)},
 		"manifest.webmanifest":        {Data: []byte(`{"name":"` + text + `"}`)},
-		"_app/immutable/entry/app.js": {Data: []byte("export const a = '" + text + "'")},
+		"_app/immutable/entry/app.js": {Data: []byte("export const a = '" + text + "'"), ModTime: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)},
 		"_app/immutable/app.css":      {Data: []byte("body{}/*" + text + "*/")},
 		"_app/immutable/zxing.wasm":   {Data: append([]byte("\x00asm\x01\x00\x00\x00"), text...)},
 		"favicon.svg":                 {Data: []byte("<svg xmlns=\"http://www.w3.org/2000/svg\"><!--" + text + "--></svg>")},
@@ -165,22 +167,132 @@ func TestCompression(t *testing.T) {
 	}
 }
 
-// TestCompressionRange checks that a Range request gets its bytes as they are
-// on disk, not a slice of a compressed body.
+// TestCompressionRange checks that a client without gzip gets its range of
+// the plain bytes, and that one with gzip, which may hold part of a gzip body,
+// gets the whole resource compressed instead of a plain slice to append.
 func TestCompressionRange(t *testing.T) {
 	webFS := compressFS()
 	srv := newServer(t, server.Deps{DB: fakeDB{}, Web: webFS})
-	resp, body := fetch(t, http.MethodGet, srv.URL+"/_app/immutable/entry/app.js",
-		map[string]string{"Accept-Encoding": "gzip", "Range": "bytes=0-9"})
+	const path = "/_app/immutable/entry/app.js"
+	file := fileData(t, webFS, "_app/immutable/entry/app.js")
+
+	resp, body := fetch(t, http.MethodGet, srv.URL+path, map[string]string{"Range": "bytes=0-9"})
 	if resp.StatusCode != http.StatusPartialContent {
-		t.Fatalf("status = %d, want 206", resp.StatusCode)
+		t.Fatalf("plain range status = %d, want 206", resp.StatusCode)
 	}
 	if got := resp.Header.Get("Content-Encoding"); got != "" {
-		t.Fatalf("Content-Encoding = %q, want none", got)
+		t.Fatalf("plain range Content-Encoding = %q, want none", got)
 	}
-	if want := fileData(t, webFS, "_app/immutable/entry/app.js")[:10]; !bytes.Equal(body, want) {
-		t.Fatalf("body = %q, want %q", body, want)
+	if !bytes.Equal(body, file[:10]) {
+		t.Fatalf("plain range body = %q, want %q", body, file[:10])
 	}
+
+	first, _ := fetch(t, http.MethodGet, srv.URL+path, map[string]string{"Accept-Encoding": "gzip"})
+	if got := first.Header.Get("Accept-Ranges"); got != "" {
+		t.Fatalf("gzip answer Accept-Ranges = %q, want none", got)
+	}
+	resp, body = fetch(t, http.MethodGet, srv.URL+path, map[string]string{
+		"Accept-Encoding": "gzip",
+		"Range":           "bytes=20-",
+		"If-Range":        first.Header.Get("Last-Modified"),
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("gzip range status = %d, want 200", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Content-Encoding"); got != "gzip" {
+		t.Fatalf("gzip range Content-Encoding = %q, want gzip", got)
+	}
+	if !bytes.Equal(gunzip(t, body), file) {
+		t.Fatal("gzip range body is not the whole file")
+	}
+}
+
+// TestCompressionAcceptEncoding checks the coding choice against quality
+// values: gzip only when the client accepts it, never deflate.
+func TestCompressionAcceptEncoding(t *testing.T) {
+	srv := newServer(t, server.Deps{DB: fakeDB{}, Web: compressFS()})
+	tests := []struct {
+		accept string
+		want   string
+	}{
+		{"gzip", "gzip"},
+		{"GZIP;q=0.5", "gzip"},
+		{"x-gzip", "gzip"},
+		{"br, gzip;q=0.1", "gzip"},
+		{"*", "gzip"},
+		{"identity, *;q=0.5", "gzip"},
+		{"gzip;q=0, identity;q=1", ""},
+		{"gzip; q=0.0", ""},
+		{"gzip;q=0, *", ""},
+		{"*;q=0", ""},
+		{"deflate", ""},
+		{"br", ""},
+		{"identity", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.accept, func(t *testing.T) {
+			resp, body := fetch(t, http.MethodGet, srv.URL+"/", map[string]string{"Accept-Encoding": tt.accept})
+			if got := resp.Header.Get("Content-Encoding"); got != tt.want {
+				t.Fatalf("Content-Encoding = %q, want %q", got, tt.want)
+			}
+			if tt.want == "" && !bytes.HasPrefix(body, []byte("<!doctype html>")) {
+				t.Fatalf("plain body starts %q", body[:min(len(body), 20)])
+			}
+		})
+	}
+}
+
+// TestCompressionVary checks that plain answers and revalidations name
+// Accept-Encoding too, so a cache never serves one encoding for the other.
+func TestCompressionVary(t *testing.T) {
+	srv := newServer(t, server.Deps{DB: fakeDB{}, Web: compressFS()})
+	const path = "/_app/immutable/entry/app.js"
+	plain, _ := fetch(t, http.MethodGet, srv.URL+path, nil)
+	if got := plain.Header.Values("Vary"); !slices.Equal(got, []string{"Accept-Encoding"}) {
+		t.Fatalf("plain Vary = %q, want [Accept-Encoding]", got)
+	}
+	png, _ := fetch(t, http.MethodGet, srv.URL+"/apple-touch-icon.png", map[string]string{"Accept-Encoding": "gzip"})
+	if got := png.Header.Get("Vary"); got != "Accept-Encoding" {
+		t.Fatalf("PNG Vary = %q, want Accept-Encoding", got)
+	}
+	resp, _ := fetch(t, http.MethodGet, srv.URL+path, map[string]string{
+		"Accept-Encoding":   "gzip",
+		"If-Modified-Since": plain.Header.Get("Last-Modified"),
+	})
+	if resp.StatusCode != http.StatusNotModified {
+		t.Fatalf("revalidation status = %d, want 304", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Vary"); got != "Accept-Encoding" {
+		t.Fatalf("304 Vary = %q, want Accept-Encoding", got)
+	}
+	if got := resp.Header.Get("Content-Encoding"); got != "" {
+		t.Fatalf("304 Content-Encoding = %q, want none", got)
+	}
+}
+
+// TestCompressionETag checks that a compressed answer's ETag is weak, since
+// its bytes differ from the plain answer's.
+func TestCompressionETag(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
+	srv := newServer(t, server.Deps{DB: fakeDB{}, API: []server.Mounter{etagAPI{logger: logger}}})
+	gz, _ := fetch(t, http.MethodGet, srv.URL+"/api/tagged", map[string]string{"Accept-Encoding": "gzip"})
+	if got := gz.Header.Get("ETag"); got != `W/"v1"` {
+		t.Fatalf("gzip ETag = %q, want W/\"v1\"", got)
+	}
+	plain, _ := fetch(t, http.MethodGet, srv.URL+"/api/tagged", nil)
+	if got := plain.Header.Get("ETag"); got != `"v1"` {
+		t.Fatalf("plain ETag = %q, want \"v1\"", got)
+	}
+}
+
+// etagAPI answers JSON with a strong ETag.
+type etagAPI struct{ logger *slog.Logger }
+
+func (a etagAPI) Mount(r chi.Router) {
+	r.Get("/tagged", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("ETag", `"v1"`)
+		httpx.WriteJSON(w, a.logger, http.StatusOK, map[string]string{"v": "1"})
+	})
 }
 
 // TestCompressionHead checks that HEAD announces the same encoding as GET

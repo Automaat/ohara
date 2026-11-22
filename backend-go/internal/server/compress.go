@@ -2,9 +2,13 @@ package server
 
 import (
 	"compress/gzip"
+	"io"
+	"mime"
 	"net/http"
-
-	"github.com/go-chi/chi/v5/middleware"
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
 )
 
 // compressibleTypes are the response types the router compresses: the SPA's
@@ -23,22 +27,169 @@ var compressibleTypes = []string{
 	"image/svg+xml",
 }
 
-// compress gzips (or deflates) a response of a compressible type for a client
-// that accepts it, adding Vary: Accept-Encoding; a response that already has a
-// Content-Encoding, like /metrics' own gzip, is left alone. The best level
-// keeps the 946 KB decoder .wasm near 412 KB; the level 6 default leaves it at
-// 429 KB. A request with a Range header gets the plain body, so a 206 answer's
-// Content-Range keeps describing the bytes it carries.
-func compress() func(http.Handler) http.Handler {
-	compressor := middleware.NewCompressor(gzip.BestCompression, compressibleTypes...)
-	return func(next http.Handler) http.Handler {
-		compressed := compressor.Handler(next)
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Header.Get("Range") != "" {
-				next.ServeHTTP(w, r)
-				return
-			}
-			compressed.ServeHTTP(w, r)
-		})
+// gzipWriters reuses writers at the best level, which keeps the 946 KB
+// decoder .wasm near 412 KB; the level 6 default leaves it at 429 KB.
+var gzipWriters = sync.Pool{New: func() any {
+	zw, err := gzip.NewWriterLevel(io.Discard, gzip.BestCompression)
+	if err != nil {
+		return nil
 	}
+	return zw
+}}
+
+// compress gzips a response of a compressible type for a client that accepts
+// gzip. Every answer carries Vary: Accept-Encoding, the plain ones and 304s
+// too, so no cache hands one encoding to a client that asked for the other.
+// A response that already has a Content-Encoding, like /metrics' own gzip, is
+// left alone. A client that accepts gzip gets the whole resource for a Range
+// request: a range of the plain bytes appended to a gzip body it already has
+// would corrupt it, and a range of the gzip body would differ between two
+// compressions. A compressed answer drops Accept-Ranges and weakens an ETag,
+// since its bytes are not the plain resource's. A client without gzip gets
+// plain bodies and its ranges as before.
+func compress(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Add("Vary", "Accept-Encoding")
+		if !acceptsGzip(r.Header.Values("Accept-Encoding")) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if r.Header.Get("Range") != "" || r.Header.Get("If-Range") != "" {
+			r = r.Clone(r.Context())
+			r.Header.Del("Range")
+			r.Header.Del("If-Range")
+		}
+		gw := &gzipResponseWriter{ResponseWriter: w, head: r.Method == http.MethodHead}
+		defer gw.close()
+		next.ServeHTTP(gw, r)
+	})
+}
+
+// acceptsGzip reports whether the Accept-Encoding values allow gzip: gzip or
+// x-gzip with a nonzero quality, or, when neither is named, * with a nonzero
+// quality.
+func acceptsGzip(values []string) bool {
+	named, star := false, false
+	for _, v := range values {
+		for item := range strings.SplitSeq(v, ",") {
+			coding, params, _ := strings.Cut(item, ";")
+			coding = strings.ToLower(strings.TrimSpace(coding))
+			ok := quality(params) > 0
+			switch coding {
+			case "gzip", "x-gzip":
+				if ok {
+					return true
+				}
+				named = true
+			case "*":
+				star = star || ok
+			}
+		}
+	}
+	return !named && star
+}
+
+// quality reads the q parameter of one Accept-Encoding item; without one, or
+// with one that does not parse, the coding counts as acceptable.
+func quality(params string) float64 {
+	for p := range strings.SplitSeq(params, ";") {
+		name, value, _ := strings.Cut(strings.TrimSpace(p), "=")
+		if !strings.EqualFold(strings.TrimSpace(name), "q") {
+			continue
+		}
+		q, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+		if err != nil {
+			return 1
+		}
+		return q
+	}
+	return 1
+}
+
+// gzipResponseWriter decides on the first WriteHeader or Write whether the
+// body is compressed, then sends it through a pooled gzip writer.
+type gzipResponseWriter struct {
+	http.ResponseWriter
+	head        bool
+	wroteHeader bool
+	zw          *gzip.Writer
+}
+
+func (g *gzipResponseWriter) WriteHeader(code int) {
+	if g.wroteHeader {
+		g.ResponseWriter.WriteHeader(code)
+		return
+	}
+	g.wroteHeader = true
+	if g.compressible(code) {
+		g.startGzip()
+	}
+	g.ResponseWriter.WriteHeader(code)
+}
+
+// startGzip marks the response as gzip and, unless it answers a HEAD, takes
+// the writer its body goes through.
+func (g *gzipResponseWriter) startGzip() {
+	if !g.head {
+		zw, ok := gzipWriters.Get().(*gzip.Writer)
+		if !ok || zw == nil {
+			return
+		}
+		zw.Reset(g.ResponseWriter)
+		g.zw = zw
+	}
+	h := g.Header()
+	h.Set("Content-Encoding", "gzip")
+	h.Del("Content-Length")
+	h.Del("Accept-Ranges")
+	if etag := h.Get("ETag"); etag != "" && !strings.HasPrefix(etag, "W/") {
+		h.Set("ETag", "W/"+etag)
+	}
+}
+
+// compressible reports a response with a body of a compressible type and no
+// encoding of its own.
+func (g *gzipResponseWriter) compressible(code int) bool {
+	if code < http.StatusOK || code == http.StatusNoContent || code == http.StatusNotModified ||
+		code == http.StatusPartialContent {
+		return false
+	}
+	h := g.Header()
+	if h.Get("Content-Encoding") != "" {
+		return false
+	}
+	mediaType, _, err := mime.ParseMediaType(h.Get("Content-Type"))
+	return err == nil && slices.Contains(compressibleTypes, mediaType)
+}
+
+func (g *gzipResponseWriter) Write(b []byte) (int, error) {
+	if !g.wroteHeader {
+		g.WriteHeader(http.StatusOK)
+	}
+	if g.zw != nil {
+		return g.zw.Write(b)
+	}
+	return g.ResponseWriter.Write(b)
+}
+
+// Flush sends what the gzip writer holds, then flushes the connection.
+func (g *gzipResponseWriter) Flush() {
+	if g.zw != nil {
+		_ = g.zw.Flush()
+	}
+	_ = http.NewResponseController(g.ResponseWriter).Flush()
+}
+
+// Unwrap lets http.ResponseController reach the underlying writer.
+func (g *gzipResponseWriter) Unwrap() http.ResponseWriter { return g.ResponseWriter }
+
+// close ends the gzip stream and returns its writer to the pool.
+func (g *gzipResponseWriter) close() {
+	if g.zw == nil {
+		return
+	}
+	_ = g.zw.Close()
+	g.zw.Reset(io.Discard)
+	gzipWriters.Put(g.zw)
+	g.zw = nil
 }

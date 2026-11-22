@@ -379,3 +379,36 @@ func TestNumberParsesAsAtoi(t *testing.T) {
 		}
 	}
 }
+
+func TestLotsDoNotMatch(t *testing.T) {
+	wall := album("The Wall", "Pink Floyd", "cd")
+	trylogia := Want{Kind: "movie", Name: "Władca Pierścieni: Trylogia", Format: new("dvd")}
+	tests := []struct {
+		name  string
+		want  Want
+		title string
+		match bool
+	}{
+		{"film set", bladeRunner("dvd"), "Zestaw 3 filmy DVD: Blade Runner, Gladiator, Obcy", false},
+		{"film package", bladeRunner("dvd"), "Pakiet 10 płyt DVD Ridley Scott Blade Runner Gladiator Prometeusz", false},
+		{"film collection", bladeRunner("dvd"), "Kolekcja filmów DVD 20 szt. Blade Runner, Matrix, Terminator", false},
+		{"book volumes", wiedzmin(), "Wiedźmin komplet 8 tomów Sapkowski Ostatnie życzenie Miecz przeznaczenia", false},
+		{"album discs", wall, "Pink Floyd 5 płyt CD The Wall Animals Meddle Wish You Were Here", false},
+		{"one film on five discs", bladeRunner("dvd"), "Blade Runner Metalbox 5xDVD z PL", true},
+		{"one film on two discs", bladeRunner("dvd"), "Blade Runner DVD 2 płyty", true},
+		{"newspaper collection", bladeRunner("dvd"), "Blade Runner DVD Kolekcja Gazety Wyborczej", true},
+		{"collector's edition", bladeRunner("bluray"), "Łowca Androidów Blu-Ray PL Edycja kolekcjonerska 30 rocznica", true},
+		{"wished set", trylogia, "Władca Pierścieni Trylogia 3 filmy DVD", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := NewListingText(tt.title, defaultRules).Belongs(&tt.want, Titles{}); got != tt.match {
+				t.Fatalf("Belongs(%q) = %v, want %v", tt.title, got, tt.match)
+			}
+			got := tt.want.Matches(tt.title) && !defaultRules.RejectedFor(tt.title, &tt.want)
+			if got != tt.match {
+				t.Fatalf("Matches(%q) && !RejectedFor = %v, want %v", tt.title, got, tt.match)
+			}
+		})
+	}
+}

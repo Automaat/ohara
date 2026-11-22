@@ -147,6 +147,17 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   box set's copy. The edition form's "Zawartość zestawu" picks existing
   titles by name; the title page shows "W zestawie: <box set>", marked "na
   półce" when owned.
+- An edition records what every copy of a pressing shares: `disc_count`
+  (1 to 99) on film, TV and album editions, `limited_to` (a limited run,
+  1 to 1 000 000) on any, and `color` (trimmed, one line, at most 500
+  bytes; blank is none) on vinyl only. One on another kind or format, out
+  of range or not a whole number answers 422 on that field. `POST` and
+  `PUT /api/editions` take them, a `PUT` without one clears it, as for the
+  other edition fields; edition and title answers and `GET /api/collection`
+  items carry them, absent when unset. The edition form shows "Liczba płyt"
+  for films, TV and albums, "Kolor winylu" once the medium is vinyl and
+  "Nakład" always. The edition summary adds them after the medium, as in
+  "Winyl · 2 płyty · czerwony · nakład 500 egz."; one disc adds nothing.
 - `GET /api/export?format=csv|json` (any other `format` 422) downloads the
   whole collection as `ohara-YYYY-MM-DD.<format>` (the day in Poland),
   each owned copy with the floor, mid and ceiling `GET /api/valuation`

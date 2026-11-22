@@ -144,6 +144,46 @@ describe('labels', () => {
 			})
 		).toBe('Audiobook · Czyta Krzysztof Gosztyła');
 	});
+
+	it.each([
+		[1, 'Winyl · czerwony · nakład 500 egz.'],
+		[2, 'Winyl · 2 płyty · czerwony · nakład 500 egz.'],
+		[5, 'Winyl · 5 płyt · czerwony · nakład 500 egz.']
+	])('summarizes a limited vinyl edition of %i discs', (discs, want) => {
+		expect(
+			editionSummary({
+				format: 'vinyl',
+				binding: null,
+				label: '',
+				disc_count: discs,
+				limited_to: 500,
+				color: 'czerwony',
+				barcode: null
+			})
+		).toBe(want);
+	});
+
+	it('summarizes a limited book edition and a multi-disc film', () => {
+		expect(
+			editionSummary({
+				format: null,
+				binding: 'hardcover',
+				label: '',
+				limited_to: 1500,
+				barcode: null
+			})
+		).toBe('Twarda oprawa · nakład 1500 egz.');
+		expect(
+			editionSummary({
+				format: 'bluray',
+				binding: null,
+				label: 'Kolekcjonerska',
+				packaging: ['steelbook'],
+				disc_count: 3,
+				barcode: null
+			})
+		).toBe('Blu-ray · 3 płyty · Kolekcjonerska · Steelbook');
+	});
 });
 
 describe('collection search links', () => {
@@ -749,6 +789,62 @@ describe('edition form', () => {
 		expect(!movie.ok && movie.issue.field).toBe('format');
 		const asMovie = editionPayload({ ...form, format: 'dvd' }, 4, 'movie');
 		expect(asMovie.ok && asMovie.value.discogs_release_id).toBeNull();
+	});
+
+	it("keeps an audiobook's format when its run changes", () => {
+		const form = { ...editionToForm(edition), format: 'audiobook' as const, limited_to: '500' };
+		const parsed = editionPayload(form, 2, 'book');
+		expect(parsed.ok && parsed.value).toMatchObject({
+			format: 'audiobook',
+			binding: null,
+			limited_to: 500
+		});
+		expect(parsed.ok && ('disc_count' in parsed.value || 'color' in parsed.value)).toBe(false);
+	});
+
+	it('sends disc count, run and vinyl color only where they apply', () => {
+		const form = {
+			...editionToForm(edition),
+			format: 'vinyl' as const,
+			disc_count: ' 2 ',
+			limited_to: '500',
+			color: ' czerwony '
+		};
+		const vinyl = editionPayload(form, 4, 'music');
+		expect(vinyl.ok && vinyl.value).toMatchObject({
+			disc_count: 2,
+			limited_to: 500,
+			color: 'czerwony'
+		});
+		const cd = editionPayload({ ...form, format: 'cd' }, 4, 'music');
+		expect(cd.ok && cd.value).toMatchObject({ disc_count: 2, limited_to: 500 });
+		expect(cd.ok && 'color' in cd.value).toBe(false);
+		const film = editionPayload({ ...form, format: 'bluray' }, 1, 'movie');
+		expect(film.ok && film.value).toMatchObject({ disc_count: 2, limited_to: 500 });
+		expect(film.ok && 'color' in film.value).toBe(false);
+		const book = editionPayload(form, 2, 'book');
+		expect(book.ok && book.value).toMatchObject({ limited_to: 500 });
+		expect(book.ok && ('disc_count' in book.value || 'color' in book.value)).toBe(false);
+	});
+
+	it('round-trips edition details and refuses counts out of range', () => {
+		const stored = { ...edition, disc_count: 2, limited_to: 1000 };
+		expect(editionToForm(stored)).toMatchObject({
+			disc_count: '2',
+			limited_to: '1000',
+			color: ''
+		});
+		expect(editionToForm(edition)).toMatchObject({ disc_count: '', limited_to: '', color: '' });
+		for (const [field, value] of [
+			['disc_count', '0'],
+			['disc_count', '100'],
+			['disc_count', '1,5'],
+			['limited_to', '0'],
+			['limited_to', '1000001']
+		] as const) {
+			const parsed = editionPayload({ ...editionToForm(edition), [field]: value }, 1, 'movie');
+			expect(!parsed.ok && parsed.issue.field).toBe(field);
+		}
 	});
 
 	it('requires a music medium and a numeric Discogs release for albums', () => {

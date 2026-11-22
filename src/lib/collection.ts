@@ -1,6 +1,13 @@
 import { trimSpace } from './go-text';
 import { tagKey, tagMatches, tagTerm } from './tags';
-import { editionCount, orderedCount, purchaseDate, titleCount } from './polish';
+import {
+	discCount,
+	editionCount,
+	limitedRun,
+	orderedCount,
+	purchaseDate,
+	titleCount
+} from './polish';
 import type {
 	AcquiredAs,
 	Binding,
@@ -303,19 +310,28 @@ export function seasonName(name: string, season: number | null | undefined): str
 	return season == null ? name : `${name} · sezon ${season}`;
 }
 
-/** A one-line description of an edition, such as "Blu-ray · Steelbook · 5901234123457". */
+/**
+ * A one-line description of an edition, such as "Blu-ray · Steelbook · 5901234123457" or
+ * "Winyl · 2 płyty · czerwony · nakład 500 egz."; a single disc goes unsaid.
+ */
 export function editionSummary(e: {
 	format: Format | null;
 	binding: Binding | null;
 	label: string;
 	packaging?: Packaging[];
+	disc_count?: number | null;
+	limited_to?: number | null;
+	color?: string | null;
 	barcode: string | null;
 }): string {
 	const parts = [
 		e.format ? formatLabels[e.format] : null,
 		e.binding ? bindingLabels[e.binding] : null,
+		e.disc_count && e.disc_count > 1 ? discCount(e.disc_count) : null,
+		e.color || null,
 		e.label || null,
 		...(e.packaging ?? []).map((p) => packagingLabels[p]),
+		e.limited_to ? limitedRun(e.limited_to) : null,
 		e.barcode
 	];
 	return parts.filter(Boolean).join(' · ') || 'Wydanie bez opisu';
@@ -764,6 +780,40 @@ export function parseSeason(kind: Kind, raw: string): Parsed<number | null> {
 	return season;
 }
 
+/** The most discs and the largest limited run an edition takes, as the API checks them. */
+const maxDiscCount = 99;
+const maxLimitedTo = 1_000_000;
+
+/** An optional whole number from 1 to max; anything else is the message on field. */
+function parseCount(
+	raw: string,
+	field: string,
+	max: number,
+	message: string
+): Parsed<number | null> {
+	const parsed = parseOptInt(raw, field, message);
+	if (!parsed.ok || parsed.value === null) return parsed;
+	if (parsed.value < 1 || parsed.value > max) return { ok: false, issue: { field, message } };
+	return parsed;
+}
+
+/**
+ * The special edition details a save sends: those given, the rest left out, which the API
+ * stores as none, as it does a null.
+ */
+function editionDetails(
+	discs: number | null,
+	run: number | null,
+	color: string
+): Pick<EditionPayload, 'disc_count' | 'limited_to' | 'color'> {
+	const shade = optText(color);
+	return {
+		...(discs === null ? {} : { disc_count: discs }),
+		...(run === null ? {} : { limited_to: run }),
+		...(shade === null ? {} : { color: shade })
+	};
+}
+
 export type EditionForm = {
 	barcode: string;
 	label: string;
@@ -775,6 +825,12 @@ export type EditionForm = {
 	packaging: Packaging[];
 	binding: Binding | '';
 	discogs_release_id: string;
+	/** How many discs a film, TV or album edition holds. */
+	disc_count: string;
+	/** A limited edition's run, in copies. */
+	limited_to: string;
+	/** A vinyl pressing's color. */
+	color: string;
 	cover_url: string;
 	notes: string;
 	/** The titles a box set holds, in their order; left out while the edition lists none. */
@@ -802,6 +858,9 @@ export function editionToForm(e: Edition | null): EditionForm {
 		packaging: [...(e?.packaging ?? [])],
 		binding: e?.binding ?? '',
 		discogs_release_id: e?.discogs_release_id?.toString() ?? '',
+		disc_count: e?.disc_count?.toString() ?? '',
+		limited_to: e?.limited_to?.toString() ?? '',
+		color: e?.color ?? '',
 		cover_url: e?.cover_url ?? '',
 		notes: e?.notes ?? ''
 	};
@@ -834,6 +893,18 @@ export function editionPayload(
 		? parseOptInt(f.discogs_release_id, 'discogs_release_id', 'Identyfikator Discogs to liczba.')
 		: ({ ok: true, value: null } as const);
 	if (!discogs.ok) return discogs;
+	const discs =
+		movie || music
+			? parseCount(f.disc_count, 'disc_count', maxDiscCount, 'Liczba płyt to liczba od 1 do 99.')
+			: ({ ok: true, value: null } as const);
+	if (!discs.ok) return discs;
+	const run = parseCount(
+		f.limited_to,
+		'limited_to',
+		maxLimitedTo,
+		'Nakład to liczba od 1 do 1 000 000.'
+	);
+	if (!run.ok) return run;
 	return {
 		ok: true,
 		value: {
@@ -848,6 +919,7 @@ export function editionPayload(
 			packaging: movie ? f.packaging : [],
 			binding: book && !audiobook && f.binding ? f.binding : null,
 			discogs_release_id: discogs.value,
+			...editionDetails(discs.value, run.value, music && f.format === 'vinyl' ? f.color : ''),
 			cover_url: f.cover_url.trim(),
 			notes: f.notes.trim(),
 			...contentsChange(f)

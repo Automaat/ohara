@@ -3,6 +3,7 @@
 	import {
 		collectionStatusLabels,
 		formatLabels,
+		loanedLabel,
 		options,
 		type CollectionFilter
 	} from '#lib/collection.js';
@@ -15,6 +16,7 @@
 		sort,
 		format,
 		status,
+		loaned,
 		location,
 		locations,
 		tag,
@@ -22,6 +24,7 @@
 		onsort,
 		onformat,
 		onstatus,
+		onloaned,
 		onlocation,
 		ontag
 	}: {
@@ -29,6 +32,7 @@
 		sort: CollectionSort;
 		format: CollectionFilter['format'];
 		status: CollectionFilter['status'];
+		loaned: boolean;
 		/** The location the copies are filtered by, empty for any. */
 		location: string;
 		/** The locations in use, the most used first. */
@@ -40,6 +44,7 @@
 		onsort: (sort: CollectionSort) => void;
 		onformat: (format: CollectionFilter['format']) => void;
 		onstatus: (status: CollectionFilter['status']) => void;
+		onloaned: (loaned: boolean) => void;
 		onlocation: (location: string) => void;
 		ontag: (tag: string) => void;
 	} = $props();
@@ -146,6 +151,12 @@
 		<Switch
 			label={sold}
 			bind:checked={() => status === 'sold', (on) => onstatus(on ? 'sold' : '')}
+		/>
+		<Switch
+			label={loanedLabel}
+			disabled={status === 'none'}
+			checked={loaned}
+			onchange={(e) => onloaned(e.currentTarget.checked)}
 		/>
 	</div>
 	{#snippet footer()}

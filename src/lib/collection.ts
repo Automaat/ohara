@@ -11,6 +11,8 @@ import type {
 	EditionPayload,
 	Format,
 	Kind,
+	Loan,
+	LoanPayload,
 	MovieFormat,
 	MusicFormat,
 	Packaging,
@@ -35,9 +37,12 @@ export type {
 	EditionPayload,
 	Format,
 	Kind,
+	Loan,
+	LoanPayload,
 	MovieFormat,
 	MusicFormat,
 	Packaging,
+	ReturnPayload,
 	TagCount,
 	Title,
 	TitleDetail,
@@ -221,6 +226,36 @@ export function wishLine(limitCents: number | null): string {
 	return `${statusLabels.wishlist} · do\u00a0${limit}`;
 }
 
+/** A date as the API and a date field take it, YYYY-MM-DD, in local time. */
+export function isoDate(d: Date): string {
+	const pad = (n: number) => String(n).padStart(2, '0');
+	return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** Whether a loan due on a YYYY-MM-DD day is late on today: only once that day has passed. */
+export function overdue(dueOn: string | null | undefined, today: string): boolean {
+	return dueOn != null && dueOn < today;
+}
+
+/**
+ * The day "Zwrócono" records: today, or the loan's own day when it began later, as a date typed
+ * ahead or the server's Polish today seen from a browser west of Poland, which the API would
+ * refuse as a return before the loan.
+ */
+export function returnDay(lentOn: string, today: string): string {
+	return lentOn > today ? lentOn : today;
+}
+
+/** A lent copy's line, such as "Wypożyczony: Ania" or "Wypożyczony: Ania · po terminie". */
+export function loanLine(
+	borrower: string,
+	dueOn: string | null | undefined,
+	today: string
+): string {
+	const line = `Wypożyczony: ${borrower}`;
+	return overdue(dueOn, today) ? `${line} · po terminie` : line;
+}
+
 /**
  * A sold copy's line under its name, such as "Sprzedany 10 maj 2026 · 35 zł": the day and, when
  * known, the price it went for.
@@ -233,7 +268,8 @@ export function saleLine(soldOn: string | null | undefined, priceCents: number |
 
 /**
  * A shelf tile's line under the name: the wish and its limit for a wishlist copy, the sale for
- * a sold one, otherwise the creators and the edition, such as "Stanisław Lem · Twarda oprawa".
+ * a sold one, who has a lent copy, otherwise the creators and the edition, such as "Stanisław Lem
+ * · Twarda oprawa". A loan is late once its due date is before today, the reader's local day.
  */
 export function shelfLine(
 	item: Pick<
@@ -246,10 +282,13 @@ export function shelfLine(
 		| 'format'
 		| 'binding'
 		| 'label'
-	>
+	> &
+		Partial<Pick<CollectionItem, 'loan_borrower' | 'loan_due_on'>>,
+	today: string = isoDate(new Date())
 ): string {
 	if (item.status === 'wishlist') return wishLine(item.max_price_cents);
 	if (item.status === 'sold') return saleLine(item.sold_on, item.sale_price_cents);
+	if (item.loan_borrower != null) return loanLine(item.loan_borrower, item.loan_due_on, today);
 	return [item.authors?.join(', '), editionSummary({ ...item, barcode: null })]
 		.filter(Boolean)
 		.join(' · ');
@@ -268,6 +307,9 @@ export const collectionStatusLabels: Record<CollectionStatus, string> = {
 	none: 'Bez egzemplarzy'
 };
 
+/** The filter that keeps only copies out on loan, the server's `?loaned=1`. */
+export const loanedLabel = 'Wypożyczone';
+
 export type CollectionFilter = {
 	kind: Kind | '';
 	format: Format | '';
@@ -275,13 +317,15 @@ export type CollectionFilter = {
 	/** Where the copies are stored, the whole location, case aside; absent for any place. */
 	location?: string;
 	q: string;
+	/** Only copies with an open loan; left out when off. */
+	loaned?: boolean;
 	/** A tag of the title, the whole tag, case aside; absent for any title. */
 	tag?: string;
 };
 
 /**
- * The filter a collection address names. A title has no format or location, so `none` drops
- * them.
+ * The filter a collection address names. A title has no format, location or loan, so `none`
+ * drops them.
  */
 export function readCollectionFilter(params: Pick<URLSearchParams, 'get'>): CollectionFilter {
 	function read<K extends string>(key: string, labels: Record<K, string>): K | '' {
@@ -298,6 +342,7 @@ export function readCollectionFilter(params: Pick<URLSearchParams, 'get'>): Coll
 		status,
 		...(location ? { location } : {}),
 		q: params.get('q') ?? '',
+		...(status !== 'none' && params.get('loaned') === '1' ? { loaned: true } : {}),
 		...(tag ? { tag } : {})
 	};
 }
@@ -307,6 +352,7 @@ export function collectionSearch(f: CollectionFilter): string {
 	if (f.kind) params.set('kind', f.kind);
 	if (f.format) params.set('format', f.format);
 	if (f.status) params.set('status', f.status);
+	if (f.loaned) params.set('loaned', '1');
 	const location = trimSpace(f.location ?? '');
 	if (location) params.set('location', location);
 	if (f.q.trim()) params.set('q', f.q.trim());
@@ -665,4 +711,54 @@ function saleOf(
 		};
 	}
 	return { sold_on: day, ...(price == null ? {} : { sale_price_cents: price }) };
+}
+
+export type LoanForm = { borrower: string; lent_on: string; due_on: string };
+
+/** An empty loan form for a copy lent today. */
+export function loanToForm(today: string): LoanForm {
+	return { borrower: '', lent_on: today, due_on: '' };
+}
+
+const isoDay = /^\d{4}-\d{2}-\d{2}$/;
+
+/** The request body for a loan form; a blank lent date is today on the server. */
+export function loanPayload(f: LoanForm): Parsed<LoanPayload> {
+	const borrower = f.borrower.trim();
+	const lent = f.lent_on.trim();
+	const due = f.due_on.trim();
+	if (!borrower) return { ok: false, issue: { field: 'borrower', message: 'Podaj, komu.' } };
+	if (lent && !isoDay.test(lent)) {
+		return { ok: false, issue: { field: 'lent_on', message: 'Data w formacie RRRR-MM-DD.' } };
+	}
+	if (due && !isoDay.test(due)) {
+		return { ok: false, issue: { field: 'due_on', message: 'Data w formacie RRRR-MM-DD.' } };
+	}
+	if (lent && due && due < lent) {
+		return {
+			ok: false,
+			issue: { field: 'due_on', message: 'Termin zwrotu nie może być przed wypożyczeniem.' }
+		};
+	}
+	return { ok: true, value: { borrower, lent_on: lent || null, due_on: due || null } };
+}
+
+/**
+ * A loan in a copy's history: "Ania · od 1 maja 2026 · termin 1 czerwca 2026" while it is out,
+ * with "po terminie" once that day has passed, or "Ania · 1 maja 2026 – 20 maja 2026" once back.
+ */
+export function loanSummary(
+	l: Pick<Loan, 'borrower' | 'lent_on' | 'due_on' | 'returned_on'>,
+	today: string
+): string {
+	const lent = purchaseDate(l.lent_on);
+	if (l.returned_on) return `${l.borrower} · ${lent} – ${purchaseDate(l.returned_on)}`;
+	return [
+		l.borrower,
+		`od ${lent}`,
+		l.due_on && `termin ${purchaseDate(l.due_on)}`,
+		overdue(l.due_on, today) && 'po terminie'
+	]
+		.filter(Boolean)
+		.join(' · ');
 }

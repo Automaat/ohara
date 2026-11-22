@@ -642,6 +642,70 @@ func TestCollectionViewFiltersAndTotals(t *testing.T) {
 	}
 }
 
+func TestCollectionViewLoans(t *testing.T) {
+	a := newAPI(t)
+	dvd := a.edition(obj{"title_id": a.title("movie", "Seksmisja"), "format": "dvd"})
+	paper := a.edition(obj{"title_id": a.title("book", "Solaris")})
+	lentDue := a.copyOf(obj{"edition_id": dvd, "status": "owned", "price_cents": 2000})
+	lentOpen := a.copyOf(obj{"edition_id": paper, "status": "owned"})
+	back := a.copyOf(obj{"edition_id": paper, "status": "owned", "price_cents": 1500})
+	a.copyOf(obj{"edition_id": dvd, "status": "owned"})
+	a.copyOf(obj{"edition_id": dvd, "status": "wishlist"})
+
+	lend := func(copyID int64, body obj) collection.Loan {
+		t.Helper()
+		var l collection.Loan
+		a.mustDo(http.MethodPost, fmt.Sprintf("/api/copies/%d/loans", copyID), body, &l, http.StatusCreated)
+		return l
+	}
+	lend(lentDue, obj{"borrower": "Ania", "lent_on": "2026-05-01", "due_on": "2026-06-01"})
+	lend(lentOpen, obj{"borrower": "Bartek"})
+	returned := lend(back, obj{"borrower": "Celina", "lent_on": "2026-04-01"})
+	a.mustDo(http.MethodPut, fmt.Sprintf("/api/loans/%d", returned.ID), obj{"returned_on": "2026-04-20"}, nil, http.StatusOK)
+
+	var view collection.CollectionView
+	a.mustDo(http.MethodGet, "/api/collection", nil, &view, http.StatusOK)
+	want := map[int64][2]string{lentDue: {"Ania", "2026-06-01"}, lentOpen: {"Bartek", ""}}
+	for _, it := range view.Items {
+		borrower := ""
+		if it.LoanBorrower != nil {
+			borrower = *it.LoanBorrower
+		}
+		if got := [2]string{borrower, day(it.LoanDueOn)}; got != want[it.CopyID] {
+			t.Errorf("copy %d loan = %q, want %q", it.CopyID, got, want[it.CopyID])
+		}
+	}
+	if want := (collection.Totals{Copies: 5, Owned: 4, Wishlist: 1, Priced: 2, SpentCents: 3500}); view.Totals != want {
+		t.Fatalf("totals = %+v, want %+v: a lent copy stays owned", view.Totals, want)
+	}
+
+	tests := []struct {
+		query string
+		want  []int64
+	}{
+		{"?loaned=1", []int64{lentDue, lentOpen}},
+		{"?loaned=1&kind=book", []int64{lentOpen}},
+		{"?loaned=1&status=wishlist", nil},
+		{"?loaned=1&q=ania", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			var view collection.CollectionView
+			a.mustDo(http.MethodGet, "/api/collection"+tt.query, nil, &view, http.StatusOK)
+			got := make([]int64, 0, len(view.Items))
+			for _, it := range view.Items {
+				got = append(got, it.CopyID)
+			}
+			if fmt.Sprint(got) != fmt.Sprint(append([]int64{}, tt.want...)) {
+				t.Fatalf("copies = %v, want %v", got, tt.want)
+			}
+		})
+	}
+	for _, q := range []string{"?loaned=0", "?loaned=true"} {
+		a.fails(http.MethodGet, "/api/collection"+q, nil, http.StatusUnprocessableEntity, "loaned")
+	}
+}
+
 func TestSoldCopy(t *testing.T) {
 	a := newAPI(t)
 	movie := a.title("movie", "Rejs")

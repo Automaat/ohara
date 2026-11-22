@@ -123,6 +123,18 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   refused save and before saving another valid pick over a key that may
   have written; a pick's provider values the API would refuse are left
   out of the save. A key is at most 100 bytes of UTF-8 without NUL.
+- A loan (`loan`) records who has an owned copy: `POST /api/copies/{id}/loans`
+  (`borrower` trimmed, at most 500 bytes; `lent_on` today in Poland when
+  null; optional `due_on`, not before it) answers 201, 409 for a wish or a
+  copy already lent; `PUT /api/loans/{id}` sets `returned_on`, not before
+  `lent_on`, once: the same day again answers 200, another day 409, so a
+  stale "Zwrócono" keeps the first. A copy has at most one open loan and keeps its returned ones,
+  newest first in `GET /api/copies/{id}`; they go with the copy. A lent copy
+  stays owned (turning it into a wish answers 409 on `status`) and counts as
+  before in spend, valuation and deals. `GET /api/collection` items carry the
+  open loan's `loan_borrower` and `loan_due_on`; `?loaned=1` lists only lent
+  copies. A discard keeps a copy that was lent: it locks the copy, as a
+  loan does, before it looks for loans.
 - Lookup providers implement `lookup.Provider` (`Fetch` returns raw JSON,
   `Parse` turns raw JSON into candidates) and register in `cmd/api` with a
   cache TTL. Candidate `title`/`edition` fields match the POST bodies of
@@ -231,8 +243,13 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   letter with a diacritic to its base letter ("Bjork" for "Björk") in
   names, listing titles and phrases; search queries keep the want's
   spelling. A run matches listing titles to wishlist copies (all title
-  words, the edition's format for movies, the author's surname in any case
-  for books ("Andrzeja Sapkowskiego", "Lalka Prusa"), the artist's words
+  words; a name of words of at most two letters ("M", "Up", "It") only
+  where it stands as the title: at the start, after a separator, a media
+  word or the author (in any case), and before the end, a separator, a
+  media word, a release year or the author, or anything right after the
+  author, and a lone letter before a space ("M Fritz Lang"); the
+  edition's format for movies, the author's surname in any case for
+  books ("Andrzeja Sapkowskiego", "Lalka Prusa"), the artist's words
   and a fitting medium for
   albums, where a listing naming no medium counts as a CD, minus the
   editable reject phrases a want's own name or artist does not contain),
@@ -245,7 +262,8 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   skips a want for a listing that names another title of its kind
   (wished, owned or neither) more specifically: one phrase, past media
   words and disc counts, holding every word of a want's name it carries
-  and more ("Alien: Covenant" for an "Alien" want), stores
+  and more ("Alien: Covenant" for an "Alien" want; a short name counts
+  its single letters, "X-Men" for an "X" want), stores
   each listing once in `price_observation` (`source`, `external_id`) and
   queues one `deal_alert` per listing at or below the copy's
   `max_price_cents` or its `max_market_percent` (1 to 100) of the
@@ -528,7 +546,10 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   (`?status=none`) lists titles without one instead, filtered in the client
   from `GET /api/titles`; `/titles` redirects to `/`. Its "Bez ceny"
   (`?status=unpriced`, client only) lists owned copies without a purchase
-  price; a phone's header shows their count as its toggle, hidden at 0.
+  price, and its "Wypożyczone" switch (`?loaned=1`, as on the server) the lent
+  ones, whose shelf line reads "Wypożyczony: <borrower>", with "po
+  terminie" once the due date has passed; a phone's header shows their
+  count as its toggle, hidden at 0.
   Its "Sprzedane" switch (`?status=sold`) lists the sold copies, which
   every other view, the counts and the default shelf leave out.
   Its "Tag" (`?tag=`) offers the tags the loaded copies and titles carry,

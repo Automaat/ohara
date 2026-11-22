@@ -28,6 +28,7 @@
 		formatLabels,
 		formatPLN,
 		kindLabels,
+		loanedLabel,
 		readCollectionFilter,
 		shelfSummary,
 		shelvedCount,
@@ -152,7 +153,7 @@
 	});
 
 	function set<K extends keyof CollectionFilter>(key: K, value: CollectionFilter[K]) {
-		if (key === 'q') query = value ?? '';
+		if (key === 'q' && typeof value === 'string') query = value;
 		updateFilter({ ...filter, [key]: value });
 	}
 
@@ -201,13 +202,15 @@
 	}
 
 	function setStatus(status: CollectionFilter['status']) {
-		// A title has no format or location, so listing titles without copies drops those filters.
+		// A title has no format, location or loan, so listing titles without copies drops those
+		// filters.
 		const titles = status === 'none';
 		updateFilter({
 			...filter,
 			status,
 			format: titles ? '' : filter.format,
-			location: titles ? '' : filter.location
+			location: titles ? '' : filter.location,
+			loaned: titles ? false : filter.loaned
 		});
 	}
 
@@ -267,6 +270,7 @@
 				{ key: 'format', label: filter.format && formatLabels[filter.format] },
 				{ key: 'location', label: filter.location },
 				{ key: 'status', label: filter.status && collectionStatusLabels[filter.status] },
+				{ key: 'loaned', label: filter.loaned ? loanedLabel : '' },
 				{ key: 'tag', label: filter.tag }
 			] as const
 		).filter((entry) => entry.label)
@@ -305,7 +309,12 @@
 					key: 'status',
 					label: collectionStatusLabels[filter.status],
 					remove: () => set('status', '')
-				}
+				},
+			filter.loaned === true && {
+				key: 'loaned',
+				label: loanedLabel,
+				remove: () => set('loaned', false)
+			}
 		].filter((choice) => choice !== false && choice !== '')
 	);
 </script>
@@ -369,6 +378,7 @@
 		{sort}
 		format={filter.format}
 		status={filter.status}
+		loaned={filter.loaned ?? false}
 		location={filter.location ?? ''}
 		{locations}
 		tag={filter.tag ?? ''}
@@ -376,6 +386,7 @@
 		onsort={setSort}
 		onformat={(format) => set('format', format)}
 		onstatus={setStatus}
+		onloaned={(loaned) => set('loaned', loaned)}
 		onlocation={(location) => set('location', location)}
 		ontag={(tag) => set('tag', tag)}
 	/>
@@ -511,7 +522,7 @@
 							<div class="status-details">
 								<Link href={`/copies/${row.copy_id}`}>
 									<Pill tone={row.status === 'owned' ? 'success' : 'neutral'}>
-										{statusLabels[row.status]}
+										{row.loan_borrower != null ? 'Wypożyczony' : statusLabels[row.status]}
 									</Pill>
 								</Link>
 								{#if row.status === 'sold'}

@@ -182,7 +182,7 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   of `/search.php?text=<query>`, the first results page in the shop's
   default order: sorting is a `/settings.php` form, which robots.txt
   disallows, and no further page or product page is fetched. The page is
-  read without its HTML comments, matching elements by attribute and class
+  read without its HTML comments, scripts and styles, matching elements by attribute and class
   token in any order. Each product tile (a `div` classed `product` with a
   numeric `data-product_id`) inside the results section
   (`section#search`, classed `search` and `products`) becomes a listing,
@@ -204,9 +204,10 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   "Zabrania się kopiowania zdjęć oraz opisów (w całości lub w części) bez
   zgody właściciela i administratora strony", so a listing keeps no photo
   or description, only the tile's title, price and link; it does not
-  forbid automated access. robots.txt asks `Crawl-delay: 1`: queries keep
-  it through `OHARA_DEALS_DELAY` (at least 1 s), and each redirect hop of
-  a search waits 1 s first, since a lane never paces its own hops.
+  forbid automated access. robots.txt asks `Crawl-delay: 1`: every request to the shop's host,
+  redirect hops included, waits until 1 s has passed since the last one
+  (`deals.crawlClock`), since the jittered `OHARA_DEALS_DELAY` can fall to
+  half its value and a lane never paces its own hops.
 
 ## Tezeusz
 

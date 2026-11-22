@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Automaat/ohara/backend-go/internal/fetch"
@@ -40,16 +41,22 @@ func (Winylownia) PerQuery() bool { return true }
 func (Winylownia) Kinds() []string { return []string{"music"} }
 
 // winylowniaCrawlDelay is the gap the shop's robots.txt asks between two
-// requests (Crawl-delay: 1); a search's redirect hops wait it too.
+// requests (Crawl-delay: 1). The hunter's jittered OHARA_DEALS_DELAY can
+// fall below it, and a search's redirect hops are not paced at all, so
+// every request to the shop's host waits for it on winylowniaClock.
 const winylowniaCrawlDelay = time.Second
+
+// winylowniaClock spaces every request sent to the Winylownia host.
+var winylowniaClock = newCrawlClock()
 
 // Search implements Source. IdoSell redirects a search without results
 // to its no-results page, which answers 404; that page is an answer
-// without listings, any other 404 a failure. Each redirect hop waits
-// winylowniaCrawlDelay first.
+// without listings, any other 404 a failure. Every request, redirect hops
+// included, is sent at least winylowniaCrawlDelay after the last one to
+// the same host.
 func (s Winylownia) Search(ctx context.Context, query string) ([]Listing, error) {
 	u := s.BaseURL + "?" + url.Values{"text": {query}}.Encode()
-	resp, err := fetch.Do(ctx, crawlDelayed(s.Client, winylowniaCrawlDelay), fetch.Request{
+	resp, err := fetch.Do(ctx, crawlDelayed(s.Client, winylowniaClock, winylowniaCrawlDelay), fetch.Request{
 		Source:  s.Name(),
 		URL:     u,
 		Header:  browserHeader("text/html"),
@@ -59,43 +66,88 @@ func (s Winylownia) Search(ctx context.Context, query string) ([]Listing, error)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", s.Name(), err)
 	}
-	if resp.Status == http.StatusNotFound && !idoSellNoProduct(withoutComments(resp.Body)) {
+	if resp.Status == http.StatusNotFound && !idoSellNoProduct(withoutInert(resp.Body)) {
 		return nil, fmt.Errorf("%s: %w", s.Name(), fetch.StatusError{Code: http.StatusNotFound})
 	}
 	return parseIdoSellSearch(s.Name(), s.BaseURL, resp.Body)
 }
 
-// maxRedirects is how many redirects a crawl-delayed client follows, as
-// many as net/http's default.
-const maxRedirects = 10
+// crawlClock spaces the requests sent to each host.
+type crawlClock struct {
+	mu   sync.Mutex
+	next map[string]time.Time
+}
 
-// crawlDelayed is a copy of client (http.DefaultClient when nil) that
-// waits delay before following each redirect, so the hops of one request
-// keep a site's crawl delay too.
-func crawlDelayed(client *http.Client, delay time.Duration) *http.Client {
+func newCrawlClock() *crawlClock { return &crawlClock{next: map[string]time.Time{}} }
+
+// wait books the next free slot for host, delay after the one before, and
+// blocks until it comes or ctx ends; the slot after it starts delay after
+// the wait ends. A slot booked for a request that was then canceled stays
+// taken.
+func (c *crawlClock) wait(ctx context.Context, host string, delay time.Duration) error {
+	c.mu.Lock()
+	at := c.next[host]
+	if now := time.Now(); at.Before(now) {
+		at = now
+	}
+	c.next[host] = at.Add(delay)
+	c.mu.Unlock()
+	d := time.Until(at)
+	if d <= 0 {
+		return nil
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	// The timer fires a little late; the next slot counts from now.
+	c.mu.Lock()
+	if later := time.Now().Add(delay); later.After(c.next[host]) {
+		c.next[host] = later
+	}
+	c.mu.Unlock()
+	return nil
+}
+
+// crawlDelayTransport sends each request once clock lets it through.
+type crawlDelayTransport struct {
+	base  http.RoundTripper
+	clock *crawlClock
+	delay time.Duration
+}
+
+// RoundTrip implements http.RoundTripper.
+func (t crawlDelayTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if err := t.clock.wait(r.Context(), r.URL.Host, t.delay); err != nil {
+		return nil, err
+	}
+	return t.base.RoundTrip(r)
+}
+
+// crawlDelayed is a copy of client (http.DefaultClient when nil) whose
+// every request, redirect hops included, waits on clock until delay has
+// passed since the last request to the same host.
+func crawlDelayed(client *http.Client, clock *crawlClock, delay time.Duration) *http.Client {
 	if client == nil {
 		client = http.DefaultClient
 	}
 	c := *client
-	c.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		if len(via) >= maxRedirects {
-			return fmt.Errorf("stopped after %d redirects", maxRedirects)
-		}
-		t := time.NewTimer(delay)
-		defer t.Stop()
-		select {
-		case <-t.C:
-			return nil
-		case <-req.Context().Done():
-			return req.Context().Err()
-		}
+	base := c.Transport
+	if base == nil {
+		base = http.DefaultTransport
 	}
+	c.Transport = crawlDelayTransport{base: base, clock: clock, delay: delay}
 	return &c
 }
 
 var (
-	idoSellComment = regexp.MustCompile(`(?s)<!--.*?-->`)
-	idoSellAttr    = regexp.MustCompile(`\s([\w:-]+)=(?:"([^"]*)"|'([^']*)')`)
+	// idoSellInert matches what a browser never renders as markup: comments
+	// and the content of script and style elements.
+	idoSellInert = regexp.MustCompile(`(?is)<!--.*?-->|<script\b.*?</script\s*>|<style\b.*?</style\s*>`)
+	idoSellAttr  = regexp.MustCompile(`\s([\w:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')`)
 	// idoSellTags match an element's opening tag, idoSellEnds its opening
 	// or closing tag (group 1 is "/" for a closing one), by element name.
 	idoSellTags = tagPatterns(`<`)
@@ -112,10 +164,10 @@ func tagPatterns(prefix string) map[string]*regexp.Regexp {
 	return out
 }
 
-// withoutComments is body with its HTML comments taken out, so markup
-// inside a comment counts for nothing.
-func withoutComments(body []byte) []byte {
-	return idoSellComment.ReplaceAll(body, nil)
+// withoutInert is body without its HTML comments, scripts and styles, so
+// markup inside them counts for nothing.
+func withoutInert(body []byte) []byte {
+	return idoSellInert.ReplaceAll(body, nil)
 }
 
 // htmlElement is one element found in a page: its attributes and the
@@ -181,7 +233,7 @@ func hasClasses(attrs map[string]string, tokens ...string) bool {
 	return true
 }
 
-// idoSellNoProduct reports whether body, without comments, is an IdoSell
+// idoSellNoProduct reports whether body, without inert markup, is an IdoSell
 // shop's no-results page: its container div is classed noproduct_page.
 func idoSellNoProduct(body []byte) bool {
 	return len(findElements(body, "div", func(a map[string]string) bool {
@@ -198,8 +250,8 @@ type idoSellRaw struct {
 }
 
 // parseIdoSellSearch reads an IdoSell shop's search page for source, with
-// base the search URL its links resolve against. HTML comments count for
-// nothing. Each available product tile (a div classed product with a
+// base the search URL its links resolve against. HTML comments, scripts
+// and styles count for nothing. Each available product tile (a div classed product with a
 // data-product_id) in the results section (section#search classed search
 // and products) becomes a new-condition listing, its title and price read
 // only inside the tile; a tile marked data-product_disable="true" (out of
@@ -207,7 +259,7 @@ type idoSellRaw struct {
 // no-results page is an answer without listings; a page that is neither,
 // or a results section without a product tile, is a parse error.
 func parseIdoSellSearch(source, base string, body []byte) ([]Listing, error) {
-	body = withoutComments(body)
+	body = withoutInert(body)
 	if idoSellNoProduct(body) {
 		return nil, nil
 	}

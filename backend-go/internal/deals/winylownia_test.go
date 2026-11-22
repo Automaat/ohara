@@ -90,7 +90,7 @@ func TestParseIdoSellSearchReadsEachTileOnly(t *testing.T) {
 
 func TestParseIdoSellSearchIgnoresAttributeOrder(t *testing.T) {
 	body := `<div class="search_page container" id="container"><section class="products d-flex search" id="search">` +
-		`<div data-product_page="0" data-product_id="7" class="col-6 product"><a title="NIRVANA Bleach LP" href="/p/7.html" class="product__name">x</a>` +
+		`<div data-product_page="0" data-product_id = "7" class = "col-6 product"><a title="NIRVANA Bleach LP" href="/p/7.html" class="product__name">x</a>` +
 		`<strong class="--main price">49,99 zł</strong></div></section></div>`
 	listings, err := parseIdoSellSearch("winylownia", winylowniaSearch, []byte(body))
 	if err != nil || len(listings) != 1 || listings[0].ExternalID != "7" || listings[0].PriceCents != 4999 {
@@ -98,11 +98,43 @@ func TestParseIdoSellSearchIgnoresAttributeOrder(t *testing.T) {
 	}
 }
 
-func TestParseIdoSellSearchIgnoresComments(t *testing.T) {
-	body := `<html><body><!-- <div id="container" class="noproduct_page"> --><h1>Przerwa techniczna</h1></body></html>`
-	_, err := parseIdoSellSearch("winylownia", winylowniaSearch, []byte(body))
-	if got := sourceStatus(err); got != metrics.SourceParseError {
-		t.Fatalf("maintenance page with a commented marker status %q (err %v), want %s", got, err, metrics.SourceParseError)
+func TestParseIdoSellSearchIgnoresInertMarkup(t *testing.T) {
+	const tile = `<section id="search" class="search products"><div class="product" data-product_id="1">` +
+		`<a class="product__name" href="/p/1.html" title="NIRVANA Nevermind LP">x</a><strong class="price --main">9,99 zł</strong></div></section>`
+	for name, body := range map[string]string{
+		"commented marker": `<html><body><!-- <div id="container" class="noproduct_page"> --><h1>Przerwa techniczna</h1></body></html>`,
+		"commented tiles":  `<html><body><!--` + tile + `--><h1>Przerwa techniczna</h1></body></html>`,
+		"scripted tiles":   "<html><script>const dormant = `" + tile + "`;</script><h1>Serwis niedostępny</h1></html>",
+		"styled marker":    `<html><style>/* <div id="container" class="noproduct_page"> */</style><h1>Błąd</h1></html>`,
+	} {
+		listings, err := parseIdoSellSearch("winylownia", winylowniaSearch, []byte(body))
+		if got := sourceStatus(err); got != metrics.SourceParseError || len(listings) != 0 {
+			t.Errorf("%s: %d listings, status %q (err %v); want none and %s", name, len(listings), got, err, metrics.SourceParseError)
+		}
+	}
+}
+
+func TestCrawlClockSpacesRequestsPerHost(t *testing.T) {
+	const delay = 50 * time.Millisecond
+	c := newCrawlClock()
+	ctx := context.Background()
+	start := time.Now()
+	for range 3 {
+		if err := c.wait(ctx, "shop.test", delay); err != nil {
+			t.Fatalf("wait: %v", err)
+		}
+	}
+	if got := time.Since(start); got < 2*delay {
+		t.Fatalf("3 requests to one host took %v, want at least %v", got, 2*delay)
+	}
+	other := time.Now()
+	if err := c.wait(ctx, "other.test", delay); err != nil || time.Since(other) > delay/2 {
+		t.Fatalf("another host waited %v (err %v), want no wait", time.Since(other), err)
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := c.wait(canceled, "shop.test", time.Hour); err == nil {
+		t.Fatal("a canceled wait returned no error")
 	}
 }
 
@@ -145,12 +177,18 @@ func TestParseIdoSellSearchTiles(t *testing.T) {
 // no-results page, which answers 404), answers a plain 404 under /gone/,
 // a 404 whose no-results marker is only in a comment under /fake404/ and
 // 403 to any other path. It records the search request and when the
-// no-results redirect and its hop arrived.
+// no-results redirect and its hop arrived, and fails the test when two
+// requests reached it less than the crawl delay apart.
 func winylowniaDouble(t *testing.T) (*httptest.Server, *string, *[]time.Time) {
 	t.Helper()
 	var gotPath string
 	var hops []time.Time
+	var mu sync.Mutex
+	var all []time.Time
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		all = append(all, time.Now())
+		mu.Unlock()
 		switch {
 		case r.URL.Path == "/search.php" && r.URL.Query().Get("text") == "brak":
 			hops = append(hops, time.Now())
@@ -172,6 +210,16 @@ func winylowniaDouble(t *testing.T) (*httptest.Server, *string, *[]time.Time) {
 		}
 	}))
 	t.Cleanup(srv.Close)
+	t.Cleanup(func() {
+		mu.Lock()
+		defer mu.Unlock()
+		for i := 1; i < len(all); i++ {
+			// 5 ms covers the loopback's scheduling noise.
+			if gap := all[i].Sub(all[i-1]); gap < winylowniaCrawlDelay-5*time.Millisecond {
+				t.Errorf("requests %d and %d to the shop were %v apart, want at least %v", i-1, i, gap, winylowniaCrawlDelay)
+			}
+		}
+	})
 	return srv, &gotPath, &hops
 }
 

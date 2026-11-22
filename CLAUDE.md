@@ -223,11 +223,22 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   author's surname for books, the artist's words and a fitting medium for
   albums, where a listing naming no medium counts as a CD, minus the
   editable reject phrases a want's own name or artist does not contain),
-  stores
+  skips a want for a listing that names another title of its kind
+  (wished, owned or neither) more specifically: one phrase, past media
+  words and disc counts, holding every word of a want's name it carries
+  and more ("Alien: Covenant" for an "Alien" want), stores
   each listing once in `price_observation` (`source`, `external_id`) and
   queues one `deal_alert` per listing at or below the copy's
   `max_price_cents`; a listing seen again keeps its row, takes the new
   price and `last_seen_at`, and alerts if it has no alert yet. Alerts are retried up to 5 times within a week.
+  A sent alert stores the price it named (`deal_alert.alerted_price_cents`);
+  a later price under it, within the limit, queues the same row again and
+  its message names the earlier price ("było …"). An alert still waiting
+  goes out at the current price; one that gave up or expired is queued
+  again only under the lowest price it was queued or tried at
+  (`queued_price_cents`). An unsent alert whose wish is gone moves to the
+  wish that now matches, keeping its attempts and age. Alerts sent before
+  migration 0016 have no stored price and never repeat.
   Okazje's "Ignoruj" (`POST /api/deals/{id}/dismissal`, undone by `DELETE`,
   both 204 when repeated, 404 for an id no OLX or Pepper listing has) sets
   the listing's `dismissed_at`, for every wish it matches: it leaves every
@@ -279,7 +290,10 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   quote, so movie discs have no floor. A title page reads
   `GET /api/valuation/copies?title_id=`: that title's owned copies valued
   as `GET /api/valuation` values them, from that title's prices only,
-  with no summary or history.
+  with no summary or history. The summary's `gain` sums the used value
+  and the price paid over the copies that have both; the Wartość hero's
+  difference reads only that, and names its coverage when it counts
+  fewer copies than the collection. History keeps no gain.
 - A barcode no provider resolves goes to `scan_queue`; a trigger on `edition`
   removes it once an edition carries that barcode. `ohara_scan_queue_size`
   counts it on each scrape. The trigger keeps the entry it removes in

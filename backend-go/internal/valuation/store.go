@@ -64,6 +64,11 @@ func (s *Store) Rules(ctx context.Context) (deals.Rules, error) {
 	return s.deals.Rules(ctx)
 }
 
+// Titles returns every title for the deal matcher's Outranks.
+func (s *Store) Titles(ctx context.Context) (deals.Titles, error) {
+	return s.deals.Titles(ctx)
+}
+
 // Record stores l as a price of h's edition, through the deal hunter's
 // store so both keep one row per listing. It reports whether the listing
 // was new.
@@ -198,7 +203,7 @@ func (s *Store) valued(ctx context.Context, window time.Duration, titleID int64)
 type HistoryPoint struct {
 	Day        string    `json:"day"`
 	ComputedAt time.Time `json:"computed_at"`
-	Summary
+	Totals
 }
 
 const historyColumns = `to_char(day, 'YYYY-MM-DD'), computed_at, copies, spent_cents,

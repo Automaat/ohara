@@ -163,18 +163,18 @@ func TestRunValuesOwnedCopies(t *testing.T) {
 	if movie.Floor != nil || movie.Mid == nil || movie.Mid.Cents != 4000 || movie.Mid.Count != 1 || !movie.LowConfidence {
 		t.Fatalf("movie value = %+v %+v low=%v", movie.Floor, movie.Mid, movie.LowConfidence)
 	}
-	wantSum := Summary{
+	wantSum := Totals{
 		Copies: 3, SpentCents: 8000,
 		Floor:         Bound{Cents: 537, Copies: 1},
 		Mid:           Bound{Cents: 2500 + 4000 + 4000, Copies: 3},
 		LowConfidence: 2,
 	}
-	if sum != wantSum {
+	if sum.Totals != wantSum {
 		t.Fatalf("summary = %+v, want %+v", sum, wantSum)
 	}
 
 	history, err := r.store.History(ctx, 30)
-	if err != nil || len(history) != 1 || history[0].Summary != wantSum {
+	if err != nil || len(history) != 1 || history[0].Totals != wantSum {
 		t.Fatalf("history = %+v, %v", history, err)
 	}
 	body := scrape(t)
@@ -1212,5 +1212,45 @@ func TestBackToBackRunsKeepTheirPacing(t *testing.T) {
 	}
 	if d := time.Since(start); d >= runDelay/2 {
 		t.Fatalf("two valuations without their own pauses took %v, want them not to wait for each other's requests", d)
+	}
+}
+
+func TestRunPricesMostSpecificTitle(t *testing.T) {
+	for _, tt := range []struct {
+		name          string
+		ownCovenant   bool
+		wantEditionID int64
+	}{
+		{"both owned", true, 31},
+		{"only Alien owned", false, 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			pool := dbtest.Migrated(t)
+			exec(t, pool, `INSERT INTO title (id, kind, name, original_title) OVERRIDING SYSTEM VALUE VALUES
+				(3, 'movie', 'Obcy - 8. pasażer Nostromo', 'Alien'), (4, 'movie', 'Alien: Covenant', NULL)`)
+			exec(t, pool, `INSERT INTO edition (id, title_id, format) OVERRIDING SYSTEM VALUE VALUES
+				(30, 3, 'dvd'), (31, 4, 'dvd')`)
+			exec(t, pool, `INSERT INTO copy (edition_id, status) VALUES (30, 'owned')`)
+			if tt.ownCovenant {
+				exec(t, pool, `INSERT INTO copy (edition_id, status) VALUES (31, 'owned')`)
+			}
+			olx := &fakeSource{name: "olx", listings: []deals.Listing{
+				listing("covenant", "Alien Covenant DVD", 2000, used()),
+			}}
+			if _, err := newTestRunner(pool, &fakeBuyBack{}, olx).Run(context.Background()); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			var editions []int64
+			if err := pool.QueryRow(context.Background(), `SELECT coalesce(array_agg(edition_id), '{}')
+				FROM price_observation WHERE external_id = 'covenant'`).Scan(&editions); err != nil {
+				t.Fatal(err)
+			}
+			switch {
+			case tt.wantEditionID == 0 && len(editions) != 0:
+				t.Fatalf("priced editions %v from the Alien: Covenant listing, want none", editions)
+			case tt.wantEditionID != 0 && !slices.Equal(editions, []int64{tt.wantEditionID}):
+				t.Fatalf("priced editions %v, want [%d]", editions, tt.wantEditionID)
+			}
+		})
 	}
 }

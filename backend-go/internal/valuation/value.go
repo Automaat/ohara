@@ -233,14 +233,29 @@ type Bound struct {
 	Copies int   `json:"copies"`
 }
 
-// Summary is the collection's value range against what was paid for it.
-type Summary struct {
+// Totals is the collection's value range against what was paid for it,
+// as one day of valuation history keeps it.
+type Totals struct {
 	Copies        int   `json:"copies"`
 	SpentCents    int64 `json:"spent_cents"`
 	Floor         Bound `json:"floor"`
 	Mid           Bound `json:"mid"`
 	Ceiling       Bound `json:"ceiling"`
 	LowConfidence int   `json:"low_confidence"`
+}
+
+// Gain compares the used value with the price paid over the copies that
+// have both, so the two sums cover the same copies.
+type Gain struct {
+	Copies     int   `json:"copies"`
+	MidCents   int64 `json:"mid_cents"`
+	SpentCents int64 `json:"spent_cents"`
+}
+
+// Summary is the collection's totals now, with its gain.
+type Summary struct {
+	Totals
+	Gain Gain `json:"gain"`
 }
 
 // Value fills each copy's range from ranges.
@@ -255,7 +270,7 @@ func Value(copies []CopyValue, ranges Ranges) {
 
 // Summarize totals valued copies.
 func Summarize(copies []CopyValue) Summary {
-	s := Summary{Copies: len(copies)}
+	s := Summary{Totals: Totals{Copies: len(copies)}}
 	add := func(b *Bound, e *Estimate) {
 		if e != nil {
 			b.Cents += e.Cents
@@ -266,6 +281,11 @@ func Summarize(copies []CopyValue) Summary {
 		c := &copies[i]
 		if c.PriceCents != nil {
 			s.SpentCents += *c.PriceCents
+			if c.Mid != nil {
+				s.Gain.Copies++
+				s.Gain.MidCents += c.Mid.Cents
+				s.Gain.SpentCents += *c.PriceCents
+			}
 		}
 		add(&s.Floor, c.Floor)
 		add(&s.Mid, c.Mid)

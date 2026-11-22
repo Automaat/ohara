@@ -37,6 +37,9 @@
 			<span class="delta">{figures.delta}</span>
 		{/if}
 	</p>
+	{#if figures.coverage}
+		<p class="coverage">{figures.coverage}</p>
+	{/if}
 	{#if marks}
 		<div class="range" aria-hidden="true">
 			<span class="paid" style:left="{marks.spent}%"></span>
@@ -131,6 +134,13 @@
 		background: rgb(244 198 204 / 18%);
 		color: #f4c6cc;
 		font-weight: 700;
+	}
+
+	.coverage {
+		margin: 0;
+		font-size: 0.75rem;
+		color: rgb(248 233 230 / 75%);
+		font-variant-numeric: tabular-nums;
 	}
 
 	.range {

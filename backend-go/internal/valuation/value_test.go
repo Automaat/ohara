@@ -168,17 +168,71 @@ func TestValueAndSummarize(t *testing.T) {
 	}
 	got := Summarize(copies)
 	want := Summary{
-		Copies:        3,
-		SpentCents:    8000,
-		Floor:         Bound{Cents: 1400, Copies: 2},
-		Mid:           Bound{Cents: 5000, Copies: 2},
-		LowConfidence: 1,
+		Totals: Totals{
+			Copies:        3,
+			SpentCents:    8000,
+			Floor:         Bound{Cents: 1400, Copies: 2},
+			Mid:           Bound{Cents: 5000, Copies: 2},
+			LowConfidence: 1,
+		},
+		Gain: Gain{Copies: 1, MidCents: 2500, SpentCents: 4000},
 	}
 	if got != want {
 		t.Fatalf("Summarize = %+v, want %+v", got, want)
 	}
 	if empty := Summarize(nil); empty != (Summary{}) {
 		t.Fatalf("Summarize(nil) = %+v", empty)
+	}
+}
+
+func TestSummarizeGainCoversCopiesWithBoth(t *testing.T) {
+	cents := func(v int64) *int64 { return &v }
+	mid := func(v int64) *Estimate { return &Estimate{Cents: v, Source: SourceOLX, Count: 3} }
+	tests := []struct {
+		name   string
+		copies []CopyValue
+		want   Summary
+	}{
+		{
+			name: "only the copy with a price and a used value",
+			copies: []CopyValue{
+				{CopyID: 1, PriceCents: cents(5000), Mid: mid(6000)},
+				{CopyID: 2, PriceCents: cents(20000)},
+				{CopyID: 3, Mid: mid(4000)},
+			},
+			want: Summary{
+				Totals: Totals{Copies: 3, SpentCents: 25000, Mid: Bound{Cents: 10000, Copies: 2}},
+				Gain:   Gain{Copies: 1, MidCents: 6000, SpentCents: 5000},
+			},
+		},
+		{
+			name: "a copy bought for nothing counts",
+			copies: []CopyValue{
+				{CopyID: 1, PriceCents: cents(0), Mid: mid(1500)},
+				{CopyID: 2, PriceCents: cents(3000), Mid: mid(2000)},
+			},
+			want: Summary{
+				Totals: Totals{Copies: 2, SpentCents: 3000, Mid: Bound{Cents: 3500, Copies: 2}},
+				Gain:   Gain{Copies: 2, MidCents: 3500, SpentCents: 3000},
+			},
+		},
+		{
+			name: "no copy with both",
+			copies: []CopyValue{
+				{CopyID: 1, PriceCents: cents(5000)},
+				{CopyID: 2, Mid: mid(4000)},
+			},
+			want: Summary{
+				Totals: Totals{Copies: 2, SpentCents: 5000, Mid: Bound{Cents: 4000, Copies: 1}},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := Summarize(tt.copies); got != tt.want {
+				t.Fatalf("Summarize = %+v, want %+v", got, tt.want)
+			}
+		})
 	}
 }
 

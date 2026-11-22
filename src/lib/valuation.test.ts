@@ -157,15 +157,28 @@ const point = (day: string, base: number): HistoryPoint => ({
 	low_confidence: 1
 });
 
-const summary = (patch: Partial<Summary> = {}): Summary => ({
-	copies: 20,
-	spent_cents: 117300,
-	floor: { cents: 3900, copies: 6 },
-	mid: { cents: 84800, copies: 20 },
-	ceiling: { cents: 137500, copies: 18 },
-	low_confidence: 3,
-	...patch
-});
+/**
+ * A summary whose gain, unless patched, covers every valued copy as if each had a price, or no
+ * copy when nothing was spent.
+ */
+const summary = (patch: Partial<Summary> = {}): Summary => {
+	const s = {
+		copies: 20,
+		spent_cents: 117300,
+		floor: { cents: 3900, copies: 6 },
+		mid: { cents: 84800, copies: 20 },
+		ceiling: { cents: 137500, copies: 18 },
+		low_confidence: 3,
+		...patch
+	};
+	return {
+		gain:
+			s.spent_cents > 0
+				? { copies: s.mid.copies, mid_cents: s.mid.cents, spent_cents: s.spent_cents }
+				: { copies: 0, mid_cents: 0, spent_cents: 0 },
+		...s
+	};
+};
 
 describe('value hero', () => {
 	it('states the used total against what was spent', () => {
@@ -203,6 +216,73 @@ describe('value hero', () => {
 
 	it('shows no sign for an even difference', () => {
 		expect(nbsp(heroFigures(summary({ spent_cents: 84800 })).delta ?? '')).toBe('0 zł · 0%');
+	});
+
+	it('compares only the copies with both a price and a used value', () => {
+		// One copy bought for 50 zł worth 60 zł, one bought for 200 zł without a used value
+		// and one without a price worth 40 zł.
+		const f = heroFigures(
+			summary({
+				copies: 3,
+				spent_cents: 25000,
+				mid: { cents: 10000, copies: 2 },
+				gain: { copies: 1, mid_cents: 6000, spent_cents: 5000 }
+			})
+		);
+
+		expect(f.value).toBe('100');
+		expect(nbsp(f.spent)).toBe('250 zł');
+		expect(nbsp(f.delta ?? '')).toBe('+10 zł · +20%');
+		expect(f.coverage).toBe('Różnica dla 1 z 3 egzemplarzy');
+	});
+
+	it('says nothing of coverage when the difference counts every copy', () => {
+		const f = heroFigures(summary());
+
+		expect(f.delta).not.toBeNull();
+		expect(f.coverage).toBeNull();
+	});
+
+	it('shows no difference without a copy that has both figures', () => {
+		const f = heroFigures(
+			summary({
+				copies: 2,
+				spent_cents: 5000,
+				mid: { cents: 4000, copies: 1 },
+				gain: { copies: 0, mid_cents: 0, spent_cents: 0 }
+			})
+		);
+
+		expect(f.value).toBe('40');
+		expect(nbsp(f.spent)).toBe('50 zł');
+		expect(f.delta).toBeNull();
+		expect(f.coverage).toBeNull();
+	});
+
+	it('shows the difference without a percent when the compared copies cost nothing', () => {
+		// One copy bought for 0 zł worth 30 zł and one bought for 200 zł without a used value.
+		const f = heroFigures(
+			summary({
+				copies: 2,
+				spent_cents: 20000,
+				mid: { cents: 3000, copies: 1 },
+				gain: { copies: 1, mid_cents: 3000, spent_cents: 0 }
+			})
+		);
+
+		expect(nbsp(f.delta ?? '')).toBe('+30 zł');
+		expect(f.coverage).toBe('Różnica dla 1 z 2 egzemplarzy');
+	});
+
+	it('keeps the totals and shows no difference for a response without a gain', () => {
+		// An open app reading a server rolled back to before the gain existed.
+		const { gain: _, ...older } = summary();
+		const f = heroFigures(older as Summary);
+
+		expect(f.value).toBe('848');
+		expect(nbsp(f.spent)).toBe('1173 zł');
+		expect(f.delta).toBeNull();
+		expect(f.coverage).toBeNull();
 	});
 
 	it('places the used total and the amount spent between buy-back and new', () => {

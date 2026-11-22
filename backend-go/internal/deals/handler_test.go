@@ -399,6 +399,25 @@ func externalIDs(obs []Observation) []string {
 	return out
 }
 
+// matchedListing returns the one matched listing with externalID.
+func matchedListing(t *testing.T, store *Store, externalID string) Observation {
+	t.Helper()
+	obs, err := store.Recent(context.Background(), RecentFilter{Limit: 100, Matched: true})
+	if err != nil {
+		t.Fatalf("recent: %v", err)
+	}
+	var found []Observation
+	for i := range obs {
+		if obs[i].ExternalID == externalID {
+			found = append(found, obs[i])
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("listing %s appears %d times, want once", externalID, len(found))
+	}
+	return found[0]
+}
+
 func TestDealsMatchedListings(t *testing.T) {
 	pool := dbtest.Migrated(t)
 	logger := slog.New(slog.DiscardHandler)
@@ -448,8 +467,23 @@ func TestDealsMatchedListings(t *testing.T) {
 		}
 		ids[tc.id] = id
 	}
-	if err := store.MarkSent(ctx, ids["under"]); err != nil {
+	if err := store.MarkSent(ctx, ids["under"], 3500); err != nil {
 		t.Fatal(err)
+	}
+	// A further drop under the limit queues a repeat alert on the same row:
+	// the listing stays one row, pending until the repeat is sent.
+	dropped := Listing{Source: "olx", ExternalID: "under", Title: "Blade Runner", PriceCents: 3000}
+	if _, alerted, err := store.Record(ctx, &dropped, limited, true); err != nil || !alerted {
+		t.Fatalf("record drop = %v, %v; want a repeat alert", alerted, err)
+	}
+	if obs := matchedListing(t, store, "under"); obs.Alert != AlertPending || obs.PriceCents != 3000 {
+		t.Fatalf("dropped listing = %+v, want one pending alert at 30 zł", obs)
+	}
+	if err := store.MarkSent(ctx, ids["under"], 3000); err != nil {
+		t.Fatal(err)
+	}
+	if obs := matchedListing(t, store, "under"); obs.Alert != AlertSent {
+		t.Fatalf("listing after the repeat alert = %+v, want sent", obs)
 	}
 	if _, err := pool.Exec(ctx, `INSERT INTO deal_alert (observation_id, copy_id, sent_at, attempts) VALUES ($1, $2, now(), 1)`,
 		ids["no-limit"], unlimited.CopyID); err != nil {

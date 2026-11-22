@@ -84,7 +84,7 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   wish that now matches, keeping its attempts and age. Alerts sent before
   migration 0016 have no stored price and never repeat.
   Okazje's "Ignoruj" (`POST /api/deals/{id}/dismissal`, undone by `DELETE`,
-  both 204 when repeated, 404 for an id no OLX, Pepper or Tezeusz listing has) sets
+  both 204 when repeated, 404 for an id no OLX, BlueDVD, Pepper or Tezeusz listing has) sets
   the listing's `dismissed_at`, for every wish it matches: it leaves every
   deals list and the badge, its unsent alert is never sent and a run that
   sees it again keeps it dismissed and queues no alert. The hunter sends
@@ -155,6 +155,26 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   The last run, scheduled, manual or cut short by shutdown, is kept in
   `deal_run`: after a restart the status shows it and the first scheduled
   run comes one interval after it started, at least 5 minutes on.
+- BlueDVD (bluedvd.pl, a shop of 4K UHD and Blu-ray discs, steelbooks and
+  preorders) is a query source, on unless `OHARA_BLUEDVD=false`. Each
+  query is one GET of the shop's WooCommerce Store API,
+  `/wp-json/wc/store/v1/products?search=<query>&per_page=50`, with no
+  `orderby` (robots.txt disallows it); no product page is fetched, and the
+  search does not cover EANs. Each product becomes a listing: its ID, its
+  name with HTML entities decoded, `permalink`, first image and
+  `prices.price` (an integer in `prices.currency_minor_unit`, "14990" is
+  149,90 zł), condition new. Out-of-stock products (stock class
+  `out-of-stock`, or neither `is_in_stock` nor `is_on_backorder`) and prices
+  in another currency than PLN are left out; preorders (`available-on-backorder`)
+  stay. An empty array is an answer without listings; any other body
+  that holds no product (an object with an ID), `["maintenance"]` too,
+  counts as `parse_error`. The reader (`deals.wooStore`) takes the source
+  name and endpoint, so another WooCommerce shop can reuse it. Its canary
+  is `4k` (`deals.Canaried`), not `OHARA_DEALS_CANARY_QUERY`: `dvd` finds
+  almost only out-of-stock DVDs there. The
+  valuation does not ask BlueDVD. Its regulamin (§4) asks only that the
+  shop is used lawfully and nothing disrupts it; it does not forbid
+  automated access.
 
 ## Tezeusz
 
@@ -284,3 +304,16 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   break the one already sent. The service worker leaves `/share/` to the
   network (`serverPaths`), so offline a share link fails instead of
   showing the app.
+
+## Frontend
+
+- Okazje (`/deals`) lists every wish in its "Lista życzeń" section, with
+  or without offers, since Kolekcja lists none. The page asks for them
+  beside the offers (`GET /api/collection?status=wishlist`) and lists
+  them title A–Z. Each SUI card names the title and links to its page,
+  reads "Film · Blu-ray · limit 80 zł" (kind, authors, format and the
+  price limit when the wish has one; the collection does not carry a
+  market percent), and its "Edytuj" opens the copy's form at
+  `/copies/<id>`. A failed answer keeps the last list with a retry; with
+  no wish the section is left out and the page's "Lista życzeń jest
+  pusta" stands. The offer segments are unchanged.

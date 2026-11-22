@@ -42,7 +42,8 @@ const firstRunDelay = 5 * time.Minute
 // be started by hand. Delay separates two source requests; both are
 // jittered. CanaryQuery, when set, is asked of every query source on every
 // run, wishlist or not: a query that always has listings, so a source that
-// answers with none is broken. A feed source's one request is its canary.
+// answers with none is broken. A Canaried source asks its own query
+// instead. A feed source's one request is its canary.
 type Config struct {
 	Interval    time.Duration
 	Delay       time.Duration
@@ -405,14 +406,14 @@ func (r *run) search(ctx context.Context, src Source, queries []string) error {
 }
 
 func (r *run) searchAll(ctx context.Context, src Source, f *Refused, queries []string) error {
-	canary := r.h.cfg.CanaryQuery
+	canary := canaryQuery(src, r.h.cfg.CanaryQuery)
 	if !src.PerQuery() {
 		listings, ok, err := r.ask(ctx, src, f, "")
 		if err != nil {
 			return err
 		}
 		if canary != "" {
-			r.canary(src, ok, len(listings))
+			r.canary(src, canary, ok, len(listings))
 		}
 		metrics.SetSourceResults(src.Name(), len(listings))
 		if ok && len(r.wants) > 0 {
@@ -428,7 +429,7 @@ func (r *run) searchAll(ctx context.Context, src Source, f *Refused, queries []s
 		if err != nil {
 			return err
 		}
-		r.canary(src, ok, len(listings))
+		r.canary(src, canary, ok, len(listings))
 		results += len(listings)
 		answered, answeredOK = listings, ok
 	}
@@ -507,10 +508,10 @@ func searchPage(ctx context.Context, src Source, query string) (Page, error) {
 
 // canary publishes the canary outcome of src; an answer without listings
 // is a failure too, since the canary query always has some.
-func (r *run) canary(src Source, ok bool, listings int) {
+func (r *run) canary(src Source, query string, ok bool, listings int) {
 	metrics.SetSourceCanary(src.Name(), ok && listings > 0)
 	if ok && listings == 0 {
-		r.h.logger.Warn("deal source canary found no listings", "source", src.Name(), "query", r.h.cfg.CanaryQuery)
+		r.h.logger.Warn("deal source canary found no listings", "source", src.Name(), "query", query)
 		r.fail(src.Name() + ": canary query found no listings")
 	}
 }
@@ -672,7 +673,7 @@ var (
 		"dvd": "DVD", "bluray": "Blu-ray", "uhd": "4K UHD",
 		"cd": "CD", "vinyl": "Winyl", "cassette": "Kaseta", FormatAudiobook: "Audiobook",
 	}
-	sourceLabels = map[string]string{"olx": "OLX", "pepper": "Pepper", "tezeusz": "Tezeusz"}
+	sourceLabels = map[string]string{"olx": "OLX", "bluedvd": "BlueDVD", "pepper": "Pepper", "tezeusz": "Tezeusz"}
 	stateLabels  = map[string]string{"new": "nowy", "used": "używany"}
 )
 

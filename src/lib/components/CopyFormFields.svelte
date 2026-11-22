@@ -82,6 +82,7 @@
 		'condition',
 		'media_grade',
 		'sleeve_grade',
+		'copy_number',
 		'notes',
 		'max_price_cents',
 		'max_market_percent',
@@ -248,6 +249,21 @@
 				/>
 			{/snippet}
 		</Field>
+	{/if}
+	{#if form.status !== 'wishlist'}
+		<Checkbox
+			label="Z autografem"
+			description="Egzemplarz podpisany przez autora lub wykonawcę."
+			bind:checked={form.signed}
+		/>
+		<Field
+			label="Numer egzemplarza"
+			hint="Numer z numerowanego nakładu, np. 123. Nienumerowany? Zostaw puste."
+			inputmode="numeric"
+			placeholder="123"
+			bind:value={form.copy_number}
+			error={errorFor('copy_number')}
+		/>
 	{/if}
 	<Field label="Notatki" error={errorFor('notes')}>
 		{#snippet control(c)}

@@ -22,6 +22,7 @@ import {
 	loanPayload,
 	loanSummary,
 	loanToForm,
+	marksLine,
 	options,
 	orderLine,
 	returnDay,
@@ -35,6 +36,9 @@ import {
 	seriesTotalPayload,
 	shelfLine,
 	shelfSummary,
+	shelved,
+	shelvedCount,
+	soldCount,
 	tagHref,
 	tagsInUse,
 	titlePayload,
@@ -50,7 +54,8 @@ import {
 	type CollectionStatus,
 	type CopyForm,
 	type CopyPayload,
-	type Title
+	type Title,
+	type Totals
 } from './collection';
 
 describe('money', () => {
@@ -187,6 +192,16 @@ describe('labels', () => {
 });
 
 describe('collection search links', () => {
+	it('reads an old wishlist address as no status, since wishes live in Okazje', () => {
+		const blank = { kind: '', format: '', status: '', q: '' };
+		expect(readCollectionFilter(new URLSearchParams('status=wishlist'))).toEqual(blank);
+		expect(readCollectionFilter(new URLSearchParams('kind=book&status=wishlist&q=Lem'))).toEqual({
+			...blank,
+			kind: 'book',
+			q: 'Lem'
+		});
+	});
+
 	it('restores shareable filters and encodes special characters', () => {
 		const filter = {
 			kind: 'music',
@@ -285,7 +300,6 @@ describe('collection search links', () => {
 			'unfinished=true',
 			'unfinished=0',
 			'status=none&unfinished=1',
-			'status=wishlist&unfinished=1',
 			'status=sold&unfinished=1'
 		]) {
 			expect(readCollectionFilter(new URLSearchParams(off))).not.toHaveProperty('unfinished');
@@ -1247,20 +1261,54 @@ describe('collection header', () => {
 	});
 
 	it.each([
-		{ owned: 20, wishlist: 4, want: '20 na półce · 4 na liście życzeń' },
-		{ owned: 0, wishlist: 0, want: '0 na półce · 0 na liście życzeń' },
-		{ owned: 12345, wishlist: 1, want: /^12\s345 na półce · 1 na liście życzeń$/ }
-	])('summarizes $owned owned and $wishlist wanted', ({ owned, wishlist, want }) => {
-		expect(shelfSummary({ owned, wishlist })).toMatch(want);
+		{ owned: 20, want: '20 na półce' },
+		{ owned: 0, want: '0 na półce' },
+		{ owned: 12345, want: /^12\s345 na półce$/ }
+	])('summarizes $owned owned', ({ owned, want }) => {
+		expect(shelfSummary({ owned })).toMatch(want);
 	});
 
 	it.each([
-		{ ordered: 1, want: '20 na półce · 1 zamówiony · 4 na liście życzeń' },
-		{ ordered: 2, want: '20 na półce · 2 zamówione · 4 na liście życzeń' },
-		{ ordered: 5, want: '20 na półce · 5 zamówionych · 4 na liście życzeń' },
-		{ ordered: 0, want: '20 na półce · 4 na liście życzeń' }
+		{ ordered: 1, want: '20 na półce · 1 zamówiony' },
+		{ ordered: 2, want: '20 na półce · 2 zamówione' },
+		{ ordered: 5, want: '20 na półce · 5 zamówionych' },
+		{ ordered: 0, want: '20 na półce' }
 	])('names $ordered copies on order', ({ ordered, want }) => {
-		expect(shelfSummary({ owned: 20, ordered, wishlist: 4 })).toBe(want);
+		expect(shelfSummary({ owned: 20, ordered })).toBe(want);
+	});
+
+	describe('Kolekcja counts no wishes', () => {
+		/** 20 on the shelf, 2 on order, 4 wishes and 3 sold copies. */
+		const totals: Totals = {
+			copies: 29,
+			owned: 20,
+			ordered: 2,
+			wishlist: 4,
+			priced: 18,
+			spent_cents: 0
+		};
+
+		it('leaves wishes out of the summary', () => {
+			expect(shelfSummary(totals)).toBe('20 na półce · 2 zamówione');
+			expect(shelfSummary({ ...totals, ordered: undefined })).toBe('20 na półce');
+		});
+
+		it('counts the copies on the shelf or on order', () => {
+			expect(shelvedCount(totals)).toBe(22);
+			expect(shelvedCount({ ...totals, ordered: undefined })).toBe(20);
+		});
+
+		it('counts the sold copies apart from the wishes', () => {
+			expect(soldCount(totals)).toBe(3);
+			expect(soldCount({ ...totals, copies: 26 })).toBe(0);
+		});
+
+		it('shelves owned and ordered copies only', () => {
+			expect(shelved('owned')).toBe(true);
+			expect(shelved('ordered')).toBe(true);
+			expect(shelved('wishlist')).toBe(false);
+			expect(shelved('sold')).toBe(false);
+		});
 	});
 });
 
@@ -1500,5 +1548,64 @@ describe('TV seasons', () => {
 		});
 		const missing = editionPayload(editionToForm(null), 1, 'tv');
 		expect(!missing.ok && missing.issue.field).toBe('format');
+	});
+});
+
+describe('collector marks', () => {
+	const owned: CopyForm = { ...copyToForm(null), price: '', signed: true, copy_number: ' 123 ' };
+
+	it('reads a signed, numbered copy into the form and sends both marks', () => {
+		const form = copyToForm({ ...copyPayloadOf(owned), status: 'sold', sold_on: '2026-01-02' });
+		expect([form.signed, form.copy_number]).toEqual([true, '123']);
+		const parsed = copyPayload(form, 3);
+		expect(parsed.ok && parsed.value).toMatchObject({ signed: true, copy_number: 123 });
+		const ordered = copyPayload({ ...owned, status: 'ordered' }, 3);
+		expect(ordered.ok && ordered.value).toMatchObject({ signed: true, copy_number: 123 });
+	});
+
+	it('leaves out marks a copy does not carry', () => {
+		const plain = copyPayload({ ...owned, signed: false, copy_number: '' }, 3);
+		expect(plain.ok && 'signed' in plain.value).toBe(false);
+		expect(plain.ok && 'copy_number' in plain.value).toBe(false);
+		const wish = copyPayload({ ...owned, status: 'wishlist' }, 3);
+		expect(wish.ok && 'signed' in wish.value).toBe(false);
+		expect(wish.ok && 'copy_number' in wish.value).toBe(false);
+		expect(copyToForm(null)).toMatchObject({ signed: false, copy_number: '' });
+	});
+
+	it.each(['0', '-1', '1,5', 'nr 5', '2147483648'])('refuses copy number %s', (input) => {
+		expect(copyPayload({ ...owned, copy_number: input }, 3)).toEqual({
+			ok: false,
+			issue: { field: 'copy_number', message: 'Numer egzemplarza to liczba całkowita od 1.' }
+		});
+	});
+
+	it.each([
+		{
+			c: { signed: true, copy_number: 123 },
+			run: 500,
+			want: 'Z autografem · Egzemplarz nr 123/500'
+		},
+		{ c: { copy_number: 123 }, run: null, want: 'Egzemplarz nr 123' },
+		{ c: { copy_number: 7 }, run: undefined, want: 'Egzemplarz nr 7' },
+		{ c: { signed: true, copy_number: null }, run: 500, want: 'Z autografem' },
+		{ c: {}, run: 500, want: '' }
+	])('describes $c against run $run', ({ c, run, want }) => {
+		expect(marksLine(c, run)).toBe(want);
+	});
+
+	it('says a signed copy on the shelf is signed', () => {
+		const item = {
+			status: 'owned' as const,
+			max_price_cents: null,
+			authors: ['Stanisław Lem'],
+			format: null,
+			binding: 'hardcover' as const,
+			label: ''
+		};
+		expect(shelfLine({ ...item, signed: true })).toBe(
+			'Stanisław Lem · Twarda oprawa · z autografem'
+		);
+		expect(shelfLine({ ...item, signed: false })).toBe('Stanisław Lem · Twarda oprawa');
 	});
 });

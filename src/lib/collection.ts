@@ -207,6 +207,20 @@ export function gradeLine(c: {
 		.join(' · ');
 }
 
+/**
+ * A copy's collector marks in short, such as "Z autografem · Egzemplarz nr 123/500", or "nr 123"
+ * when its edition's run is unknown; empty without any.
+ */
+export function marksLine(
+	c: { signed?: boolean; copy_number?: number | null },
+	run?: number | null
+): string {
+	const number = c.copy_number == null ? '' : run ? `${c.copy_number}/${run}` : `${c.copy_number}`;
+	return [c.signed ? 'Z autografem' : '', number ? `Egzemplarz nr ${number}` : '']
+		.filter(Boolean)
+		.join(' · ');
+}
+
 /** Select or segment options from a label table, in its key order. */
 export function options<K extends string>(
 	labels: Record<K, string>
@@ -232,21 +246,30 @@ export function kindCounts(
 	return counts;
 }
 
-/** How many copies are on the shelf, on order or on the wishlist: every copy but the sold ones. */
-export function shelvedCount(t: Pick<Totals, 'owned' | 'ordered' | 'wishlist'>): number {
-	return t.owned + (t.ordered ?? 0) + t.wishlist;
+/**
+ * Whether Kolekcja lists a copy of this status without a status filter: one on the shelf or on
+ * order. A wish is not had yet, so it lives in Okazje; a sold copy only "Sprzedane" lists.
+ */
+export function shelved(status: CopyStatus): boolean {
+	return status === 'owned' || status === 'ordered';
+}
+
+/** How many copies are on the shelf or on order: the ones Kolekcja lists without a status. */
+export function shelvedCount(t: Pick<Totals, 'owned' | 'ordered'>): number {
+	return t.owned + (t.ordered ?? 0);
+}
+
+/** How many copies were sold: every copy neither shelved nor wished for. */
+export function soldCount(t: Pick<Totals, 'copies' | 'owned' | 'ordered' | 'wishlist'>): number {
+	return t.copies - shelvedCount(t) - t.wishlist;
 }
 
 /**
- * The collection header's one line, such as "20 na półce · 2 zamówione · 4 na liście życzeń";
- * copies on order are named only when there are some.
+ * The collection header's one line, such as "20 na półce · 2 zamówione"; copies on order are
+ * named only when there are some. Wishes are not counted: they live in Okazje.
  */
-export function shelfSummary(t: Pick<Totals, 'owned' | 'ordered' | 'wishlist'>): string {
-	return [
-		`${count.format(t.owned)} na półce`,
-		t.ordered ? orderedCount(t.ordered) : null,
-		`${count.format(t.wishlist)} na liście życzeń`
-	]
+export function shelfSummary(t: Pick<Totals, 'owned' | 'ordered'>): string {
+	return [`${count.format(t.owned)} na półce`, t.ordered ? orderedCount(t.ordered) : null]
 		.filter(Boolean)
 		.join(' · ');
 }
@@ -407,7 +430,7 @@ export function orderLine(expectedOn: string | null | undefined, today: string):
 /**
  * A shelf tile's line under the name: the wish and its limit for a wishlist copy, the sale for
  * a sold one, the delivery for an ordered one, who has a lent copy, otherwise the creators and
- * the edition, such as "Stanisław Lem · Twarda oprawa". A loan or a delivery is late once its
+ * the edition, such as "Stanisław Lem · Twarda oprawa", and "z autografem" for a signed copy. A loan or a delivery is late once its
  * day is before today, the reader's local day.
  */
 export function shelfLine(
@@ -423,26 +446,31 @@ export function shelfLine(
 		| 'binding'
 		| 'label'
 	> &
-		Partial<Pick<CollectionItem, 'loan_borrower' | 'loan_due_on'>>,
+		Partial<Pick<CollectionItem, 'loan_borrower' | 'loan_due_on' | 'signed'>>,
 	today: string = isoDate(new Date())
 ): string {
 	if (item.status === 'wishlist') return wishLine(item.max_price_cents);
 	if (item.status === 'sold') return saleLine(item.sold_on, item.sale_price_cents);
 	if (item.status === 'ordered') return orderLine(item.expected_on, today);
 	if (item.loan_borrower != null) return loanLine(item.loan_borrower, item.loan_due_on, today);
-	return [item.authors?.join(', '), editionSummary({ ...item, barcode: null })]
+	return [
+		item.authors?.join(', '),
+		editionSummary({ ...item, barcode: null }),
+		item.signed ? 'z autografem' : null
+	]
 		.filter(Boolean)
 		.join(' · ');
 }
 
 /**
  * What the collection lists: copies of a status, `unpriced`, the owned copies without a purchase
- * price, or `none`, the titles that have no copy yet. Without one it lists every copy but the
- * sold ones.
+ * price, or `none`, the titles that have no copy yet. Without one it lists the copies on the
+ * shelf or on order. Wishes have no status here: they live in Okazje, so an address naming them
+ * reads as no status.
  */
-export type CollectionStatus = CopyStatus | 'unpriced' | 'none';
+export type CollectionStatus = Exclude<CopyStatus, 'wishlist'> | 'unpriced' | 'none';
 export const collectionStatusLabels: Record<CollectionStatus, string> = {
-	...statusLabels,
+	owned: statusLabels.owned,
 	ordered: 'Zamówione',
 	sold: 'Sprzedane',
 	unpriced: 'Bez ceny',
@@ -783,6 +811,8 @@ export function parseSeason(kind: Kind, raw: string): Parsed<number | null> {
 /** The most discs and the largest limited run an edition takes, as the API checks them. */
 const maxDiscCount = 99;
 const maxLimitedTo = 1_000_000;
+/** The largest copy number the API stores; only the edition's run, when known, bounds it lower. */
+const maxCopyNumber = 2_147_483_647;
 
 /** An optional whole number from 1 to max; anything else is the message on field. */
 function parseCount(
@@ -936,6 +966,9 @@ export type CopyForm = {
 	condition: Condition | '';
 	media_grade: MediaGrade | '';
 	sleeve_grade: SleeveGrade | '';
+	/** The collector marks of a copy in hand: an autograph and a numbered copy's number. */
+	signed: boolean;
+	copy_number: string;
 	notes: string;
 	max_price: string;
 	market_percent: string;
@@ -957,6 +990,8 @@ export function copyToForm(c: CopyPayload | null): CopyForm {
 		condition: c?.condition ?? '',
 		media_grade: c?.media_grade ?? '',
 		sleeve_grade: c?.sleeve_grade ?? '',
+		signed: c?.signed ?? false,
+		copy_number: c?.copy_number?.toString() ?? '',
 		notes: c?.notes ?? '',
 		max_price: centsToInput(c?.max_price_cents ?? null),
 		market_percent: c?.max_market_percent == null ? '' : String(c.max_market_percent),
@@ -981,9 +1016,9 @@ export function parsePercent(input: string): number | null | undefined {
  * The request body for a copy. A wishlist copy carries no price or purchase date, an owned, sold
  * or ordered copy no maximum price, market percent or exact edition, only a sold copy its sale's
  * day, which it needs, and price, only an ordered copy its expected delivery and only an owned
- * copy its location; an album's grades go only when picked. A field a copy does not carry is left
- * out, which the server reads as none, so a sold copy put back on the shelf drops its sale and a
- * received one its delivery day.
+ * copy its location; an album's grades go only when picked, and the collector marks only on a
+ * copy in hand. A field a copy does not carry is left out, which the server reads as none, so a
+ * sold copy put back on the shelf drops its sale and a received one its delivery day.
  */
 export function copyPayload(f: CopyForm, editionID: number): Parsed<CopyPayload> {
 	const sold = f.status === 'sold';
@@ -1015,6 +1050,15 @@ export function copyPayload(f: CopyForm, editionID: number): Parsed<CopyPayload>
 			}
 		};
 	}
+	const copyNumber = owned
+		? parseCount(
+				f.copy_number,
+				'copy_number',
+				maxCopyNumber,
+				'Numer egzemplarza to liczba całkowita od 1.'
+			)
+		: ({ ok: true, value: null } as const);
+	if (!copyNumber.ok) return copyNumber;
 	// Trimmed as the server trims, so saving other fields leaves a stored location as it is.
 	const location = f.status === 'owned' ? trimSpace(f.location) : '';
 	const date = owned ? f.purchased_on.trim() : '';
@@ -1039,6 +1083,8 @@ export function copyPayload(f: CopyForm, editionID: number): Parsed<CopyPayload>
 			condition: f.condition || null,
 			...(f.media_grade ? { media_grade: f.media_grade } : {}),
 			...(f.sleeve_grade ? { sleeve_grade: f.sleeve_grade } : {}),
+			...(owned && f.signed ? { signed: true } : {}),
+			...(copyNumber.value === null ? {} : { copy_number: copyNumber.value }),
 			notes: f.notes.trim(),
 			max_price_cents: maxPrice,
 			...(marketPercent == null ? {} : { max_market_percent: marketPercent }),

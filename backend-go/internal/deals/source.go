@@ -1,5 +1,5 @@
-// Package deals hunts for listings of wishlist copies on OLX, Pepper.pl
-// and Tezeusz. A run asks every source, keeps the listings that
+// Package deals hunts for listings of wishlist copies on OLX, BlueDVD,
+// Pepper.pl and Tezeusz. A run asks every source, keeps the listings that
 // match a wishlist copy, stores each once as a price_observation and sends
 // one Telegram message per new listing at or below the copy's maximum price.
 package deals
@@ -63,6 +63,22 @@ type Source interface {
 type KindSource interface {
 	Source
 	Kinds() []string
+}
+
+// Canaried is a query source whose catalog the configured canary query
+// does not fit; it names the query that always finds listings there.
+type Canaried interface {
+	Source
+	CanaryQuery() string
+}
+
+// canaryQuery is the canary src is asked: its own when it is Canaried,
+// else configured. An empty configured query turns every canary off.
+func canaryQuery(src Source, configured string) string {
+	if c, ok := src.(Canaried); ok && configured != "" {
+		return c.CanaryQuery()
+	}
+	return configured
 }
 
 // Page is a Pager's answer to one query. Seen holds the external ID of

@@ -150,11 +150,32 @@ beforeEach(() => {
 describe('sourceURL', () => {
 	it('lists titles for "Bez egzemplarzy" and the collection otherwise', () => {
 		expect(sourceURL(none)).toBe('/api/titles');
-		expect(sourceURL({ ...all, status: 'wishlist' })).toBe('/api/collection');
+		expect(sourceURL({ ...all, status: 'ordered' })).toBe('/api/collection');
 	});
 });
 
 describe('CollectionLoad answers', () => {
+	it('counts a kind by the copies on the shelf or on order, never a wish or a sold copy', async () => {
+		const { srv, load } = setup();
+		const loading = load.navigated(all, false);
+		await settle();
+		await srv.take('/api/scan-queue').answer(200, []);
+		await srv
+			.take('/api/collection')
+			.answer(
+				200,
+				view(
+					item({ copy_id: 1 }),
+					item({ copy_id: 2, status: 'ordered' }),
+					item({ copy_id: 3, status: 'wishlist' }),
+					item({ copy_id: 4, status: 'sold' }),
+					item({ copy_id: 5, kind: 'book', status: 'wishlist' })
+				)
+			);
+		await loading;
+		expect(load.overview?.kinds).toEqual({ movie: 2, book: 0, music: 0 });
+	});
+
 	it('loads the collection and the queue count, then places the covers', async () => {
 		const { srv, load, placed } = setup();
 		const loading = load.navigated(all, false);

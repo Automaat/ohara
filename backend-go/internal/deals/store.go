@@ -511,6 +511,27 @@ func (s *Store) MarkOffered(ctx context.Context, source string, externalIDs []st
 	return nil
 }
 
+// Unmatch takes the unsent alerts of source's stored listings with
+// externalIDs, which an answer held under a title that matches no want,
+// off their wishes. Like the alert of a listing moved to a title no one
+// wishes for, each goes to none, so the price it was queued at, which
+// the answer contradicts, is never sent. Its attempts, age and prices
+// stay: a later answer that matches the listing within a wish's limit
+// queues it for that wish again (queueAlert). Sent alerts and IDs of
+// listings never stored are left alone.
+func (s *Store) Unmatch(ctx context.Context, source string, externalIDs []string) error {
+	if len(externalIDs) == 0 {
+		return nil
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE deal_alert a SET copy_id = NULL
+		FROM price_observation o
+		WHERE o.id = a.observation_id AND o.source = $1 AND o.external_id = ANY ($2)
+			AND a.sent_at IS NULL AND a.copy_id IS NOT NULL`, source, externalIDs); err != nil {
+		return fmt.Errorf("unmatch alerts: %w", err)
+	}
+	return nil
+}
+
 // ForgetStale deletes the listings of expiring sources that no answer has
 // offered for discogsKeep, with their alerts and purchases, dismissed or
 // not: the source's terms let them be kept only while they serve. It

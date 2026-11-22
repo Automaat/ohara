@@ -557,13 +557,21 @@ func (r *run) fail(msg string) {
 // which may have changed since the run read the wishlist. A listing of
 // this run that met no rule is judged again against the market prices read
 // once the answer is stored, since its listings may have moved them.
+// A stored listing the answer holds under a title that matches no want
+// keeps its price, but its unsent alert leaves its wish (Store.Unmatch):
+// the answer contradicts the listing the alert was queued for.
 func (r *run) record(ctx context.Context, listings []Listing) error {
 	r.res.Listings += len(listings)
 	refreshed := map[string]bool{}
+	unmatched := map[string][]string{}
 	for i := range listings {
 		l := &listings[i]
 		w := pickOf(r.wants, r.kinds[l.Source], l, r.rules, r.titles)
 		if w == nil {
+			if l.ExternalID != "" {
+				unmatched[l.Source] = append(unmatched[l.Source], l.ExternalID)
+				delete(r.missed, listingKey(l.Source, l.ExternalID))
+			}
 			continue
 		}
 		r.res.Matched++
@@ -585,6 +593,12 @@ func (r *run) record(ctx context.Context, listings []Listing) error {
 			delete(r.missed, key)
 		}
 		refreshed[key] = true
+	}
+	for _, source := range slices.Sorted(maps.Keys(unmatched)) {
+		ids := slices.DeleteFunc(unmatched[source], func(id string) bool { return refreshed[listingKey(source, id)] })
+		if err := r.h.store.Unmatch(ctx, source, ids); err != nil {
+			return err
+		}
 	}
 	if len(refreshed) == 0 {
 		return nil

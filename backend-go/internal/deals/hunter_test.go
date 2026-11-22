@@ -536,6 +536,57 @@ func TestRunAlertsOnListingsStoredBefore(t *testing.T) {
 	}
 }
 
+// TestRunDropsAlertTheAnswerContradicts: a pending alert whose listing a
+// later answer holds under a title that matches no wish is not sent at
+// the stored price, also in a run no answer carries the listing. An
+// answer that matches the listing again within the limit sends it at the
+// new price.
+func TestRunDropsAlertTheAnswerContradicts(t *testing.T) {
+	for _, renamedPrice := range []int64{6500, 3000} {
+		t.Run(formatPLN(renamedPrice), func(t *testing.T) {
+			pool := dbtest.Migrated(t)
+			wishlist(t, pool, wantBluray(new(int64(5000))))
+			listing := Listing{
+				Source: "olx", ExternalID: "171", Title: "Blade Runner Blu-ray",
+				URL: "https://www.olx.pl/d/oferta/z-ID171.html", PriceCents: 4000,
+			}
+			olx := &fakeSource{name: "olx", perQuery: true, listings: []Listing{listing}}
+			notifier := &fakeNotifier{fail: 1}
+			h := newTestHunter(pool, notifier, olx)
+
+			if res := mustRun(t, h); res.Alerts != 1 || res.Sent != 0 {
+				t.Fatalf("failing run = %+v, want one pending alert", res)
+			}
+			renamed := listing
+			renamed.Title, renamed.PriceCents = "Blade Runner Blu-ray 4K UHD", renamedPrice
+			olx.listings = []Listing{renamed}
+			if res := mustRun(t, h); res.Matched != 0 || res.Sent != 0 {
+				t.Fatalf("renamed listing run = %+v, want no match and no message", res)
+			}
+			olx.listings = nil
+			if res := mustRun(t, h); res.Sent != 0 {
+				t.Fatalf("run without the listing = %+v, want no message", res)
+			}
+			if got := notifier.messages(); len(got) != 0 {
+				t.Fatalf("sent %q, want nothing at a price the answer contradicts", got)
+			}
+			if n := count(t, pool, `SELECT price_cents FROM price_observation WHERE external_id = '171'`); n != 4000 {
+				t.Fatalf("stored price %d, want the matched one kept", n)
+			}
+
+			back := listing
+			back.PriceCents = 4500
+			olx.listings = []Listing{back}
+			if res := mustRun(t, h); res.Sent != 1 {
+				t.Fatalf("matching again run = %+v, want the alert sent", res)
+			}
+			if got := notifier.messages(); len(got) != 1 || !strings.Contains(got[0], "45,00 zł (limit 50,00 zł)") {
+				t.Fatalf("sent %q, want one message at the new price", got)
+			}
+		})
+	}
+}
+
 // TestRunAlertsAgainOnPriceDrop follows one listing under a 50 zł wish
 // through price changes: only a price under the one the last sent alert
 // named, still within the limit, alerts again.

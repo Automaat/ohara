@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/Automaat/ohara/backend-go/internal/dbtest"
@@ -229,6 +230,48 @@ func TestSendAlertSkipsAnAlertMovedAway(t *testing.T) {
 	}
 	if got := stored(t, pool); got.AlertSent {
 		t.Fatalf("alert = %+v, want it unsent", got)
+	}
+}
+
+// TestUnmatchTakesOnlyNamedUnsentAlerts: Unmatch takes the unsent alerts
+// of the named listings of one source off their wish and leaves a sent
+// alert, a listing it does not name and another source's listing with the
+// same ID.
+func TestUnmatchTakesOnlyNamedUnsentAlerts(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	ctx := context.Background()
+	store := NewStore(pool)
+	wish := wished(t, pool, bladeRunner("bluray"))
+	for _, l := range []Listing{
+		{Source: "olx", ExternalID: "sent"},
+		{Source: "olx", ExternalID: "pending"},
+		{Source: "olx", ExternalID: "other"},
+		{Source: "bluedvd", ExternalID: "pending"},
+	} {
+		l.Title, l.URL, l.PriceCents = "Blade Runner Blu-ray", "https://example.test/"+l.ExternalID, 4000
+		if _, alerted, err := store.Record(ctx, &l, &wish, true); err != nil || !alerted {
+			t.Fatalf("Record %s %s = %v, %v; want an alert", l.Source, l.ExternalID, alerted, err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `UPDATE deal_alert a SET sent_at = now() FROM price_observation o
+		WHERE o.id = a.observation_id AND o.external_id = 'sent'`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.Unmatch(ctx, "olx", []string{"sent", "pending", "never-stored"}); err != nil {
+		t.Fatalf("Unmatch: %v", err)
+	}
+	rows, err := pool.Query(ctx, `SELECT o.source || ' ' || o.external_id FROM deal_alert a
+		JOIN price_observation o ON o.id = a.observation_id WHERE a.copy_id = $1 ORDER BY 1`, wish.CopyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"bluedvd pending", "olx other", "olx sent"}; !slices.Equal(bound, want) {
+		t.Fatalf("alerts still for the wish = %q, want %q", bound, want)
 	}
 }
 

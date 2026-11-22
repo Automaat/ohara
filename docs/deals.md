@@ -47,6 +47,12 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   `max_price_cents` or its `max_market_percent` (1 to 100) of the
   title and format's used market price, when either holds; a listing seen again keeps its row, takes the new
   price and `last_seen_at`, and alerts if it has no alert yet. Alerts are retried up to 5 times within a week.
+  An answer that holds a stored listing under a title that matches no
+  wish (a Blu-ray listing renamed "4K UHD") keeps its stored price, but
+  takes its unsent alert to none (`Store.Unmatch`), so the alert never
+  goes out at a price that answer contradicts, even in a later run that
+  no answer carries the listing; an answer that matches it again within
+  a wish's limit queues it for that wish at the new price.
   A hunt or valuation that matches a stored listing to another title (its
   edition's) moves it to that title and the matched edition and sets
   `moved_at`; a valuation match drops the wish it was recorded for. Its

@@ -29,6 +29,7 @@
 >
 	{#if paths}
 		<svg
+			class="chart"
 			viewBox="0 0 {width} {height}"
 			preserveAspectRatio="none"
 			role="img"

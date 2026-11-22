@@ -125,6 +125,12 @@ test('Statystyki draws spending, growth and the new and used split', async ({ pa
 		await expect(page.getByText(/^Bez daty: /)).toContainText(pln.format(undatedCents / 100));
 		await expect(page.getByRole('img', { name: /^Nowe \d+%, Używane \d+%/ }).first()).toBeVisible();
 
+		const chevrons = await page
+			.locator('.content summary svg')
+			.evaluateAll((icons) => icons.map((icon) => icon.getBoundingClientRect().height));
+		expect(chevrons).toHaveLength(2);
+		expect(Math.max(...chevrons), 'a "Pokaż dane" chevron sized like a chart').toBeLessThan(32);
+
 		const spending = page.getByRole('region', { name: 'Wydatki w miesiącach' });
 		await spending.locator('summary').tap();
 		await expect(spending.getByRole('rowheader', { name: 'Bez daty' })).toBeVisible();

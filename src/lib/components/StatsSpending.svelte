@@ -39,6 +39,7 @@
 	aside={`${roundZl(total)} w ${months.length} mies.`}
 >
 	<svg
+		class="chart"
 		viewBox="0 0 {width} {height}"
 		preserveAspectRatio="none"
 		role="img"

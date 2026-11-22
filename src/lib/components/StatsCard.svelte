@@ -51,7 +51,7 @@
 		font-variant-numeric: tabular-nums;
 	}
 
-	.card :global(svg) {
+	.card :global(svg.chart) {
 		display: block;
 		inline-size: 100%;
 		block-size: 7.5rem;

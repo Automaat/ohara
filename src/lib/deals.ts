@@ -16,7 +16,8 @@ import type {
 	KeywordPayload,
 	Format,
 	MarketPrice,
-	Observation
+	Observation,
+	WantlistSyncResult
 } from '#lib/api.gen.js';
 
 export type {
@@ -30,7 +31,10 @@ export type {
 	KeywordPayload,
 	MarketPrice,
 	MarketView,
-	Observation
+	Observation,
+	ShareLink,
+	WantlistStatus,
+	WantlistSyncResult
 } from '#lib/api.gen.js';
 
 const wholePLN = new Intl.NumberFormat('pl-PL', {
@@ -298,4 +302,27 @@ export function wishFacts(
 	]
 		.filter(Boolean)
 		.join(' · ');
+}
+
+/** GET reads the Discogs wantlist sync's state; POST to its /sync starts a sync. */
+export const wantlistPath = '/api/discogs/wantlist';
+
+/** One line about the last Discogs wantlist sync, or null before the first one. */
+export function wantlistSummary(result: WantlistSyncResult | null): string | null {
+	if (!result) return null;
+	const parts = [`dodano: ${result.added}`, `już na liście: ${result.already}`];
+	if (result.removed > 0) parts.push(`usunięto: ${result.removed}`);
+	if (result.skipped > 0) parts.push(`bez wydania Discogs: ${result.skipped}`);
+	const counts = parts.join(', ');
+	return result.failure
+		? `Synchronizacja przerwana: ${result.failure}. Przed przerwaniem ${counts}.`
+		: `Ostatnia synchronizacja: ${counts}.`;
+}
+
+/** The owner's share link of the wishlist: GET shows it, POST makes a new one, DELETE turns it off. */
+export const shareLinkPath = '/api/wishlist/share';
+
+/** The full address of a share link, whose `url` is its path on this site. */
+export function shareURL(link: { url: string }, origin: string): string {
+	return new URL(link.url, origin).href;
 }

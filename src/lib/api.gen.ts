@@ -596,6 +596,11 @@ export type KeywordPayload = {
 	phrase: string;
 };
 
+export type ShareLink = {
+	url: string;
+	created_at: string;
+};
+
 export type Estimate = {
 	cents: number;
 	source: ValueSource;
@@ -735,6 +740,22 @@ export type MarketPrice = {
 export type MarketView = {
 	window_days: number;
 	markets: MarketPrice[];
+};
+
+export type WantlistSyncResult = {
+	added: number;
+	already: number;
+	removed: number;
+	skipped: number;
+	failure?: string;
+};
+
+export type WantlistStatus = {
+	enabled: boolean;
+	running: boolean;
+	last_started_at: string | null;
+	last_finished_at: string | null;
+	last_result: WantlistSyncResult | null;
 };
 
 export type Status = {

@@ -32,7 +32,7 @@ type TitleFields struct {
 	BNID          *string  `json:"bn_id,omitempty" ts:",null"`
 	OpenLibraryID *string  `json:"openlibrary_id,omitempty" ts:",null"`
 	// SeriesName and SeriesNumber name the series the title is in, as the
-	// title body does; no provider fills them yet.
+	// title body does; BN fills them from MARC 800.
 	SeriesName   *string `json:"series_name,omitempty" ts:",null"`
 	SeriesNumber *int    `json:"series_number,omitempty" ts:",null"`
 }

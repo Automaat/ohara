@@ -34,7 +34,9 @@ import (
 	"github.com/Automaat/ohara/backend-go/internal/seed"
 	"github.com/Automaat/ohara/backend-go/internal/server"
 	"github.com/Automaat/ohara/backend-go/internal/valuation"
+	"github.com/Automaat/ohara/backend-go/internal/wantlist"
 	"github.com/Automaat/ohara/backend-go/internal/web"
+	"github.com/Automaat/ohara/backend-go/internal/wishshare"
 )
 
 // version is set at build time with -ldflags "-X main.version=...".
@@ -124,17 +126,24 @@ func run() int {
 	defer valuer.Wait()
 	defer hunter.Wait()
 	defer stopHunt()
+	syncer := newWantlistSyncer(pool, logger)
+	syncer.Start(huntCtx)
+	defer syncer.Wait()
 	queue := scanqueue.NewStore(pool)
 	metrics.RegisterScanQueueCollector(queue.Count)
 	searchers := titleSearchers()
+	shares := wishshare.NewHandler(wishshare.NewStore(pool), logger)
+	deps.Share = shares.Public()
 	deps.API = []server.Mounter{
-		collection.NewHandler(collection.NewStore(pool), logger).WithCatalogCovers(searchers, lookupService),
+		newCollectionHandler(pool, searchers, lookupService, logger),
 		lookup.NewHandler(lookupService, logger),
 		&lookup.SearchHandler{Searchers: searchers, Logger: logger},
 		scanqueue.NewHandler(queue, logger),
 		deals.NewHandler(dealStore, hunter, logger),
 		valuation.NewHandler(valueStore, valuer, logger),
+		wantlist.NewHandler(syncer, logger),
 		export.NewHandler(pool, valuer.Window(), logger),
+		shares,
 	}
 	if dir := os.Getenv("OHARA_WEB_DIR"); dir != "" {
 		webFS := os.DirFS(dir)
@@ -233,8 +242,8 @@ func newLookup(pool *pgxpool.Pool, logger *slog.Logger) (*lookup.Service, error)
 	registry := &lookup.Registry{}
 	client := &http.Client{}
 	providers := []lookup.Provider{
-		books.BN{Client: client},
-		books.OpenLibrary{Client: client},
+		books.BN{Client: client, BaseURL: envOr("OHARA_BN_URL", books.BNBaseURL)},
+		books.OpenLibrary{Client: client, BaseURL: openLibraryURL()},
 	}
 	if key := os.Getenv("OHARA_GOOGLE_BOOKS_API_KEY"); key != "" {
 		providers = append(providers, books.GoogleBooks{APIKey: key, Client: client})
@@ -265,6 +274,10 @@ func newLookup(pool *pgxpool.Pool, logger *slog.Logger) (*lookup.Service, error)
 	logger.Info("lookup providers", "providers", strings.Join(registry.Names(), ","))
 	return lookup.NewService(registry, lookup.NewPGCache(pool), logger), nil
 }
+
+// openLibraryURL is where the barcode lookup and the title search ask
+// Open Library.
+func openLibraryURL() string { return envOr("OHARA_OPENLIBRARY_URL", books.OpenLibraryBaseURL) }
 
 // sourceClient is shared by the external sources; the lookup service bounds
 // each provider call too.
@@ -297,11 +310,24 @@ func newMovieProvider(allegro *movie.Allegro, logger *slog.Logger) *movie.Provid
 	return p
 }
 
+// newCollectionHandler serves the collection API, filling a new title's
+// cover from the title searchers and, with a TMDB key, a new film's series
+// from its TMDB collection.
+func newCollectionHandler(pool *pgxpool.Pool, searchers map[string]lookup.TextSearcher,
+	service *lookup.Service, logger *slog.Logger,
+) *collection.Handler {
+	h := collection.NewHandler(collection.NewStore(pool), logger).WithCatalogCovers(searchers, service)
+	if key := os.Getenv("OHARA_TMDB_API_KEY"); key != "" {
+		h.WithFilmSeries(movie.TMDB{Client: sourceClient, Key: key})
+	}
+	return h
+}
+
 // titleSearchers back the search by title for a barcode no source knows:
 // TMDB for films and TV series and Discogs for albums when their keys are
 // set, Google Books for books with a key and Open Library without one.
 func titleSearchers() map[string]lookup.TextSearcher {
-	s := map[string]lookup.TextSearcher{"book": books.OpenLibrary{Client: sourceClient}}
+	s := map[string]lookup.TextSearcher{"book": books.OpenLibrary{Client: sourceClient, BaseURL: openLibraryURL()}}
 	if key := os.Getenv("OHARA_GOOGLE_BOOKS_API_KEY"); key != "" {
 		s["book"] = books.GoogleBooks{APIKey: key, Client: sourceClient}
 	}
@@ -334,6 +360,20 @@ func newDiscogs() *discogs.Client {
 	return &discogs.Client{
 		HTTP: discogsHTTP, BaseURL: envOr("OHARA_DISCOGS_URL", discogs.BaseURL), Token: token, Limiter: discogsBudget,
 	}
+}
+
+// newWantlistSyncer mirrors the album wishes to the Discogs wantlist of
+// the OHARA_DISCOGS_TOKEN owner, behind the lookup's requests in the
+// token's budget; disabled without the token.
+func newWantlistSyncer(pool *pgxpool.Pool, logger *slog.Logger) *wantlist.Syncer {
+	store := wantlist.NewStore(pool)
+	d := newDiscogs()
+	if d == nil {
+		logger.Info("discogs wantlist sync disabled: OHARA_DISCOGS_TOKEN not set")
+		return wantlist.NewSyncer(store, nil, logger)
+	}
+	d.Priority = discogs.Background
+	return wantlist.NewSyncer(store, d, logger)
 }
 
 // newMusicProvider builds the music chain: Discogs when a token is set,

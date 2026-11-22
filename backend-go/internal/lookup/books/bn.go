@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/Automaat/ohara/backend-go/internal/barcode"
 	"github.com/Automaat/ohara/backend-go/internal/lookup"
@@ -144,7 +145,8 @@ func bnCandidate(code, isbn10 string, bib bnBib) (lookup.Candidate, bool) {
 	if !ok {
 		return lookup.Candidate{}, false
 	}
-	var name, originalTitle, label, publisher, imprint string
+	var name, originalTitle, label, publisher, imprint, series string
+	var seriesNumber *int
 	var authors []string
 	for _, f := range fields {
 		switch f.Tag {
@@ -163,6 +165,12 @@ func bnCandidate(code, isbn10 string, bib bnBib) (lookup.Candidate, bool) {
 		case "700":
 			if len(f.sub("t")) == 0 && isAuthorRole(f.sub("e"), f.sub("4")) {
 				authors = append(authors, personName(f.first("a")))
+			}
+		case "800":
+			// An author's series; BN puts publishers' lines in 490 and 830,
+			// which are not the title's series.
+			if t := clean(f.first("t")); series == "" && t != "" {
+				series, seriesNumber = t, volumeNumber(f.first("v"))
 			}
 		case "250":
 			if label == "" {
@@ -203,6 +211,9 @@ func bnCandidate(code, isbn10 string, bib bnBib) (lookup.Candidate, bool) {
 	if originalTitle != "" && originalTitle != name {
 		title.OriginalTitle = &originalTitle
 	}
+	if series != "" {
+		title.SeriesName, title.SeriesNumber = &series, seriesNumber
+	}
 	if y, err := strconv.Atoi(strings.TrimSpace(bib.TimePeriodOfCreation)); err == nil && y >= 1800 && y <= 2200 {
 		title.Year = &y
 	}
@@ -212,6 +223,46 @@ func bnCandidate(code, isbn10 string, bib bnBib) (lookup.Candidate, bool) {
 		Edition:    edition,
 		Confidence: 0.9,
 	}, true
+}
+
+// maxVolume bounds the digits volumeNumber reads; the collection takes
+// numbers up to 10000, so a longer run is no volume.
+const maxVolume = 1 << 20
+
+// volumeNumber reads the first whole number in an 800 $v ("1", "t. 2",
+// "2a"), in the decimal digits of any script; one without digits gives
+// none.
+func volumeNumber(v string) *int {
+	n, seen := 0, false
+	for _, r := range v {
+		d, ok := decimalDigit(r)
+		switch {
+		case ok && n > maxVolume:
+			return nil
+		case ok:
+			n, seen = n*10+d, true
+		case seen:
+			return &n
+		}
+	}
+	if !seen {
+		return nil
+	}
+	return &n
+}
+
+// decimalDigit is the value of a decimal digit (Unicode Nd). Every script
+// has its digits as runs of whole zero-to-nine blocks, so the offset from
+// the start of the run gives the value.
+func decimalDigit(r rune) (int, bool) {
+	if !unicode.Is(unicode.Nd, r) {
+		return 0, false
+	}
+	start := r
+	for unicode.Is(unicode.Nd, start-1) {
+		start--
+	}
+	return int(r-start) % 10, true
 }
 
 // matchISBN finds the 020 field whose $a is this book's ISBN. A $z is a

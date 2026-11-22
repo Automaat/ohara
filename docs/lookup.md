@@ -52,6 +52,8 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   over the caller's cap fails (`fetch.Outcome` counts it a parse error),
   a status the caller does not accept is a `fetch.StatusError` returned
   with the response headers, and errors never carry the URL's query.
+  With `SkipBody` an accepted answer returns unread, for a write judged by
+  its status (the Discogs wantlist sync).
   Browser-like sites get `fetch.BrowserUserAgent`.
   When some of its sources fail but others answered, it returns a
   `*lookup.PartialError`: the lookup reports the failure next to the
@@ -75,15 +77,23 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   edition form's "Nośnik" ("Druk" or "Audiobook") hides "Oprawa" for an
   audiobook, the quick confirm offers it beside the bindings, and the
   shelf, the edition summary and Kolekcja's "Nośnik" filter name it.
+- BN fills a book's `series_name` from the first MARC 800 `$t` (an
+  author's series) and `series_number` from the first whole number in its
+  `$v` ("t. 2" and "2a" give 2, in any script's decimal digits; no digits
+  give none). 490 and 830, where
+  BN puts publishers' lines, are ignored. A merged candidate takes the
+  name and number together from the first provider that names a series,
+  so BN's wins. `Parse` reads the series from cached answers too, so
+  earlier scans need no new request.
 - Every Discogs request in the process (music lookup, title search,
-  valuation), and every redirect it follows, waits for one shared
+  valuation, wantlist sync), and every redirect it follows, waits for one shared
   `discogs.Limiter`: a burst of 4, then one every 1.2 s. Each request
   sent, redirects included, has 8 s from its own turn
   (`discogs.RequestTimeout`) and its own HTTP/1.1
   connection (`discogs.NewHTTPClient`), so net/http cannot resend it
   outside the budget and no minute of arrivals holds more than the
   token's 60. Waiting scans and title searches go before the valuation's
-  `Background` requests, each in arrival order; a caller that gives up
+  and the wantlist sync's `Background` requests, each in arrival order; a caller that gives up
   leaves the queue, and a wait that would outlast the caller's context
   returns its error at once without a request.
 - A lookup result sets `needs_confirmation` unless exactly one candidate
@@ -109,6 +119,17 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   user types (TMDB films, Google Books or, without a key, Open Library
   books, Discogs albums), answered as candidates for the barcode being
   added; a kind without its key answers 503.
+- A film's series comes from its TMDB collection (`lookup.FilmFinder`,
+  `movie.TMDB.Film`, enabled by `OHARA_TMDB_API_KEY`): two requests in
+  Polish, `/3/movie/{id}` for the poster and `belongs_to_collection` and
+  `/3/collection/{id}` for its name and parts, only for a title being
+  created, never per search result, and not cached. A film in no
+  collection costs the first request only. The name drops a trailing
+  "kolekcja" or "Collection" TMDB adds ("Harry Potter - kolekcja" becomes
+  "Harry Potter"); an empty name is no series. Only parts with a TMDB ID
+  and a release date on or before today (UTC) are numbered, by release
+  date and then TMDB ID, and counted. A movie answer without an `id`
+  counts as a parse error. Both requests count under the `tmdb` source.
 
 ## Frontend
 

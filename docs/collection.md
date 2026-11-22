@@ -80,8 +80,13 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   (`title_series_lock_for_delete`), so a create taking its number answers
   409 instead of a deadlock. A series page reads the series and its titles
   in one snapshot. Lookup candidates' `title` carries the same optional
-  `series_name` and `series_number` (no provider fills them yet), which the
-  scanner's add forwards when the API would take them; the title form sends
+  `series_name` and `series_number` (BN fills them, see
+  [lookup](lookup.md)), which the scanner's add forwards when the API would
+  take them, so a scanned book joins or creates its series. When another
+  title of the series holds the number (a reprint under a new ISBN, or the
+  same book saved at once from two tabs), the add saves the title in the
+  series without one instead of failing on 409; a lookup only
+  creates titles and never changes an existing title's series; the title form sends
   the two fields only when the reader changed them, so a form opened
   before another save gave the title its series keeps it. Kolekcja's
   desktop header links to `/series`, the list, and a phone's summary line
@@ -90,6 +95,18 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   "Liczba tomów" field; the title form has "Seria" (suggesting the series
   of the title's kind) and "Tom"; the title page shows "<series> · tom <n>"
   linking to its series.
+- `POST /api/titles` for a film with a `tmdb_id` and neither
+  `series_name` nor `series_number` in the body (an explicit null keeps
+  none) puts it in the series named after its TMDB collection (see
+  [lookup](lookup.md)), numbered by release order among the collection's
+  released films, and sets the series' `total_volumes` to that count. A
+  number another title of the series holds is dropped and the film joins
+  without one. The same lookup gives a title without `cover_url` the
+  film's TMDB poster, in place of the title search, so a save makes at
+  most two TMDB requests. The lookup waits at most 3 s; a TMDB error,
+  timeout or name the API would refuse saves the title without a series
+  (and without a cover when the first request failed). Updates, TV
+  seasons and other kinds never look a series up.
 - A loan (`loan`) records who has an owned copy: `POST /api/copies/{id}/loans`
   (`borrower` trimmed, at most 500 bytes; `lent_on` today in Poland when
   null; optional `due_on`, not before it) answers 201, 409 for a wish or a

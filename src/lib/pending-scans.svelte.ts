@@ -157,6 +157,12 @@ type Outcome = 'queued' | 'settled' | 'kept' | 'stop';
 export class PendingScans {
 	/** Codes waiting on this device, as last read from its store. */
 	count = $state(0);
+	/**
+	 * Goes up each time codes leave the device as this tab sees it: its run took some off, or a
+	 * read found fewer than it counted, as when another tab sent them. A code kept meanwhile
+	 * cannot hide a departure, as it can in the count.
+	 */
+	departures = $state(0);
 	/** Whether this device keeps such codes; null until its store was opened. */
 	available = $state<boolean | null>(null);
 	/** The sign-in turned the API's requests away: the page must reload to sign in again. */
@@ -197,11 +203,18 @@ export class PendingScans {
 		this.#store = null;
 	}
 
-	async #recount(store: PendingStore) {
+	/** Sets the count; left says this tab's run took codes off the device. */
+	#counted(count: number, left = false) {
+		if (left || count < this.count) this.departures++;
+		this.count = count;
+	}
+
+	async #recount(store: PendingStore, left = false) {
 		try {
-			this.count = (await store.list()).length;
+			this.#counted((await store.list()).length, left);
 		} catch {
 			this.#lost();
+			if (left) this.departures++;
 		}
 	}
 
@@ -263,27 +276,39 @@ export class PendingScans {
 			this.#lost();
 			return;
 		}
-		this.count = codes.length;
+		this.#counted(codes.length);
 		if (codes.length === 0) return;
 		await queueDeletesSettled();
+		const run = { left: false };
 		try {
-			await this.#sendEach(store, codes);
+			await this.#sendEach(store, codes, run);
 		} catch {
 			this.#lost();
+			if (run.left) this.departures++;
 			return;
 		}
-		await this.#recount(store);
+		await this.#recount(store, run.left);
 	}
 
-	/** Sends codes one after another, so a run that gets no answer stops before the rest. */
-	async #sendEach(store: PendingStore, codes: readonly string[]): Promise<void> {
+	/**
+	 * Sends codes one after another, so a run that gets no answer stops before the rest; run.left
+	 * notes that a code left the device.
+	 */
+	async #sendEach(
+		store: PendingStore,
+		codes: readonly string[],
+		run: { left: boolean }
+	): Promise<void> {
 		const [barcode, ...rest] = codes;
 		if (barcode === undefined) return;
 		const outcome = await this.#post(barcode);
 		if (outcome === 'stop') return;
-		if (outcome !== 'kept') await store.remove(barcode);
+		if (outcome !== 'kept') {
+			await store.remove(barcode);
+			run.left = true;
+		}
 		if (outcome === 'queued') queueWaiting(barcode);
-		await this.#sendEach(store, rest);
+		await this.#sendEach(store, rest, run);
 	}
 
 	#post(barcode: string): Promise<Outcome> {

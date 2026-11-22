@@ -398,15 +398,27 @@ type Bound struct {
 	Copies int   `json:"copies"`
 }
 
+// Realized is what sold copies made over what they cost: the sale price
+// less the purchase price, summed over the sold copies that have both, how
+// many copies that is and how many sold copies lack either price. A copy
+// given away for 0 zł loses what it cost.
+type Realized struct {
+	Copies    int   `json:"copies"`
+	GainCents int64 `json:"gain_cents"`
+	Unpriced  int   `json:"unpriced"`
+}
+
 // Totals is the collection's value range against what was paid for it,
-// as one day of valuation history keeps it.
+// with the gain realized by the copies sold by then, as one day of
+// valuation history keeps it. Every other figure covers owned copies only.
 type Totals struct {
-	Copies        int   `json:"copies"`
-	SpentCents    int64 `json:"spent_cents"`
-	Floor         Bound `json:"floor"`
-	Mid           Bound `json:"mid"`
-	Ceiling       Bound `json:"ceiling"`
-	LowConfidence int   `json:"low_confidence"`
+	Copies        int      `json:"copies"`
+	SpentCents    int64    `json:"spent_cents"`
+	Floor         Bound    `json:"floor"`
+	Mid           Bound    `json:"mid"`
+	Ceiling       Bound    `json:"ceiling"`
+	LowConfidence int      `json:"low_confidence"`
+	Realized      Realized `json:"realized"`
 }
 
 // Gain compares the used value with the price paid over the copies that
@@ -436,7 +448,8 @@ func Value(copies []CopyValue, ranges Ranges) {
 	}
 }
 
-// Summarize totals valued copies.
+// Summarize totals valued copies. It leaves Realized empty, as sold copies
+// are not among them.
 func Summarize(copies []CopyValue) Summary {
 	s := Summary{Totals: Totals{Copies: len(copies)}}
 	add := func(b *Bound, e *Estimate) {

@@ -649,6 +649,91 @@ func TestValuationAPI(t *testing.T) {
 	}
 }
 
+// TestValuationRealizedGain sells copies and reads the gain they realized
+// in the summary: sale price less purchase price over the sold copies with
+// both, the others counted apart, owned totals untouched.
+func TestValuationRealizedGain(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	seed(t, pool)
+	logger := slog.New(slog.DiscardHandler)
+	store := NewStore(pool)
+	runner := NewRunner(store, nil, nil, nil, Config{Window: 90 * 24 * time.Hour}, logger)
+	h := NewHandler(store, runner, logger)
+	srv := httptest.NewServer(server.New(server.Config{}, logger, server.Deps{DB: pool, API: []server.Mounter{h}}))
+	t.Cleanup(srv.Close)
+	summary := func() Summary {
+		t.Helper()
+		var view View
+		if code := get(t, srv.URL+"/api/valuation", &view); code != http.StatusOK {
+			t.Fatalf("GET = %d", code)
+		}
+		if view.Summary.Copies != 3 || view.Summary.SpentCents != 8000 {
+			t.Fatalf("owned totals = %+v, want the 3 owned copies and 80 zł spent", view.Summary.Totals)
+		}
+		return view.Summary
+	}
+
+	if got := summary().Realized; got != (Realized{}) {
+		t.Fatalf("realized before any sale = %+v, want none", got)
+	}
+
+	// Bought for 40 zł and sold for 70 zł, bought for 50 zł and sold for
+	// 20 zł: 0 zł from 2 copies.
+	exec(t, pool, `INSERT INTO copy (edition_id, status, price_cents, sold_on, sale_price_cents) VALUES
+		(10, 'sold', 4000, current_date - 3, 7000), (20, 'sold', 5000, current_date, 2000)`)
+	if got, want := summary().Realized, (Realized{Copies: 2, GainCents: 0}); got != want {
+		t.Fatalf("realized = %+v, want %+v", got, want)
+	}
+
+	// The gift for 0 zł loses its 25 zł. The two sales without a sale or a
+	// purchase price stay out of the gain, as unpriced, and the sale dated
+	// tomorrow is not realized yet.
+	exec(t, pool, `INSERT INTO copy (edition_id, status, price_cents, sold_on, sale_price_cents) VALUES
+		(10, 'sold', 2500, current_date, 0),
+		(20, 'sold', 3000, current_date, NULL),
+		(21, 'sold', NULL, current_date, 1000),
+		(21, 'sold', 1000, current_date + 1, 9000)`)
+	if got, want := summary().Realized, (Realized{Copies: 3, GainCents: -2500, Unpriced: 2}); got != want {
+		t.Fatalf("realized = %+v, want %+v", got, want)
+	}
+}
+
+// TestRunStoresRealizedGain runs a valuation after sales: the day's history
+// row keeps the gain realized to date, and a day stored before the gain
+// was kept reads 0.
+func TestRunStoresRealizedGain(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	seed(t, pool)
+	exec(t, pool, `INSERT INTO valuation_history (day, copies, spent_cents, floor_cents, floor_copies,
+			mid_cents, mid_copies, ceiling_cents, ceiling_copies, low_confidence)
+		VALUES (current_date - 1, 3, 8000, 0, 0, 5000, 2, 0, 0, 1)`)
+	exec(t, pool, `INSERT INTO copy (edition_id, status, price_cents, sold_on, sale_price_cents) VALUES
+		(10, 'sold', 4000, current_date - 1, 7000), (20, 'sold', 5000, current_date, NULL),
+		(20, 'sold', 1000, current_date + 1, 500)`)
+	bb := &fakeBuyBack{quotes: map[string]Quote{"9788308073209": {Offered: true, Cents: 537}}}
+	r := newTestRunner(pool, bb, &fakeSource{name: "olx"})
+
+	if _, err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	history, err := r.store.History(context.Background(), 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 2 {
+		t.Fatalf("history = %+v, want the earlier day and today", history)
+	}
+	if got := history[0].Realized; got != (Realized{}) {
+		t.Fatalf("earlier day realized = %+v, want 0", got)
+	}
+	if got, want := history[1].Realized, (Realized{Copies: 1, GainCents: 3000, Unpriced: 1}); got != want {
+		t.Fatalf("today realized = %+v, want %+v", got, want)
+	}
+	if history[1].Copies != 3 || history[1].SpentCents != 8000 {
+		t.Fatalf("today owned totals = %+v, want the 3 owned copies and 80 zł spent", history[1].Totals)
+	}
+}
+
 // TestSoldCopiesAreNotValued sells a copy of the Blu-ray, which another copy
 // still holds, and the only copy of a book edition: neither sold copy is
 // valued, and the edition left without an owned copy gets no search or quote.

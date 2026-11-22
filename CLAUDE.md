@@ -79,6 +79,12 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   with the request's context adds `request_id`, `method` and `path`;
   `httpx.WriteInternal` takes the request for that. Lines logged outside a
   request keep their form.
+- The router, not Traefik, compresses: `compressibleTypes` in
+  `internal/server/compress.go` lists the types (HTML, JS, CSS, JSON, SVG,
+  the manifest, `.wasm`) gzipped at the best level for a client that accepts
+  it, with `Vary: Accept-Encoding`. Other images go out as they are, a
+  response that already has a `Content-Encoding` (`/metrics`) is left alone
+  and a `Range` request gets the plain bytes.
 - Money is integer grosze (`price_cents`). Barcodes are stored normalized
   (`barcode.Normalize`: EAN-8, EAN-13 or GTIN-14; a UPC-A becomes its
   EAN-13 with a leading 0, ISBN-10 becomes ISBN-13), one edition per barcode.

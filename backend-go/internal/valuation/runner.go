@@ -498,7 +498,9 @@ type releaseRaw struct {
 
 // recordRelease stores each known price of release id as an observation
 // of h's edition, keyed by release and edition so two editions naming the
-// same release both get it.
+// same release both get it. They are stored in one transaction, so the
+// suggestions of one answer share their last seen time and a grade the
+// answer left out is older than the rest.
 func (x *run) recordRelease(ctx context.Context, h *Holding, id int64, p ReleasePrice) (bool, error) {
 	raw, err := json.Marshal(releaseRaw{ReleaseID: id, NumForSale: p.NumForSale})
 	if err != nil {
@@ -506,29 +508,33 @@ func (x *run) recordRelease(ctx context.Context, h *Holding, id int64, p Release
 	}
 	key := strconv.FormatInt(id, 10) + "/" + strconv.FormatInt(h.Want.EditionID, 10)
 	release := "https://www.discogs.com/release/" + strconv.FormatInt(id, 10)
-	prices := []struct {
+	type price struct {
 		source string
 		cents  *int64
 		url    string
-	}{
-		{SourceDiscogsLowest, p.LowestCents, "https://www.discogs.com/sell/release/" + strconv.FormatInt(id, 10)},
-		{SourceDiscogsVGPlus, p.VGPlusCents, release},
-		{SourceDiscogsMint, p.MintCents, release},
 	}
-	recorded := false
+	prices := []price{
+		{SourceDiscogsLowest, p.LowestCents, "https://www.discogs.com/sell/release/" + strconv.FormatInt(id, 10)},
+	}
+	for _, s := range p.suggested() {
+		prices = append(prices, price{s.source, *s.cents, release})
+	}
+	var ls []deals.Listing
 	for _, pr := range prices {
 		if pr.cents == nil {
 			continue
 		}
-		l := deals.Listing{
+		ls = append(ls, deals.Listing{
 			Source: pr.source, ExternalID: key, Title: h.Want.Name, URL: pr.url, PriceCents: *pr.cents, Raw: raw,
-		}
-		if _, err := x.r.store.RecordAsOf(ctx, &l, h, x.asOf); err != nil {
-			return false, err
-		}
-		recorded = true
+		})
 	}
-	return recorded, nil
+	if len(ls) == 0 {
+		return false, nil
+	}
+	if err := x.r.store.RecordAllAsOf(ctx, ls, h, x.asOf); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // publish exports a stored day as the collection value gauges.

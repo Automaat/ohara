@@ -19,12 +19,17 @@ import (
 )
 
 // Discogs prices of an album edition in price_observation: the cheapest
-// copy for sale (the floor), the suggested price of a Very Good Plus copy
-// (the middle) and of a Mint one (the ceiling).
+// copy for sale (the floor), the suggested price of a copy in each grade a
+// condition maps to (the middle, Very Good Plus for a copy without one)
+// and of a Mint one (the ceiling).
 const (
-	SourceDiscogsLowest = "discogs_lowest"
-	SourceDiscogsVGPlus = "discogs_vg_plus"
-	SourceDiscogsMint   = "discogs_mint"
+	SourceDiscogsLowest   = "discogs_lowest"
+	SourceDiscogsNearMint = "discogs_near_mint"
+	SourceDiscogsVGPlus   = "discogs_vg_plus"
+	SourceDiscogsVG       = "discogs_vg"
+	SourceDiscogsGood     = "discogs_good"
+	SourceDiscogsPoor     = "discogs_poor"
+	SourceDiscogsMint     = "discogs_mint"
 )
 
 // SourceDiscogs names Discogs as the source of an estimate built from any
@@ -33,17 +38,46 @@ const SourceDiscogs = "discogs"
 
 // Discogs media condition grades the suggestions are read for.
 const (
-	gradeVGPlus = "Very Good Plus (VG+)"
-	gradeMint   = "Mint (M)"
+	gradeMint     = "Mint (M)"
+	gradeNearMint = "Near Mint (NM or M-)"
+	gradeVGPlus   = "Very Good Plus (VG+)"
+	gradeVG       = "Very Good (VG)"
+	gradeGood     = "Good (G)"
+	gradePoor     = "Poor (P)"
 )
 
 // ReleasePrice is a Discogs release priced in grosze; a nil price is
-// unknown (nothing for sale, no suggestion).
+// unknown (nothing for sale, no suggestion). Each suggestion is the price
+// of a copy in one media grade.
 type ReleasePrice struct {
-	LowestCents *int64
-	NumForSale  int
-	VGPlusCents *int64
-	MintCents   *int64
+	LowestCents   *int64
+	NumForSale    int
+	MintCents     *int64
+	NearMintCents *int64
+	VGPlusCents   *int64
+	VGCents       *int64
+	GoodCents     *int64
+	PoorCents     *int64
+}
+
+// suggestion is one grade's suggested price in a ReleasePrice and the
+// price_observation source it is stored under.
+type suggestion struct {
+	grade  string
+	source string
+	cents  **int64
+}
+
+// suggested lists the suggestions of p, best grade first.
+func (p *ReleasePrice) suggested() []suggestion {
+	return []suggestion{
+		{gradeMint, SourceDiscogsMint, &p.MintCents},
+		{gradeNearMint, SourceDiscogsNearMint, &p.NearMintCents},
+		{gradeVGPlus, SourceDiscogsVGPlus, &p.VGPlusCents},
+		{gradeVG, SourceDiscogsVG, &p.VGCents},
+		{gradeGood, SourceDiscogsGood, &p.GoodCents},
+		{gradePoor, SourceDiscogsPoor, &p.PoorCents},
+	}
 }
 
 // ReleasePricer prices a Discogs release in PLN. A partly priced release
@@ -108,11 +142,10 @@ func (d Discogs) Price(ctx context.Context, id int64) (ReleasePrice, error) {
 		if err != nil {
 			return p, errors.Join(append(errs, err)...)
 		}
-		if m, ok := s[gradeVGPlus]; ok {
-			set(&p.VGPlusCents, m)
-		}
-		if m, ok := s[gradeMint]; ok {
-			set(&p.MintCents, m)
+		for _, g := range p.suggested() {
+			if m, ok := s[g.grade]; ok {
+				set(g.cents, m)
+			}
 		}
 	}
 	return p, errors.Join(errs...)

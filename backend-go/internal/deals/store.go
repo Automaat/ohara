@@ -235,7 +235,44 @@ func (s *Store) RecordAsOf(ctx context.Context, l *Listing, w *Want, alert bool,
 	return s.record(ctx, l, w, alert, &asOf)
 }
 
+// RecordAllAsOf stores ls as observations of w as RecordAsOf does, in one
+// transaction and queuing no alert, so every one of them is last seen at
+// the same instant.
+func (s *Store) RecordAllAsOf(ctx context.Context, ls []Listing, w *Want, asOf time.Time) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("record: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	for i := range ls {
+		if _, _, err := record(ctx, tx, &ls[i], w, false, &asOf); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("record: commit: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) record(ctx context.Context, l *Listing, w *Want, alert bool, asOf *time.Time) (bool, bool, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return false, false, fmt.Errorf("record: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	isNew, alerted, err := record(ctx, tx, l, w, alert, asOf)
+	if err != nil {
+		return false, false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, false, fmt.Errorf("record: commit: %w", err)
+	}
+	return isNew, alerted, nil
+}
+
+// record is Store.record inside tx, which the caller commits.
+func record(ctx context.Context, tx pgx.Tx, l *Listing, w *Want, alert bool, asOf *time.Time) (bool, bool, error) {
 	raw, err := json.Marshal(observationRaw{
 		Title: l.Title, Data: l.Raw, PhotoURL: l.PhotoURL, WishlistCopyID: w.CopyID, Query: QueryKey(l.Query),
 	})
@@ -246,11 +283,6 @@ func (s *Store) record(ctx context.Context, l *Listing, w *Want, alert bool, asO
 	if listingSources[l.Source] {
 		firstPrice = &l.PriceCents
 	}
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return false, false, fmt.Errorf("record: begin: %w", err)
-	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	var id int64
 	var isNew, dismissed, alerted bool
 	var titleID *int64
@@ -282,9 +314,6 @@ func (s *Store) record(ctx context.Context, l *Listing, w *Want, alert bool, asO
 		return false, false, fmt.Errorf("record observation: %w", err)
 	}
 	if titleID == nil || *titleID != w.TitleID {
-		if err := tx.Commit(ctx); err != nil {
-			return false, false, fmt.Errorf("record: commit: %w", err)
-		}
 		return isNew, false, nil
 	}
 	if _, err := tx.Exec(ctx, `UPDATE deal_alert a SET copy_id = nullif($3::bigint, 0)
@@ -297,9 +326,6 @@ func (s *Store) record(ctx context.Context, l *Listing, w *Want, alert bool, asO
 		if alerted, err = queueAlert(ctx, tx, id, w.CopyID, l.PriceCents); err != nil {
 			return false, false, err
 		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return false, false, fmt.Errorf("record: commit: %w", err)
 	}
 	return isNew, alerted, nil
 }

@@ -75,6 +75,8 @@ func (h *Handler) writeErr(w http.ResponseWriter, r *http.Request, id int64, err
 		h.fail(w, http.StatusConflict, refused.Reason)
 	case errors.Is(err, ErrForeignInstance):
 		h.fail(w, http.StatusConflict, ForeignInstanceMessage)
+	case errors.Is(err, ErrLinkedElsewhere):
+		h.fail(w, http.StatusConflict, LinkedElsewhereMessage)
 	case errors.As(err, &field):
 		h.logger.WarnContext(r.Context(), "discogs collection push", "copy", id, "err", err)
 		h.fail(w, http.StatusBadGateway,

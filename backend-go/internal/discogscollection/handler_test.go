@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -59,6 +60,12 @@ type double struct {
 	fail      int
 	failPath  string
 	nextID    int64
+	// cutAdd makes the next adds answer 201 with a body cut short, and
+	// cutList the release lookups after such an add fail with 502.
+	cutAdd, cutList int
+	cutDone         bool
+	// beforeLookup runs, unlocked, before every release lookup.
+	beforeLookup func()
 }
 
 func newDouble(t *testing.T) (*double, *httptest.Server) {
@@ -85,6 +92,11 @@ func newDouble(t *testing.T) (*double, *httptest.Server) {
 		writeJSON(w, http.StatusOK, obj{"fields": d.fields})
 	})
 	mux.HandleFunc("GET "+user+"/releases/{release}", func(w http.ResponseWriter, r *http.Request) {
+		if d.cutList > 0 && d.cutDone {
+			d.cutList--
+			writeJSON(w, http.StatusBadGateway, obj{"message": "down"})
+			return
+		}
 		id := pathInt(r, "release")
 		held := d.instances[id]
 		if len(held) == 0 {
@@ -93,15 +105,28 @@ func newDouble(t *testing.T) (*double, *httptest.Server) {
 		}
 		out := []obj{}
 		for _, h := range held {
-			out = append(out, obj{"id": id, "instance_id": h.InstanceID, "folder_id": h.FolderID, "rating": 0})
+			out = append(out, obj{
+				"id": id, "instance_id": h.InstanceID, "folder_id": h.FolderID, "rating": 0, "date_added": h.DateAdded,
+			})
 		}
 		writeJSON(w, http.StatusOK, obj{"pagination": obj{"page": 1, "pages": 1}, "releases": out})
 	})
 	mux.HandleFunc("POST "+user+"/folders/{folder}/releases/{release}", func(w http.ResponseWriter, r *http.Request) {
 		d.nextID++
 		folder, id := pathInt(r, "folder"), pathInt(r, "release")
-		d.instances[id] = append(d.instances[id], discogs.Instance{InstanceID: d.nextID, FolderID: folder})
+		d.instances[id] = append(d.instances[id], discogs.Instance{
+			InstanceID: d.nextID, FolderID: folder, DateAdded: time.Now().Format(time.RFC3339),
+		})
 		d.adds = append(d.adds, fieldEdit{folder: folder, release: id, instance: d.nextID})
+		if d.cutAdd > 0 {
+			d.cutAdd--
+			d.cutDone = true
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Content-Length", "100")
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"instance_id": 9`))
+			return
+		}
 		writeJSON(w, http.StatusCreated, obj{"instance_id": d.nextID, "resource_url": "x"})
 	})
 	mux.HandleFunc("POST "+user+"/folders/{folder}/releases/{release}/instances/{instance}/fields/{field}",
@@ -113,6 +138,14 @@ func newDouble(t *testing.T) (*double, *httptest.Server) {
 			w.WriteHeader(http.StatusNoContent)
 		})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/collection/releases/") {
+			d.mu.Lock()
+			hook := d.beforeLookup
+			d.mu.Unlock()
+			if hook != nil {
+				hook()
+			}
+		}
 		d.mu.Lock()
 		defer d.mu.Unlock()
 		d.requests++
@@ -159,6 +192,16 @@ func (d *double) moveTo(id, folder int64) {
 	defer d.mu.Unlock()
 	for i := range d.instances[id] {
 		d.instances[id][i].FolderID = folder
+	}
+}
+
+// age dates every instance of release id by ago earlier.
+func (d *double) age(id int64, ago time.Duration) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	held := d.instances[id]
+	for i := range held {
+		held[i].DateAdded = time.Now().Add(-ago).Format(time.RFC3339)
 	}
 }
 
@@ -485,6 +528,14 @@ func TestPushDiscogsFailures(t *testing.T) {
 	}
 }
 
+// state reads the copy's Discogs state.
+func (a *api) state(id int64) discogscollection.State {
+	a.t.Helper()
+	var s discogscollection.State
+	a.must(http.MethodGet, fmt.Sprintf("/api/copies/%d/discogs", id), nil, &s, http.StatusOK)
+	return s
+}
+
 func TestPushFieldEditFailureKeepsInstance(t *testing.T) {
 	d, srv := newDouble(t)
 	a := newAPI(t, srv.URL, discogscollection.DefaultFolder)
@@ -496,10 +547,14 @@ func TestPushFieldEditFailureKeepsInstance(t *testing.T) {
 	}
 	adds, _, _ := d.snapshot()
 	if inst, _ := a.stored(id); len(adds) != 1 || inst == nil || *inst != adds[0].instance {
-		t.Fatalf("stored %v after adds %+v, want the made instance kept", inst, adds)
+		t.Fatalf("stored %v after adds %+v, want the made instance kept for a retry", inst, adds)
+	}
+	if s := a.state(id); s.InstanceID != nil || s.ReleaseURL != nil || !s.Pushable {
+		t.Fatalf("state = %+v, want no instance shown before its conditions are set", s)
 	}
 	d.failWith(0, "")
-	if code, raw, _ := a.push(id); code != http.StatusOK {
+	code, raw, s := a.push(id)
+	if code != http.StatusOK || s.InstanceID == nil || *s.InstanceID != adds[0].instance {
 		t.Fatalf("retry = %d %s", code, raw)
 	}
 	if adds, _, _ = d.snapshot(); len(adds) != 1 {
@@ -556,28 +611,164 @@ func TestPushRefusesWhatIsNoOwnedAlbum(t *testing.T) {
 	}
 }
 
-func TestPushAfterEditionNamesAnotherRelease(t *testing.T) {
-	d, srv := newDouble(t)
-	a := newAPI(t, srv.URL, discogscollection.DefaultFolder)
-	id := a.album(obj{"status": "owned"})
-	if code, raw, _ := a.push(id); code != http.StatusOK {
-		t.Fatalf("push = %d %s", code, raw)
-	}
+// relink moves copy id's edition to release.
+func (a *api) relink(id, rel int64) {
+	a.t.Helper()
 	var c collection.CopyDetail
 	a.must(http.MethodGet, fmt.Sprintf("/api/copies/%d", id), nil, &c, http.StatusOK)
 	a.must(http.MethodPut, fmt.Sprintf("/api/editions/%d", c.EditionID), obj{
-		"title_id": c.Title.ID, "format": "vinyl", "discogs_release_id": 77,
+		"title_id": c.Title.ID, "format": "vinyl", "discogs_release_id": rel,
 	}, nil, http.StatusOK)
+}
 
-	var s discogscollection.State
-	a.must(http.MethodGet, fmt.Sprintf("/api/copies/%d/discogs", id), nil, &s, http.StatusOK)
-	if s.InstanceID != nil || !s.Pushable {
+func TestPushAfterEditionNamesAnotherRelease(t *testing.T) {
+	d, srv := newDouble(t)
+	a := newAPI(t, srv.URL, discogscollection.DefaultFolder)
+	id := a.album(obj{"status": "owned", "media_grade": "mint"})
+	if code, raw, _ := a.push(id); code != http.StatusOK {
+		t.Fatalf("push = %d %s", code, raw)
+	}
+	adds, _, _ := d.snapshot()
+	first := adds[0].instance
+
+	a.relink(id, 77)
+	if s := a.state(id); s.InstanceID != nil || !s.Pushable {
 		t.Fatalf("state = %+v, want no instance of the new release", s)
+	}
+	code, raw, _ := a.push(id)
+	if code != http.StatusConflict || !strings.Contains(raw, "jako inne wydanie") {
+		t.Fatalf("push of release 77 = %d %s, want 409 while the first instance is there", code, raw)
+	}
+	if inst, rel := a.stored(id); inst == nil || *inst != first || rel == nil || *rel != release {
+		t.Fatalf("stored %v of %v, want the first link kept", inst, rel)
+	}
+
+	a.relink(id, release)
+	code, raw, s := a.push(id)
+	adds, edits, _ := d.snapshot()
+	if code != http.StatusOK || len(adds) != 1 || s.InstanceID == nil || *s.InstanceID != first {
+		t.Fatalf("push back on release %d = %d %s, adds %+v", release, code, raw, adds)
+	}
+	if last := edits[len(edits)-1]; last.instance != first {
+		t.Fatalf("last edit = %+v, want the first instance", last)
+	}
+
+	a.relink(id, 77)
+	d.removeRelease(release)
+	code, raw, s = a.push(id)
+	adds, _, _ = d.snapshot()
+	if code != http.StatusOK || len(adds) != 2 || adds[1].release != 77 || s.InstanceID == nil ||
+		*s.InstanceID != adds[1].instance || *s.ReleaseURL != "https://www.discogs.com/release/77" {
+		t.Fatalf("push after the first instance is gone = %d %s, adds %+v", code, raw, adds)
+	}
+}
+
+func TestPushAdoptsAddWhoseAnswerWasCut(t *testing.T) {
+	d, srv := newDouble(t)
+	a := newAPI(t, srv.URL, discogscollection.DefaultFolder)
+	id := a.album(obj{"status": "owned", "media_grade": "mint"})
+	d.mu.Lock()
+	d.cutAdd = 1
+	d.mu.Unlock()
+	code, raw, s := a.push(id)
+	adds, edits, _ := d.snapshot()
+	if code != http.StatusOK || len(adds) != 1 || s.InstanceID == nil || *s.InstanceID != adds[0].instance ||
+		len(edits) != 1 || edits[0].instance != adds[0].instance {
+		t.Fatalf("push = %d %s, adds %+v, edits %+v; want the cut add adopted", code, raw, adds, edits)
+	}
+}
+
+func TestPushSettlesCutAddOnRetry(t *testing.T) {
+	d, srv := newDouble(t)
+	a := newAPI(t, srv.URL, discogscollection.DefaultFolder)
+	id := a.album(obj{"status": "owned"})
+	d.mu.Lock()
+	d.cutAdd, d.cutList = 1, 1
+	d.mu.Unlock()
+	if code, raw, _ := a.push(id); code != http.StatusBadGateway {
+		t.Fatalf("push = %d %s, want 502", code, raw)
+	}
+	if inst, _ := a.stored(id); inst != nil {
+		t.Fatalf("stored instance %d before the add is settled", *inst)
 	}
 	code, raw, s := a.push(id)
 	adds, _, _ := d.snapshot()
-	if code != http.StatusOK || len(adds) != 2 || adds[1].release != 77 || s.InstanceID == nil ||
-		*s.InstanceID != adds[1].instance || *s.ReleaseURL != "https://www.discogs.com/release/77" {
-		t.Fatalf("push = %d %s, adds %+v", code, raw, adds)
+	if code != http.StatusOK || len(adds) != 1 || s.InstanceID == nil || *s.InstanceID != adds[0].instance {
+		t.Fatalf("retry = %d %s, adds %+v; want the earlier add adopted", code, raw, adds)
+	}
+}
+
+func TestPushDoesNotAdoptOlderInstance(t *testing.T) {
+	d, srv := newDouble(t)
+	a := newAPI(t, srv.URL, discogscollection.DefaultFolder)
+	id := a.album(obj{"status": "owned"})
+	d.mu.Lock()
+	d.cutAdd, d.cutList = 1, 1
+	d.mu.Unlock()
+	if code, _, _ := a.push(id); code != http.StatusBadGateway {
+		t.Fatalf("push = %d, want 502", code)
+	}
+	d.age(release, time.Hour)
+	if code, raw, _ := a.push(id); code != http.StatusConflict {
+		t.Fatalf("retry = %d %s, want 409 for an instance older than the add", code, raw)
+	}
+	if inst, _ := a.stored(id); inst != nil {
+		t.Fatalf("stored instance %d", *inst)
+	}
+}
+
+func TestPushRefusesForeignBesideOwn(t *testing.T) {
+	d, srv := newDouble(t)
+	a := newAPI(t, srv.URL, discogscollection.DefaultFolder)
+	id := a.album(obj{"status": "owned", "media_grade": "mint"})
+	if code, raw, _ := a.push(id); code != http.StatusOK {
+		t.Fatalf("push = %d %s", code, raw)
+	}
+	d.hold(release, discogs.Instance{InstanceID: 812, FolderID: 1})
+	_, before, _ := d.snapshot()
+	code, raw, _ := a.push(id)
+	adds, after, _ := d.snapshot()
+	if code != http.StatusConflict || !strings.Contains(raw, discogscollection.ForeignInstanceMessage) ||
+		len(adds) != 1 || len(after) != len(before) {
+		t.Fatalf("push = %d %s, adds %+v, edits %d then %d; want 409 and no edit", code, raw, adds, len(before), len(after))
+	}
+}
+
+func TestDeleteWaitsForPush(t *testing.T) {
+	d, srv := newDouble(t)
+	a := newAPI(t, srv.URL, discogscollection.DefaultFolder)
+	id := a.album(obj{"status": "owned"})
+	paused, resume := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	d.mu.Lock()
+	d.beforeLookup = func() {
+		once.Do(func() {
+			close(paused)
+			<-resume
+		})
+	}
+	d.mu.Unlock()
+	pushed := make(chan int, 1)
+	go func() {
+		code, _, _ := a.push(id)
+		pushed <- code
+	}()
+	<-paused
+	deleted := make(chan int, 1)
+	go func() {
+		code, _ := a.do(http.MethodDelete, fmt.Sprintf("/api/copies/%d", id), nil, nil)
+		deleted <- code
+	}()
+	select {
+	case code := <-deleted:
+		t.Fatalf("delete answered %d while the push held the copy", code)
+	case <-time.After(300 * time.Millisecond):
+	}
+	close(resume)
+	if code := <-pushed; code != http.StatusOK {
+		t.Fatalf("push = %d", code)
+	}
+	if code := <-deleted; code != http.StatusNoContent {
+		t.Fatalf("delete = %d", code)
 	}
 }

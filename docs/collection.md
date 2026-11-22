@@ -199,31 +199,38 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   `OHARA_DISCOGS_FOLDER_ID` (1, "Uncategorized", unless set). It reads
   the owner from `/oauth/identity`, the field IDs and options of "Media
   Condition" and "Sleeve Condition" from the collection's fields, and the
-  release's instances in every folder. Without a stored instance it adds
-  one (POST to the folder), stores its ID with the release on the copy
+  release's instances in every folder. A copy makes one instance: the
+  push adds one (POST to the folder), links it to the copy
   (`discogs_instance_id`, `discogs_instance_release_id`), then sets each
   grade the copy has to its Discogs option ("Very Good Plus (VG+)"); a
-  missing grade leaves its field unset. A later push finds the stored
-  instance in whatever folder the owner moved it to and only sets its
-  conditions. An instance the copy stored that Discogs no longer has, or
-  one of a release the edition no longer names, is forgotten and a new
-  one made. A release already held in an instance the copy did not make
-  answers 409 "To wydanie jest już w Twojej kolekcji Discogs." with
-  nothing added or edited. A copy that is not owned, not an album, or
-  whose edition has no release answers 409 before any Discogs request;
-  without the token 503; a Discogs error (401, 429, 5xx, no answer) or a
-  fields list without the field or option a grade needs answers 502 with
-  a Polish message and logs a warning naming no token. The instance ID is
-  stored as soon as Discogs makes it, so a failed field edit retried adds
-  nothing. Those error answers carry `field: "discogs_collection"`, whose
-  message the SPA shows as it is. Pushes run one at a time. Ohara never
-  removes or edits another instance, sends no rating or notes, and leaves
-  Discogs alone when a copy is sold or deleted. `GET` on the same path
-  answers `enabled` (a token is set), `pushable`, and `instance_id` with
-  `release_url` once the copy made an instance of its edition's release.
-  The copy page shows a "Discogs" part for a pushable or pushed copy:
-  "Dodaj do kolekcji Discogs", then "W kolekcji Discogs" linking the
-  release and "Zaktualizuj stan w Discogs".
+  missing grade leaves its field unset. Only once the conditions are set
+  (`discogs_instance_synced`) does the API show the instance; a push that
+  failed after the add reuses the linked instance. A later push finds the
+  linked instance in whatever folder the owner moved it to and only sets
+  its conditions. A linked instance Discogs no longer has is forgotten
+  and a new one made; one of a release the edition no longer names, still
+  there, answers 409 "Ten egzemplarz jest już w kolekcji Discogs jako inne
+  wydanie." and keeps the link. Any instance of the release the copy did
+  not make, beside its own or alone, answers 409 "To wydanie jest już w
+  Twojej kolekcji Discogs." with nothing added or edited. An add is marked
+  (`discogs_add_release_id`, `discogs_add_since`) before it is sent; when
+  its answer does not come, the push, or a later one, adopts the release's
+  instance only when it is the only one and Discogs dated it no earlier
+  than 5 minutes before the mark. The push holds the copy's row
+  (`FOR NO KEY UPDATE`) until it ends, so a delete or update of the copy
+  waits for it, and pushes run one at a time. A copy that is not owned,
+  not an album, or whose edition has no release answers 409 before any
+  Discogs request; without the token 503; a Discogs error (401, 429, 5xx,
+  no answer) or a fields list without the field or option a grade needs
+  answers 502 with a Polish message and logs a warning naming no token.
+  Those error answers carry `field: "discogs_collection"`, whose message
+  the SPA shows as it is. Ohara never removes or edits another instance,
+  sends no rating or notes, and leaves Discogs alone when a copy is sold
+  or deleted. `GET` on the same path answers `enabled` (a token is set),
+  `pushable`, and `instance_id` with `release_url` once the push set its
+  conditions. The copy page shows a "Discogs" part for a pushable or
+  pushed copy: "Dodaj do kolekcji Discogs", then "W kolekcji Discogs"
+  linking the release and "Zaktualizuj stan w Discogs".
 
 ## Frontend
 

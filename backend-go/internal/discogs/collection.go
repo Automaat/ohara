@@ -39,9 +39,11 @@ func (c *Client) CollectionFields(ctx context.Context, username string) ([]Field
 }
 
 // Instance is one copy of a release in a user's collection, in a folder.
+// DateAdded is when it was added, as Discogs writes it (RFC 3339).
 type Instance struct {
-	InstanceID int64 `json:"instance_id"`
-	FolderID   int64 `json:"folder_id"`
+	InstanceID int64  `json:"instance_id"`
+	FolderID   int64  `json:"folder_id"`
+	DateAdded  string `json:"date_added"`
 }
 
 // ReleaseInstances returns the instances of release id in the collection

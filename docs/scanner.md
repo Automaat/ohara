@@ -42,6 +42,16 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   time (Web Locks), each POST within 15 s. `request` does not follow
   redirects, so a 401 or Authelia's cross-origin redirect is an expired
   session ("Odśwież"), not a lost connection; the code is kept either way.
+- The queue page (`/scan/queue`, `QueueList` in `src/lib/queue.svelte.ts`)
+  reads the queue when it opens and again each time codes kept on the
+  device leave it, so a code sent in the background after the first read
+  still shows up. It watches `PendingScans.departures`, which goes up when
+  a run of this tab took codes off the device or a read found fewer than it
+  counted, so a code another tab kept meanwhile cannot hide a departure as
+  it does in the count. An answer older than the last one shown is dropped,
+  and so is an entry a removal took out after that read went out. A failed
+  first read shows the error state; a later failed read keeps the list with
+  a warning and "Spróbuj ponownie" until a read asked after it answers.
 - The scanner's visit ("Ta sesja" adds, "Ostatnie skany" and the purchase
   date carried to the next add) is kept in `localStorage`
   (`ohara.scan.visit`, `src/lib/visit.ts`) and restored on load until 12

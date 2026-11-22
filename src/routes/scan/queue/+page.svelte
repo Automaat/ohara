@@ -2,6 +2,7 @@
 	import {
 		BackLink,
 		Button,
+		Callout,
 		EmptyState,
 		ErrorState,
 		PageHeader,
@@ -10,16 +11,15 @@
 		dismiss,
 		toast
 	} from '@smykla-skalski/sui';
-	import { onDestroy, onMount, tick } from 'svelte';
+	import { onDestroy, onMount, tick, untrack } from 'svelte';
 	import QueueRow from '#lib/components/QueueRow.svelte';
-	import { errorMessage, request } from '#lib/api.js';
-	import { deleteQueueEntry, queueDeletesSettled } from '#lib/queue-deletes.js';
-	import { QueueRemovals } from '#lib/queue.svelte.js';
+	import { pendingScans } from '#lib/pending-scans.svelte.js';
+	import { deleteQueueEntry } from '#lib/queue-deletes.js';
+	import { QueueList, QueueRemovals } from '#lib/queue.svelte.js';
 	import type { QueueEntry } from '#lib/scan.js';
 	import { toastHeld } from '#lib/toast-hold.js';
 
-	let entries = $state<QueueEntry[] | null>(null);
-	let failure = $state<string | null>(null);
+	const list = new QueueList(fetch);
 	let openRow = $state<number | null>(null);
 
 	const removals = new QueueRemovals({
@@ -27,22 +27,15 @@
 		dismiss,
 		holding: (id) => toastHeld(document, id),
 		send: (entry) => deleteQueueEntry(entry.id),
-		removed: (entry) => {
-			entries = (entries ?? []).filter((e) => e.id !== entry.id);
-		}
+		removed: (entry) => list.removed(entry.id)
 	});
 
-	const shown = $derived(entries?.filter((e) => !removals.hidden.has(e.id)) ?? null);
+	const shown = $derived(list.entries?.filter((e) => !removals.hidden.has(e.id)) ?? null);
 
-	async function load() {
-		try {
-			await queueDeletesSettled();
-			entries = await request<QueueEntry[]>(fetch, 'GET', '/api/scan-queue');
-			failure = null;
-		} catch (err) {
-			failure = errorMessage(err);
-		}
-	}
+	$effect(() => {
+		const departures = pendingScans.departures;
+		untrack(() => list.departed(departures));
+	});
 
 	/**
 	 * Hides the entry behind its undo toast. A removal from the menu leaves focus on a trigger
@@ -70,7 +63,7 @@
 	}
 
 	onMount(() => {
-		void load();
+		void list.load();
 	});
 
 	onDestroy(() => {
@@ -95,11 +88,21 @@
 </PageHeader>
 
 <div class="content">
-	{#if failure}
+	{#if list.failure && list.entries !== null}
+		<div class="refresh-failed">
+			<Callout tone="warning" title="Nie udało się odświeżyć kolejki" live>
+				{list.failure} Lista może nie zawierać ostatnio wysłanych kodów.
+				{#snippet actions()}
+					<Button onclick={() => list.load()}>Spróbuj ponownie</Button>
+				{/snippet}
+			</Callout>
+		</div>
+	{/if}
+	{#if list.failure && list.entries === null}
 		<ErrorState
 			title="Nie udało się wczytać kolejki"
-			description={failure}
-			onretry={() => load()}
+			description={list.failure}
+			onretry={() => list.load()}
 			retryLabel="Spróbuj ponownie"
 		/>
 	{:else if shown === null}
@@ -140,6 +143,10 @@
 		font-family: var(--sui-sans);
 		color: var(--sui-text-primary);
 		max-width: 48rem;
+	}
+
+	.refresh-failed {
+		margin-block-end: 1rem;
 	}
 
 	.queue {

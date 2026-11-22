@@ -24,6 +24,11 @@ export function copyCount(count: number): string {
 	return counted(count, 'egzemplarz', 'egzemplarze', 'egzemplarzy');
 }
 
+/** Copies on their way, such as "2 zamówione". */
+export function orderedCount(count: number): string {
+	return counted(count, 'zamówiony', 'zamówione', 'zamówionych');
+}
+
 /** Codes in the scan queue, such as "2 kody czekają na uzupełnienie". */
 export function queuedCodes(count: number): string {
 	const plural = pluralRules.select(count);

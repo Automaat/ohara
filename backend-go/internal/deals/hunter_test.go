@@ -453,6 +453,29 @@ func TestRunWithEmptyWishlistAsksNoSource(t *testing.T) {
 	}
 }
 
+// TestRunSkipsOrderedCopies turns the only copy of a wished Blu-ray into one
+// on order: the run has nothing to search for and alerts on no listing.
+func TestRunSkipsOrderedCopies(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	copyID := wishlist(t, pool, wantBluray(new(int64(5000))))
+	if _, err := pool.Exec(context.Background(), `UPDATE copy SET status = 'ordered', max_price_cents = NULL,
+		price_cents = 4500, purchased_on = current_date, expected_on = current_date + 7 WHERE id = $1`, copyID); err != nil {
+		t.Fatal(err)
+	}
+	olx := olxFixture(t)
+	notifier := &fakeNotifier{}
+	res := mustRun(t, newTestHunter(pool, notifier, olx))
+	if res.Wants != 0 || res.Matched != 0 || res.Alerts != 0 || len(olx.queries) != 0 {
+		t.Fatalf("run = %+v, queries %q, want no search for an ordered copy", res, olx.queries)
+	}
+	if msgs := notifier.messages(); len(msgs) != 0 {
+		t.Fatalf("messages = %q", msgs)
+	}
+	if n := count(t, pool, `SELECT count(*) FROM deal_alert`); n != 0 {
+		t.Fatalf("deal alerts = %d", n)
+	}
+}
+
 func TestRunMatchesBooksOnPepper(t *testing.T) {
 	pool := dbtest.Migrated(t)
 	book := wiedzmin()

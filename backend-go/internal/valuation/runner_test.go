@@ -866,6 +866,63 @@ func TestSoldCopiesAreNotValued(t *testing.T) {
 	}
 }
 
+// TestOrderedCopiesAreNotValued orders a second copy of the Blu-ray, which an
+// owned copy still holds, and the only copy of a book edition: neither
+// ordered copy is valued or counted in the spend, and the edition with no
+// owned copy gets no search or quote.
+func TestOrderedCopiesAreNotValued(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	seed(t, pool)
+	exec(t, pool, `INSERT INTO title (id, kind, name, authors) OVERRIDING SYSTEM VALUE
+		VALUES (3, 'book', 'Lód', '{"Jacek Dukaj"}')`)
+	exec(t, pool, `INSERT INTO edition (id, title_id, barcode, binding) OVERRIDING SYSTEM VALUE
+		VALUES (30, 3, '9788308041239', 'hardcover')`)
+	exec(t, pool, `INSERT INTO copy (edition_id, status, price_cents, purchased_on, expected_on) VALUES
+		(30, 'ordered', 7000, current_date, current_date + 14), (20, 'ordered', 4000, current_date, NULL)`)
+	logger := slog.New(slog.DiscardHandler)
+	olx := &fakeSource{name: "olx", listings: []deals.Listing{
+		listing("1", "Katedra Jacek Dukaj", 2000, used()),
+		listing("2", "Lód Jacek Dukaj", 3000, used()),
+	}}
+	bb := &fakeBuyBack{quotes: map[string]Quote{
+		"9788308073209": {Offered: true, Cents: 537},
+		"9788308041239": {Offered: true, Cents: 900},
+	}}
+	r := newTestRunner(pool, bb, olx)
+	h := NewHandler(r.store, r, logger)
+	srv := httptest.NewServer(server.New(server.Config{}, logger, server.Deps{DB: pool, API: []server.Mounter{h}}))
+	t.Cleanup(srv.Close)
+
+	res, err := r.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Editions != 2 {
+		t.Fatalf("Run valued %d editions, want the 2 with an owned copy", res.Editions)
+	}
+	if strings.Join(bb.asked, ",") != "9788308073209" {
+		t.Fatalf("buy-back asked for %v, want the owned book only", bb.asked)
+	}
+	for _, q := range olx.queries {
+		if strings.Contains(q, "Lód") {
+			t.Fatalf("OLX asked %q for the ordered edition", q)
+		}
+	}
+
+	var view View
+	if code := get(t, srv.URL+"/api/valuation", &view); code != http.StatusOK {
+		t.Fatalf("GET = %d", code)
+	}
+	if len(view.Copies) != 3 || view.Summary.Copies != 3 || view.Summary.SpentCents != 8000 {
+		t.Fatalf("view copies %d, summary %+v, want the 3 owned copies", len(view.Copies), view.Summary)
+	}
+	for _, c := range view.Copies {
+		if c.EditionID == 30 || c.PriceCents != nil && *c.PriceCents == 4000 {
+			t.Fatalf("valuation lists an ordered copy: %+v", c)
+		}
+	}
+}
+
 func get(t *testing.T, url string, out any) int {
 	t.Helper()
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, http.NoBody)

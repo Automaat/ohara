@@ -80,6 +80,7 @@
 	/** The heading of the card of a title's one copy. */
 	const soleCopyHeading: Record<CopyStatus, string> = {
 		owned: 'Twój egzemplarz',
+		ordered: 'Zamówiony egzemplarz',
 		wishlist: 'Na liście życzeń',
 		sold: 'Sprzedany egzemplarz'
 	};

@@ -7,7 +7,8 @@
 		large = false,
 		name,
 		wish = false,
-		lent = false
+		lent = false,
+		ordered = false
 	}: {
 		kind: Kind;
 		url?: string;
@@ -18,6 +19,8 @@
 		wish?: boolean;
 		/** A copy out on loan: the cover carries an arrow leaving a box. */
 		lent?: boolean;
+		/** A copy on order: the cover carries a parcel. */
+		ordered?: boolean;
 	} = $props();
 	let failedURL = $state<string>();
 	let loadedURL = $state<string>();
@@ -80,6 +83,13 @@
 		<span class="badge lent">
 			<svg viewBox="0 0 24 24">
 				<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />
+			</svg>
+		</span>
+	{:else if ordered}
+		<span class="badge ordered">
+			<svg viewBox="0 0 24 24">
+				<path d="M21 8 12 3 3 8v8l9 5 9-5V8Z" />
+				<path d="m3 8 9 5 9-5M12 13v8" />
 			</svg>
 		</span>
 	{/if}
@@ -202,6 +212,20 @@
 		stroke: currentColor;
 		stroke-width: 2.25;
 		stroke-linecap: round;
+		stroke-linejoin: round;
+	}
+
+	/* A parcel in the muted ink: the copy is bought, not yet on the shelf. */
+	.ordered {
+		color: var(--sui-text-muted);
+	}
+
+	.ordered svg {
+		inline-size: 0.875rem;
+		block-size: 0.875rem;
+		fill: none;
+		stroke: currentColor;
+		stroke-width: 2;
 		stroke-linejoin: round;
 	}
 </style>

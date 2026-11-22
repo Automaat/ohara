@@ -27,6 +27,10 @@ const (
 	// StatusSold is a copy that left the shelf: it keeps its purchase and
 	// adds the day it was sold and, when known, what it sold for.
 	StatusSold = "sold"
+	// StatusOrdered is a copy bought but not yet delivered: it keeps its
+	// price, the day it was ordered and the shop, and may name the day it is
+	// expected. It turns owned, keeping all of that, once it arrives.
+	StatusOrdered = "ordered"
 
 	maxText    = 500
 	maxNotes   = 10000
@@ -48,7 +52,7 @@ var (
 	bindings     = []string{"hardcover", "paperback", "other"}
 	triStates    = []string{"yes", "no", "unknown"}
 	packagings   = []string{"steelbook", "slipcover", "digipak", "mediabook"}
-	statuses     = []string{StatusOwned, StatusWishlist, StatusSold}
+	statuses     = []string{StatusOwned, StatusWishlist, StatusSold, StatusOrdered}
 	acquiredAs   = []string{"new", "used"}
 	conditions   = []string{"mint", "very_good", "good", "fair", "poor"}
 )
@@ -87,6 +91,8 @@ var (
 	ErrAlreadyLent      = errors.New("this copy is already lent")
 	ErrLentCopyStays    = errors.New("a lent copy stays owned until it comes back")
 	ErrReturned         = errors.New("this loan is already returned")
+	// ErrNotOrdered refuses to receive a copy that is not on order.
+	ErrNotOrdered = errors.New("only ordered copies can be received")
 )
 
 // Date is a calendar day carried as YYYY-MM-DD in JSON.
@@ -193,8 +199,9 @@ type Edition struct {
 }
 
 // CopyInput is the body of POST and PUT /api/copies. Price and purchase date
-// apply only to owned and sold copies, the sale's day and price only to sold
-// ones; a sold copy needs its day. MaxPriceCents, the most a wishlist copy may
+// apply only to owned, sold and ordered copies, the sale's day and price only
+// to sold ones, the expected delivery only to ordered ones; a sold copy needs
+// its day. MaxPriceCents, the most a wishlist copy may
 // cost, and MaxMarketPercent, the share of the used market price it may
 // cost, apply only to wishlist copies: the deal hunter alerts on listings
 // at or below either.
@@ -215,8 +222,10 @@ type CopyInput struct {
 	// for, null when unknown.
 	SoldOn         *Date  `json:"sold_on,omitempty" ts:",null"`
 	SalePriceCents *int64 `json:"sale_price_cents,omitempty" ts:",null"`
+	// ExpectedOn is the day an ordered copy should arrive, null when unknown.
+	ExpectedOn *Date `json:"expected_on,omitempty" ts:",null"`
 	// Location is where an owned copy is stored, such as "Regał 2"; a
-	// wishlist or sold copy has none.
+	// wishlist, sold or ordered copy has none.
 	Location *string `json:"location,omitempty" ts:",null"`
 	// RequestKey makes a create safe to retry: a second create with the
 	// same key returns the first copy. Updates ignore it.
@@ -240,7 +249,7 @@ func normalizeRequestKey(key *string) (*string, *httpx.FieldError) {
 	return trimmed, nil
 }
 
-// Copy is one physical item, owned, wanted or sold.
+// Copy is one physical item, owned, wanted, sold or on order.
 type Copy struct {
 	ID int64 `json:"id"`
 	CopyInput
@@ -611,11 +620,14 @@ func (in *CopyInput) Normalize() *httpx.FieldError {
 	}
 	if in.Status == StatusWishlist {
 		if in.PriceCents != nil {
-			return fieldErr("price_cents", "applies only to owned and sold copies")
+			return fieldErr("price_cents", "applies only to owned, sold and ordered copies")
 		}
 		if in.PurchasedOn != nil {
-			return fieldErr("purchased_on", "applies only to owned and sold copies")
+			return fieldErr("purchased_on", "applies only to owned, sold and ordered copies")
 		}
+	}
+	if in.ExpectedOn != nil && in.Status != StatusOrdered {
+		return fieldErr("expected_on", "applies only to ordered copies")
 	}
 	if in.Location != nil && in.Status != StatusOwned {
 		return fieldErr("location", "applies only to owned copies")

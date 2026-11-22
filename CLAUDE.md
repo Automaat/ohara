@@ -101,12 +101,29 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
 - Money is integer grosze (`price_cents`). Barcodes are stored normalized
   (`barcode.Normalize`: EAN-8, EAN-13 or GTIN-14; a UPC-A becomes its
   EAN-13 with a leading 0, ISBN-10 becomes ISBN-13), one edition per barcode.
-- A copy is `owned`, `wishlist` or `sold`. A sold copy keeps its purchase
-  price, date and shop and needs `sold_on`; `sale_price_cents` is optional.
-  Only a sold copy carries either, so setting it back to `owned` clears
-  them. Sold copies count in no owned total or `spent_cents`, and the
+- A copy is `owned`, `wishlist`, `sold` or `ordered`. A sold copy keeps its
+  purchase price, date and shop and needs `sold_on`; `sale_price_cents` is
+  optional. Only a sold copy carries either, so setting it back to `owned`
+  clears them. Sold copies count in no owned total or `spent_cents`, and the
   valuation and deal hunter never read them. `GET /api/collection` lists
   them without a status, for the page that filters in the browser.
+- An `ordered` copy is bought but not delivered: it takes a price, its
+  order date as `purchased_on`, a shop and an optional `expected_on`, which
+  no other status takes (422); a wish's limits and a location stay off it.
+  Its price counts in `spent_cents` and `totals.ordered` counts it apart
+  from `owned` (left out at 0); the valuation (value, spend, copy count)
+  and the deal hunter never read it. Kolekcja's default shelf keeps it,
+  with a parcel on the cover and "Dostawa <date>" ("po terminie" once the
+  day has passed, local time) or "Zamówiony"; the filter sheet's
+  "Zamówione" switch (`?status=ordered`) lists them alone. The shelf's day
+  (`src/lib/local-day.svelte.ts`) moves on at local midnight and when the
+  page is shown again, for late deliveries and loans alike. The copy
+  form marks an order with a "Zamówiony" switch under "Na półce". The copy
+  page's "Odebrano" sends `POST /api/copies/{id}/receipt`, which turns the
+  stored ordered copy `owned` and drops `expected_on`, keeping every other
+  field as stored (409 on `status` for a copy not on order), so a page read
+  before another save cannot put old values back. No reminder goes out for
+  a late delivery.
 - `POST /api/titles`, `/api/editions` and `/api/copies` take an optional
   `request_key`: a repeat with the same key answers 200 with the row the
   first request created. The scanner sends one key per add, so a retry

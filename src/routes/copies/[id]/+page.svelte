@@ -137,6 +137,30 @@
 		}
 	}
 
+	/**
+	 * "Odebrano": the server puts the ordered copy on the shelf as it is stored, so a page read
+	 * before another save cannot put old values back. A copy received meanwhile, elsewhere, is
+	 * shown as it now is.
+	 */
+	async function receive(d: CopyDetail) {
+		if (pendingSaves.has(d.id)) return;
+		pendingSaves.add(d.id);
+		saved = false;
+		try {
+			await request<Copy>(fetch, 'POST', `/api/copies/${d.id}/receipt`);
+			if (d.id !== requested) return;
+			issue = null;
+			saved = true;
+			await load(d.id);
+		} catch (err) {
+			if (d.id !== requested) return;
+			if (err instanceof ApiError && err.status === 409) await load(d.id);
+			else issue = issueFrom(err);
+		} finally {
+			pendingSaves.delete(d.id);
+		}
+	}
+
 	function startLoan() {
 		loanForm = loanToForm(isoDate(new Date()));
 		loanIssue = null;
@@ -236,6 +260,8 @@
 				<Button tone="signal" loading={loanBusy} onclick={() => giveBack(d, loan)}>Zwrócono</Button>
 			{:else if d.status === 'owned'}
 				<Button onclick={startLoan}>Wypożycz</Button>
+			{:else if d.status === 'ordered'}
+				<Button tone="signal" loading={saving} onclick={() => receive(d)}>Odebrano</Button>
 			{/if}
 			<Button tone="stop-quiet" onclick={() => ((deleteError = null), (confirmDelete = true))}>
 				Usuń

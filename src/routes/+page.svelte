@@ -29,6 +29,7 @@
 		formatPLN,
 		kindLabels,
 		loanedLabel,
+		orderLine,
 		readCollectionFilter,
 		shelfSummary,
 		shelvedCount,
@@ -52,6 +53,7 @@
 	import { purchaseDate, queuedCodes, resultCount } from '#lib/polish.js';
 	import CollectionFilterSheet from '#lib/components/CollectionFilterSheet.svelte';
 	import CollectionShelf from '#lib/components/CollectionShelf.svelte';
+	import { LocalDay } from '#lib/local-day.svelte.js';
 	import type { ShelfPlace } from '#lib/shelf-drawing.js';
 	import TitleShelf from '#lib/components/TitleShelf.svelte';
 	import type { Snapshot } from './$types';
@@ -91,6 +93,10 @@
 	function setSort(value: CollectionSort) {
 		replaceState(window.location.href, { ...page.state, collectionSort: value });
 	}
+
+	/** Today in local time, which tells a late delivery in the table, kept current past midnight. */
+	const today = new LocalDay();
+	$effect(() => today.start());
 
 	const emptyFilter: CollectionFilter = { q: '', kind: '', format: '', status: '' };
 	let sheetOpen = $state(false);
@@ -537,6 +543,10 @@
 										{[purchaseDate(row.sold_on ?? null), formatPLN(row.sale_price_cents)]
 											.filter(Boolean)
 											.join(' · ')}
+									</span>
+								{:else if row.status === 'ordered' && row.expected_on}
+									<span class="metadata price">
+										{orderLine(row.expected_on, today.current)}
 									</span>
 								{/if}
 							</div>

@@ -15,7 +15,7 @@ export type TriState = 'yes' | 'no' | 'unknown';
 
 export type Packaging = 'steelbook' | 'slipcover' | 'digipak' | 'mediabook';
 
-export type CopyStatus = 'owned' | 'wishlist' | 'sold';
+export type CopyStatus = 'owned' | 'wishlist' | 'sold' | 'ordered';
 
 export type AcquiredAs = 'new' | 'used';
 
@@ -124,6 +124,7 @@ export type CopyPayload = {
 	max_market_percent?: number | null;
 	sold_on?: string | null;
 	sale_price_cents?: number | null;
+	expected_on?: string | null;
 	location?: string | null;
 	request_key?: string;
 };
@@ -142,6 +143,7 @@ export type Copy = {
 	max_market_percent?: number | null;
 	sold_on?: string | null;
 	sale_price_cents?: number | null;
+	expected_on?: string | null;
 	location?: string | null;
 	request_key?: string;
 	created_at: string;
@@ -251,6 +253,7 @@ export type CopyDetail = {
 	max_market_percent?: number | null;
 	sold_on?: string | null;
 	sale_price_cents?: number | null;
+	expected_on?: string | null;
 	location?: string | null;
 	request_key?: string;
 	created_at: string;
@@ -272,6 +275,7 @@ export type CollectionItem = {
 	condition: Condition | null;
 	sold_on?: string | null;
 	sale_price_cents?: number | null;
+	expected_on?: string | null;
 	location?: string | null;
 	edition_id: number;
 	barcode: string | null;
@@ -293,6 +297,7 @@ export type CollectionItem = {
 export type Totals = {
 	copies: number;
 	owned: number;
+	ordered?: number;
 	wishlist: number;
 	priced: number;
 	spent_cents: number;

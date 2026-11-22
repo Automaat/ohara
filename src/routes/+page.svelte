@@ -27,8 +27,10 @@
 		editionSummary,
 		formatLabels,
 		formatPLN,
+		isoDate,
 		kindLabels,
 		loanedLabel,
+		orderLine,
 		readCollectionFilter,
 		shelfSummary,
 		shelvedCount,
@@ -520,6 +522,10 @@
 										{[purchaseDate(row.sold_on ?? null), formatPLN(row.sale_price_cents)]
 											.filter(Boolean)
 											.join(' · ')}
+									</span>
+								{:else if row.status === 'ordered' && row.expected_on}
+									<span class="metadata price">
+										{orderLine(row.expected_on, isoDate(new Date()))}
 									</span>
 								{/if}
 							</div>

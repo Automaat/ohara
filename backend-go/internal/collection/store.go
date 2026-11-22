@@ -102,16 +102,17 @@ func scanEdition(row pgx.Row) (Edition, error) {
 
 const copyColumns = `c.id, c.edition_id, c.status, c.price_cents, c.purchased_on, c.shop,
 	c.acquired_as, c.condition, c.notes, c.max_price_cents, c.max_market_percent, c.sold_on,
-	c.sale_price_cents, c.location, c.created_at, c.updated_at`
+	c.sale_price_cents, c.location, c.expected_on, c.created_at, c.updated_at`
 
 func scanCopy(row pgx.Row) (Copy, error) {
 	var c Copy
-	var purchased, sold *time.Time
+	var purchased, sold, expected *time.Time
 	err := row.Scan(&c.ID, &c.EditionID, &c.Status, &c.PriceCents, &purchased, &c.Shop,
 		&c.AcquiredAs, &c.Condition, &c.Notes, &c.MaxPriceCents, &c.MaxMarketPercent, &sold,
-		&c.SalePriceCents, &c.Location, &c.CreatedAt, &c.UpdatedAt)
+		&c.SalePriceCents, &c.Location, &expected, &c.CreatedAt, &c.UpdatedAt)
 	c.PurchasedOn = dateOf(purchased)
 	c.SoldOn = dateOf(sold)
+	c.ExpectedOn = dateOf(expected)
 	return c, err
 }
 
@@ -519,12 +520,12 @@ func (s *Store) CreateCopy(ctx context.Context, in *CopyInput) (Copy, bool, erro
 		var id int64
 		err := tx.QueryRow(ctx, `INSERT INTO copy (edition_id, status, price_cents, purchased_on,
 			shop, acquired_as, condition, notes, max_price_cents, max_market_percent, sold_on,
-			sale_price_cents, location, request_key)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+			sale_price_cents, location, expected_on, request_key)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 			ON CONFLICT (request_key) DO NOTHING RETURNING id`,
 			in.EditionID, in.Status, in.PriceCents, timeOf(in.PurchasedOn), in.Shop, in.AcquiredAs,
 			in.Condition, in.Notes, in.MaxPriceCents, in.MaxMarketPercent, timeOf(in.SoldOn),
-			in.SalePriceCents, in.Location, in.RequestKey).Scan(&id)
+			in.SalePriceCents, in.Location, timeOf(in.ExpectedOn), in.RequestKey).Scan(&id)
 		switch {
 		case errors.Is(err, pgx.ErrNoRows) && in.RequestKey != nil:
 			created = false
@@ -561,10 +562,10 @@ func (s *Store) UpdateCopy(ctx context.Context, id int64, in *CopyInput) (Copy, 
 		c, err = scanCopy(tx.QueryRow(ctx, `UPDATE copy c SET edition_id = $2, status = $3, price_cents = $4,
 			purchased_on = $5, shop = $6, acquired_as = $7, condition = $8, notes = $9,
 			max_price_cents = $10, max_market_percent = $11, sold_on = $12, sale_price_cents = $13,
-			location = $14, updated_at = now() WHERE c.id = $1 RETURNING `+copyColumns,
+			location = $14, expected_on = $15, updated_at = now() WHERE c.id = $1 RETURNING `+copyColumns,
 			id, in.EditionID, in.Status, in.PriceCents, timeOf(in.PurchasedOn), in.Shop, in.AcquiredAs,
 			in.Condition, in.Notes, in.MaxPriceCents, in.MaxMarketPercent, timeOf(in.SoldOn),
-			in.SalePriceCents, in.Location))
+			in.SalePriceCents, in.Location, timeOf(in.ExpectedOn)))
 		if isFKViolation(err, "copy_edition_id_fkey") {
 			return ErrEditionNotFound
 		}
@@ -880,9 +881,11 @@ type Item struct {
 	Shop          string  `json:"shop"`
 	AcquiredAs    *string `json:"acquired_as" ts:"AcquiredAs"`
 	Condition     *string `json:"condition" ts:"Condition"`
-	// SoldOn and SalePriceCents are a sold copy's sale.
+	// SoldOn and SalePriceCents are a sold copy's sale, ExpectedOn the day an
+	// ordered copy should arrive.
 	SoldOn         *Date    `json:"sold_on,omitempty" ts:",null"`
 	SalePriceCents *int64   `json:"sale_price_cents,omitempty" ts:",null"`
+	ExpectedOn     *Date    `json:"expected_on,omitempty" ts:",null"`
 	Location       *string  `json:"location,omitempty" ts:",null"`
 	EditionID      int64    `json:"edition_id"`
 	Barcode        *string  `json:"barcode"`
@@ -905,15 +908,16 @@ type Item struct {
 func scanItem(row pgx.Row) (Item, error) {
 	var it Item
 	var createdAt time.Time
-	var purchased, sold, due *time.Time
+	var purchased, sold, due, expected *time.Time
 	err := row.Scan(&it.CopyID, &createdAt, &it.Status, &it.PriceCents, &it.MaxPriceCents, &purchased, &it.Shop,
-		&it.AcquiredAs, &it.Condition, &sold, &it.SalePriceCents, &it.Location, &it.EditionID, &it.Barcode, &it.Label, &it.Format, &it.Binding,
+		&it.AcquiredAs, &it.Condition, &sold, &it.SalePriceCents, &expected, &it.Location, &it.EditionID, &it.Barcode, &it.Label, &it.Format, &it.Binding,
 		&it.TitleID, &it.Kind, &it.Name, &it.OriginalTitle, &it.PolishTitle, &it.Year, &it.CoverURL, &it.Authors,
 		&it.LoanBorrower, &due)
 	it.CreatedAtUS = createdAt.UnixMicro()
 	it.PurchasedOn = dateOf(purchased)
 	it.SoldOn = dateOf(sold)
 	it.LoanDueOn = dateOf(due)
+	it.ExpectedOn = dateOf(expected)
 	return it, err
 }
 
@@ -922,8 +926,8 @@ func scanItem(row pgx.Row) (Item, error) {
 // filter them itself.
 func (s *Store) Collection(ctx context.Context, f Filter) ([]Item, error) {
 	rows, err := s.pool.Query(ctx, `SELECT c.id, c.created_at, c.status, c.price_cents, c.max_price_cents,
-			c.purchased_on, c.shop, c.acquired_as, c.condition, c.sold_on, c.sale_price_cents, c.location,
-			e.id, e.barcode, e.label, e.format, e.binding,
+			c.purchased_on, c.shop, c.acquired_as, c.condition, c.sold_on, c.sale_price_cents, c.expected_on,
+			c.location, e.id, e.barcode, e.label, e.format, e.binding,
 			t.id, t.kind, t.name, t.original_title, t.polish_title, t.year,
 			`+CoverURL+`, t.authors, l.borrower, l.due_on
 		FROM copy c JOIN edition e ON e.id = c.edition_id JOIN title t ON t.id = e.title_id

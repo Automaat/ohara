@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { ErrorState, Link } from '@smykla-skalski/sui';
 	import { tick, type Snippet } from 'svelte';
-	import { displayName, shelfLine, type CollectionItem } from '#lib/collection.js';
+	import { displayName, isoDate, shelfLine, type CollectionItem } from '#lib/collection.js';
 	import { drawnCount, firstTiles, tilesPerStep, type ShelfPlace } from '#lib/shelf-drawing.js';
 	import CollectionCover from './CollectionCover.svelte';
 	import ShelfSkeleton from './ShelfSkeleton.svelte';
@@ -19,6 +19,9 @@
 		onretry: () => void;
 		empty: Snippet;
 	} = $props();
+
+	/** Today in local time, which tells an ordered copy's late delivery, read once per shelf. */
+	const today = isoDate(new Date());
 
 	/** The copies whose tiles the last draw left in the page. */
 	let drawnKeys: ReadonlySet<number> = new Set();
@@ -207,6 +210,7 @@
 			{@const wish = row.status === 'wishlist'}
 			{@const lent = row.loan_borrower != null}
 			{@const sold = row.status === 'sold'}
+			{@const ordered = row.status === 'ordered'}
 			<li
 				data-cover-title={row.title_id}
 				data-cover-key={row.copy_id}
@@ -214,10 +218,20 @@
 				aria-posinset={i + 1}
 			>
 				<div class="artwork">
-					<CollectionCover kind={row.kind} url={row.cover_url} large {name} {wish} {lent} />
+					<CollectionCover
+						kind={row.kind}
+						url={row.cover_url}
+						large
+						{name}
+						{wish}
+						{lent}
+						{ordered}
+					/>
 				</div>
 				<Link href={`/titles/${row.title_id}`}>{name}</Link>
-				<span class="meta" class:wish class:sold class:lent>{shelfLine(row)}</span>
+				<span class="meta" class:wish class:sold class:lent class:ordered>
+					{shelfLine(row, today)}
+				</span>
 			</li>
 		{/each}
 	</ul>
@@ -271,13 +285,15 @@
 		font-variant-numeric: tabular-nums;
 	}
 
-	/* A sale's line, "Sprzedany 10 maj 2026 · 35 zł", in the details' colour. */
-	.meta.sold {
+	/* A sale's line, "Sprzedany 10 maj 2026 · 35 zł", or a delivery's, "Dostawa 15 gru 2026", in
+	   the details' colour. */
+	.meta.sold,
+	.meta.ordered {
 		font-variant-numeric: tabular-nums;
 	}
 
 	/* Phones: three covers a row, a title of at most two lines and one line of details, two for
-	   a wish and its limit or a sale. */
+	   a wish and its limit, a sale or a late delivery. */
 	@media (max-width: 640px) {
 		.shelf {
 			grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -316,7 +332,8 @@
 		/* A wish's limit, a sale and a loan's "po terminie" wrap rather than vanish past the edge. */
 		.meta.wish,
 		.meta.sold,
-		.meta.lent {
+		.meta.lent,
+		.meta.ordered {
 			white-space: normal;
 			overflow-wrap: anywhere;
 		}

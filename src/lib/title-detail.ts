@@ -182,7 +182,10 @@ export function previewHero(p: TitlePreview): Hero {
 
 export type CopyFact = { label: string; value: string };
 
-/** A copy's facts for its card: what was paid, when and where, the sale, its state and where it is kept. */
+/**
+ * A copy's facts for its card: what was paid, when and where, the sale or the expected delivery,
+ * its state and where it is kept.
+ */
 export function copyFacts(c: Copy): CopyFact[] {
 	const state =
 		[
@@ -210,23 +213,29 @@ export function copyFacts(c: Copy): CopyFact[] {
 					{ label: 'Cena sprzedaży', value: formatPLN(c.sale_price_cents) || '—' }
 				]
 			: [];
+	const ordered = c.status === 'ordered';
+	const delivery = ordered
+		? [{ label: 'Spodziewana dostawa', value: purchaseDate(c.expected_on ?? null) || '—' }]
+		: [];
 	return [
 		{ label: 'Cena', value: formatPLN(c.price_cents) || '—' },
-		{ label: 'Kupiono', value: purchaseDate(c.purchased_on) || '—' },
+		{ label: ordered ? 'Zamówiono' : 'Kupiono', value: purchaseDate(c.purchased_on) || '—' },
 		{ label: 'Sklep', value: c.shop || '—' },
 		...sale,
+		...delivery,
 		{ label: 'Stan', value: state },
 		...(c.location ? [{ label: 'Miejsce', value: c.location }] : [])
 	];
 }
 
 /**
- * A copy's row in an edition card, such as "Na półce · 89,99 zł · Empik", "Lista życzeń · do
- * 60,00 zł" or, with what it sold for, "Sprzedany · 35,00 zł · Empik".
+ * A copy's row in an edition card, such as "Na półce · 89,99 zł · Empik", "Zamówiony · 129,99 zł
+ * · Allegro", "Lista życzeń · do 60,00 zł" or, with what it sold for, "Sprzedany · 35,00 zł ·
+ * Empik".
  */
 export function copyLine(c: Copy): string {
 	const price =
-		c.status === 'owned'
+		c.status === 'owned' || c.status === 'ordered'
 			? formatPLN(c.price_cents)
 			: c.status === 'sold'
 				? formatPLN(c.sale_price_cents)

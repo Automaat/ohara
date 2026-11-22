@@ -108,10 +108,12 @@ func notFound(err error) error {
 }
 
 // Totals sums the copies in a collection view. Copies counts sold ones too;
-// owned, priced and spent count owned copies only.
+// owned and priced count owned copies only, ordered the copies on their way
+// (left out when none) and spent what owned and ordered copies cost.
 type Totals struct {
 	Copies     int   `json:"copies"`
 	Owned      int   `json:"owned"`
+	Ordered    int   `json:"ordered,omitempty"`
 	Wishlist   int   `json:"wishlist"`
 	Priced     int   `json:"priced"`
 	SpentCents int64 `json:"spent_cents"`
@@ -133,6 +135,12 @@ func totals(items []Item) Totals {
 			t.Wishlist++
 			continue
 		case StatusSold:
+			continue
+		case StatusOrdered:
+			t.Ordered++
+			if it.PriceCents != nil {
+				t.SpentCents += *it.PriceCents
+			}
 			continue
 		}
 		t.Owned++

@@ -114,8 +114,11 @@
 		if (detail && form.status === 'wishlist') void markets.load(detail.title.id);
 	});
 
-	async function save(d: CopyDetail) {
-		const parsed = copyPayload(form, d.edition_id);
+	/** Saves the form, or with `received` puts the ordered copy as stored on the shelf. */
+	async function save(d: CopyDetail, received = false) {
+		const parsed = received
+			? copyPayload({ ...copyToForm(d), status: 'owned' }, d.edition_id)
+			: copyPayload(form, d.edition_id);
 		if (!parsed.ok) {
 			issue = parsed.issue;
 			return;
@@ -236,6 +239,9 @@
 				<Button tone="signal" loading={loanBusy} onclick={() => giveBack(d, loan)}>Zwrócono</Button>
 			{:else if d.status === 'owned'}
 				<Button onclick={startLoan}>Wypożycz</Button>
+			{:else if d.status === 'ordered'}
+				<!-- Receiving keeps the price, order date and shop; only the status changes. -->
+				<Button tone="signal" loading={saving} onclick={() => save(d, true)}>Odebrano</Button>
 			{/if}
 			<Button tone="stop-quiet" onclick={() => ((deleteError = null), (confirmDelete = true))}>
 				Usuń

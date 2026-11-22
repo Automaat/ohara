@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { purchaseDate } from './polish';
 import {
 	centsToInput,
@@ -14,10 +14,12 @@ import {
 	formatOptions,
 	formatPLN,
 	kindCounts,
+	isoDate,
 	loanPayload,
 	loanSummary,
 	loanToForm,
 	options,
+	orderLine,
 	returnDay,
 	parsePLN,
 	readCollectionFilter,
@@ -172,6 +174,12 @@ describe('collection search links', () => {
 			status: 'sold',
 			q: ''
 		});
+	});
+
+	it('keeps the ordered copies in the address, with kind and search', () => {
+		const filter = { kind: 'movie', format: '', status: 'ordered', q: 'diuna' } as const;
+		expect(collectionSearch(filter)).toBe('?kind=movie&status=ordered&q=diuna');
+		expect(readCollectionFilter(new URLSearchParams(collectionSearch(filter)))).toEqual(filter);
 	});
 
 	it('keeps titles without copies in the address, with no format', () => {
@@ -681,6 +689,72 @@ describe('copy form', () => {
 		expect(!parsed.ok && parsed.issue.field).toBe(field);
 	});
 
+	it('round-trips an ordered copy with its order and expected delivery', () => {
+		const form = copyToForm({
+			edition_id: 3,
+			status: 'ordered',
+			price_cents: 12999,
+			purchased_on: '2026-11-02',
+			shop: 'Allegro',
+			acquired_as: 'new',
+			condition: null,
+			notes: '',
+			max_price_cents: null,
+			expected_on: '2026-12-15'
+		});
+		expect(form).toMatchObject({ expected_on: '2026-12-15', price: '129,99' });
+		const parsed = copyPayload({ ...form, max_price: '60', market_percent: '70' }, 3);
+		expect(parsed.ok && parsed.value).toEqual({
+			edition_id: 3,
+			status: 'ordered',
+			price_cents: 12999,
+			purchased_on: '2026-11-02',
+			shop: 'Allegro',
+			acquired_as: 'new',
+			condition: null,
+			notes: '',
+			max_price_cents: null,
+			expected_on: '2026-12-15'
+		});
+	});
+
+	it('sends an ordered copy without an expected delivery or a location', () => {
+		const parsed = copyPayload(
+			{ ...copyToForm(null), status: 'ordered', expected_on: '  ', location: 'Regał 2' },
+			3
+		);
+		expect(parsed.ok && 'expected_on' in parsed.value).toBe(false);
+		expect(parsed.ok && 'location' in parsed.value).toBe(false);
+	});
+
+	it('receives an ordered copy: owned, keeping its order, without the delivery day', () => {
+		const form = copyToForm({
+			edition_id: 3,
+			status: 'ordered',
+			price_cents: 12999,
+			purchased_on: '2026-11-02',
+			shop: 'Allegro',
+			acquired_as: null,
+			condition: null,
+			notes: '',
+			max_price_cents: null,
+			expected_on: '2026-12-15'
+		});
+		const parsed = copyPayload({ ...form, status: 'owned' }, 3);
+		expect(parsed.ok && parsed.value).toMatchObject({
+			status: 'owned',
+			price_cents: 12999,
+			purchased_on: '2026-11-02',
+			shop: 'Allegro'
+		});
+		expect(parsed.ok && 'expected_on' in parsed.value).toBe(false);
+	});
+
+	it.each(['15.12.2026', '2026-02-30', 'jutro'])('rejects an expected delivery %j', (day) => {
+		const parsed = copyPayload({ ...copyToForm(null), status: 'ordered', expected_on: day }, 3);
+		expect(!parsed.ok && parsed.issue.field).toBe('expected_on');
+	});
+
 	it.each(['0', '101', '70,5', 'dużo', '-5'])('rejects market percent %j', (percent) => {
 		const parsed = copyPayload(
 			{ ...copyToForm(null), status: 'wishlist', market_percent: percent },
@@ -743,6 +817,15 @@ describe('collection header', () => {
 	])('summarizes $owned owned and $wishlist wanted', ({ owned, wishlist, want }) => {
 		expect(shelfSummary({ owned, wishlist })).toMatch(want);
 	});
+
+	it.each([
+		{ ordered: 1, want: '20 na półce · 1 zamówiony · 4 na liście życzeń' },
+		{ ordered: 2, want: '20 na półce · 2 zamówione · 4 na liście życzeń' },
+		{ ordered: 5, want: '20 na półce · 5 zamówionych · 4 na liście życzeń' },
+		{ ordered: 0, want: '20 na półce · 4 na liście życzeń' }
+	])('names $ordered copies on order', ({ ordered, want }) => {
+		expect(shelfSummary({ owned: 20, ordered, wishlist: 4 })).toBe(want);
+	});
 });
 
 describe('shelf tile line', () => {
@@ -793,6 +876,37 @@ describe('shelf tile line', () => {
 		expect(shelfLine({ ...owned, status: 'sold', sold_on: sold, sale_price_cents: cents })).toMatch(
 			want
 		);
+	});
+
+	describe('of an ordered copy', () => {
+		beforeEach(() => {
+			vi.useFakeTimers();
+			vi.setSystemTime(new Date(2026, 11, 15, 12, 0));
+		});
+		afterEach(() => {
+			vi.useRealTimers();
+		});
+
+		it.each([
+			{ when: 'yesterday', expected: '2026-12-14', want: /^Dostawa 14 gru 2026 · po terminie$/ },
+			{ when: 'today', expected: '2026-12-15', want: /^Dostawa 15 gru 2026$/ },
+			{ when: 'tomorrow', expected: '2026-12-16', want: /^Dostawa 16 gru 2026$/ }
+		])('names a delivery due $when', ({ expected, want }) => {
+			expect(isoDate(new Date())).toBe('2026-12-15');
+			expect(shelfLine({ ...owned, status: 'ordered', expected_on: expected })).toMatch(want);
+			expect(orderLine(expected, '2026-12-15')).toMatch(want);
+		});
+
+		it('reads Zamówiony without an expected day', () => {
+			expect(shelfLine({ ...owned, status: 'ordered', expected_on: null })).toBe('Zamówiony');
+			expect(shelfLine({ ...owned, status: 'ordered' })).toBe('Zamówiony');
+		});
+	});
+
+	it('turns late after the day passes, by the day it is given', () => {
+		expect(orderLine('2026-12-15', '2026-12-15')).not.toMatch(/po terminie/);
+		expect(orderLine('2026-12-15', '2027-01-01')).toMatch(/· po terminie$/);
+		expect(orderLine('2026-12-31', '2027-01-01')).toMatch(/· po terminie$/);
 	});
 
 	it('gives an owned copy its creators and edition, without a status', () => {

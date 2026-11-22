@@ -345,6 +345,27 @@ describe('copyFacts of a sold copy', () => {
 	});
 });
 
+describe('copyFacts of an ordered copy', () => {
+	it('names the order and the expected delivery', () => {
+		const facts = copyFacts(copy({ status: 'ordered', expected_on: '2026-12-15' }));
+		expect(facts.map((f) => [f.label, nbsp(f.value)])).toEqual([
+			['Cena', '89,99 zł'],
+			['Zamówiono', '24 gru 2023'],
+			['Sklep', 'Empik'],
+			['Spodziewana dostawa', '15 gru 2026'],
+			['Stan', 'Nowy']
+		]);
+		expect(copyFacts(copy({ status: 'ordered' }))[3]).toEqual({
+			label: 'Spodziewana dostawa',
+			value: '—'
+		});
+	});
+
+	it('lists what it cost in its row', () => {
+		expect(nbsp(copyLine(copy({ status: 'ordered' })))).toBe('Zamówiony · 89,99 zł · Empik');
+	});
+});
+
 describe('copyLine', () => {
 	it('lists the status, the price and the shop that are known', () => {
 		expect(nbsp(copyLine(copy()))).toBe('Na półce · 89,99 zł · Empik');

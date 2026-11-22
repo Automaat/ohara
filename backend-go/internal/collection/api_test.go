@@ -893,6 +893,139 @@ func TestCollectionViewKeepsSoldCopiesApart(t *testing.T) {
 	}
 }
 
+func TestOrderedCopy(t *testing.T) {
+	a := newAPI(t)
+	movie := a.title("movie", "Diuna")
+	edition := a.edition(obj{"title_id": movie, "format": "uhd"})
+	with := func(base obj, fields obj) obj {
+		out := maps.Clone(base)
+		maps.Copy(out, fields)
+		return out
+	}
+	ordered := obj{
+		"edition_id": edition, "status": "ordered", "price_cents": 12999, "purchased_on": "2026-11-02",
+		"shop": "Allegro", "acquired_as": "new", "expected_on": "2026-12-15",
+	}
+	var created collection.Copy
+	a.mustDo(http.MethodPost, "/api/copies", ordered, &created, http.StatusCreated)
+	if created.Status != "ordered" || created.ExpectedOn == nil || created.ExpectedOn.Format("2006-01-02") != "2026-12-15" ||
+		created.PriceCents == nil || *created.PriceCents != 12999 || created.PurchasedOn == nil ||
+		created.PurchasedOn.Format("2006-01-02") != "2026-11-02" || created.Shop != "Allegro" {
+		t.Fatalf("created ordered copy = %+v", created)
+	}
+	path := fmt.Sprintf("/api/copies/%d", created.ID)
+
+	var undated collection.Copy
+	a.mustDo(http.MethodPut, path, with(ordered, obj{"expected_on": nil}), &undated, http.StatusOK)
+	if undated.Status != "ordered" || undated.ExpectedOn != nil || *undated.PriceCents != 12999 {
+		t.Fatalf("ordered copy without a delivery day = %+v", undated)
+	}
+	a.mustDo(http.MethodPut, path, ordered, nil, http.StatusOK)
+
+	owned := obj{"edition_id": edition, "status": "owned", "price_cents": 12999}
+	refused := []struct {
+		name   string
+		method string
+		path   string
+		body   obj
+		field  string
+	}{
+		{"owned with a delivery day", http.MethodPut, path, with(owned, obj{"expected_on": "2026-12-15"}), "expected_on"},
+		{"wish with a delivery day", http.MethodPut, path, obj{"edition_id": edition, "status": "wishlist", "expected_on": "2026-12-15"}, "expected_on"},
+		{"sold with a delivery day", http.MethodPut, path, with(owned, obj{"status": "sold", "sold_on": "2026-12-20", "expected_on": "2026-12-15"}), "expected_on"},
+		{"created owned with a delivery day", http.MethodPost, "/api/copies", with(owned, obj{"expected_on": "2026-12-15"}), "expected_on"},
+		{"ordered with a wish limit", http.MethodPut, path, with(ordered, obj{"max_price_cents": 10000}), "max_price_cents"},
+		{"created ordered with a wish limit", http.MethodPost, "/api/copies", with(ordered, obj{"max_price_cents": 10000}), "max_price_cents"},
+		{"ordered with a market percent", http.MethodPut, path, with(ordered, obj{"max_market_percent": 70}), "max_market_percent"},
+		{"ordered with a location", http.MethodPut, path, with(ordered, obj{"location": "Regał 2"}), "location"},
+		{"ordered with a sale day", http.MethodPut, path, with(ordered, obj{"sold_on": "2026-12-20"}), "sold_on"},
+		{"delivery day not a date", http.MethodPut, path, with(ordered, obj{"expected_on": "15.12.2026"}), "body"},
+	}
+	for _, tt := range refused {
+		t.Run(tt.name, func(t *testing.T) {
+			a.fails(tt.method, tt.path, tt.body, http.StatusUnprocessableEntity, tt.field)
+		})
+	}
+	var kept collection.Copy
+	a.mustDo(http.MethodGet, path, nil, &kept, http.StatusOK)
+	if kept.Status != "ordered" || kept.ExpectedOn == nil || kept.ExpectedOn.Format("2006-01-02") != "2026-12-15" {
+		t.Fatalf("refused updates changed the copy to %+v", kept)
+	}
+
+	// Receiving: the form sends the copy back as owned, without its delivery day.
+	received := maps.Clone(ordered)
+	delete(received, "expected_on")
+	received["status"] = "owned"
+	var got collection.Copy
+	a.mustDo(http.MethodPut, path, received, &got, http.StatusOK)
+	if got.Status != "owned" || got.ExpectedOn != nil || got.PriceCents == nil || *got.PriceCents != 12999 ||
+		got.PurchasedOn == nil || got.PurchasedOn.Format("2006-01-02") != "2026-11-02" || got.Shop != "Allegro" ||
+		got.AcquiredAs == nil || *got.AcquiredAs != "new" {
+		t.Fatalf("received copy = %+v", got)
+	}
+	var raw map[string]any
+	a.mustDo(http.MethodGet, path, nil, &raw, http.StatusOK)
+	if _, ok := raw["expected_on"]; ok {
+		t.Fatalf("owned copy answers a delivery day: %v", raw)
+	}
+}
+
+func TestCollectionViewCountsOrderedCopiesApart(t *testing.T) {
+	a := newAPI(t)
+	movie := a.title("movie", "Diuna")
+	uhd := a.edition(obj{"title_id": movie, "format": "uhd"})
+	a.copyOf(obj{"edition_id": uhd, "status": "owned", "price_cents": 4999})
+	a.copyOf(obj{"edition_id": uhd, "status": "owned"})
+	a.copyOf(obj{"edition_id": uhd, "status": "wishlist"})
+	a.copyOf(obj{"edition_id": uhd, "status": "sold", "price_cents": 2000, "sold_on": "2026-05-10"})
+	ordered := a.copyOf(obj{
+		"edition_id": uhd, "status": "ordered", "price_cents": 12999, "purchased_on": "2026-11-02",
+		"expected_on": "2026-12-15",
+	})
+	a.copyOf(obj{"edition_id": uhd, "status": "ordered"})
+
+	tests := []struct {
+		query string
+		want  collection.Totals
+	}{
+		{"", collection.Totals{Copies: 6, Owned: 2, Ordered: 2, Wishlist: 1, Priced: 1, SpentCents: 17998}},
+		{"?status=ordered", collection.Totals{Copies: 2, Ordered: 2, SpentCents: 12999}},
+		{"?status=owned", collection.Totals{Copies: 2, Owned: 2, Priced: 1, SpentCents: 4999}},
+		{"?status=wishlist", collection.Totals{Copies: 1, Wishlist: 1}},
+		{"?status=sold", collection.Totals{Copies: 1}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			var view collection.CollectionView
+			a.mustDo(http.MethodGet, "/api/collection"+tt.query, nil, &view, http.StatusOK)
+			if view.Totals != tt.want || len(view.Items) != tt.want.Copies {
+				t.Fatalf("totals = %+v (%d items), want %+v", view.Totals, len(view.Items), tt.want)
+			}
+			for _, it := range view.Items {
+				if tt.query == "?status=ordered" && it.Status != "ordered" {
+					t.Fatalf("ordered view lists %+v", it)
+				}
+			}
+		})
+	}
+
+	var view collection.CollectionView
+	a.mustDo(http.MethodGet, "/api/collection?status=ordered", nil, &view, http.StatusOK)
+	var found bool
+	for _, it := range view.Items {
+		if it.CopyID != ordered {
+			continue
+		}
+		found = true
+		if it.ExpectedOn == nil || it.ExpectedOn.Format("2006-01-02") != "2026-12-15" || *it.PriceCents != 12999 {
+			t.Fatalf("ordered item = %+v", it)
+		}
+	}
+	if !found {
+		t.Fatalf("ordered view misses copy %d: %+v", ordered, view.Items)
+	}
+}
+
 func TestCollectionViewReturnsArtworkAndCreators(t *testing.T) {
 	a := newAPI(t)
 	const titleCover = "https://example.test/title.jpg"

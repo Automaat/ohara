@@ -642,7 +642,7 @@ describe('edition form', () => {
 		expect(!badID.ok && badID.issue.field).toBe('discogs_release_id');
 	});
 
-	it("sends a box set's contents only once it lists some", () => {
+	it("sends a box set's contents only once the reader changed them", () => {
 		const towers = {
 			id: 7,
 			kind: 'movie' as const,
@@ -654,10 +654,14 @@ describe('edition form', () => {
 		const hobbit = { ...towers, id: 8, kind: 'book' as const, name: 'Hobbit', year: 1937 };
 		const plain = editionPayload(editionToForm(edition), 1, 'movie');
 		expect(plain.ok && 'contents' in plain.value).toBe(false);
+		const added = editionPayload({ ...editionToForm(edition), contents: [towers] }, 1, 'movie');
+		expect(added.ok && added.value.contents).toEqual([7]);
 		const form = editionToForm({ ...edition, contents: [towers, hobbit] });
 		expect(form.contents).toEqual([towers, hobbit]);
-		const listed = editionPayload(form, 1, 'movie');
-		expect(listed.ok && listed.value.contents).toEqual([7, 8]);
+		const untouched = editionPayload({ ...form, notes: 'Steelbook' }, 1, 'movie');
+		expect(untouched.ok && 'contents' in untouched.value).toBe(false);
+		const reordered = editionPayload({ ...form, contents: [hobbit, towers] }, 1, 'movie');
+		expect(reordered.ok && reordered.value.contents).toEqual([8, 7]);
 		const emptied = editionPayload({ ...form, contents: [] }, 1, 'movie');
 		expect(emptied.ok && emptied.value.contents).toEqual([]);
 	});

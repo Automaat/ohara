@@ -42,7 +42,8 @@ export function foldLocation(text: string): string {
 
 /**
  * What a search reads of the titles a box set holds: each one's name, original and Polish title,
- * in their order, as the store's `contentsText` joins them; null when it holds none.
+ * in their order, as the store's `contentsText` joins them; null when it holds none. It is
+ * matched as typed, so a contained title named like a code ("2001-09-11") is found.
  */
 function contentsText(item: CollectionItem): string | null {
 	if (!item.contents?.length) return null;
@@ -52,9 +53,9 @@ function contentsText(item: CollectionItem): string | null {
 }
 
 /**
- * The text a search looks in: title, original and Polish title, authors, label, shop, location
- * and the titles a box set holds, one space apart, as `concat_ws` joins them; a missing field is
- * left out, an empty one is not.
+ * The text a search looks in: title, original and Polish title, authors, label, shop and
+ * location, one space apart, as `concat_ws` joins them; a missing field is left out, an empty
+ * one is not.
  */
 function searchedText(item: CollectionItem): string {
 	return lowerCase(
@@ -65,8 +66,7 @@ function searchedText(item: CollectionItem): string {
 			(item.authors ?? []).join(' '),
 			item.label,
 			item.shop,
-			item.location,
-			contentsText(item)
+			item.location
 		]
 			.filter((field) => field != null)
 			.join(' ')
@@ -86,8 +86,8 @@ function hasStatus(item: CollectionItem, status: CollectionFilter['status']): bo
 /**
  * The copies the filter lists, in their order: of its kind, medium, status, location and tag, out on
  * loan when it asks for that, owned copies of titles not finished for "Do nadrobienia", whose barcode is the searched code or whose text holds the search,
- * case aside. A search that reads as a barcode still finds a location holding it as typed, as the
- * server does.
+ * case aside. A search that reads as a barcode still finds a location or a box set's contained
+ * title holding it as typed, as the server does.
  */
 export function filterCollection(
 	items: readonly CollectionItem[],
@@ -109,7 +109,8 @@ export function filterCollection(
 			(!term ||
 				item.barcode === term ||
 				searchedText(item).includes(words) ||
-				(item.location != null && lowerCase(item.location).includes(typed)))
+				(item.location != null && lowerCase(item.location).includes(typed)) ||
+				lowerCase(contentsText(item) ?? '').includes(typed))
 	);
 }
 

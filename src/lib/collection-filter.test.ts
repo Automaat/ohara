@@ -436,10 +436,19 @@ describe('box set contents', () => {
 		item({ copy_id: 1, name: 'Władca Pierścieni: Trylogia', contents: [towers] }),
 		item({ copy_id: 2, name: 'Seksmisja' })
 	];
-	const search = (q: string) => filterCollection(boxed, { ...none, q }).map((it) => it.copy_id);
+	const search = (q: string) => filterCollection(boxed, { ...none, q }).map((row) => row.copy_id);
 
 	it.each(['dwie WIEŻE', 'two towers', 'trylogia'])('finds the box set by %s', (q) => {
 		expect(search(q)).toEqual([1]);
+	});
+
+	it('finds a contained title named like a code as typed', () => {
+		const dated = [
+			item({ copy_id: 3, name: 'Kolekcja', contents: [{ ...towers, name: '2001-09-11' }] })
+		];
+		expect(filterCollection(dated, { ...none, q: '2001-09-11' }).map((row) => row.copy_id)).toEqual(
+			[3]
+		);
 	});
 
 	it('finds no box set by a title it does not hold', () => {

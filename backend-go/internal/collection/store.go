@@ -119,6 +119,8 @@ const editionContents = `COALESCE((SELECT json_agg(json_build_object('id', ct.id
 
 // contentsText is what a search reads of the titles edition e holds: each
 // one's name, original and Polish title, in their order; null when none.
+// A search matches it as typed, since a contained title named like a code
+// ("2001-09-11") is no barcode of the box set.
 const contentsText = `(SELECT string_agg(concat_ws(' ', ct.name, ct.original_title, ct.polish_title), ' '
 	ORDER BY ec.position) FROM edition_content ec JOIN title ct ON ct.id = ec.title_id
 	WHERE ec.edition_id = e.id)`
@@ -567,6 +569,9 @@ func (s *Store) UpdateEdition(ctx context.Context, id int64, in *EditionInput) (
 		if in.Contents == nil {
 			return checkNotContained(ctx, tx, id, in.TitleID)
 		}
+		if err := lockContents(ctx, tx, in.Contents); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx, `DELETE FROM edition_content WHERE edition_id = $1`, id); err != nil {
 			return fmt.Errorf("clear edition contents: %w", err)
 		}
@@ -576,6 +581,34 @@ func (s *Store) UpdateEdition(ctx context.Context, id int64, in *EditionInput) (
 		return Edition{}, err
 	}
 	return s.GetEdition(ctx, id)
+}
+
+// lockContents key-share-locks the titles an edition is about to list, in
+// ID order, before UpdateEdition drops the stored list. A DELETE of a listed
+// title that locked it first then fails its foreign-key check on the stored
+// list (ErrInBoxSet) before the update touches it; locking after the drop
+// would leave each waiting on the other's lock. A title that does not exist
+// is a *httpx.FieldError on contents.
+func lockContents(ctx context.Context, tx pgx.Tx, titles []int64) error {
+	if len(titles) == 0 {
+		return nil
+	}
+	rows, err := tx.Query(ctx, `SELECT id FROM title WHERE id = ANY($1) ORDER BY id FOR KEY SHARE`, titles)
+	if err != nil {
+		return fmt.Errorf("lock edition contents: %w", err)
+	}
+	found, err := collect(rows, func(row pgx.Row) (int64, error) {
+		var id int64
+		err := row.Scan(&id)
+		return id, err
+	}, "lock edition contents")
+	if err != nil {
+		return err
+	}
+	if len(found) != len(titles) {
+		return fieldErr("contents", "does not exist")
+	}
+	return nil
 }
 
 // setContents lists the titles a box set edition holds, in their order, on
@@ -1126,7 +1159,8 @@ func discardUnused(ctx context.Context, tx pgx.Tx, key, lock, used, remove strin
 // Filter narrows the collection view; empty fields match everything.
 // Location matches a copy's whole location, case aside. Query is the search
 // as barcode.Normalize leaves it, Typed as the reader typed it: a location
-// holding a code is found by the code as typed.
+// or a box set's contained title holding a code is found by the code as
+// typed.
 type Filter struct {
 	Kind     string
 	Format   string
@@ -1233,9 +1267,9 @@ func (s *Store) Collection(ctx context.Context, f Filter) ([]Item, error) {
 		LEFT JOIN loan l ON l.copy_id = c.id AND l.returned_on IS NULL
 		WHERE ($1 = '' OR t.kind = $1) AND ($2 = '' OR e.format = $2) AND ($3 = '' OR c.status = $3)
 		  AND ($4 = '' OR e.barcode = $4 OR strpos(lower(concat_ws(' ', t.name, t.original_title,
-		       t.polish_title, array_to_string(t.authors, ' '), e.label, c.shop, c.location,
-		       `+contentsText+`)), lower($4)) > 0
-		       OR strpos(lower(c.location), lower($5)) > 0)
+		       t.polish_title, array_to_string(t.authors, ' '), e.label, c.shop, c.location)), lower($4)) > 0
+		       OR strpos(lower(c.location), lower($5)) > 0
+		       OR strpos(lower(`+contentsText+`), lower($5)) > 0)
 		  AND (NOT $6 OR l.id IS NOT NULL)
 		  AND `+hasTag("$7")+`
 		  AND (NOT $8 OR (c.status = 'owned' AND NOT t.finished))

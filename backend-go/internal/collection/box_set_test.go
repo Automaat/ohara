@@ -1,11 +1,15 @@
 package collection_test
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"slices"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/Automaat/ohara/backend-go/internal/collection"
 )
@@ -134,7 +138,11 @@ func TestCollectionSearchFindsBoxSetContents(t *testing.T) {
 	other := a.edition(obj{"title_id": a.title("movie", "Seksmisja"), "format": "dvd"})
 	a.copyOf(obj{"edition_id": other, "status": "owned"})
 
-	for _, q := range []string{"dwie WIEŻE", "two towers"} {
+	dated := a.title("movie", "2001-09-11")
+	a.mustDo(http.MethodPut, fmt.Sprintf("/api/editions/%d", box),
+		obj{"title_id": trilogy, "format": "bluray", "contents": []int64{towers, dated}}, nil, http.StatusOK)
+
+	for _, q := range []string{"dwie WIEŻE", "two towers", "2001-09-11"} {
 		var view collection.CollectionView
 		a.mustDo(http.MethodGet, "/api/collection?q="+url.QueryEscape(q), nil, &view, http.StatusOK)
 		if len(view.Items) != 1 || view.Items[0].CopyID != boxCopy {
@@ -143,8 +151,48 @@ func TestCollectionSearchFindsBoxSetContents(t *testing.T) {
 		if view.Totals != (collection.Totals{Copies: 1, Owned: 1, Priced: 1, SpentCents: 9999}) {
 			t.Fatalf("q=%q totals = %+v", q, view.Totals)
 		}
-		if c := view.Items[0].Contents; len(c) != 1 || c[0].ID != towers || *c[0].OriginalTitle != "The Two Towers" {
+		if c := view.Items[0].Contents; len(c) != 2 || c[0].ID != towers || *c[0].OriginalTitle != "The Two Towers" {
 			t.Fatalf("q=%q contents = %+v", q, c)
 		}
+	}
+}
+
+func TestSavingContentsWhileAListedTitleIsDeleted(t *testing.T) {
+	a, pool := newAPIWithPool(t)
+	ctx := context.Background()
+	trilogy := a.title("movie", "Władca Pierścieni: Trylogia")
+	towers := a.title("movie", "Dwie wieże")
+	king := a.title("movie", "Powrót króla")
+	box := a.edition(obj{"title_id": trilogy, "format": "bluray", "contents": []int64{towers}})
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM title WHERE id = $1 FOR UPDATE`, towers); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan int, 1)
+	go func() {
+		done <- a.do(http.MethodPut, fmt.Sprintf("/api/editions/%d", box),
+			obj{"title_id": trilogy, "format": "bluray", "contents": []int64{towers, king}}, nil)
+	}()
+	waitForLockWait(t, pool)
+	_, err = tx.Exec(ctx, `DELETE FROM title WHERE id = $1`, towers)
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23001" {
+		t.Fatalf("delete of a listed title while contents are saved = %v, want restrict violation 23001", err)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if status := <-done; status != http.StatusOK {
+		t.Fatalf("contents save = %d, want 200", status)
+	}
+	var detail collection.EditionDetail
+	a.mustDo(http.MethodGet, fmt.Sprintf("/api/editions/%d", box), nil, &detail, http.StatusOK)
+	if got, want := contentIDs(detail.Edition), []int64{towers, king}; !slices.Equal(got, want) {
+		t.Fatalf("contents = %v, want %v", got, want)
 	}
 }

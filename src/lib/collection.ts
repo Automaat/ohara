@@ -571,17 +571,21 @@ export type EditionForm = {
 	discogs_release_id: string;
 	cover_url: string;
 	notes: string;
-	/**
-	 * The titles a box set holds, in their order. Left out while the edition lists none and the
-	 * reader added none, so a save keeps what another save listed meanwhile.
-	 */
+	/** The titles a box set holds, in their order; left out while the edition lists none. */
 	contents?: ContentTitle[];
+	/**
+	 * The IDs of the titles the edition listed when the form opened. A save sends the contents
+	 * only once the reader changed them, so it keeps what another save listed meanwhile.
+	 */
+	savedContents?: number[];
 };
 
 /** The editable form of an edition, or an empty one. */
 export function editionToForm(e: Edition | null): EditionForm {
 	return {
-		...(e?.contents?.length ? { contents: [...e.contents] } : {}),
+		...(e?.contents?.length
+			? { contents: [...e.contents], savedContents: e.contents.map((c) => c.id) }
+			: {}),
 		barcode: e?.barcode ?? '',
 		label: e?.label ?? '',
 		publisher: e?.publisher ?? '',
@@ -595,6 +599,14 @@ export function editionToForm(e: Edition | null): EditionForm {
 		cover_url: e?.cover_url ?? '',
 		notes: e?.notes ?? ''
 	};
+}
+
+/** The box set contents a save sends: none unless the reader changed the list. */
+function contentsChange(f: EditionForm): { contents?: number[] } {
+	const ids = (f.contents ?? []).map((c) => c.id);
+	const saved = f.savedContents ?? [];
+	const same = ids.length === saved.length && ids.every((id, i) => id === saved[i]);
+	return same ? {} : { contents: ids };
 }
 
 /** The request body for an edition of a title of kind; fields of the other kind are dropped. */
@@ -630,7 +642,7 @@ export function editionPayload(
 			discogs_release_id: discogs.value,
 			cover_url: f.cover_url.trim(),
 			notes: f.notes.trim(),
-			...(f.contents ? { contents: f.contents.map((c) => c.id) } : {})
+			...contentsChange(f)
 		}
 	};
 }

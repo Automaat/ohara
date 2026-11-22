@@ -339,21 +339,18 @@ describe('the wish list', () => {
 });
 
 describe('Allegro wish search', () => {
-	it('keeps movie accents and punctuation in a single search parameter', () => {
-		const href = allegroSearchURL({ kind: 'movie', name: 'Żółć: A & B + C #2', format: 'dvd' });
-		const url = new URL(href ?? '');
+	it.each<[string, Parameters<typeof allegroSearchURL>[0]]>([
+		['Żółć: A & B + C #2 DVD', { kind: 'movie', name: 'Żółć: A & B + C #2', format: 'dvd' }],
+		['Debut Björk Winyl', { kind: 'music', name: 'Debut', authors: ['Björk'], format: 'vinyl' }],
+		['Dark sezon 2 Blu-ray', { kind: 'tv', name: 'Dark', season: 2, format: 'bluray' }]
+	])('searches for %s', (phrase, wish) => {
+		const url = new URL(allegroSearchURL(wish) ?? '');
 		expect(`${url.origin}${url.pathname}`).toBe('https://allegro.pl/listing');
-		expect([...url.searchParams]).toEqual([['string', 'Żółć: A & B + C #2 DVD']]);
+		expect([...url.searchParams]).toEqual([['string', phrase]]);
 	});
 
-	it('includes the artist and medium for an album', () => {
-		const href = allegroSearchURL({
-			kind: 'music',
-			name: 'Debut',
-			authors: ['Björk'],
-			format: 'vinyl'
-		});
-		expect(new URL(href ?? '').searchParams.get('string')).toBe('Debut Björk Winyl');
+	it('omits the link for a blank title', () => {
+		expect(allegroSearchURL({ kind: 'book', name: '  ', format: null })).toBeNull();
 	});
 });
 

@@ -47,11 +47,17 @@
 	import {
 		addCopyHref,
 		addCopyStart,
+		applyFinish,
 		copyFacts,
 		copyLine,
 		copyRequest,
 		editionArtwork,
 		editionName,
+		finishAction,
+		finishDay,
+		finishedLabels,
+		finishedLine,
+		finishPayload,
 		noRating,
 		openedFromCollection,
 		plainClick,
@@ -59,6 +65,8 @@
 		ratingOptions,
 		soleCopy,
 		titleHero,
+		todayInPoland,
+		withoutFinish,
 		trendHeight,
 		trendWidth,
 		valueCard,
@@ -110,6 +118,12 @@
 	let savingTitle = $state(false);
 	/** The tags in use, read when the title form opens; without them the form takes typed tags. */
 	let tagSuggestions = $state<string[]>([]);
+
+	/** The sheet that changes or removes a finished title's day, or takes the mark back. */
+	let finishSheet = $state(false);
+	let finishText = $state('');
+	let finishIssue = $state<FormIssue | null>(null);
+	let finishing = $state(false);
 
 	let copySheet = $state(false);
 	let copyTarget = $state<CopyTarget | null>(null);
@@ -284,7 +298,7 @@
 		try {
 			const saved = await request<Title>(fetch, 'PUT', `/api/titles/${id}`, parsed.value);
 			if (detail?.id === saved.id) {
-				Object.assign(detail, saved);
+				Object.assign(detail, withoutFinish(saved));
 				detail.rating = ratingFrom(saved.id, saved.rating ?? null, mark);
 			}
 			titleSheet = false;
@@ -294,6 +308,47 @@
 		} finally {
 			savingTitle = false;
 		}
+	}
+
+	function openFinish(t: Title) {
+		finishText = t.finished_on ?? '';
+		finishIssue = null;
+		finishSheet = true;
+	}
+
+	/**
+	 * Records the title as finished on a day (null when unknown) or not finished, sending only that
+	 * state, and shows the answer at once.
+	 */
+	async function saveFinished(t: Title, finished: boolean, day: string | null) {
+		if (finishing) return;
+		finishing = true;
+		finishIssue = null;
+		try {
+			const saved = await request<Title>(
+				fetch,
+				'PUT',
+				`/api/titles/${t.id}/finished`,
+				finishPayload(finished, day)
+			);
+			if (detail?.id === saved.id) applyFinish(detail, saved);
+			finishSheet = false;
+			// A refresh started before this answer would bring the old state back; a newer one wins.
+			if (requested === saved.id) void load(saved.id);
+		} catch (err) {
+			finishIssue = issueFrom(err);
+		} finally {
+			finishing = false;
+		}
+	}
+
+	function submitFinish(t: Title) {
+		const day = finishDay(finishText, todayInPoland(new Date()));
+		if (!day.ok) {
+			finishIssue = day.issue;
+			return;
+		}
+		void saveFinished(t, true, day.value);
 	}
 
 	/**
@@ -469,6 +524,23 @@
 	<div class="content">
 		<FormError message={refreshError} />
 		<FormError message={deleteError} />
+
+		<div class="finished">
+			{#if t.finished}
+				<p class="finished-line">{finishedLine(t)}</p>
+				<Button tone="ghost" onclick={() => openFinish(t)}>Zmień datę</Button>
+			{:else}
+				<Button
+					loading={finishing}
+					onclick={() => saveFinished(t, true, todayInPoland(new Date()))}
+				>
+					{finishAction(t.kind)}
+				</Button>
+			{/if}
+		</div>
+		{#if !finishSheet}
+			<FormError message={finishIssue?.message ?? null} />
+		{/if}
 
 		{#if sole}
 			{@const s = sole}
@@ -667,6 +739,39 @@
 	</Modal>
 
 	<Modal
+		bind:open={finishSheet}
+		title={finishedLabels[t.kind]}
+		closeLabel="Zamknij"
+		busy={finishing}
+	>
+		<form
+			id="finish-form"
+			novalidate
+			onsubmit={(e) => {
+				e.preventDefault();
+				submitFinish(t);
+			}}
+		>
+			<FormError
+				message={finishIssue && finishIssue.field !== 'finished_on' ? finishIssue.message : null}
+			/>
+			<Field
+				label="Data"
+				hint="Zostaw puste, jeśli nie pamiętasz dnia."
+				placeholder="RRRR-MM-DD"
+				bind:value={finishText}
+				error={finishIssue?.field === 'finished_on' ? finishIssue.message : undefined}
+			/>
+		</form>
+		{#snippet footer()}
+			<Button tone="stop-quiet" disabled={finishing} onclick={() => saveFinished(t, false, null)}>
+				Usuń oznaczenie
+			</Button>
+			<Button tone="signal" type="submit" form="finish-form" loading={finishing}>Zapisz</Button>
+		{/snippet}
+	</Modal>
+
+	<Modal
 		bind:open={copySheet}
 		title={copyTarget?.mode === 'add' ? 'Nowy egzemplarz' : 'Edycja egzemplarza'}
 		description={copyEdition ? editionName(copyEdition) : undefined}
@@ -736,6 +841,16 @@
 		display: grid;
 		gap: 1rem;
 		padding: var(--sui-pane-gutter, 1.5rem);
+	}
+	.finished {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.5rem 0.75rem;
+	}
+	.finished-line {
+		margin: 0;
+		font-weight: 600;
 	}
 	.rating {
 		justify-self: start;

@@ -1,6 +1,10 @@
 <script lang="ts">
 	import { IconButton, LinkList, Modal, ThemeSwitch } from '@smykla-skalski/sui';
+	import type { Snippet } from 'svelte';
 	import { morePages, sections } from '#lib/nav.js';
+
+	/** Page actions the phone header has no room for, drawn under the theme switch. */
+	let { children }: { children?: Snippet } = $props();
 
 	let open = $state(false);
 	const id = $props.id();
@@ -22,6 +26,7 @@
 			darkLabel="Ciemny"
 			systemLabel="Systemowy"
 		/>
+		{@render children?.()}
 		<nav aria-label="Pozostałe strony">
 			<LinkList links={pages} />
 		</nav>

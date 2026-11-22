@@ -1,7 +1,7 @@
 import { ApiError, request } from './api';
 import type { CopyStatus, Kind } from './collection';
-import { retractScan } from './recent.svelte';
-import { keepVisit, storedVisit } from './visit';
+import { retracted } from './recent.svelte';
+import { bindVisit, changeVisit, type StoredVisit } from './visit';
 
 /** One copy this visit added through the quick confirm, with what undoing it has to remove. */
 export type SessionAdd = {
@@ -30,28 +30,35 @@ export type SessionAdd = {
  * between the scanner and the add page, and the browser's storage keeps it across reloads until
  * the visit ends.
  */
-export const session = $state<{ adds: SessionAdd[] }>({ adds: storedVisit().adds });
+export const session = $state<{ adds: SessionAdd[] }>({ adds: [] });
 
-/** The last add's id; a reload goes on from the adds it kept, so no id comes back. */
-let nextID = Math.max(0, ...session.adds.map((a) => a.id));
+session.adds = bindVisit('adds', {
+	get: () => $state.snapshot(session.adds),
+	set: (adds) => {
+		session.adds = adds;
+	}
+});
 
-/** Keeps the visit's adds for the next load; an add restarts the visit's lifetime. */
-function keepAdds(activity: boolean) {
-	keepVisit({ adds: $state.snapshot(session.adds) }, activity);
-}
+/** The last id this page gave an add, so an undone add's id never comes back. */
+let lastID = 0;
 
-/** Records an add at the top of the visit's adds. */
+/**
+ * Records an add at the top of the visit's adds. Its id follows every add the visit holds, those
+ * another tab or an earlier load made included.
+ */
 export function recordAdd(add: Omit<SessionAdd, 'id'>): SessionAdd {
-	const recorded: SessionAdd = { ...add, id: ++nextID };
-	session.adds = [recorded, ...session.adds];
-	keepAdds(true);
+	let recorded: SessionAdd = { ...add, id: 0 };
+	changeVisit((v) => {
+		lastID = Math.max(lastID, ...v.adds.map((a) => a.id)) + 1;
+		recorded = { ...add, id: lastID };
+		return { ...v, adds: [recorded, ...v.adds] };
+	}, true);
 	return recorded;
 }
 
 /** Forgets every add, as the end of a visit does. */
 export function resetSession() {
-	session.adds = [];
-	keepAdds(false);
+	changeVisit((v) => ({ ...v, adds: [] }), false);
 }
 
 /** What the visit's owned copies cost, in grosze; wishes and blank prices add nothing. */
@@ -99,15 +106,24 @@ async function deleteUnused(fetchFn: typeof fetch, path: string): Promise<boolea
  * took out back in the same step as the edition's delete, so a repeat never puts it back twice.
  * An edition or a title the add found is never touched. The add leaves the visit and its recent
  * scan reads as undone. A failure leaves the add in place; trying again picks up where the last
- * attempt stopped.
+ * attempt stopped. Once the copy is gone, the next load no longer shows the add, even when its
+ * edition or title is still to be removed, as nothing there offers to try again.
  */
 export async function undoAdd(fetchFn: typeof fetch, add: SessionAdd): Promise<void> {
 	await deleteCopy(fetchFn, add.copyID);
+	changeVisit((v) => withoutAdd(v, add), false, false);
 	if (add.createdEdition) {
 		const gone = await deleteUnused(fetchFn, `/api/editions/${add.editionID}?requeue=1`);
 		if (gone && add.createdTitle) await deleteUnused(fetchFn, `/api/titles/${add.titleID}`);
 	}
-	session.adds = session.adds.filter((a) => a.id !== add.id);
-	keepAdds(false);
-	if (add.recentID !== null) retractScan(add.recentID);
+	changeVisit((v) => withoutAdd(v, add), false);
+}
+
+/** The visit without the add, its recent scan read as undone. */
+function withoutAdd(v: StoredVisit, add: SessionAdd): StoredVisit {
+	return {
+		...v,
+		adds: v.adds.filter((a) => a.id !== add.id),
+		scans: add.recentID === null ? v.scans : retracted(v.scans, add.recentID)
+	};
 }

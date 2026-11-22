@@ -48,7 +48,7 @@ import {
 	type Sticky
 } from './scan';
 import { recordAdd, type SessionAdd } from './session.svelte';
-import { keepVisit, storedVisit } from './visit';
+import { batchVisit, bindVisit, changeVisit } from './visit';
 
 /** found and owned have candidates or the edition; missing is filled in by hand. */
 export type ItemStatus = 'found' | 'owned' | 'missing';
@@ -151,12 +151,18 @@ function mediumOf(e: Pick<Edition, 'format' | 'binding'>): string {
  * it outlasts the trips between the scanner and the add page, and the browser's storage keeps it
  * across reloads until the visit ends.
  */
-const visit = { date: storedVisit().date };
+const visit = { date: '' };
+
+visit.date = bindVisit('date', {
+	get: () => visit.date,
+	set: (date) => {
+		visit.date = date;
+	}
+});
 
 /** Sets the purchase date the visit's next add starts with and keeps it for the next load. */
 function carryDate(date: string) {
-	visit.date = date;
-	keepVisit({ date }, false);
+	changeVisit((v) => ({ ...v, date }), false);
 }
 
 /** Forgets the visit's purchase date, as the end of a visit does. */
@@ -452,7 +458,8 @@ export class ScanFlow {
 	/**
 	 * Saves the form. A copy that went through is logged, in the recent scans only when it has a
 	 * barcode, and its shop, new or used and date carry over even when the user has moved on; only
-	 * the barcode still shown gets the result.
+	 * the barcode still shown gets the result. The date, the scan and the add are kept for the next
+	 * load in one write, so storage that fills up keeps all of them or none.
 	 * The copy the server returns decides what is logged: a retry of a save whose answer was
 	 * lost returns the copy the first attempt made, even when the form changed in between. An
 	 * owned copy's shop joins the ones stored when it answers, so another page's save that
@@ -485,35 +492,37 @@ export class ScanFlow {
 			}
 			const saved = await saveScan(this.#fetch, target, f, item.key, item.made);
 			const kept = { ...f, status: saved.copy.status ?? f.status };
-			if (kept.status === 'owned') {
-				carryDate(kept.purchased_on);
-				this.sticky = stickyAfter(this.#store ? loadSticky(this.#store) : this.sticky, kept);
-				saveSticky(this.#store, this.sticky);
-			}
-			const price = formatPLN(saved.copy.price_cents ?? saved.copy.max_price_cents);
-			const what = kept.status === 'owned' ? '' : ' · lista życzeń';
-			const recentID = item.barcode
-				? logScan(
-						item.barcode,
-						'added',
-						saved.titleName + (price ? ` · ${price}` : '') + what,
-						`/copies/${saved.copy.id}`
-					)
-				: null;
-			item.logged = true;
-			const add = recordAdd({
-				copyID: saved.copy.id,
-				editionID: saved.editionID,
-				titleID: saved.titleID,
-				createdEdition: saved.createdEdition,
-				createdTitle: saved.createdTitle,
-				name: saved.titleName,
-				medium: mediumOf(saved.edition),
-				kind: saved.kind,
-				cover: saved.cover,
-				status: kept.status,
-				priceCents: kept.status === 'owned' ? (saved.copy.price_cents ?? null) : null,
-				recentID
+			const add = batchVisit(() => {
+				if (kept.status === 'owned') {
+					carryDate(kept.purchased_on);
+					this.sticky = stickyAfter(this.#store ? loadSticky(this.#store) : this.sticky, kept);
+					saveSticky(this.#store, this.sticky);
+				}
+				const price = formatPLN(saved.copy.price_cents ?? saved.copy.max_price_cents);
+				const what = kept.status === 'owned' ? '' : ' · lista życzeń';
+				const recentID = item.barcode
+					? logScan(
+							item.barcode,
+							'added',
+							saved.titleName + (price ? ` · ${price}` : '') + what,
+							`/copies/${saved.copy.id}`
+						)
+					: null;
+				item.logged = true;
+				return recordAdd({
+					copyID: saved.copy.id,
+					editionID: saved.editionID,
+					titleID: saved.titleID,
+					createdEdition: saved.createdEdition,
+					createdTitle: saved.createdTitle,
+					name: saved.titleName,
+					medium: mediumOf(saved.edition),
+					kind: saved.kind,
+					cover: saved.cover,
+					status: kept.status,
+					priceCents: kept.status === 'owned' ? (saved.copy.price_cents ?? null) : null,
+					recentID
+				});
 			});
 			return current() ? { saved, add, barcode: item.barcode, next } : null;
 		} catch (err) {

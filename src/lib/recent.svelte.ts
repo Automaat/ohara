@@ -1,4 +1,5 @@
-import { keepVisit, storedVisit } from './visit';
+import { canonicalBarcode } from './scan';
+import { bindVisit, changeVisit, type StoredVisit } from './visit';
 
 /**
  * How a scan ended, for the scanner's list of recent scans; waiting is kept on the device until
@@ -35,36 +36,58 @@ export const outcomeTones = {
  * between the scanner and the add page, and the browser's storage keeps it across reloads until
  * the visit ends.
  */
-export const recentScans = $state<{ list: RecentScan[] }>({ list: storedVisit().scans });
+export const recentScans = $state<{ list: RecentScan[] }>({ list: [] });
 
-/**
- * The last scan's id; a reload goes on from the ids the visit kept, its adds' links to their scans
- * included, so no id comes back.
- */
-let nextID = Math.max(
-	0,
-	...recentScans.list.map((r) => r.id),
-	...storedVisit().adds.map((a) => a.recentID ?? 0)
-);
+recentScans.list = bindVisit('scans', {
+	get: () => $state.snapshot(recentScans.list),
+	set: (list) => {
+		recentScans.list = list;
+	}
+});
 
-/** Keeps the visit's scans for the next load; a scan restarts the visit's lifetime. */
-function keepScans(activity: boolean) {
-	keepVisit({ scans: $state.snapshot(recentScans.list) }, activity);
+/** The last id this page gave a scan, so a scan dropped from the list never gives its id back. */
+let lastID = 0;
+
+/** The next scan id, after every scan the visit holds and every add's link to its scan. */
+function nextID(v: StoredVisit): number {
+	lastID = Math.max(lastID, ...v.scans.map((r) => r.id), ...v.adds.map((a) => a.recentID ?? 0)) + 1;
+	return lastID;
 }
 
 /** Logs a scan at the top of the list and returns its id. */
 export function logScan(barcode: string, outcome: ScanOutcome, label: string, href?: string) {
-	const id = ++nextID;
-	recentScans.list = [{ id, barcode, outcome, label, href }, ...recentScans.list].slice(0, 20);
-	keepScans(true);
+	let id = 0;
+	changeVisit((v) => {
+		id = nextID(v);
+		return { ...v, scans: [{ id, barcode, outcome, label, href }, ...v.scans].slice(0, 20) };
+	}, true);
 	return id;
+}
+
+/** The scans with a logged add marked undone; its link led to a copy that is gone. */
+export function retracted(scans: readonly RecentScan[], id: number): RecentScan[] {
+	return scans.map((r) => (r.id === id ? { ...r, outcome: 'undone', href: undefined } : r));
 }
 
 /** Marks a logged add as undone; its link led to a copy that is gone. */
 export function retractScan(id: number) {
-	const scan = recentScans.list.find((r) => r.id === id);
-	if (!scan) return;
-	scan.outcome = 'undone';
-	scan.href = undefined;
-	keepScans(false);
+	changeVisit((v) => ({ ...v, scans: retracted(v.scans, id) }), false);
+}
+
+/**
+ * Marks the scans of a code that waited on the device as queued once the scan queue took it; the
+ * code is in the server's normalized form.
+ */
+export function queueWaiting(barcode: string) {
+	changeVisit(
+		(v) => ({
+			...v,
+			scans: v.scans.map((r) =>
+				r.outcome === 'waiting' && canonicalBarcode(r.barcode) === barcode
+					? { ...r, outcome: 'queued', href: '/scan/queue' }
+					: r
+			)
+		}),
+		false
+	);
 }

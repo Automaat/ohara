@@ -287,4 +287,128 @@ describe('the visit across reloads', () => {
 		expect(after.session.adds).toEqual([]);
 		expect(after.recentScans.list).toEqual([]);
 	});
+
+	it('keeps what two tabs add, each over what the other kept', async () => {
+		const storage = memory();
+		const a = await load(storage);
+		const b = await load(storage);
+		const first = await addCopy(a, '25', '2026-11-20');
+		b.logScan('5901234123458', 'skipped', 'Nie dodano');
+		const second = await addCopy(b, '10', '2026-11-21');
+		expect(second?.add.id).toBe((first?.add.id ?? 0) + 1);
+		expect(second?.add.recentID).toBe(3);
+
+		const after = await load(storage);
+		expect(after.session.adds.map((x) => x.priceCents)).toEqual([1000, 2500]);
+		expect(after.recentScans.list.map((r) => r.outcome)).toEqual(['added', 'skipped', 'added']);
+		const flow = new after.ScanFlow(shop(), memory(), device);
+		flow.start('movie');
+		expect(flow.form.purchased_on).toBe('2026-11-21');
+	});
+
+	it('shows what another tab changed once it writes', async () => {
+		vi.stubGlobal('window', new EventTarget());
+		const storage = memory();
+		const a = await load(storage);
+		const b = await load(storage);
+		await addCopy(b, '25', '2026-11-20');
+		window.dispatchEvent(Object.assign(new Event('storage'), { key: 'ohara.other' }));
+		expect(a.session.adds).toEqual([]);
+		window.dispatchEvent(Object.assign(new Event('storage'), { key }));
+		expect(a.session.adds.map((x) => x.priceCents)).toEqual([2500]);
+		expect(a.recentScans.list).toHaveLength(1);
+	});
+
+	it('starts a new visit when a page open past the end adds or scans', async () => {
+		vi.useFakeTimers({ now, toFake: ['Date'] });
+		const storage = memory();
+		const page = await load(storage);
+		await addCopy(page, '25', '2026-11-20');
+
+		vi.setSystemTime(now + visitLifetime);
+		page.logScan('5901234123458', 'skipped', 'Nie dodano');
+		expect(page.session.adds).toEqual([]);
+		expect(page.recentScans.list.map((r) => r.outcome)).toEqual(['skipped']);
+
+		const after = await load(storage);
+		expect(after.session.adds).toEqual([]);
+		expect(after.recentScans.list.map((r) => r.outcome)).toEqual(['skipped']);
+		const flow = new after.ScanFlow(shop(), memory(), device);
+		flow.start('movie');
+		expect(flow.form.purchased_on).toBe('');
+	});
+
+	it('drops an add whose copy is gone on the next load, though its edition is left', async () => {
+		const storage = memory();
+		const page = await load(storage);
+		const recentID = page.logScan('5901234123457', 'added', 'Rejs', '/copies/40');
+		const add = page.recordAdd({
+			copyID: 40,
+			editionID: 21,
+			titleID: 9,
+			createdEdition: true,
+			createdTitle: false,
+			name: 'Rejs',
+			medium: 'DVD',
+			kind: 'movie',
+			status: 'owned',
+			priceCents: 2500,
+			recentID
+		});
+		const timedOut: typeof fetch = async (input) => {
+			if (String(input).startsWith('/api/editions/')) throw new TypeError('Failed to fetch');
+			return new Response(null, { status: 204 });
+		};
+		await expect(page.undoAdd(timedOut, add)).rejects.toThrow();
+		expect(page.session.adds).toHaveLength(1);
+		expect(page.recentScans.list[0].outcome).toBe('added');
+
+		const after = await load(storage);
+		expect(after.session.adds).toEqual([]);
+		expect(after.recentScans.list[0].outcome).toBe('undone');
+		expect(after.recentScans.list[0].href).toBeUndefined();
+	});
+
+	it('keeps an add whole or not at all when storage is full, and catches up later', async () => {
+		const data: Record<string, string> = {};
+		const limit = { full: false };
+		const storage: KeyValueStore = {
+			getItem: (k) => data[k] ?? null,
+			setItem: (k, v) => {
+				if (limit.full) throw new DOMException('full', 'QuotaExceededError');
+				data[k] = v;
+			}
+		};
+		const page = await load(storage);
+		await addCopy(page, '25', '2026-11-20');
+		limit.full = true;
+		await addCopy(page, '10', '2026-11-21');
+		expect(page.session.adds).toHaveLength(2);
+
+		const kept = await load(storage);
+		expect(kept.session.adds.map((x) => x.priceCents)).toEqual([2500]);
+		expect(kept.recentScans.list).toHaveLength(1);
+		const flow = new kept.ScanFlow(shop(), memory(), device);
+		flow.start('movie');
+		expect(flow.form.purchased_on).toBe('2026-11-20');
+
+		limit.full = false;
+		page.logScan('5901234123458', 'skipped', 'Nie dodano');
+		const caught = await load(storage);
+		expect(caught.session.adds.map((x) => x.priceCents)).toEqual([1000, 2500]);
+		expect(caught.recentScans.list.map((r) => r.outcome)).toEqual(['skipped', 'added', 'added']);
+	});
+
+	it('marks a waiting scan queued for the next load once the queue took its code', async () => {
+		const storage = memory();
+		const page = await load(storage);
+		page.logScan('5901234123457', 'waiting', 'Zapisano bez połączenia');
+		page.queueWaiting('5901234123457');
+		const after = await load(storage);
+		expect(after.recentScans.list[0]).toMatchObject({
+			outcome: 'queued',
+			label: 'Zapisano bez połączenia',
+			href: '/scan/queue'
+		});
+	});
 });

@@ -261,8 +261,11 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
 - The scanner's visit ("Ta sesja" adds, "Ostatnie skany" and the purchase
   date carried to the next add) is kept in `localStorage`
   (`ohara.scan.visit`, `src/lib/visit.ts`) and restored on load until 12
-  hours after its last add or scan. Undo toasts are not restored; without
-  storage the visit lasts until the next load.
+  hours after its last add or scan. Each change starts from what storage
+  holds, so tabs keep each other's adds, and an add writes its date, scan
+  and tray entry at once. A waiting scan turns queued once the queue takes
+  its code. Undo toasts are not restored; without storage the visit lasts
+  until the next load.
 - Kolekcja's "Dodaj tytuł" (`/titles/new`) is the scanner's quick confirm
   without a barcode (`ScanFlow.start`): search by title or fill in by hand;
   the save creates the title, a barcode-less edition and the copy. Such

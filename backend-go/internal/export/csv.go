@@ -26,6 +26,7 @@ var (
 	}
 	statusLabels = map[string]string{
 		collection.StatusOwned: "Na półce", collection.StatusWishlist: "Lista życzeń", collection.StatusSold: "Sprzedany",
+		collection.StatusOrdered: "Zamówiony",
 	}
 	acquiredLabels  = map[string]string{"new": "Nowy", "used": "Używany"}
 	conditionLabels = map[string]string{
@@ -38,9 +39,9 @@ var (
 
 // header names the CSV's columns, in the order row fills them.
 var header = []string{
-	"Rodzaj", "Tytuł", "Tytuł oryginalny", "Tytuł polski", "Twórcy", "Rok", "Tagi",
+	"Rodzaj", "Tytuł", "Tytuł oryginalny", "Tytuł polski", "Twórcy", "Rok", "Tagi", "Ocena",
 	"Nośnik lub oprawa", "Wydanie", "Wydawca", "Kod kreskowy",
-	"Status", "Cena zakupu (zł)", "Data zakupu", "Sklep", "Nowy czy używany", "Stan", "Miejsce", "Notatki",
+	"Status", "Cena zakupu (zł)", "Data zakupu", "Spodziewana dostawa", "Sklep", "Nowy czy używany", "Stan", "Miejsce", "Notatki",
 	"Cena maksymalna (zł)", "Maks. % ceny rynkowej", "Data sprzedaży", "Cena sprzedaży (zł)",
 	"Wartość: skup (zł)", "Źródło: skup", "Wartość: używany (zł)", "Źródło: używany",
 	"Wartość: nowy (zł)", "Źródło: nowy",
@@ -94,6 +95,7 @@ func titleCells(t *Title) []string {
 	return []string{
 		label(kindLabels, t.Kind), t.Name, deref(t.OriginalTitle), deref(t.PolishTitle),
 		strings.Join(t.Authors, ", "), intText(t.Year), strings.Join(t.Tags, ", "),
+		intText(t.Rating),
 	}
 }
 
@@ -114,18 +116,11 @@ func copyRow(t *Title, e *Edition, c *Copy) []string {
 		medium = label(bindingLabels, *e.Binding)
 	}
 	cells = append(cells, medium, e.Label, e.Publisher, deref(e.Barcode))
-	var purchased, sold string
-	if c.PurchasedOn != nil {
-		purchased = c.PurchasedOn.Format("2006-01-02")
-	}
-	if c.SoldOn != nil {
-		sold = c.SoldOn.Format("2006-01-02")
-	}
 	cells = append(cells,
-		label(statusLabels, c.Status), zloty(c.PriceCents), purchased, c.Shop,
+		label(statusLabels, c.Status), zloty(c.PriceCents), dateText(c.PurchasedOn), dateText(c.ExpectedOn), c.Shop,
 		optLabel(acquiredLabels, c.AcquiredAs), optLabel(conditionLabels, c.Condition),
 		deref(c.Location), c.Notes,
-		zloty(c.MaxPriceCents), intText(c.MaxMarketPercent), sold, zloty(c.SalePriceCents),
+		zloty(c.MaxPriceCents), intText(c.MaxMarketPercent), dateText(c.SoldOn), zloty(c.SalePriceCents),
 	)
 	for _, bound := range []*valuation.Estimate{c.Floor, c.Mid, c.Ceiling} {
 		if bound == nil {
@@ -157,6 +152,14 @@ func zloty(cents *int64) string {
 		sign, v = "-", -v
 	}
 	return fmt.Sprintf("%s%d,%02d", sign, v/100, v%100)
+}
+
+// dateText writes a day as YYYY-MM-DD; nil is blank.
+func dateText(d *collection.Date) string {
+	if d == nil {
+		return ""
+	}
+	return d.Format("2006-01-02")
 }
 
 func intText(v *int) string {

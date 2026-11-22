@@ -544,7 +544,7 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   with a BOM, `;`, LF line ends (a CR inside a cell survives),
   Polish headers and labels (tags joined by ", "), złoty with a decimal
   comma, one row per copy
-  (sold ones too) and one per title without copies, and a `'` before a
+  (sold and ordered ones too) and one per title without copies, and a `'` before a
   cell starting with `=`, `+`, `-`, `@`, a tab or a CR. The JSON is the
   titles with their editions and copies under the API's field names,
   grosze as the API sends them. Kolekcja's "Eksportuj kolekcję" menu

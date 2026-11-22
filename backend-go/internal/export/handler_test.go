@@ -45,8 +45,8 @@ func exec(t *testing.T, pool *pgxpool.Pool, sql string, args ...any) {
 // title without copies.
 func seed(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
-	exec(t, pool, `INSERT INTO title (id, kind, name, original_title, year) OVERRIDING SYSTEM VALUE
-		VALUES (1, 'movie', '=HYPERLINK("x")', 'Dune', 2021)`)
+	exec(t, pool, `INSERT INTO title (id, kind, name, original_title, year, rating) OVERRIDING SYSTEM VALUE
+		VALUES (1, 'movie', '=HYPERLINK("x")', 'Dune', 2021, 8)`)
 	exec(t, pool, `INSERT INTO tag (name, key) VALUES ('klasyka', 'klasyka'), ('sci-fi', 'sci-fi')`)
 	exec(t, pool, `INSERT INTO title_tag (title_id, tag_id, position) SELECT 1, id, id FROM tag`)
 	exec(t, pool, `INSERT INTO title (id, kind, name, authors) OVERRIDING SYSTEM VALUE
@@ -62,6 +62,8 @@ func seed(t *testing.T, pool *pgxpool.Pool) {
 		VALUES (100, 10, 'owned', 4999, '2026-01-02', 'Empik', 'used', 'very_good', $1, 'Regał 2')`, trickyNote)
 	exec(t, pool, `INSERT INTO copy (id, edition_id, status, max_price_cents, max_market_percent)
 		OVERRIDING SYSTEM VALUE VALUES (101, 11, 'wishlist', 3000, 70)`)
+	exec(t, pool, `INSERT INTO copy (id, edition_id, status, price_cents, purchased_on, expected_on, shop)
+		OVERRIDING SYSTEM VALUE VALUES (102, 10, 'ordered', 3999, '2026-11-20', '2026-12-01', 'Allegro')`)
 	exec(t, pool, `INSERT INTO copy (id, edition_id, status, price_cents) OVERRIDING SYSTEM VALUE
 		VALUES (200, 20, 'owned', 3000)`)
 	exec(t, pool, `INSERT INTO copy (id, edition_id, status, price_cents, sold_on, sale_price_cents)
@@ -132,8 +134,8 @@ func TestExportCSV(t *testing.T) {
 		}
 		return i
 	}
-	if len(rows) != 6 {
-		t.Fatalf("rows = %d, want a header, 4 copies and 1 title without copies: %q", len(rows), rows)
+	if len(rows) != 7 {
+		t.Fatalf("rows = %d, want a header, 5 copies and 1 title without copies: %q", len(rows), rows)
 	}
 	byTitle := map[string][][]string{}
 	for _, row := range rows[1:] {
@@ -144,15 +146,19 @@ func TestExportCSV(t *testing.T) {
 	}
 
 	film := byTitle[`'=HYPERLINK("x")`]
-	if len(film) != 2 {
-		t.Fatalf("film rows = %q, want its name with a leading ' twice", film)
+	if len(film) != 3 {
+		t.Fatalf("film rows = %q, want its name with a leading ' three times", film)
 	}
-	owned, wished := film[0], film[1]
-	if owned[col("Status")] != "Na półce" {
-		owned, wished = wished, owned
+	byStatus := map[string][]string{}
+	for _, row := range film {
+		byStatus[row[col("Status")]] = row
+	}
+	owned, wished, ordered := byStatus["Na półce"], byStatus["Lista życzeń"], byStatus["Zamówiony"]
+	if owned == nil || wished == nil || ordered == nil {
+		t.Fatalf("film rows by status = %q", byStatus)
 	}
 	for name, want := range map[string]string{
-		"Rodzaj": "Film", "Tytuł oryginalny": "Dune", "Rok": "2021", "Tagi": "klasyka, sci-fi", "Nośnik lub oprawa": "DVD",
+		"Rodzaj": "Film", "Tytuł oryginalny": "Dune", "Rok": "2021", "Tagi": "klasyka, sci-fi", "Ocena": "8", "Nośnik lub oprawa": "DVD",
 		"Wydanie": "Wydanie kolekcjonerskie", "Wydawca": "Galapagos", "Kod kreskowy": "5902600069706",
 		"Status": "Na półce", "Cena zakupu (zł)": "49,99", "Data zakupu": "2026-01-02", "Sklep": "Empik",
 		"Nowy czy używany": "Używany", "Stan": "Bardzo dobry", "Miejsce": "Regał 2", "Notatki": trickyNote,
@@ -168,6 +174,15 @@ func TestExportCSV(t *testing.T) {
 	} {
 		if got := wished[col(name)]; got != want {
 			t.Errorf("wished film %s = %q, want %q", name, got, want)
+		}
+	}
+
+	for name, want := range map[string]string{
+		"Cena zakupu (zł)": "39,99", "Data zakupu": "2026-11-20", "Spodziewana dostawa": "2026-12-01",
+		"Sklep": "Allegro", "Wartość: używany (zł)": "", "Ocena": "8",
+	} {
+		if got := ordered[col(name)]; got != want {
+			t.Errorf("ordered film %s = %q, want %q", name, got, want)
 		}
 	}
 
@@ -241,8 +256,8 @@ func TestExportJSON(t *testing.T) {
 			}
 		}
 	}
-	if len(titles) != 4 || editions != 4 || copies != 4 {
-		t.Fatalf("titles, editions, copies = %d, %d, %d, want 4, 4, 4", len(titles), editions, copies)
+	if len(titles) != 4 || editions != 4 || copies != 5 {
+		t.Fatalf("titles, editions, copies = %d, %d, %d, want 4, 4, 5", len(titles), editions, copies)
 	}
 	if film == nil || book == nil {
 		t.Fatalf("copies 100 and 200 missing from %s", body)

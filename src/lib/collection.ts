@@ -16,11 +16,13 @@ import type {
 	Kind,
 	Loan,
 	LoanPayload,
+	MediaGrade,
 	MovieFormat,
 	MusicFormat,
 	Packaging,
 	Series,
 	SeriesTotalPayload,
+	SleeveGrade,
 	Title,
 	TitlePayload,
 	Totals,
@@ -49,6 +51,7 @@ export type {
 	Kind,
 	Loan,
 	LoanPayload,
+	MediaGrade,
 	MovieFormat,
 	MusicFormat,
 	Packaging,
@@ -59,6 +62,7 @@ export type {
 	SeriesDetail,
 	SeriesTotalPayload,
 	SeriesVolume,
+	SleeveGrade,
 	TagCount,
 	Title,
 	TitleDetail,
@@ -150,6 +154,51 @@ export const conditionLabels: Record<Condition, string> = {
 	fair: 'Dostateczny',
 	poor: 'Słaby'
 };
+
+/** An album's Goldmine grades as Discogs names them, best first; the sleeve also takes its own. */
+export const mediaGradeLabels: Record<MediaGrade, string> = {
+	mint: 'Mint (M)',
+	near_mint: 'Near Mint (NM or M-)',
+	very_good_plus: 'Very Good Plus (VG+)',
+	very_good: 'Very Good (VG)',
+	good_plus: 'Good Plus (G+)',
+	good: 'Good (G)',
+	fair: 'Fair (F)',
+	poor: 'Poor (P)'
+};
+export const sleeveGradeLabels: Record<SleeveGrade, string> = {
+	...mediaGradeLabels,
+	generic: 'Generic',
+	not_graded: 'Not Graded',
+	no_cover: 'No Cover'
+};
+/** The short code of each grade, as record sellers write it: "VG+", "NM". */
+export const gradeCodes: Record<SleeveGrade, string> = {
+	mint: 'M',
+	near_mint: 'NM',
+	very_good_plus: 'VG+',
+	very_good: 'VG',
+	good_plus: 'G+',
+	good: 'G',
+	fair: 'F',
+	poor: 'P',
+	generic: 'Generic',
+	not_graded: 'Not Graded',
+	no_cover: 'No Cover'
+};
+
+/** An album copy's grades in short, such as "Nośnik VG+ · Okładka NM"; empty without any. */
+export function gradeLine(c: {
+	media_grade?: MediaGrade | null;
+	sleeve_grade?: SleeveGrade | null;
+}): string {
+	return [
+		c.media_grade ? `Nośnik ${gradeCodes[c.media_grade]}` : '',
+		c.sleeve_grade ? `Okładka ${gradeCodes[c.sleeve_grade]}` : ''
+	]
+		.filter(Boolean)
+		.join(' · ');
+}
 
 /** Select or segment options from a label table, in its key order. */
 export function options<K extends string>(
@@ -813,6 +862,8 @@ export type CopyForm = {
 	shop: string;
 	acquired_as: AcquiredAs | '';
 	condition: Condition | '';
+	media_grade: MediaGrade | '';
+	sleeve_grade: SleeveGrade | '';
 	notes: string;
 	max_price: string;
 	market_percent: string;
@@ -832,6 +883,8 @@ export function copyToForm(c: CopyPayload | null): CopyForm {
 		shop: c?.shop ?? '',
 		acquired_as: c?.acquired_as ?? '',
 		condition: c?.condition ?? '',
+		media_grade: c?.media_grade ?? '',
+		sleeve_grade: c?.sleeve_grade ?? '',
 		notes: c?.notes ?? '',
 		max_price: centsToInput(c?.max_price_cents ?? null),
 		market_percent: c?.max_market_percent == null ? '' : String(c.max_market_percent),
@@ -856,8 +909,9 @@ export function parsePercent(input: string): number | null | undefined {
  * The request body for a copy. A wishlist copy carries no price or purchase date, an owned, sold
  * or ordered copy no maximum price, market percent or exact edition, only a sold copy its sale's
  * day, which it needs, and price, only an ordered copy its expected delivery and only an owned
- * copy its location. A field a copy does not carry is left out, which the server reads as none,
- * so a sold copy put back on the shelf drops its sale and a received one its delivery day.
+ * copy its location; an album's grades go only when picked. A field a copy does not carry is left
+ * out, which the server reads as none, so a sold copy put back on the shelf drops its sale and a
+ * received one its delivery day.
  */
 export function copyPayload(f: CopyForm, editionID: number): Parsed<CopyPayload> {
 	const sold = f.status === 'sold';
@@ -911,6 +965,8 @@ export function copyPayload(f: CopyForm, editionID: number): Parsed<CopyPayload>
 			shop: f.shop.trim(),
 			acquired_as: f.acquired_as || null,
 			condition: f.condition || null,
+			...(f.media_grade ? { media_grade: f.media_grade } : {}),
+			...(f.sleeve_grade ? { sleeve_grade: f.sleeve_grade } : {}),
 			notes: f.notes.trim(),
 			max_price_cents: maxPrice,
 			...(marketPercent == null ? {} : { max_market_percent: marketPercent }),

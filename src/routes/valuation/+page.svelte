@@ -212,7 +212,7 @@
 						<span class="price">{row.price_cents == null ? '—' : formatPLN(row.price_cents)}</span>
 					{:else if column.key === 'floor' || column.key === 'mid' || column.key === 'ceiling'}
 						{estimateValue(row[column.key])}
-						<span class="meta">{estimateSource(column.key, row[column.key])}</span>
+						<span class="meta">{estimateSource(column.key, row[column.key], row.mid_grade)}</span>
 					{:else if column.key === 'gain'}
 						{copyGain(row)}
 					{:else if column.key === 'low_confidence'}
@@ -233,8 +233,9 @@
 				{/each}
 			</ul>
 			<p class="methodology">
-				Dla wydań powiązanych z Discogs używamy najtańszej oferty oraz sugerowanych cen dla stanów
-				VG+ i Mint.
+				Dla wydań powiązanych z Discogs używamy najtańszej oferty, sugerowanej ceny dla stanu
+				egzemplarza (Idealny: NM, Bardzo dobry: VG+, Dobry: VG, Dostateczny: G, Słaby: P; bez stanu
+				lub bez sugestii dla niego: VG+) oraz sugerowanej ceny dla stanu Mint.
 			</p>
 			<p class="methodology">
 				Ceny z OLX pochodzą z ogłoszeń. Nie znamy cen, po których zawarto transakcje. Uwzględniamy

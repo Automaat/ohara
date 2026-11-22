@@ -328,9 +328,16 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   with a `discogs_release_id` is
   priced on Discogs (marketplace stats in EUR, price suggestions in the
   seller-settings currency, converted to PLN at the NBP table A rate): its
-  floor is the cheapest copy for sale, its mid and ceiling the suggested
-  Very Good Plus and Mint prices; the suggestion replaces the OLX mid and
-  is never low confidence. Each run upserts today's `valuation_history` row and
+  floor is the cheapest copy for sale, its ceiling the suggested Mint
+  price and each copy's mid the suggestion for the grade its condition
+  maps to (`mint` Near Mint, `very_good` Very Good Plus, `good` Very
+  Good, `fair` Good, `poor` Poor; `mid_grade` names it), Very Good Plus
+  for a copy without a condition or whose grade has no suggestion. A
+  release's prices are stored in one transaction, so a grade counts only
+  when the edition's newest answer naming any middle grade named it; an
+  answer naming none (`{}`, Mint only) or a failed request keeps the last
+  answer (#411). The suggestion replaces the OLX mid and is never
+  low confidence. Each run upserts today's `valuation_history` row and
   sets the `ohara_collection_*` gauges. Skupksiazek.pl (cart behind an
   app flow) and Rivendo (manual form with photos) have no automatic
   quote, so movie discs have no floor. A title page reads

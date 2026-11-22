@@ -38,11 +38,11 @@ type EditionFields struct {
 	Label       string   `json:"label,omitempty"`
 	Publisher   string   `json:"publisher,omitempty"`
 	Year        *int     `json:"year,omitempty"`
-	Format      *string  `json:"format,omitempty"`
-	PLSubtitles string   `json:"pl_subtitles,omitempty"`
-	PLVoiceover string   `json:"pl_voiceover,omitempty"`
-	Packaging   []string `json:"packaging,omitempty"`
-	Binding     *string  `json:"binding,omitempty"`
+	Format      *string  `json:"format,omitempty" ts:"Format"`
+	PLSubtitles string   `json:"pl_subtitles,omitempty" ts:"TriState"`
+	PLVoiceover string   `json:"pl_voiceover,omitempty" ts:"TriState"`
+	Packaging   []string `json:"packaging,omitempty" ts:"Packaging"`
+	Binding     *string  `json:"binding,omitempty" ts:"Binding"`
 	// DiscogsReleaseID names the Discogs release an album candidate is.
 	DiscogsReleaseID *int64 `json:"discogs_release_id,omitempty"`
 }
@@ -52,7 +52,7 @@ type EditionFields struct {
 // lists every provider whose fields went into the candidate. CoverURL and
 // Description are for display only; they are not stored.
 type Candidate struct {
-	Type        string        `json:"type"`
+	Type        string        `json:"type" ts:"Kind"`
 	Title       TitleFields   `json:"title"`
 	Edition     EditionFields `json:"edition"`
 	CoverURL    string        `json:"cover_url,omitempty"`

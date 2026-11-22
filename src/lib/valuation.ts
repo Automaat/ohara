@@ -1,73 +1,30 @@
-import { formatLabels, formatPLN, kindLabels, type Format, type Kind } from '#lib/collection.js';
+import { formatLabels, formatPLN, kindLabels } from '#lib/collection.js';
+import type {
+	Bound,
+	CopyValue,
+	Estimate,
+	HistoryPoint,
+	RunnerStatus,
+	Summary,
+	ValuationRunResult,
+	ValuationView,
+	ValueSource
+} from '#lib/api.gen.js';
 
-export type ValueSource = 'olx' | 'skupszop' | 'discogs';
+export type {
+	Bound,
+	CopyValue,
+	Estimate,
+	HistoryPoint,
+	RunnerStatus,
+	Summary,
+	TitleValues,
+	ValuationRunResult as RunResult,
+	ValuationView,
+	ValueSource
+} from '#lib/api.gen.js';
+
 export type BoundKey = 'floor' | 'mid' | 'ceiling';
-
-export type Estimate = { cents: number; source: ValueSource; count: number; trimmed: number };
-
-export type CopyValue = {
-	copy_id: number;
-	edition_id: number;
-	title_id: number;
-	title_name: string;
-	kind: Kind;
-	format: Format | null;
-	barcode: string | null;
-	price_cents: number | null;
-	cover_url?: string;
-	/** The Discogs release of an album edition, when it names one. */
-	discogs_release_id?: number | null;
-	floor: Estimate | null;
-	mid: Estimate | null;
-	ceiling: Estimate | null;
-	low_confidence: boolean;
-};
-
-export type Bound = { cents: number; copies: number };
-
-export type Summary = {
-	copies: number;
-	spent_cents: number;
-	floor: Bound;
-	mid: Bound;
-	ceiling: Bound;
-	low_confidence: number;
-};
-
-export type HistoryPoint = Summary & { day: string; computed_at: string };
-
-export type RunResult = {
-	editions: number;
-	queries: number;
-	listings: number;
-	matched: number;
-	new: number;
-	quotes: number;
-	errors: string[];
-	failure?: string;
-};
-
-export type RunnerStatus = {
-	running: boolean;
-	scheduled: boolean;
-	interval_seconds: number;
-	last_started_at: string | null;
-	last_finished_at: string | null;
-	last_result: RunResult | null;
-};
-
-export type ValuationView = {
-	status: RunnerStatus;
-	window_days: number;
-	min_observations: number;
-	summary: Summary;
-	copies: CopyValue[];
-	history: HistoryPoint[];
-	last_valuation: string | null;
-};
-
-/** The GET /api/valuation/copies?title_id= body: one title's owned copies, valued. */
-export type TitleValues = { copies: CopyValue[] };
 
 export const boundKeys: BoundKey[] = ['floor', 'mid', 'ceiling'];
 
@@ -128,7 +85,7 @@ export function intervalLabel(status: RunnerStatus): string {
 }
 
 /** One line about the last finished run, or null before the first one. */
-export function lastRunSummary(result: RunResult | null): string | null {
+export function lastRunSummary(result: ValuationRunResult | null): string | null {
 	if (!result) return null;
 	if (result.failure) return `Ostatnia wycena przerwana: ${result.failure}`;
 	const parts = [

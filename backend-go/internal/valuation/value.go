@@ -35,7 +35,7 @@ const MinObservations = 3
 // from, how many prices it rests on and how many outliers were left out.
 type Estimate struct {
 	Cents   int64  `json:"cents"`
-	Source  string `json:"source"`
+	Source  string `json:"source" ts:"ValueSource"`
 	Count   int    `json:"count"`
 	Trimmed int    `json:"trimmed"`
 }
@@ -212,8 +212,8 @@ type CopyValue struct {
 	EditionID  int64   `json:"edition_id"`
 	TitleID    int64   `json:"title_id"`
 	TitleName  string  `json:"title_name"`
-	Kind       string  `json:"kind"`
-	Format     *string `json:"format"`
+	Kind       string  `json:"kind" ts:"Kind"`
+	Format     *string `json:"format" ts:"Format"`
 	Barcode    *string `json:"barcode"`
 	PriceCents *int64  `json:"price_cents"`
 	CoverURL   *string `json:"cover_url,omitempty"`

@@ -1,115 +1,47 @@
 import { editionCount } from './polish';
+import type {
+	AcquiredAs,
+	Binding,
+	CollectionItem,
+	Condition,
+	CopyPayload,
+	CopyStatus,
+	EditionPayload,
+	Format,
+	Kind,
+	MovieFormat,
+	MusicFormat,
+	Packaging,
+	Title,
+	TitlePayload,
+	Totals,
+	TriState
+} from './api.gen';
 
-export type Kind = 'movie' | 'book' | 'music';
-export type MovieFormat = 'dvd' | 'bluray' | 'uhd';
-export type MusicFormat = 'cd' | 'vinyl' | 'cassette';
-export type Format = MovieFormat | MusicFormat;
-export type Binding = 'hardcover' | 'paperback' | 'other';
-export type TriState = 'yes' | 'no' | 'unknown';
-export type Packaging = 'steelbook' | 'slipcover' | 'digipak' | 'mediabook';
-export type CopyStatus = 'owned' | 'wishlist';
-export type AcquiredAs = 'new' | 'used';
-export type Condition = 'mint' | 'very_good' | 'good' | 'fair' | 'poor';
-
-export type TitlePayload = {
-	kind: Kind;
-	name: string;
-	original_title: string | null;
-	polish_title: string | null;
-	year: number | null;
-	tmdb_id: number | null;
-	authors: string[];
-	bn_id: string | null;
-	openlibrary_id: string | null;
-	notes: string;
-	cover_url?: string;
-};
-
-export type Title = TitlePayload & {
-	id: number;
-	edition_count: number;
-	copy_count: number;
-	created_at: string;
-	updated_at: string;
-};
-
-export type EditionPayload = {
-	title_id: number;
-	barcode: string | null;
-	label: string;
-	publisher: string;
-	year: number | null;
-	format: Format | null;
-	pl_subtitles: TriState;
-	pl_voiceover: TriState;
-	packaging: Packaging[];
-	binding: Binding | null;
-	discogs_release_id: number | null;
-	notes: string;
-	cover_url?: string;
-};
-
-export type Edition = EditionPayload & {
-	id: number;
-	cover_override_url?: string;
-	copy_count: number;
-	created_at: string;
-	updated_at: string;
-};
-
-export type CopyPayload = {
-	edition_id: number;
-	status: CopyStatus;
-	price_cents: number | null;
-	purchased_on: string | null;
-	shop: string;
-	acquired_as: AcquiredAs | null;
-	condition: Condition | null;
-	notes: string;
-	max_price_cents: number | null;
-};
-
-export type Copy = CopyPayload & { id: number; created_at: string; updated_at: string };
-
-export type TitleDetail = Title & { editions: (Edition & { copies: Copy[] })[] };
-export type EditionDetail = Edition & { title: Title; copies: Copy[] };
-export type CopyDetail = Copy & { edition: Edition; title: Title };
-
-export type CollectionItem = {
-	copy_id: number;
-	created_at_us: number;
-	status: CopyStatus;
-	price_cents: number | null;
-	/** The most a wish may cost; null for owned copies and wishes without a limit. */
-	max_price_cents: number | null;
-	purchased_on: string | null;
-	shop: string;
-	acquired_as: AcquiredAs | null;
-	condition: Condition | null;
-	edition_id: number;
-	barcode: string | null;
-	label: string;
-	format: Format | null;
-	binding: Binding | null;
-	title_id: number;
-	kind: Kind;
-	name: string;
-	original_title: string | null;
-	polish_title: string | null;
-	year: number | null;
-	cover_url?: string;
-	authors?: string[];
-};
-
-export type Totals = {
-	copies: number;
-	owned: number;
-	wishlist: number;
-	priced: number;
-	spent_cents: number;
-};
-
-export type CollectionView = { items: CollectionItem[]; totals: Totals };
+export type {
+	AcquiredAs,
+	Binding,
+	CollectionItem,
+	CollectionView,
+	Condition,
+	Copy,
+	CopyDetail,
+	CopyPayload,
+	CopyStatus,
+	Edition,
+	EditionDetail,
+	EditionPayload,
+	Format,
+	Kind,
+	MovieFormat,
+	MusicFormat,
+	Packaging,
+	Title,
+	TitleDetail,
+	TitlePayload,
+	Totals,
+	TriState
+} from './api.gen';
 
 export const kindLabels: Record<Kind, string> = { movie: 'Film', book: 'Książka', music: 'Muzyka' };
 export const movieFormatLabels: Record<MovieFormat, string> = {

@@ -74,8 +74,11 @@
 	let keyboard = $state(0);
 	let viewport = $state<number | null>(null);
 	let listOpen = $state(false);
-	/** Codes waiting on the device when last seen, to recount the queue once some went in. */
-	let waitingBefore = 0;
+	/**
+	 * How often codes left the device when last seen, as `PendingScans.departures` counts, to
+	 * recount the queue once some went in, from this tab or another; null before the first look.
+	 */
+	let departuresBefore: number | null = null;
 	const guard = new RepeatGuard(repeatWindow);
 	const flow = new ScanFlow(fetch, browserStore());
 	const addToasts = new AddToasts(
@@ -208,10 +211,10 @@
 	});
 
 	$effect(() => {
-		const waiting = pendingScans.count;
+		const departures = pendingScans.departures;
 		untrack(() => {
-			if (waiting < waitingBefore) void queueTally.load(fetch);
-			waitingBefore = waiting;
+			if (departuresBefore !== null && departures > departuresBefore) void queueTally.load(fetch);
+			departuresBefore = departures;
 		});
 	});
 

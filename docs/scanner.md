@@ -59,9 +59,15 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   reads the queue when it opens and again each time codes kept on the
   device leave it, so a code sent in the background after the first read
   still shows up. It watches `PendingScans.departures`, which goes up when
-  a run of this tab took codes off the device or a read found fewer than it
-  counted, so a code another tab kept meanwhile cannot hide a departure as
-  it does in the count. An answer older than the last one shown is dropped,
+  a run of this tab took codes off the device, another tab's run did, or a
+  read found fewer than it counted, so a code another tab kept meanwhile
+  cannot hide a departure as it does in the count. A run that took codes
+  off the device posts on the `ohara-pending-scans` `BroadcastChannel`;
+  every other started tab then counts one departure and reads its count
+  again, even for codes it never counted (#508). Without
+  `BroadcastChannel` a tab finds only what its own reads show. The
+  scanner's "Do uzupełnienia" count reads the queue again on the same
+  departures. An answer older than the last one shown is dropped,
   and so is an entry a removal took out after that read went out. A failed
   first read shows the error state; a later failed read keeps the list with
   a warning and "Spróbuj ponownie" until a read asked after it answers.

@@ -5,11 +5,13 @@ import { deleteQueueEntry } from './queue-deletes';
 import { logScan, recentScans } from './recent.svelte';
 import {
 	PendingScans,
+	broadcastDepartures,
 	browserLock,
 	offlineDetail,
 	openPendingStore,
 	postTimeout,
 	storageCursor,
+	type DepartureNews,
 	type PendingStore
 } from './pending-scans.svelte';
 
@@ -34,6 +36,31 @@ function memory(codes: string[] = []) {
 		return store;
 	};
 	return { kept, state, open };
+}
+
+/**
+ * Tabs of one browser in memory: each tab's news reaches the listeners of every other tab, as
+ * BroadcastChannel does.
+ */
+function browserTabs() {
+	const tabs: Set<() => void>[] = [];
+	return () => {
+		const listeners = new Set<() => void>();
+		tabs.push(listeners);
+		const news: DepartureNews & { posts: number } = {
+			posts: 0,
+			post() {
+				news.posts++;
+				for (const other of tabs) if (other !== listeners) for (const heard of other) heard();
+			},
+			listen(heard) {
+				const own = () => heard();
+				listeners.add(own);
+				return () => void listeners.delete(own);
+			}
+		};
+		return news;
+	};
 }
 
 type Answer = number | 'none';
@@ -587,6 +614,215 @@ describe('PendingScans.departures', () => {
 		await here.send();
 		expect(here.count).toBe(0);
 		expect(here.departures).toBe(1);
+	});
+});
+
+describe('broadcastDepartures', () => {
+	/** Resolves once heard was called n times, or rejects after a second. */
+	function hearing(n: number) {
+		let calls = 0;
+		let done: () => void = () => {};
+		const reached = new Promise<void>((resolve, reject) => {
+			done = resolve;
+			setTimeout(() => reject(new Error(`heard ${calls} of ${n}`)), 1000);
+		});
+		const heard = () => {
+			calls++;
+			if (calls === n) done();
+		};
+		return { heard, reached, calls: () => calls };
+	}
+
+	it("carries one tab's news to the others, not to its own listeners", async () => {
+		const one = broadcastDepartures();
+		const two = broadcastDepartures();
+		const atOne = hearing(1);
+		const atTwo = hearing(2);
+		const stopOne = one.listen(atOne.heard);
+		const stopTwo = two.listen(atTwo.heard);
+		one.post();
+		one.post();
+		await atTwo.reached;
+		two.post();
+		await atOne.reached;
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect([atOne.calls(), atTwo.calls()]).toEqual([1, 2]);
+		stopOne();
+		stopTwo();
+	});
+
+	it('reaches listening tabs from a tab that does not listen', async () => {
+		const listening = broadcastDepartures();
+		const at = hearing(1);
+		const stop = listening.listen(at.heard);
+		broadcastDepartures().post();
+		await at.reached;
+		stop();
+	});
+
+	it('keeps one channel while any listener is left, and opens one for a post alone', () => {
+		const channels: { posted: unknown[]; closed: boolean }[] = [];
+		const open = () => {
+			const target = new EventTarget();
+			const channel = { posted: [] as unknown[], closed: false };
+			channels.push(channel);
+			return Object.assign(target, {
+				postMessage: (message: unknown) => void channel.posted.push(message),
+				close: () => void (channel.closed = true)
+			}) as unknown as BroadcastChannel;
+		};
+		const news = broadcastDepartures(open);
+		news.post();
+		expect(channels).toEqual([{ posted: ['departed'], closed: true }]);
+		const heard: string[] = [];
+		const stopA = news.listen(() => heard.push('a'));
+		const stopB = news.listen(() => heard.push('b'));
+		expect(channels).toHaveLength(2);
+		news.post();
+		expect(channels[1]).toEqual({ posted: ['departed'], closed: false });
+		stopA();
+		stopA();
+		expect(channels[1]?.closed).toBe(false);
+		stopB();
+		expect(channels[1]?.closed).toBe(true);
+		expect(heard).toEqual([]);
+	});
+
+	it('does nothing where the browser has no BroadcastChannel', () => {
+		const news = broadcastDepartures(() => null);
+		const stop = news.listen(() => {
+			throw new Error('heard');
+		});
+		expect(() => news.post()).not.toThrow();
+		stop();
+		vi.stubGlobal('BroadcastChannel', undefined);
+		const missing = broadcastDepartures();
+		expect(() => missing.post()).not.toThrow();
+		missing.listen(() => {})();
+		vi.unstubAllGlobals();
+	});
+
+	it('does nothing where opening a channel fails', () => {
+		function refused(): never {
+			throw new DOMException('denied', 'SecurityError');
+		}
+		vi.stubGlobal('BroadcastChannel', refused);
+		const news = broadcastDepartures();
+		expect(() => news.post()).not.toThrow();
+		news.listen(() => {})();
+		vi.unstubAllGlobals();
+	});
+});
+
+describe('PendingScans news to other tabs', () => {
+	it('tells the other tabs once for a run that took codes off the device', async () => {
+		const tab = browserTabs();
+		const news = tab();
+		const device = memory([a, b]);
+		const pending = new PendingScans(
+			api({ [b]: 503 }).fetchFn,
+			device.open,
+			undefined,
+			undefined,
+			news
+		);
+		await pending.send();
+		expect(news.posts).toBe(1);
+		await pending.send();
+		expect(news.posts).toBe(1);
+	});
+
+	it('tells the other tabs when the store failed after a code left', async () => {
+		const tab = browserTabs();
+		const news = tab();
+		const device = memory([a, b]);
+		let posts = 0;
+		const pending = new PendingScans(
+			async () => {
+				if (++posts === 2) device.state.fail = true;
+				return new Response('{}', { status: 201 });
+			},
+			device.open,
+			undefined,
+			undefined,
+			news
+		);
+		await pending.send();
+		expect(news.posts).toBe(1);
+		expect(pending.departures).toBe(1);
+	});
+
+	it('tells no tab when no code left', async () => {
+		const tab = browserTabs();
+		const news = tab();
+		const pending = new PendingScans(
+			api({ [a]: 503 }).fetchFn,
+			memory([a]).open,
+			undefined,
+			undefined,
+			news
+		);
+		await pending.send();
+		await new PendingScans(api().fetchFn, memory().open, undefined, undefined, news).send();
+		expect(news.posts).toBe(0);
+	});
+
+	function page() {
+		const win = new EventTarget();
+		const doc = Object.assign(new EventTarget(), {
+			visibilityState: 'visible' as DocumentVisibilityState
+		});
+		return { win, doc };
+	}
+
+	it("counts another tab's departure of a code this tab never counted, while started", async () => {
+		vi.useFakeTimers();
+		const tab = browserTabs();
+		const device = memory();
+		const s = api();
+		const here = new PendingScans(s.fetchFn, device.open, undefined, undefined, tab());
+		const there = new PendingScans(s.fetchFn, device.open, undefined, undefined, tab());
+		const { win, doc } = page();
+		const stop = here.start(win, doc, 60_000);
+		await vi.advanceTimersByTimeAsync(0);
+		await there.keep(a);
+		await there.keep(b);
+		await there.send();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(s.codes()).toEqual([a, b]);
+		expect(here.count).toBe(0);
+		expect(here.departures).toBe(1);
+
+		await there.keep(c);
+		await here.keep(a);
+		await there.send();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(here.count).toBe(0);
+		expect(here.departures).toBe(2);
+
+		stop();
+		await there.keep(b);
+		await there.send();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(here.departures).toBe(2);
+		vi.useRealTimers();
+	});
+
+	it("counts another tab's departure where this tab has no store", async () => {
+		vi.useFakeTimers();
+		const tab = browserTabs();
+		const device = memory();
+		const here = new PendingScans(api().fetchFn, async () => null, undefined, undefined, tab());
+		const there = new PendingScans(api().fetchFn, device.open, undefined, undefined, tab());
+		const { win, doc } = page();
+		const stop = here.start(win, doc, 60_000);
+		await vi.advanceTimersByTimeAsync(0);
+		await there.keep(a);
+		await there.send();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(here.departures).toBe(1);
+		stop();
+		vi.useRealTimers();
 	});
 });
 

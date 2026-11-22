@@ -101,6 +101,67 @@ export function storageCursor(
 	};
 }
 
+/**
+ * How the app's tabs tell each other that a run took codes off the device, so a tab that never
+ * counted those codes still sees them leave.
+ */
+export type DepartureNews = {
+	/** Tells the other tabs; this tab's own listeners do not hear it. */
+	post(): void;
+	/** Calls heard each time another tab posts, until the returned function stops it. */
+	listen(heard: () => void): () => void;
+};
+
+const channelName = 'ohara-pending-scans';
+
+function openChannel(): BroadcastChannel | null {
+	try {
+		return globalThis.BroadcastChannel ? new BroadcastChannel(channelName) : null;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * The news over a BroadcastChannel, opened while this tab listens. A channel never hears its own
+ * messages, so a post goes out on that channel, or on one opened for the post alone. Without
+ * BroadcastChannel no tab hears the others, and each finds departures by its own reads.
+ */
+export function broadcastDepartures(
+	open: () => BroadcastChannel | null = openChannel
+): DepartureNews {
+	let channel: BroadcastChannel | null = null;
+	const listeners = new Set<() => void>();
+	const heard = () => {
+		for (const listener of [...listeners]) listener();
+	};
+	return {
+		post: () => {
+			if (channel) {
+				channel.postMessage('departed');
+				return;
+			}
+			const once = open();
+			once?.postMessage('departed');
+			once?.close();
+		},
+		listen: (listener) => {
+			const own = () => listener();
+			listeners.add(own);
+			if (!channel) {
+				channel = open();
+				channel?.addEventListener('message', heard);
+			}
+			return () => {
+				if (!listeners.delete(own) || listeners.size > 0) return;
+				channel?.removeEventListener('message', heard);
+				channel?.close();
+				channel = null;
+			};
+		}
+	};
+}
+
 /** Runs work with a signal that aborts it after ms, and rejects once ms passed either way. */
 function withDeadline<T>(ms: number, work: (signal: AbortSignal) => Promise<T>): Promise<T> {
 	const controller = new AbortController();
@@ -231,9 +292,9 @@ export class PendingScans {
 	/** Codes waiting on this device, as last read from its store. */
 	count = $state(0);
 	/**
-	 * Goes up each time codes leave the device as this tab sees it: its run took some off, or a
-	 * read found fewer than it counted, as when another tab sent them. A code kept meanwhile
-	 * cannot hide a departure, as it can in the count.
+	 * Goes up each time codes leave the device as this tab sees it: its run took some off, another
+	 * tab's run did (heard while started), or a read found fewer than it counted. A code kept
+	 * meanwhile cannot hide a departure, as it can in the count.
 	 */
 	departures = $state(0);
 	/** Whether this device keeps such codes; null until its store was opened. */
@@ -246,17 +307,20 @@ export class PendingScans {
 	#store: Promise<PendingStore | null> | null = null;
 	#sending: Promise<void> | null = null;
 	readonly #cursor: SendCursor;
+	readonly #news: DepartureNews;
 
 	constructor(
 		fetchFn: typeof fetch,
 		open: () => Promise<PendingStore | null>,
 		lock: SendLock = browserLock,
-		cursor: SendCursor = storageCursor()
+		cursor: SendCursor = storageCursor(),
+		news: DepartureNews = broadcastDepartures()
 	) {
 		this.#fetch = fetchFn;
 		this.#open = open;
 		this.#lock = lock;
 		this.#cursor = cursor;
+		this.#news = news;
 	}
 
 	/** The store, opened once; a store that failed an operation is opened again next time. */
@@ -294,6 +358,13 @@ export class PendingScans {
 		}
 	}
 
+	/** Another tab's run took codes off the device: one departure, and the count read again. */
+	async #departedElsewhere() {
+		const store = await this.#opened();
+		if (store) await this.#recount(store, true);
+		else this.departures++;
+	}
+
 	/**
 	 * Keeps a code whose check got no answer, in the form the server stores it, so two spellings of
 	 * one barcode wait once. False when the device cannot keep it; until a later write succeeds,
@@ -326,6 +397,7 @@ export class PendingScans {
 	 * next run. No answer within postTimeout, or the sign-in turning the request away, ends the
 	 * run; after no answer, the next run, after a reload or in another tab too, starts with the
 	 * code after that one and sends it last. While another tab sends, this one only reads the count.
+	 * A run that took codes off the device tells the app's other tabs.
 	 */
 	send(): Promise<void> {
 		this.#sending ??= this.#lock(() => this.#sendAll())
@@ -363,6 +435,8 @@ export class PendingScans {
 			this.#lost();
 			if (run.left) this.departures++;
 			return;
+		} finally {
+			if (run.left) this.#news.post();
 		}
 		await this.#recount(store, run.left);
 	}
@@ -422,7 +496,8 @@ export class PendingScans {
 
 	/**
 	 * Sends now, whenever the browser comes online or the app is shown again, and every interval,
-	 * as another tab may have kept codes this one has not counted. Returns what stops it.
+	 * as another tab may have kept codes this one has not counted. Meanwhile it hears each run of
+	 * another tab that took codes off the device. Returns what stops both.
 	 */
 	start(
 		win: Pick<EventTarget, 'addEventListener' | 'removeEventListener'>,
@@ -433,11 +508,13 @@ export class PendingScans {
 		const shown = () => {
 			if (doc.visibilityState === 'visible') send();
 		};
+		const unlisten = this.#news.listen(() => void this.#departedElsewhere());
 		send();
 		win.addEventListener('online', send);
 		doc.addEventListener('visibilitychange', shown);
 		const timer = setInterval(send, every);
 		return () => {
+			unlisten();
 			win.removeEventListener('online', send);
 			doc.removeEventListener('visibilitychange', shown);
 			clearInterval(timer);

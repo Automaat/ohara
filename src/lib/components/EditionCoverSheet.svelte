@@ -30,12 +30,15 @@
 	let library = $state<HTMLInputElement>();
 	let pending = $state<Action | null>(null);
 	let failure = $state<string>();
-	/** Set once the sheet is gone, such as after leaving the edition while a photo was still being
-	 * shrunk: that photo is then never sent, since a sheet opened since may have saved a newer one. */
-	let destroyed = false;
-	onDestroy(() => {
-		destroyed = true;
-	});
+	/** Counts the moments after which a photo still being shrunk is no longer sent, since a newer
+	 * cover may have been saved meanwhile: the sheet going away, such as after leaving the edition,
+	 * and the page being hidden, after which the browser may restore it from its back-forward cache.
+	 * A photo chosen after that is sent as usual. */
+	let invalidations = 0;
+	const invalidate = () => {
+		invalidations++;
+	};
+	onDestroy(invalidate);
 
 	/** Sends one change at a time: a second one started while the first is unanswered could land
 	 * first and be overwritten by it. A photo is shrunk first; one the browser cannot read sends
@@ -44,9 +47,10 @@
 		if (pending) return;
 		pending = action;
 		failure = undefined;
+		const started = invalidations;
 		try {
 			const body = photo ? await shrinkPhoto(photo, browserCodec) : undefined;
-			if (destroyed) return;
+			if (started !== invalidations) return;
 			await request(
 				fetch,
 				body ? 'PUT' : 'DELETE',
@@ -76,6 +80,8 @@
 		if (!pending) input?.click();
 	}
 </script>
+
+<svelte:window onpagehide={invalidate} />
 
 <Modal
 	bind:open

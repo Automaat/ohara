@@ -183,8 +183,8 @@ async function pick(page: Page, name: string, bytes: Uint8Array, mimeType = 'ima
 
 /** Picks the file in the "Zmień okładkę" sheet of the edition page already shown. */
 async function pickHere(page: Page, name: string, bytes: Uint8Array, mimeType = 'image/jpeg') {
-	await page.getByRole('button', { name: 'Zmień okładkę' }).click();
 	const sheet = page.getByRole('dialog', { name: 'Zmień okładkę' });
+	if (!(await sheet.isVisible())) await page.getByRole('button', { name: 'Zmień okładkę' }).click();
 	await expect(sheet).toContainText('JPEG lub PNG. Duże zdjęcia zostaną zmniejszone.');
 	await sheet
 		.locator('input[type="file"]:not([capture])')
@@ -351,4 +351,66 @@ test('a photo still shrinking when the edition is left is never sent', async ({
 	expect(puts).toHaveLength(1);
 	const stored = await request.get(`/api/editions/${editionID}/cover`);
 	expect(jpegSize(new Uint8Array(await stored.body()))).toEqual({ width: 800, height: 600 });
+});
+
+test('a photo shrinking in a page the browser restores from its cache is never sent', async ({
+	page,
+	request
+}) => {
+	await page.addInitScript(() => {
+		addEventListener('pageshow', (event) => {
+			Object.assign(window, { restored: event.persisted });
+		});
+		if (!new URLSearchParams(location.search).has('hold')) return;
+		const decode = window.createImageBitmap.bind(window);
+		let held: Promise<void> | undefined = new Promise((resolve) => {
+			Object.assign(window, { releaseFirstDecode: resolve });
+		});
+		Object.assign(window, {
+			createImageBitmap: async (...args: Parameters<typeof createImageBitmap>) => {
+				const wait = held;
+				held = undefined;
+				if (wait) await wait;
+				return decode(...args);
+			}
+		});
+	});
+	const puts: string[] = [];
+	page.on('request', (req) => {
+		if (isCoverPut(req)) puts.push(req.url());
+	});
+	const storedSize = async () => {
+		const stored = await request.get(`/api/editions/${editionID}/cover`);
+		return jpegSize(new Uint8Array(await stored.body()));
+	};
+	const older = await photo(page, 1200, 900);
+	const newer = await photo(page, 800, 600);
+	const later = await photo(page, 640, 480);
+
+	await page.goto(`/editions/${editionID}?hold=1`);
+	await pickHere(page, 'older.jpg', older);
+	await page.goto(`/editions/${editionID}`);
+	const answered = page.waitForResponse((res) => isCoverPut(res.request()));
+	await pickHere(page, 'newer.jpg', newer);
+	expect((await answered).status()).toBe(204);
+	expect(await storedSize()).toEqual({ width: 800, height: 600 });
+
+	await page.goBack();
+	await expect(page).toHaveURL(/\?hold=1$/);
+	expect(
+		await page.evaluate(() => (window as unknown as { restored?: boolean }).restored),
+		'restored from the back-forward cache'
+	).toBe(true);
+	await page.evaluate(() =>
+		(window as unknown as { releaseFirstDecode: () => void }).releaseFirstDecode()
+	);
+	await page.waitForTimeout(1000);
+	expect(puts).toHaveLength(1);
+	expect(await storedSize()).toEqual({ width: 800, height: 600 });
+
+	const saved = page.waitForResponse((res) => isCoverPut(res.request()));
+	await pickHere(page, 'later.jpg', later);
+	expect((await saved).status()).toBe(204);
+	expect(puts).toHaveLength(2);
+	expect(await storedSize()).toEqual({ width: 640, height: 480 });
 });

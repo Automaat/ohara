@@ -35,6 +35,7 @@
 		likelySoldLabel,
 		offers,
 		pageSummary,
+		realizedLine,
 		recentHistory,
 		type CopyValue,
 		type RunnerStatus,
@@ -106,6 +107,9 @@
 	const runSummary = $derived(lastRunSummary(status?.last_result ?? null));
 	const sourceErrors = $derived(status?.last_result?.errors ?? []);
 	const busy = $derived(starting || !!status?.running);
+	// A sale's gain needs no market prices, so it shows before the first valuation too; after
+	// one, the hero shows it.
+	const realized = $derived(view ? realizedLine(view.summary) : null);
 	const minObservations = $derived(view?.min_observations ?? 0);
 	const fewOffers = $derived(offers(minObservations));
 </script>
@@ -185,6 +189,9 @@
 			description="Wycena sprawdza ceny posiadanych egzemplarzy w skupie, w ogłoszeniach z OLX oraz na Discogs."
 			action={runButton}
 		/>
+		{#if realized}
+			<p class="status">{realized}</p>
+		{/if}
 		{#if status?.last_result}
 			{@render runStatus()}
 		{/if}

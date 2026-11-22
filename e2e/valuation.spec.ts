@@ -106,6 +106,26 @@ test('Wartość shows a loss from sales with its sign', async ({ page }) => {
 	);
 });
 
+test('Wartość shows the gain from sales before the first valuation', async ({ page }) => {
+	await page.route('**/api/valuation', async (route) => {
+		const res = await route.fetch();
+		const view = (await res.json()) as View;
+		await route.fulfill({
+			response: res,
+			json: {
+				...view,
+				last_valuation: null,
+				summary: { ...view.summary, realized: { copies: 1, gain_cents: 3000, unpriced: 0 } }
+			}
+		});
+	});
+	await page.goto('/valuation');
+	await expect(page.getByText('Kolekcja nie ma jeszcze wyceny')).toBeVisible();
+	await expect(page.getByText(/^Zysk ze sprzedaży: /)).toHaveText(
+		/^Zysk ze sprzedaży: \+30,00\szł · 1 egzemplarz$/
+	);
+});
+
 test('Wartość shows no realized gain without a sold copy', async ({ page, request }) => {
 	await openValued(page, (v) => ({
 		...v,

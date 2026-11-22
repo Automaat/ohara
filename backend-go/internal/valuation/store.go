@@ -288,14 +288,18 @@ func (s *Store) valued(ctx context.Context, window time.Duration, titleID int64)
 	return owned, sales, nil
 }
 
-// realized sums the sales of the copies sold on or before today, as
-// Realized describes. A sale dated later counts from its day.
+// realizedSQL sums the sales of the copies sold on or before today, as
+// Realized describes: its copies, gain and unpriced copies. A sale dated
+// later counts from its day.
+const realizedSQL = `SELECT
+		count(*) FILTER (WHERE price_cents IS NOT NULL AND sale_price_cents IS NOT NULL) AS copies,
+		coalesce(sum(sale_price_cents - price_cents), 0) AS gain_cents,
+		count(*) FILTER (WHERE price_cents IS NULL OR sale_price_cents IS NULL) AS unpriced
+	FROM copy WHERE status = 'sold' AND sold_on <= current_date`
+
+// realized reads realizedSQL.
 func realized(ctx context.Context, q querier) (Realized, error) {
-	rows, err := q.Query(ctx, `SELECT
-			count(*) FILTER (WHERE price_cents IS NOT NULL AND sale_price_cents IS NOT NULL),
-			coalesce(sum(sale_price_cents - price_cents), 0),
-			count(*) FILTER (WHERE price_cents IS NULL OR sale_price_cents IS NULL)
-		FROM copy WHERE status = 'sold' AND sold_on <= current_date`)
+	rows, err := q.Query(ctx, realizedSQL)
 	if err != nil {
 		return Realized{}, fmt.Errorf("realized: %w", err)
 	}
@@ -337,12 +341,15 @@ func historyFields(p *HistoryPoint) []any {
 	}
 }
 
-// saveDaySQL upserts today's collection value with its gain realized to
-// date.
+// saveDaySQL upserts today's collection value. It sums the gain realized
+// to date itself rather than taking the run's, so a run read before
+// midnight and saved after it stores the sales of the day the row names.
 const saveDaySQL = `INSERT INTO valuation_history (day, copies, spent_cents,
 		floor_cents, floor_copies, mid_cents, mid_copies, ceiling_cents, ceiling_copies,
 		low_confidence, realized_gain_cents, realized_copies, realized_unpriced)
-	VALUES (current_date, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+	SELECT current_date, $1, $2, $3, $4, $5, $6, $7, $8, $9,
+		sales.gain_cents, sales.copies, sales.unpriced
+	FROM (` + realizedSQL + `) sales
 	ON CONFLICT (day) DO UPDATE SET copies = EXCLUDED.copies, spent_cents = EXCLUDED.spent_cents,
 		floor_cents = EXCLUDED.floor_cents, floor_copies = EXCLUDED.floor_copies,
 		mid_cents = EXCLUDED.mid_cents, mid_copies = EXCLUDED.mid_copies,
@@ -384,19 +391,19 @@ func copyDayArgs(day *string, owned []CopyValue) []any {
 	return []any{day, ids, floors, mids, ceilings}
 }
 
-// SaveDay stores sum as today's value and each copy in owned as that
-// copy's value today, replacing what an earlier run stored today for the
-// collection and for those copies. A copy valued earlier today but not in
-// owned, such as one sold since, keeps its row. Both are written in one
-// transaction, so the day is stored with its copies or not at all; the
-// two statements go in one batch to spare a round trip.
+// SaveDay stores sum as today's value, with the gain realized by the
+// copies sold on or before today in place of sum's, and each copy in
+// owned as that copy's value today, replacing what an earlier run stored
+// today for the collection and for those copies. A copy valued earlier
+// today but not in owned, such as one sold since, keeps its row. Both are
+// written in one transaction, so the day is stored with its copies or not
+// at all; the two statements go in one batch to spare a round trip.
 func (s *Store) SaveDay(ctx context.Context, sum *Summary, owned []CopyValue) (HistoryPoint, error) {
 	var p HistoryPoint
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		batch := &pgx.Batch{}
 		batch.Queue(saveDaySQL, sum.Copies, sum.SpentCents, sum.Floor.Cents, sum.Floor.Copies,
-			sum.Mid.Cents, sum.Mid.Copies, sum.Ceiling.Cents, sum.Ceiling.Copies, sum.LowConfidence,
-			sum.Realized.GainCents, sum.Realized.Copies, sum.Realized.Unpriced).
+			sum.Mid.Cents, sum.Mid.Copies, sum.Ceiling.Cents, sum.Ceiling.Copies, sum.LowConfidence).
 			QueryRow(func(row pgx.Row) error { return row.Scan(historyFields(&p)...) })
 		batch.Queue(saveCopyDaysSQL, copyDayArgs(nil, owned)...)
 		return tx.SendBatch(ctx, batch).Close()

@@ -734,6 +734,41 @@ func TestRunStoresRealizedGain(t *testing.T) {
 	}
 }
 
+// TestSaveDayRealizesTheRowsDay saves a summary read before midnight,
+// which has no gain yet, after a sale dated the new day: the row keeps the
+// gain of the day it names, not the summary's.
+func TestSaveDayRealizesTheRowsDay(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	seed(t, pool)
+	store := NewStore(pool)
+	ctx := context.Background()
+	owned, read, err := store.Valued(ctx, 90*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if read.Realized != (Realized{}) {
+		t.Fatalf("realized before the sale = %+v, want none", read.Realized)
+	}
+	exec(t, pool, `INSERT INTO copy (edition_id, status, price_cents, sold_on, sale_price_cents)
+		VALUES (10, 'sold', 4000, current_date, 7000)`)
+
+	point, err := store.SaveDay(ctx, &read, owned)
+	if err != nil {
+		t.Fatalf("SaveDay: %v", err)
+	}
+	want := Realized{Copies: 1, GainCents: 3000}
+	if point.Realized != want {
+		t.Fatalf("saved realized = %+v, want %+v", point.Realized, want)
+	}
+	history, err := store.History(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 1 || history[0].Realized != want {
+		t.Fatalf("history = %+v, want today's row with %+v", history, want)
+	}
+}
+
 // TestSoldCopiesAreNotValued sells a copy of the Blu-ray, which another copy
 // still holds, and the only copy of a book edition: neither sold copy is
 // valued, and the edition left without an owned copy gets no search or quote.

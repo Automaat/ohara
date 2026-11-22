@@ -427,9 +427,12 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   purchase price (no fees), summed over the copies sold on or before
   today that have both, a gift sold for 0 zł losing its price; a sold
   copy missing either counts in `unpriced`, never as 0 zł. Each run
-  stores it in the day's `valuation_history` row (days stored before
-  migration 0028 read 0). The Wartość hero shows it as "Zysk ze
-  sprzedaży", signed, with its copies, and nothing without a sold copy.
+  stores it in the day's `valuation_history` row, summed in the save
+  itself for the day the row names, so a run crossing midnight stores
+  that day's sales (days stored before migration 0028 read 0). The
+  Wartość hero shows it as "Zysk ze sprzedaży", signed, with its copies,
+  and nothing without a sold copy; before the first valuation the line
+  stands under the empty state.
   `GET /api/valuation/market` gives each
   wished title and format that used middle from stored listings, owned
   or not (`?title_id=`: every format of one title), and sends no request

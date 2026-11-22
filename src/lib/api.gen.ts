@@ -31,6 +31,8 @@ export type KeywordKind = 'reject' | 'accept';
 
 export type ValueSource = 'olx' | 'skupszop' | 'discogs';
 
+export type DiscogsGrade = 'NM' | 'VG+' | 'VG' | 'G' | 'P';
+
 export type ServiceState = 'ok' | 'degraded';
 
 export type DatabaseState = 'ok' | 'unavailable' | 'unconfigured';
@@ -411,6 +413,7 @@ export type CopyValue = {
 	floor: Estimate | null;
 	mid: Estimate | null;
 	ceiling: Estimate | null;
+	mid_grade?: DiscogsGrade;
 	low_confidence: boolean;
 };
 

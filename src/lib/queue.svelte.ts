@@ -6,8 +6,8 @@ import type { QueueEntry } from './scan.js';
 
 /**
  * The queue page's entries. They load when the page opens, and again each time codes kept on
- * the device leave it (`PendingScans.departures` goes up), as a code sent in the background may
- * reach the queue after the page's first read. An answer older than the last one applied is
+ * the device leave it (`PendingScans.departures` goes up), as a code sent in the background, by
+ * this tab or another, may reach the queue after the page's first read. An answer older than the last one applied is
  * dropped, and so is an entry a removal took out after its load went out. A failed load keeps
  * the entries shown and reports its failure until a load asked after it answers.
  */

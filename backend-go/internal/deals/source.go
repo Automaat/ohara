@@ -30,19 +30,21 @@ import (
 // when it does not; a listing with Kinds belongs to no want of another
 // kind. Medium is the album medium a source names apart from the title
 // ("vinyl", "cd", "cassette" or "other"), which makes the listing an
-// album's; empty leaves the medium to the title.
+// album's; empty leaves the medium to the title. DiscogsReleaseID is
+// the inventory release ID when Discogs supplies it.
 type Listing struct {
-	Source     string
-	ExternalID string
-	Title      string
-	URL        string
-	PhotoURL   string
-	PriceCents int64
-	AcquiredAs *string
-	Raw        json.RawMessage
-	Query      string
-	Medium     string
-	Kinds      []string
+	Source           string
+	ExternalID       string
+	Title            string
+	URL              string
+	PhotoURL         string
+	PriceCents       int64
+	AcquiredAs       *string
+	Raw              json.RawMessage
+	Query            string
+	Medium           string
+	Kinds            []string
+	DiscogsReleaseID int64
 }
 
 func imageURL(value string) string {

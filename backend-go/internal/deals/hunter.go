@@ -620,8 +620,7 @@ func (r *run) record(ctx context.Context, source string, listings []Listing, tar
 	picks := make([]*Want, len(listings))
 	for i := range listings {
 		l := &listings[i]
-		text := NewListingText(l.Title, r.rules)
-		text.medium = l.Medium
+		text := l.text(r.rules)
 		picks[i] = pickListing(r.wants, r.kinds[l.Source], l, text, r.titles)
 		r.coverListing(source, targets, l, text, picks[i])
 		key := listingKey(l.Source, l.ExternalID)

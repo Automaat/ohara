@@ -185,7 +185,7 @@ func (s *Store) Wants(ctx context.Context) ([]Want, error) {
 	rows, err := s.pool.Query(ctx, `SELECT c.id, e.id, t.id, t.kind, t.name, t.original_title,
 			t.polish_title, t.authors, e.format, e.barcode, c.max_price_cents, c.max_market_percent,
 			CASE WHEN c.max_market_percent IS NOT NULL THEN m.cents END, c.exact_edition,
-			e.packaging, e.pl_voiceover, e.pl_subtitles, e.binding
+			e.packaging, e.pl_voiceover, e.pl_subtitles, e.binding, e.discogs_release_id
 		FROM copy c JOIN edition e ON e.id = c.edition_id JOIN title t ON t.id = e.title_id
 		`+marketJoin("e", 1)+`
 		WHERE c.status = 'wishlist' AND t.kind <> 'tv' ORDER BY c.id`, markets.titles, markets.formats, markets.cents)
@@ -196,7 +196,7 @@ func (s *Store) Wants(ctx context.Context) ([]Want, error) {
 		var w Want
 		err := row.Scan(&w.CopyID, &w.EditionID, &w.TitleID, &w.Kind, &w.Name, &w.OriginalTitle,
 			&w.PolishTitle, &w.Authors, &w.Format, &w.Barcode, &w.MaxPriceCents, &w.MaxMarketPercent,
-			&w.MarketCents, &w.ExactEdition, &w.Packaging, &w.PLVoiceover, &w.PLSubtitles, &w.Binding)
+			&w.MarketCents, &w.ExactEdition, &w.Packaging, &w.PLVoiceover, &w.PLSubtitles, &w.Binding, &w.DiscogsReleaseID)
 		return w, err
 	})
 }
@@ -804,7 +804,7 @@ type querier interface {
 func pendingAlerts(ctx context.Context, q querier, markets marketTable, only *int64) ([]Alert, error) {
 	rows, err := q.Query(ctx, `SELECT o.id, c.id, o.source, coalesce(o.external_id, ''), o.url, coalesce(o.raw->>'title', ''),
 			o.price_cents, o.acquired_as, t.name, e.format, c.max_price_cents, c.max_market_percent,
-			CASE WHEN c.max_market_percent IS NOT NULL THEN m.cents END, a.alerted_price_cents
+			CASE WHEN c.max_market_percent IS NOT NULL THEN m.cents END, a.alerted_price_cents, `+storedAlbumFields+`
 		FROM deal_alert a
 		JOIN price_observation o ON o.id = a.observation_id
 		JOIN copy c ON c.id = a.copy_id AND c.status = 'wishlist'
@@ -821,13 +821,24 @@ func pendingAlerts(ctx context.Context, q querier, markets marketTable, only *in
 	if err != nil {
 		return nil, fmt.Errorf("pending alerts: %w", err)
 	}
-	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Alert, error) {
+	defer rows.Close()
+	var alerts []Alert
+	for rows.Next() {
 		var a Alert
-		err := row.Scan(&a.ObservationID, &a.CopyID, &a.Source, &a.ExternalID, &a.URL, &a.ListingTitle, &a.PriceCents,
+		var album storedAlbum
+		fields := []any{
+			&a.ObservationID, &a.CopyID, &a.Source, &a.ExternalID, &a.URL, &a.ListingTitle, &a.PriceCents,
 			&a.AcquiredAs, &a.TitleName, &a.Format, &a.MaxPriceCents, &a.MaxMarketPercent, &a.MarketCents,
-			&a.AlertedPriceCents)
-		return a, err
-	})
+			&a.AlertedPriceCents,
+		}
+		if err := rows.Scan(append(fields, album.destinations()...)...); err != nil {
+			return nil, fmt.Errorf("pending alerts: %w", err)
+		}
+		if album.want.VerifiesAlbum(&album.listing) {
+			alerts = append(alerts, a)
+		}
+	}
+	return alerts, rows.Err()
 }
 
 // MarkSent records a delivered alert and the price its message named.
@@ -925,7 +936,7 @@ var (
 		LEFT JOIN deal_alert a ON a.observation_id = o.id
 		LEFT JOIN copy w ON w.status = 'wishlist' AND w.id = coalesce(o.wishlist_copy_id, a.copy_id)
 			AND (o.wishlist_copy_id IS NOT NULL OR ` + wishOfListingTitle + `) AND ` + wishNamedBy("w") + `
-			AND ` + huntedWish("w") + ` AND ` + mediumFits("w") + `
+			AND ` + huntedWish("w") + ` AND ` + mediumFits("w") + ` AND o.id <> ALL ($10)
 		WHERE o.dismissed_at IS NULL AND ` + freshListing
 	wishedListings = `SELECT o.id, o.observed_at, o.price_cents, o.source, a.sent_at, w.id AS wish_id, w.max_price_cents,
 			w.max_market_percent, w.edition_id AS wish_edition_id
@@ -944,18 +955,71 @@ var (
 		` AND ` + mediumFits("w")
 )
 
-// Recent returns the newest deal observations that pass f. It picks the page from the listing
-// rows first and reads raw and the joined edition and title only for that page.
+// Compare the stored Discogs release as JSON, since old observations
+// need not have a numeric release_id.
+const storedAlbumFields = `t.name, t.original_title, t.polish_title, t.authors, t.kind, e.format, e.discogs_release_id,
+	coalesce(o.raw->>'title', ''), o.source, coalesce(o.raw->'data'->>'medium', ''),
+	CASE WHEN o.raw->'data'->'release_id' = to_jsonb(e.discogs_release_id) THEN e.discogs_release_id ELSE 0 END`
+
+type storedAlbum struct {
+	want    Want
+	listing Listing
+}
+
+func (a *storedAlbum) destinations() []any {
+	w, l := &a.want, &a.listing
+	return []any{
+		&w.Name, &w.OriginalTitle, &w.PolishTitle, &w.Authors, &w.Kind, &w.Format, &w.DiscogsReleaseID,
+		&l.Title, &l.Source, &l.Medium, &l.DiscogsReleaseID,
+	}
+}
+
+func unverifiedAlbums(ctx context.Context, q querier) ([]int64, error) {
+	rows, err := q.Query(ctx, `SELECT o.id, `+storedAlbumFields+`
+		FROM (`+wishedListings+`) l
+		JOIN price_observation o ON o.id = l.id
+		JOIN edition e ON e.id = l.wish_edition_id
+		JOIN title t ON t.id = e.title_id
+		WHERE t.kind = 'music' AND o.source = ANY ($1)`, sources)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	unverified := []int64{}
+	for rows.Next() {
+		var id int64
+		var album storedAlbum
+		if err := rows.Scan(append([]any{&id}, album.destinations()...)...); err != nil {
+			return nil, err
+		}
+		if !album.want.VerifiesAlbum(&album.listing) {
+			unverified = append(unverified, id)
+		}
+	}
+	return unverified, rows.Err()
+}
+
+// Recent returns the newest deal observations that pass f. It rechecks album
+// associations before paging so an ambiguous match cannot displace a valid one.
 func (s *Store) Recent(ctx context.Context, f RecentFilter) ([]Observation, error) {
 	markets, err := s.marketTable(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("recent observations: %w", err)
 	}
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return nil, fmt.Errorf("recent observations: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	unverified, err := unverifiedAlbums(ctx, tx)
+	if err != nil {
+		return nil, fmt.Errorf("verify stored album matches: %w", err)
+	}
 	listings := allListings
 	if f.Matched || f.UnderLimit || f.Sent {
-		listings = wishedListings
+		listings = `SELECT * FROM (` + wishedListings + `) w WHERE w.id <> ALL ($10)`
 	}
-	rows, err := s.pool.Query(ctx, `SELECT o.id, o.source, coalesce(o.external_id, ''), o.observed_at,
+	rows, err := tx.Query(ctx, `SELECT o.id, o.source, coalesce(o.external_id, ''), o.observed_at,
 			o.price_cents, o.acquired_as, o.url, coalesce(o.raw->>'title', ''), coalesce(e.title_id, o.title_id), t.name,
 			e.id, e.format, nullif(o.raw->>'photo_url', ''),
             coalesce(CASE WHEN e.cover_photo IS NOT NULL
@@ -986,7 +1050,8 @@ func (s *Store) Recent(ctx context.Context, f RecentFilter) ([]Observation, erro
 		LEFT JOIN title t ON t.id = coalesce(e.title_id, o.title_id)
 		`+marketJoin("e", 7)+`
 		ORDER BY o.observed_at DESC, o.id DESC`,
-		f.Limit, MaxAttempts, sources, f.UnderLimit, f.Matched, f.Sent, markets.titles, markets.formats, markets.cents)
+		f.Limit, MaxAttempts, sources, f.UnderLimit, f.Matched, f.Sent, markets.titles, markets.formats, markets.cents,
+		unverified)
 	if err != nil {
 		return nil, fmt.Errorf("recent observations: %w", err)
 	}

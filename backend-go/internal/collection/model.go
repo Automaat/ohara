@@ -5,6 +5,8 @@ package collection
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"math"
 	"net/url"
 	"reflect"
 	"slices"
@@ -57,6 +59,9 @@ const (
 	MaxDiscCount = 99
 	// MaxLimitedTo bounds the size of a limited edition's run.
 	MaxLimitedTo = 1_000_000
+	// MaxCopyNumber is the largest copy number the integer column holds;
+	// only the edition's run, when known, bounds it below that.
+	MaxCopyNumber = math.MaxInt32
 
 	// MaxSeriesNumber bounds a title's number in its series and a series'
 	// total of volumes.
@@ -136,6 +141,7 @@ var (
 	ErrNotOrdered = errors.New("only ordered copies can be received")
 	// ErrDuplicateSeriesNumber refuses a number another title of the series has.
 	ErrDuplicateSeriesNumber = errors.New("another title of this series has this number")
+	ErrDuplicateCopyNumber   = errors.New("another copy of this edition has this number")
 )
 
 // Date is a calendar day carried as YYYY-MM-DD in JSON.
@@ -341,6 +347,12 @@ type CopyInput struct {
 	// Location is where an owned copy is stored, such as "Regał 2"; a
 	// wishlist, sold or ordered copy has none.
 	Location *string `json:"location,omitempty" ts:",null"`
+	// Signed marks a copy its author or artist signed. CopyNumber is a
+	// numbered copy's number, 1 up to its edition's run (limited_to) when
+	// that is known, unique within the edition. A wishlist copy has
+	// neither.
+	Signed     bool `json:"signed,omitempty"`
+	CopyNumber *int `json:"copy_number,omitempty" ts:",null"`
 	// RequestKey makes a create safe to retry: a second create with the
 	// same key returns the first copy. Updates ignore it.
 	RequestKey *string `json:"request_key,omitempty"`
@@ -899,6 +911,9 @@ func (in *CopyInput) Normalize() *httpx.FieldError {
 	if in.Location != nil && in.Status != StatusOwned {
 		return fieldErr("location", "applies only to owned copies")
 	}
+	if e := in.checkMarks(); e != nil {
+		return e
+	}
 	if e := in.checkSale(); e != nil {
 		return e
 	}
@@ -925,6 +940,34 @@ func (in *CopyInput) CheckGradeKind(kind string) *httpx.FieldError {
 		return fieldErr("media_grade", "applies only to albums")
 	case in.SleeveGrade != nil:
 		return fieldErr("sleeve_grade", "applies only to albums")
+	}
+	return nil
+}
+
+// checkMarks keeps a copy number in range and both collector marks off
+// wishlist copies: they describe a copy in hand, and the deal hunter does
+// not look for them. The edition's run is checked by the store.
+func (in *CopyInput) checkMarks() *httpx.FieldError {
+	if n := in.CopyNumber; n != nil && (*n < 1 || *n > MaxCopyNumber) {
+		return fieldErr("copy_number", "must be a whole number from 1")
+	}
+	if in.Status != StatusWishlist {
+		return nil
+	}
+	if in.Signed {
+		return fieldErr("signed", "applies only to owned, sold and ordered copies")
+	}
+	if in.CopyNumber != nil {
+		return fieldErr("copy_number", "applies only to owned, sold and ordered copies")
+	}
+	return nil
+}
+
+// CheckRun keeps a copy's number within its edition's run, limitedTo,
+// when the edition has one.
+func (in *CopyInput) CheckRun(limitedTo *int) *httpx.FieldError {
+	if in.CopyNumber != nil && limitedTo != nil && *in.CopyNumber > *limitedTo {
+		return fieldErr("copy_number", fmt.Sprintf("must be at most %d, the edition's run", *limitedTo))
 	}
 	return nil
 }

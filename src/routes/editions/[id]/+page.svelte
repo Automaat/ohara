@@ -28,6 +28,7 @@
 		formatPLN,
 		gradeLine,
 		kindLabels,
+		marksLine,
 		screenKind,
 		statusLabels,
 		triStateLabels,
@@ -308,6 +309,7 @@
 									},
 									{ label: 'Stan', value: copy.condition && conditionLabels[copy.condition] },
 									{ label: 'Gradacja', value: gradeLine(copy) },
+									{ label: 'Cechy', value: marksLine(copy, d.limited_to) },
 									{ label: 'Miejsce', value: copy.location }
 								].filter((fact) => fact.value)}
 							/>

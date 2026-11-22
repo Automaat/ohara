@@ -205,6 +205,26 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   that only grades loses nothing. Deals and valuation ignore the grades. The album copy form adds "Stan nośnika" and "Stan
   okładki" with the English names ("Very Good Plus (VG+)"), and the copy's
   facts show "Gradacja: Nośnik VG+ · Okładka NM".
+- A copy carries its own collector marks, since copies of one edition
+  differ in them: `signed` (an autograph, false when left out) and
+  `copy_number` (a numbered copy's number, a whole number from 1; only
+  the edition's run bounds it, below the integer column's 2 147 483 647). Copy, title and `GET /api/collection` answers carry them,
+  absent when unset; a `PUT` without one clears it. A number above the
+  edition's `limited_to` answers 422 on `copy_number`, and so does a move to
+  an edition whose run is below it; two copies of one edition with one
+  number answer 409 on `copy_number` (copies of two editions may share
+  one). An edition `PUT` whose `limited_to` is below the highest number its
+  copies carry answers 422 on `limited_to`; a copy save locks its edition
+  (share) before the copy, the order an edition delete takes them in, so
+  neither check misses a concurrent change of the other and a save racing a
+  delete waits instead of deadlocking. A `PUT` of a missing copy stays 404.
+  Wishlist copies take neither mark (422 on its field): the deal hunter
+  does not look for them, and deals and valuation ignore both. The form of
+  an owned, ordered or sold copy has "Z autografem" and "Numer
+  egzemplarza"; the copy's facts and the edition page show "Cechy: Z
+  autografem · Egzemplarz nr 123/500" ("nr 123" without a run), and a
+  signed owned copy's Kolekcja tile ends its creators and edition line with
+  "z autografem"; a lent, ordered or sold tile keeps its status line.
 
 ## Frontend
 

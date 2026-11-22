@@ -130,9 +130,19 @@ export function shelfSummary(t: Pick<Totals, 'owned' | 'wishlist'>): string {
 /** Hint under a purchase price field: blank, not 0, is an unknown price. */
 export const priceHint = 'Nie pamiętasz? Zostaw puste. 0 zł liczy się jako cena.';
 
+/** How many owned copies have no purchase price yet. */
+export function unpricedCount(t: Pick<Totals, 'owned' | 'priced'>): number {
+	return t.owned - t.priced;
+}
+
+/** The phone header's link to the copies without a price, such as "3 bez ceny". */
+export function unpricedLabel(n: number): string {
+	return `${count.format(n)} bez ceny`;
+}
+
 /** What owned copies cost, and how many still have no price to fill in. */
 export function spentLabel(t: Totals): string {
-	const unpriced = t.owned - t.priced;
+	const unpriced = unpricedCount(t);
 	const spent = formatPLN(t.spent_cents);
 	return unpriced > 0 ? `${spent} (${unpriced} bez ceny)` : spent;
 }
@@ -218,10 +228,14 @@ export function shelfLine(
 		.join(' · ');
 }
 
-/** What the collection lists: copies of a status, or `none`, the titles that have no copy yet. */
-export type CollectionStatus = CopyStatus | 'none';
+/**
+ * What the collection lists: copies of a status, `unpriced`, the owned copies without a purchase
+ * price, or `none`, the titles that have no copy yet.
+ */
+export type CollectionStatus = CopyStatus | 'unpriced' | 'none';
 export const collectionStatusLabels: Record<CollectionStatus, string> = {
 	...statusLabels,
+	unpriced: 'Bez ceny',
 	none: 'Bez egzemplarzy'
 };
 

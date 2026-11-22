@@ -221,9 +221,13 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   It seeds no deal run (a running hunter reads that only at startup) and
   never a pending deal alert. Its DB test asserts what each page needs,
   so a schema change that breaks the seed fails CI.
-- Deal sources implement `deals.Source`. A run matches listing titles to
-  wishlist copies (all title words, the edition's format for movies, the
-  author's surname for books, the artist's words and a fitting medium for
+- Deal sources implement `deals.Source`. Matching folds every Latin
+  letter with a diacritic to its base letter ("Bjork" for "Björk") in
+  names, listing titles and phrases; search queries keep the want's
+  spelling. A run matches listing titles to wishlist copies (all title
+  words, the edition's format for movies, the author's surname in any case
+  for books ("Andrzeja Sapkowskiego", "Lalka Prusa"), the artist's words
+  and a fitting medium for
   albums, where a listing naming no medium counts as a CD, minus the
   editable reject phrases a want's own name or artist does not contain),
   skips lots of several titles: a count of titles ("3 filmy", "20 szt.",

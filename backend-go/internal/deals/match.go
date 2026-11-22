@@ -6,6 +6,9 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 // Want is a wishlist copy the hunter searches for, with its edition and
@@ -61,6 +64,7 @@ type wantText struct {
 	names    []nameText // the titles the want is sold under
 	ownWords [][]string // the words of each name, then of each author
 	surname  string     // the last word of the first author
+	ownName  string     // surname in the author's own letters, for queries
 	artist   []string   // the required words of the first author
 	set      bool       // a name says the want is a set ("Trylogia")
 }
@@ -106,6 +110,9 @@ func newWantText(w *Want) *wantText {
 		if ws := words(w.Authors[0]); len(ws) > 0 {
 			p.surname = ws[len(ws)-1]
 		}
+		if ws := spelledWords(w.Authors[0]); len(ws) > 0 {
+			p.ownName = ws[len(ws)-1]
+		}
 		p.artist = required(w.Authors[0])
 	}
 	return p
@@ -141,17 +148,98 @@ type Rules struct {
 	Accept []string
 }
 
-var polishFold = strings.NewReplacer(
-	"ą", "a", "ć", "c", "ę", "e", "ł", "l", "ń", "n", "ó", "o", "ś", "s", "ź", "z", "ż", "z",
-)
+// strokes are the Latin letters whose diacritic is no combining mark, so
+// canonical decomposition leaves them whole.
+var strokes = map[rune]rune{
+	'ł': 'l', 'ŀ': 'l', 'ƚ': 'l', 'ø': 'o', 'đ': 'd', 'ħ': 'h', 'ı': 'i',
+	'ɨ': 'i', 'ŧ': 't', 'ƀ': 'b', 'ƶ': 'z',
+}
 
-// words lowercases s, folds Polish diacritics and splits it into runs of
-// letters and digits.
+// fold lowercases s and folds every Latin letter with a diacritic to its
+// base letter: "Björk" and "Bjork", "Márquez" and "Marquez", "Łódź" and
+// "Lodz" fold alike. Marks on letters of other scripts stay.
+func fold(s string) string {
+	s = strings.ToLower(s)
+	if isASCII(s) {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	latin := false
+	for _, r := range norm.NFD.String(s) {
+		if unicode.Is(unicode.Mn, r) {
+			if latin {
+				continue
+			}
+		} else {
+			latin = unicode.Is(unicode.Latin, r)
+		}
+		if base, ok := strokes[r]; ok {
+			r = base
+		}
+		b.WriteRune(r)
+	}
+	return norm.NFC.String(b.String())
+}
+
+func isASCII(s string) bool {
+	for i := range len(s) {
+		if s[i] >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
+}
+
+// words lowercases s, folds diacritics and splits it into runs of letters
+// and digits.
 func words(s string) []string {
-	folded := polishFold.Replace(strings.ToLower(s))
-	return strings.FieldsFunc(folded, func(r rune) bool {
-		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
-	})
+	return strings.FieldsFunc(fold(s), notWordRune)
+}
+
+// spelledWords lowercases s and splits it as words does, keeping its
+// diacritics.
+func spelledWords(s string) []string {
+	return strings.FieldsFunc(norm.NFC.String(strings.ToLower(s)), notWordRune)
+}
+
+func notWordRune(r rune) bool {
+	return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+}
+
+// surnameEndings are the Polish case endings a surname takes after its
+// stem: "Prusa", "Mickiewiczowi", "Sapkowskiego", "Szymborskiej", "Fredry".
+var surnameEndings = map[string]bool{
+	"": true, "a": true, "e": true, "i": true, "o": true, "u": true, "y": true,
+	"ie": true, "em": true, "om": true, "owi": true, "ego": true, "emu": true,
+	"iego": true, "iemu": true, "im": true, "ym": true, "ej": true, "iej": true,
+}
+
+// minSurnameStem is the shortest stem a surname is declined from, so a
+// short one does not match every word that starts with it: "Eco" matches
+// only itself.
+const minSurnameStem = 3
+
+// surnameStem is surname without its final vowel, the part every case of
+// it starts with, and whether it is long enough to decline.
+func surnameStem(surname string) (string, bool) {
+	stem := surname
+	if r, size := utf8.DecodeLastRuneInString(surname); strings.ContainsRune("aeiouy", r) {
+		stem = surname[:len(surname)-size]
+	}
+	return stem, utf8.RuneCountInString(stem) >= minSurnameStem
+}
+
+// namesSurname reports whether text holds surname in some case:
+// "Sapkowski" in "Ostatnie życzenie Andrzeja Sapkowskiego".
+func namesSurname(text []string, surname string) bool {
+	stem, declines := surnameStem(surname)
+	for _, w := range text {
+		if w == surname || declines && strings.HasPrefix(w, stem) && surnameEndings[w[len(stem):]] {
+			return true
+		}
+	}
+	return false
 }
 
 // findPhrase returns where phrase starts in text, or -1. Each phrase word
@@ -327,20 +415,22 @@ var formatKeyword = map[string]string{"dvd": "dvd", "bluray": "blu-ray", "uhd": 
 // generic. An album query names no medium: CD listings often do not.
 func (w *Want) Queries() []string {
 	p := w.text()
-	suffix := ""
+	// suffix is added unless q already has the word key.
+	suffix, key := "", ""
 	switch {
 	case w.Kind == "movie" && w.Format != nil:
 		suffix = formatKeyword[*w.Format]
+		key = suffix
 	case w.Kind == "book":
 		// Book listings carry the author's surname far more often than
 		// first names.
-		suffix = p.surname
+		suffix, key = p.ownName, p.surname
 	}
 	artist := strings.TrimSpace(w.artist())
 	var out []string
 	for _, n := range p.names {
 		q := strings.TrimSpace(n.name)
-		if suffix != "" && !slices.Contains(words(q), suffix) {
+		if suffix != "" && !slices.Contains(words(q), key) {
 			q += " " + suffix
 		}
 		if artist != "" && !containsAll(words(q), required(artist)) {
@@ -633,7 +723,7 @@ func qualifies(w *Want, p *wantText, l *ListingText) bool {
 	if w.Kind == "movie" && w.Format != nil && l.format != *w.Format {
 		return false
 	}
-	if w.Kind == "book" && p.surname != "" && !slices.Contains(text, p.surname) {
+	if w.Kind == "book" && p.surname != "" && !namesSurname(text, p.surname) {
 		return false
 	}
 	if w.Kind == "music" {

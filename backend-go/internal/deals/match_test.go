@@ -175,6 +175,8 @@ func TestWantQueries(t *testing.T) {
 		{"album after its artist", album("The Wall", "Pink Floyd", "cd"), []string{"Pink Floyd The Wall"}},
 		{"self-titled album", album("Metallica", "Metallica", "cd"), []string{"Metallica"}},
 		{"album without artist", Want{Kind: "music", Name: "Kind of Blue", Format: new("cd")}, []string{"Kind of Blue"}},
+		{"surname in its own spelling", book("Sto lat samotności", "Gabriel García Márquez"), []string{"Sto lat samotności márquez"}},
+		{"name has the surname unaccented", book("Sto lat samotności Marquez", "Gabriel García Márquez"), []string{"Sto lat samotności Marquez"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -418,5 +420,78 @@ func TestLotsDoNotMatch(t *testing.T) {
 				t.Fatalf("Matches(%q) && !RejectedFor = %v, want %v", tt.title, got, tt.match)
 			}
 		})
+	}
+}
+
+func book(name, author string) Want {
+	return Want{CopyID: 6, EditionID: 60, TitleID: 600, Kind: "book", Name: name, Authors: []string{author}}
+}
+
+func TestSpellingVariantsMatch(t *testing.T) {
+	tests := []struct {
+		name  string
+		want  Want
+		title string
+		match bool
+	}{
+		{"artist without accents", album("Homogenic", "Björk", "cd"), "Bjork Homogenic CD", true},
+		{"listing with accents", album("Homogenic", "Bjork", "cd"), "Björk Homogenic CD", true},
+		{"umlaut in a band name", album("Ace of Spades", "Motörhead", "vinyl"), "Motorhead Ace of Spades LP winyl", true},
+		{"decomposed accents", album("Homogenic", "Björk", "cd"), "Björk Homogenic CD", true},
+		{"author without accents", book("Sto lat samotności", "Gabriel García Márquez"), "Sto lat samotności Gabriel Garcia Marquez", true},
+		{"title without accents", book("Sto lat samotności", "Gabriel García Márquez"), "Sto lat samotnosci Marquez", true},
+		{"genitive of -ski", book("Ostatnie życzenie", "Andrzej Sapkowski"), "Ostatnie życzenie Andrzeja Sapkowskiego", true},
+		{"genitive of a noun surname", book("Lalka", "Bolesław Prus"), "Lalka Prusa lektura", true},
+		{"genitive after -cz", book("Pan Tadeusz", "Adam Mickiewicz"), "Pan Tadeusz Adama Mickiewicza", true},
+		{"genitive of -ska", book("Wiersze wybrane", "Wisława Szymborska"), "Wiersze wybrane Wisławy Szymborskiej", true},
+		{"genitive of a short surname", book("Solaris", "Stanisław Lem"), "Solaris Lema", true},
+		{"genitive of -o", book("Zemsta", "Aleksander Fredro"), "Zemsta Fredry", true},
+		{"another author", book("Ostatnie życzenie", "Andrzej Sapkowski"), "Ostatnie życzenie Pilipiuk", false},
+		{"surname as a prefix of another word", book("Solaris", "Stanisław Lem"), "Solaris Lemański", false},
+		{"short surname takes no ending", book("Imię róży", "Umberto Eco"), "Imię róży Ecoa", false},
+		{"title words are not inflected", book("Lalka", "Bolesław Prus"), "Lalki Prusa", false},
+		{"artist names are not inflected", album("Homogenic", "Björk", "cd"), "Homogenic Björka CD", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.want.Matches(tt.title); got != tt.match {
+				t.Fatalf("Matches(%q) = %v, want %v", tt.title, got, tt.match)
+			}
+		})
+	}
+}
+
+func TestRulesFoldDiacritics(t *testing.T) {
+	rules := Rules{Reject: []string{"café", "pudelko"}, Accept: []string{"pudełko gratis"}}
+	tests := []struct {
+		title  string
+		reject bool
+	}{
+		{"Homogenic CD cafe edition", true},
+		{"Homogenic CD CAFÉ", true},
+		{"Homogenic CD pudełko", true},
+		{"Homogenic CD + pudelko gratis", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.title, func(t *testing.T) {
+			if got := rules.Rejected(tt.title); got != tt.reject {
+				t.Fatalf("Rejected(%q) = %v, want %v", tt.title, got, tt.reject)
+			}
+		})
+	}
+}
+
+func TestWordsFoldOnlyLatinLetters(t *testing.T) {
+	tests := map[string][]string{
+		"Łódź Żółć":       {"lodz", "zolc"},
+		"Øresund Đorđe":   {"oresund", "dorde"},
+		"Ñandú Çà":        {"nandu", "ca"},
+		"Чайковский Ёлка": {"чайковский", "ёлка"},
+		"Björk – CD":     {"bjork", "cd"},
+	}
+	for in, want := range tests {
+		if got := words(in); !slices.Equal(got, want) {
+			t.Errorf("words(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

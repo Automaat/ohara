@@ -228,6 +228,15 @@ export function overdue(dueOn: string | null | undefined, today: string): boolea
 	return dueOn != null && dueOn < today;
 }
 
+/**
+ * The day "Zwrócono" records: today, or the loan's own day when it began later, as a date typed
+ * ahead or the server's Polish today seen from a browser west of Poland, which the API would
+ * refuse as a return before the loan.
+ */
+export function returnDay(lentOn: string, today: string): string {
+	return lentOn > today ? lentOn : today;
+}
+
 /** A lent copy's line, such as "Wypożyczony: Ania" or "Wypożyczony: Ania · po terminie". */
 export function loanLine(
 	borrower: string,

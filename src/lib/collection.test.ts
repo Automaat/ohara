@@ -18,6 +18,7 @@ import {
 	loanSummary,
 	loanToForm,
 	options,
+	returnDay,
 	parsePLN,
 	readCollectionFilter,
 	shelfLine,
@@ -633,5 +634,15 @@ describe('loans', () => {
 		}
 	])('sums up a loan $over on 10 May', ({ over, want }) => {
 		expect(loanSummary({ ...loan, ...over }, '2026-05-10')).toBe(want);
+	});
+});
+
+describe('return day', () => {
+	it.each([
+		{ lent: '2026-05-01', today: '2026-05-10', want: '2026-05-10' },
+		{ lent: '2026-05-10', today: '2026-05-10', want: '2026-05-10' },
+		{ lent: '2026-05-11', today: '2026-05-10', want: '2026-05-11' }
+	])('returns a loan from $lent on $today on $want', ({ lent, today, want }) => {
+		expect(returnDay(lent, today)).toBe(want);
 	});
 });

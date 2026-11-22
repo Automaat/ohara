@@ -90,3 +90,29 @@ test('Wypożycz and Zwrócono on a copy page, with the shelf line and the filter
 	await expect(tile(page, lent)).not.toContainText('Wypożyczony');
 	await expectNoSourceRequests(request);
 });
+
+test('a loan from a later day and a 500-byte borrower still fit and come back', async ({
+	page,
+	request
+}) => {
+	const t = `T${Date.now()}`;
+	const copy = await seedCopy(request, `Daleki ${t}`);
+	const borrower = 'W'.repeat(500);
+	const res = await request.post(`/api/copies/${copy}/loans`, {
+		data: { borrower, lent_on: '2099-01-01' }
+	});
+	expect(res.status(), await res.text()).toBe(201);
+
+	await page.goto(`/copies/${copy}`);
+	const loans = page.getByRole('region', { name: 'Wypożyczenia' });
+	await expect(loans.getByRole('listitem')).toHaveCount(1);
+	const width = await page.evaluate(() => [
+		document.documentElement.scrollWidth,
+		window.innerWidth
+	]);
+	expect(width[0]).toBeLessThanOrEqual(width[1]);
+
+	await page.getByRole('button', { name: 'Zwrócono' }).tap();
+	await expect(page.getByRole('button', { name: 'Wypożycz' })).toBeVisible();
+	await expect(loans.getByRole('listitem')).toHaveText([/ – /]);
+});

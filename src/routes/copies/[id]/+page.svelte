@@ -23,6 +23,7 @@
 		loanPayload,
 		loanSummary,
 		loanToForm,
+		returnDay,
 		statusLabels,
 		type Copy,
 		type CopyDetail,
@@ -176,7 +177,7 @@
 		loanError = null;
 		try {
 			await request<Loan>(fetch, 'PUT', `/api/loans/${loan.id}`, {
-				returned_on: isoDate(new Date())
+				returned_on: returnDay(loan.lent_on, isoDate(new Date()))
 			});
 			if (d.id === requested) await load(d.id, true);
 		} catch (err) {
@@ -330,7 +331,9 @@
 		font-size: 1rem;
 	}
 
+	/* A borrower is free text up to 500 bytes, often without a space to break at. */
 	.loans ul {
+		overflow-wrap: anywhere;
 		display: grid;
 		gap: 0.25rem;
 		margin: 0;

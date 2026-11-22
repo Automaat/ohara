@@ -315,6 +315,15 @@ func (s *Store) UpdateTitle(ctx context.Context, id int64, in *TitleInput) (Titl
 					return err
 				}
 				seriesID = &joined
+			} else if stored.id != nil {
+				// The series is locked before the title leaves it, as
+				// joinSeries locks one a title moves from: the UPDATE frees
+				// the title's number, and a create holding the series row
+				// while it waits on that number would otherwise deadlock with
+				// the trigger that then locks the series.
+				if _, err := tx.Exec(ctx, `SELECT 1 FROM series WHERE id = $1 FOR UPDATE`, *stored.id); err != nil {
+					return fmt.Errorf("lock series: %w", err)
+				}
 			}
 		}
 		if err := checkFinishedOn(ctx, tx, in.FinishedOn); err != nil {

@@ -451,7 +451,7 @@ func TestDeletingANumberedTitleWaitsForACreateJoiningItsSeries(t *testing.T) {
 	}()
 	waitForLockWait(t, pool)
 	_, err = tx.Exec(ctx, `INSERT INTO title (kind, name, series_id, series_number) VALUES ('book', 'Kopia', $1, 1)`, seriesID)
-	if code, _ := pgCodeOf(err); code != "23505" {
+	if code := pgCodeOf(err); code != "23505" {
 		t.Fatalf("a create of the number the delete waits on = %v, want a unique violation at once", err)
 	}
 	if err := tx.Rollback(ctx); err != nil {
@@ -465,9 +465,46 @@ func TestDeletingANumberedTitleWaitsForACreateJoiningItsSeries(t *testing.T) {
 	}
 }
 
-func pgCodeOf(err error) (string, bool) {
+func pgCodeOf(err error) string {
 	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
-		return pgErr.Code, true
+		return pgErr.Code
 	}
-	return "", false
+	return ""
+}
+
+func TestDetachingANumberedTitleWaitsForACreateJoiningItsSeries(t *testing.T) {
+	a, pool := newAPIWithPool(t)
+	ctx := context.Background()
+	first := a.seriesTitle("book", "Ostatnie życzenie", "Wiedźmin", 1)
+	a.seriesTitle("book", "Miecz przeznaczenia", "Wiedźmin", 2)
+	seriesID := *first.SeriesID
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM series WHERE id = $1 FOR UPDATE`, seriesID); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan int, 1)
+	go func() {
+		done <- a.do(http.MethodPut, fmt.Sprintf("/api/titles/%d", first.ID),
+			obj{"kind": "book", "name": "Ostatnie życzenie", "series_name": nil}, nil)
+	}()
+	waitForLockWait(t, pool)
+	_, err = tx.Exec(ctx, `INSERT INTO title (kind, name, series_id, series_number) VALUES ('book', 'Kopia', $1, 1)`, seriesID)
+	if code := pgCodeOf(err); code != "23505" {
+		t.Fatalf("a create of the number the detach waits on = %v, want a unique violation at once", err)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if status := <-done; status != http.StatusOK {
+		t.Fatalf("detach while a create held the series = %d, want 200", status)
+	}
+	if got := a.titleOf(first.ID); got.SeriesID != nil {
+		t.Fatalf("detached title = %s", seriesLine(got.Title))
+	}
 }

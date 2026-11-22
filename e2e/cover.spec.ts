@@ -353,10 +353,36 @@ test('a photo still shrinking when the edition is left is never sent', async ({
 	expect(jpegSize(new Uint8Array(await stored.body()))).toEqual({ width: 800, height: 600 });
 });
 
+/**
+ * Playwright starts Chromium with the back-forward cache turned off, and its headless shell has
+ * none, so this test launches full Chromium in headless mode with the cache on, shaped like the
+ * phone project. A page restored from the cache fires no load, so going back waits for the commit.
+ */
 test('a photo shrinking in a page the browser restores from its cache is never sent', async ({
-	page,
-	request
+	playwright,
+	request,
+	baseURL
 }) => {
+	const browser = await playwright.chromium.launch({
+		channel: 'chromium',
+		ignoreDefaultArgs: ['--disable-back-forward-cache']
+	});
+	try {
+		const page = await browser.newPage({
+			baseURL,
+			viewport: { width: 390, height: 844 },
+			deviceScaleFactor: 3,
+			isMobile: true,
+			hasTouch: true,
+			locale: 'pl-PL'
+		});
+		await bfcacheFlow(page, request);
+	} finally {
+		await browser.close();
+	}
+});
+
+async function bfcacheFlow(page: Page, request: APIRequestContext) {
 	await page.addInitScript(() => {
 		addEventListener('pageshow', (event) => {
 			Object.assign(window, { restored: event.persisted });
@@ -395,7 +421,7 @@ test('a photo shrinking in a page the browser restores from its cache is never s
 	expect((await answered).status()).toBe(204);
 	expect(await storedSize()).toEqual({ width: 800, height: 600 });
 
-	await page.goBack();
+	await page.goBack({ waitUntil: 'commit' });
 	await expect(page).toHaveURL(/\?hold=1$/);
 	expect(
 		await page.evaluate(() => (window as unknown as { restored?: boolean }).restored),
@@ -413,4 +439,4 @@ test('a photo shrinking in a page the browser restores from its cache is never s
 	expect((await saved).status()).toBe(204);
 	expect(puts).toHaveLength(2);
 	expect(await storedSize()).toEqual({ width: 640, height: 480 });
-});
+}

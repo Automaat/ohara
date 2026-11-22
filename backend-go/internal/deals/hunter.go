@@ -639,7 +639,7 @@ var (
 		"dvd": "DVD", "bluray": "Blu-ray", "uhd": "4K UHD",
 		"cd": "CD", "vinyl": "Winyl", "cassette": "Kaseta", FormatAudiobook: "Audiobook",
 	}
-	sourceLabels = map[string]string{"olx": "OLX", "bluedvd": "BlueDVD", "pepper": "Pepper"}
+	sourceLabels = map[string]string{"olx": "OLX", "bluedvd": "BlueDVD", "winylownia": "Winylownia", "pepper": "Pepper"}
 	stateLabels  = map[string]string{"new": "nowy", "used": "używany"}
 )
 

@@ -39,7 +39,7 @@ func Ohara() API {
 			{Name: "SleeveGrade", Values: c["SleeveGrade"]},
 			{Name: "VolumeState", Values: c["VolumeState"]},
 			{Name: "QueueReason", Values: []string{scanqueue.ReasonNotFound, scanqueue.ReasonLookupFailed}},
-			{Name: "DealSource", Values: []string{deals.OLX{}.Name(), deals.BlueDVD{}.Name(), deals.Pepper{}.Name()}},
+			{Name: "DealSource", Values: []string{deals.OLX{}.Name(), deals.BlueDVD{}.Name(), deals.Winylownia{}.Name(), deals.Pepper{}.Name()}},
 			{Name: "AlertState", Values: []string{deals.AlertNone, deals.AlertPending, deals.AlertSent, deals.AlertFailed}},
 			{Name: "KeywordKind", Values: []string{deals.KeywordReject, deals.KeywordAccept}},
 			{Name: "ValueSource", Values: []string{valuation.SourceOLX, valuation.SourceSkupSzop, valuation.SourceDiscogs}},

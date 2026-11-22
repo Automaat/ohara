@@ -509,7 +509,8 @@ func newRuns(pool *pgxpool.Pool, logger *slog.Logger) (*deals.Hunter, *deals.Sto
 // off until OHARA_DEALS_INTERVAL is set; alerts, and the poller for their
 // "Ignoruj" button, need both Telegram variables. The *_URL variables
 // point the sources at test doubles; OHARA_BLUEDVD=false leaves the BlueDVD
-// shop out. lane spaces its requests from the valuation's.
+// shop out and OHARA_WINYLOWNIA=false the Winylownia shop. lane spaces its
+// requests from the valuation's.
 func newHunter(pool *pgxpool.Pool, lane *deals.Lane, logger *slog.Logger) (*deals.Hunter, *deals.Store, error) {
 	interval, err := time.ParseDuration(envOr("OHARA_DEALS_INTERVAL", "0s"))
 	if err != nil || interval < 0 {
@@ -526,6 +527,9 @@ func newHunter(pool *pgxpool.Pool, lane *deals.Lane, logger *slog.Logger) (*deal
 	sources := usedSources(client)
 	if envOr("OHARA_BLUEDVD", "true") == "true" {
 		sources = append(sources, deals.BlueDVD{Client: client, BaseURL: envOr("OHARA_DEALS_BLUEDVD_URL", deals.BlueDVDURL)})
+	}
+	if envOr("OHARA_WINYLOWNIA", "true") == "true" {
+		sources = append(sources, deals.Winylownia{Client: client, BaseURL: envOr("OHARA_DEALS_WINYLOWNIA_URL", deals.WinylowniaURL)})
 	}
 	sources = append(sources, deals.Pepper{Client: client, BaseURL: envOr("OHARA_DEALS_PEPPER_URL", deals.PepperURL)})
 	store := deals.NewStore(pool)

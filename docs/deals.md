@@ -84,7 +84,7 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   wish that now matches, keeping its attempts and age. Alerts sent before
   migration 0016 have no stored price and never repeat.
   Okazje's "Ignoruj" (`POST /api/deals/{id}/dismissal`, undone by `DELETE`,
-  both 204 when repeated, 404 for an id no OLX, BlueDVD or Pepper listing has) sets
+  both 204 when repeated, 404 for an id no OLX, BlueDVD, Winylownia or Pepper listing has) sets
   the listing's `dismissed_at`, for every wish it matches: it leaves every
   deals list and the badge, its unsent alert is never sent and a run that
   sees it again keeps it dismissed and queues no alert. The hunter sends
@@ -173,6 +173,30 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   valuation does not ask BlueDVD. Its regulamin (§4) asks only that the
   shop is used lawfully and nothing disrupts it; it does not forbid
   automated access.
+- Winylownia (winylownia.pl, an IdoSell shop of new vinyl records) is a
+  query source, on unless `OHARA_WINYLOWNIA=false`. Each query is one GET
+  of `/search.php?text=<query>`, the first results page in the shop's
+  default order: sorting is a `/settings.php` form, which robots.txt
+  disallows, and no further page or product page is fetched. Each product
+  tile (`div.product[data-product_id]`) becomes a listing: that ID, the
+  title of its `a.product__name`, its link without IdoSell's `query_id`
+  and the price of `strong.price.--main` ("127,97 zł" is 12797 grosze; the
+  `gtag` JSON on the page holds the price before a discount), condition
+  new. A tile marked `data-product_disable="true"` (out of stock, "Brak")
+  is left out, and so is one without a title, link or price. A search
+  without results redirects to `/pl/noproduct.html`, which answers 404
+  with the no-results page: an answer without listings. Any other 404
+  counts as `http_404`, and a page that is neither a results page
+  (`section#search`) nor the no-results page, or a results page without a
+  product tile, as `parse_error`. The reader (`parseIdoSellSearch`) takes
+  the source name and search URL, so another IdoSell shop can reuse it.
+  Its canary is `OHARA_DEALS_CANARY_QUERY`: `dvd` finds the shop's CD/DVD
+  combos and DVDs. The valuation does not ask Winylownia. Its regulamin
+  (§ 11) says "Zabrania się kopiowania zdjęć oraz opisów (w całości lub w
+  części) bez zgody właściciela i administratora strony", so a listing
+  keeps no photo or description, only the tile's title, price and link;
+  it does not forbid automated access. robots.txt asks `Crawl-delay: 1`,
+  which `OHARA_DEALS_DELAY` (at least 1 s) keeps.
 
 ## Discogs wantlist
 

@@ -78,7 +78,7 @@ type Runner struct {
 	// status holds the settings the status view shows; task holds the
 	// runs.
 	status Status
-	task   *deals.Task[RunResult]
+	task   deals.Task[RunResult]
 }
 
 // NewRunner wires the runner. sources are asked for used and new listings
@@ -93,7 +93,7 @@ func NewRunner(store *Store, sources []deals.Source, buybacks []BuyBack, pricer 
 		store: store, sources: sources, buybacks: buybacks, pricer: pricer, logger: logger, cfg: cfg,
 		sleep: deals.Sleep,
 	}
-	r.task = deals.NewTask[RunResult](r.execute)
+	r.task.Init(r.execute)
 	r.status.Scheduled = cfg.Interval > 0
 	r.status.IntervalSeconds = int64(cfg.Interval.Seconds())
 	metrics.InitBackgroundTask(metrics.TaskValuation)
@@ -136,15 +136,7 @@ func (r *Runner) Pricer() ReleasePricer { return r.pricer }
 func (r *Runner) Start(ctx context.Context) {
 	r.task.Bind(ctx)
 	if r.cfg.Retention > 0 {
-		r.task.Go(func() {
-			wait := deals.Jitter(firstRunDelay, 0.1)
-			for r.sleep(ctx, wait) == nil {
-				wait = deals.Jitter(pruneInterval, 0.1)
-				if !r.prune(ctx) {
-					wait = deals.Jitter(pruneRetry, 0.1)
-				}
-			}
-		})
+		r.task.Repeat(ctx, deals.Jitter(firstRunDelay, 0.1), pruneInterval, pruneRetry, r.sleep, r.prune)
 	}
 	latest, ok, err := r.store.Latest(ctx)
 	if err != nil {

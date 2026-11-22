@@ -16,9 +16,16 @@ type blockingJob struct {
 	release chan struct{}
 }
 
+// newTask returns a task that runs job.
+func newTask(job func(context.Context)) *Task[int] {
+	t := &Task[int]{}
+	t.Init(job)
+	return t
+}
+
 func newBlockingJob() *blockingJob {
 	j := &blockingJob{started: make(chan struct{}, 4), release: make(chan struct{})}
-	j.task = NewTask[int](j.run)
+	j.task = newTask(j.run)
 	return j
 }
 
@@ -61,7 +68,7 @@ func TestTaskTriggerRunsOneAtATime(t *testing.T) {
 func TestTaskManualRunUsesTheBoundContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	var got atomic.Value
-	task := NewTask[int](func(ctx context.Context) { got.Store(ctx.Err()) })
+	task := newTask(func(ctx context.Context) { got.Store(ctx.Err()) })
 	task.Bind(ctx)
 	cancel()
 	task.Trigger()
@@ -73,7 +80,7 @@ func TestTaskManualRunUsesTheBoundContext(t *testing.T) {
 
 func TestTaskScheduleWaitsFirstThenTheInterval(t *testing.T) {
 	var runs atomic.Int32
-	task := NewTask[int](func(context.Context) { runs.Add(1) })
+	task := newTask(func(context.Context) { runs.Add(1) })
 	var waits []time.Duration
 	task.Schedule(t.Context(), 7*time.Minute, time.Hour, func(_ context.Context, d time.Duration) error {
 		waits = append(waits, d)
@@ -119,7 +126,7 @@ func TestTaskScheduleSkipsARunningRun(t *testing.T) {
 }
 
 func TestTaskRestoreKeepsANewerRun(t *testing.T) {
-	task := NewTask[int](func(context.Context) {})
+	task := newTask(func(context.Context) {})
 	stored, n := time.Unix(10, 0), 5
 	task.Restore(TaskRun[int]{StartedAt: &stored, FinishedAt: &stored, Result: &n})
 	last, _ := task.State()
@@ -127,7 +134,7 @@ func TestTaskRestoreKeepsANewerRun(t *testing.T) {
 		t.Fatalf("restored = %+v", last)
 	}
 
-	task = NewTask[int](func(context.Context) {})
+	task = newTask(func(context.Context) {})
 	task.Started(time.Unix(20, 0))
 	task.Restore(TaskRun[int]{StartedAt: &stored, FinishedAt: &stored, Result: &n})
 	last, _ = task.State()
@@ -137,7 +144,7 @@ func TestTaskRestoreKeepsANewerRun(t *testing.T) {
 }
 
 func TestTaskWaitWaitsForGo(t *testing.T) {
-	task := NewTask[int](func(context.Context) {})
+	task := newTask(func(context.Context) {})
 	var done atomic.Bool
 	task.Go(func() {
 		time.Sleep(10 * time.Millisecond)
@@ -146,5 +153,40 @@ func TestTaskWaitWaitsForGo(t *testing.T) {
 	task.Wait()
 	if !done.Load() {
 		t.Fatal("Wait returned before the Go func ended")
+	}
+}
+
+func TestTaskRepeatRetriesSoonerWhenFReportsFalse(t *testing.T) {
+	results := []bool{true, false, true}
+	var calls int
+	var waits []time.Duration
+	task := newTask(func(context.Context) {})
+	task.Repeat(t.Context(), 3*time.Minute, 24*time.Hour, 10*time.Minute, func(_ context.Context, d time.Duration) error {
+		waits = append(waits, d)
+		if len(waits) > len(results) {
+			return context.Canceled
+		}
+		return nil
+	}, func(context.Context) bool {
+		calls++
+		return results[calls-1]
+	})
+	task.Wait()
+	if calls != 3 || len(waits) != 4 || waits[0] != 3*time.Minute {
+		t.Fatalf("calls = %d, waits = %v; want 3 calls, the first wait 3m", calls, waits)
+	}
+	within := func(d, want time.Duration) bool {
+		return d >= want*9/10 && d <= want*11/10
+	}
+	if !within(waits[1], 24*time.Hour) || !within(waits[2], 10*time.Minute) || !within(waits[3], 24*time.Hour) {
+		t.Fatalf("waits = %v, want 24h, then the 10m retry after false, then 24h, each jittered by 10%%", waits)
+	}
+}
+
+func TestZeroTaskWaitsAndReportsNoRun(t *testing.T) {
+	var task Task[int]
+	task.Wait()
+	if last, running := task.State(); running || last.StartedAt != nil {
+		t.Fatalf("zero task state = %+v, running %t", last, running)
 	}
 }

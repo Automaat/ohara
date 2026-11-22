@@ -46,7 +46,8 @@ type TaskRun[R any] struct {
 // Task runs a background job, a deal hunt or a valuation, one run at a
 // time: on a schedule (Schedule) or by hand (Trigger). The job records its
 // own start and outcome with Started and Finished, which the job's status
-// view reads with State.
+// view reads with State. The zero value has no job yet, which Init sets;
+// until then State, Restore and Wait work and nothing runs.
 type Task[R any] struct {
 	job     func(context.Context)
 	running atomic.Bool
@@ -57,11 +58,9 @@ type Task[R any] struct {
 	last TaskRun[R]
 }
 
-// NewTask returns a task that runs job. Until Bind, a manual run gets
+// Init makes job the task's job. Until Bind, a manual run gets
 // context.Background().
-func NewTask[R any](job func(context.Context)) *Task[R] {
-	return &Task[R]{job: job, base: context.Background()}
-}
+func (t *Task[R]) Init(job func(context.Context)) { t.job = job }
 
 // Bind makes ctx the context of every later manual run.
 func (t *Task[R]) Bind(ctx context.Context) { t.base = ctx }
@@ -69,22 +68,31 @@ func (t *Task[R]) Bind(ctx context.Context) { t.base = ctx }
 // Go runs f in the background; Wait waits for it too.
 func (t *Task[R]) Go(f func()) { t.wg.Go(f) }
 
+// Repeat runs f in the background after first, then again after interval
+// jittered by ±10%, or after retry jittered by ±10% when f reports false,
+// each wait starting when f returned, until sleep fails, which it does once
+// ctx ends. Wait waits for it too. f does not hold the task's one run.
+func (t *Task[R]) Repeat(ctx context.Context, first, interval, retry time.Duration, sleep func(context.Context, time.Duration) error, f func(context.Context) bool) {
+	t.wg.Go(func() {
+		for wait := first; sleep(ctx, wait) == nil; {
+			wait = jitter(interval, 0.1)
+			if !f(ctx) {
+				wait = jitter(retry, 0.1)
+			}
+		}
+	})
+}
+
 // Schedule runs the job after first and then every interval jittered by
 // ±10%, each wait starting when the last run ended, until sleep fails,
 // which it does once ctx ends. A scheduled run that finds a manual one
 // running is skipped.
 func (t *Task[R]) Schedule(ctx context.Context, first, interval time.Duration, sleep func(context.Context, time.Duration) error) {
-	t.wg.Go(func() {
-		wait := first
-		for {
-			if sleep(ctx, wait) != nil {
-				return
-			}
-			if t.running.CompareAndSwap(false, true) {
-				t.execute(ctx)
-			}
-			wait = jitter(interval, 0.1)
+	t.Repeat(ctx, first, interval, interval, sleep, func(ctx context.Context) bool {
+		if t.running.CompareAndSwap(false, true) {
+			t.execute(ctx)
 		}
+		return true
 	})
 }
 
@@ -98,7 +106,11 @@ func (t *Task[R]) Trigger() bool {
 	if !t.running.CompareAndSwap(false, true) {
 		return false
 	}
-	t.wg.Go(func() { t.execute(t.base) })
+	ctx := t.base
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	t.wg.Go(func() { t.execute(ctx) })
 	return true
 }
 

@@ -82,12 +82,14 @@ type Hunter struct {
 	logger   *slog.Logger
 	cfg      Config
 	sleep    func(ctx context.Context, d time.Duration) error
+	// startJitter spreads the first scheduled wait; tests replace it.
+	startJitter func(d time.Duration, spread float64) time.Duration
 	// now reads the clock that paces alert messages.
 	now func() time.Time
 	// status holds the settings the status view shows; task holds the
 	// runs.
 	status Status
-	task   *Task[RunResult]
+	task   Task[RunResult]
 
 	mu sync.Mutex
 	// lastSend is when the notifier last returned, kept across runs so
@@ -103,9 +105,9 @@ func NewHunter(store *Store, sources []Source, notifier Notifier, cfg Config, lo
 	}
 	h := &Hunter{
 		store: store, sources: sources, notifier: notifier, logger: logger, cfg: cfg,
-		sleep: sleepCtx, now: time.Now,
+		sleep: sleepCtx, startJitter: jitter, now: time.Now,
 	}
-	h.task = NewTask[RunResult](h.execute)
+	h.task.Init(h.execute)
 	h.status.Scheduled = cfg.Interval > 0
 	h.status.IntervalSeconds = int64(cfg.Interval.Seconds())
 	h.status.Telegram = notifier != nil
@@ -141,7 +143,7 @@ func (h *Hunter) Start(ctx context.Context) {
 	if ok {
 		due, spread = time.Until(last.Add(h.cfg.Interval)), 0.1
 	}
-	h.task.Schedule(ctx, max(jitter(due, spread), firstRunDelay), h.cfg.Interval, h.sleep)
+	h.task.Schedule(ctx, max(h.startJitter(due, spread), firstRunDelay), h.cfg.Interval, h.sleep)
 }
 
 // restore puts the last stored run into the status and returns its start;

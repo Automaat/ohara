@@ -66,6 +66,7 @@ func fillCandidate(dst, src *Candidate) {
 	fillPtr(&dst.Title.PolishTitle, src.Title.PolishTitle)
 	fillPtr(&dst.Title.Year, src.Title.Year)
 	fillPtr(&dst.Title.TMDBID, src.Title.TMDBID)
+	fillPtr(&dst.Title.Season, src.Title.Season)
 	fillSlice(&dst.Title.Authors, src.Title.Authors)
 	fillPtr(&dst.Title.BNID, src.Title.BNID)
 	fillPtr(&dst.Title.OpenLibraryID, src.Title.OpenLibraryID)

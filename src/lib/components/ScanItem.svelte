@@ -14,6 +14,7 @@
 		providerLabel,
 		queuedMessage,
 		reasonLabels,
+		sameSeason,
 		searchHints,
 		type Candidate
 	} from '#lib/scan.js';
@@ -107,7 +108,10 @@
 				tone: candidate ? 'ok' : 'quiet',
 				name: flow.form.name.trim() || undefined,
 				meta: kindLabels[flow.form.kind],
-				cover: { kind: flow.form.kind, url: candidate?.cover_url },
+				cover: {
+					kind: flow.form.kind,
+					url: sameSeason(flow.form, candidate) ? candidate?.cover_url : undefined
+				},
 				discogs: candidate?.edition.discogs_release_id
 			};
 		}
@@ -123,11 +127,13 @@
 			meta: line([
 				kindLabels[flow.form.kind],
 				same?.title.authors?.join(', '),
-				(same?.title.year ?? same?.edition.year)?.toString(),
+				sameSeason(flow.form, same)
+					? (same?.title.year ?? same?.edition.year)?.toString()
+					: undefined,
 				same ? otherTitle(same.title) : undefined
 			]),
 			more: same?.type === 'music' ? line([same.edition.publisher, same.edition.label]) : undefined,
-			cover: { kind: flow.form.kind, url: c?.cover_url },
+			cover: { kind: flow.form.kind, url: sameSeason(flow.form, c) ? c?.cover_url : undefined },
 			discogs: c?.edition.discogs_release_id
 		};
 	}

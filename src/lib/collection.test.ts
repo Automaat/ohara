@@ -16,6 +16,7 @@ import {
 	formatOptions,
 	formatPLN,
 	kindCounts,
+	kindLabels,
 	isoDate,
 	listsOwned,
 	loanPayload,
@@ -27,6 +28,7 @@ import {
 	parsePLN,
 	readCollectionFilter,
 	saleLine,
+	seasonName,
 	shelfLine,
 	shelfSummary,
 	tagHref,
@@ -1199,5 +1201,100 @@ describe('return day', () => {
 		{ lent: '2026-05-11', today: '2026-05-10', want: '2026-05-11' }
 	])('returns a loan from $lent on $today on $want', ({ lent, today, want }) => {
 		expect(returnDay(lent, today)).toBe(want);
+	});
+});
+
+describe('TV seasons', () => {
+	it('labels the kind and offers it the film media', () => {
+		expect(kindLabels.tv).toBe('Serial');
+		expect(options(kindLabels).map((o) => o.label)).toEqual([
+			'Film',
+			'Książka',
+			'Muzyka',
+			'Serial'
+		]);
+		expect(formatOptions('tv')).toEqual([
+			{ value: 'dvd', label: 'DVD' },
+			{ value: 'bluray', label: 'Blu-ray' },
+			{ value: 'uhd', label: '4K UHD' }
+		]);
+		expect(formatFits('tv', 'uhd')).toBe(true);
+		expect(formatFits('tv', 'cd')).toBe(false);
+	});
+
+	it('names a season after its show', () => {
+		expect(
+			displayName({ name: 'Dark', polish_title: 'Dark', original_title: 'Dark', season: 2 })
+		).toBe('Dark · sezon 2');
+		expect(
+			displayName({
+				name: 'Rodzina Soprano',
+				polish_title: null,
+				original_title: 'The Sopranos',
+				season: 0
+			})
+		).toBe('Rodzina Soprano (The Sopranos) · sezon 0');
+		expect(seasonName('Seksmisja', undefined)).toBe('Seksmisja');
+	});
+
+	it('counts TV copies apart', () => {
+		expect(kindCounts([{ kind: 'tv' }, { kind: 'movie' }, { kind: 'tv' }])).toEqual({
+			movie: 1,
+			book: 0,
+			music: 0,
+			tv: 2
+		});
+	});
+
+	it('round-trips a season with the show and the film fields', () => {
+		const form = {
+			...titleToForm(null, 'tv'),
+			name: 'Dark',
+			season: '2',
+			tmdb_id: '70523',
+			authors: 'Ktoś',
+			bn_id: 'b1'
+		};
+		const parsed = titlePayload(form);
+		expect(parsed.ok && parsed.value).toMatchObject({
+			kind: 'tv',
+			season: 2,
+			tmdb_id: 70523,
+			authors: [],
+			bn_id: null
+		});
+		if (parsed.ok) expect(titleToForm(parsed.value).season).toBe('2');
+	});
+
+	it.each([
+		['', 'Podaj numer sezonu.'],
+		['dwa', 'Sezon to liczba, 0 dla odcinków specjalnych.'],
+		['10000', 'Sezon to liczba do 9999.']
+	])('refuses season %j', (season, message) => {
+		const parsed = titlePayload({ ...titleToForm(null, 'tv'), name: 'Dark', season });
+		expect(!parsed.ok && parsed.issue).toEqual({ field: 'season', message });
+	});
+
+	it('takes specials and leaves other kinds without a season', () => {
+		const specials = titlePayload({ ...titleToForm(null, 'tv'), name: 'Dark', season: '0' });
+		expect(specials.ok && specials.value.season).toBe(0);
+		const film = titlePayload({ ...titleToForm(null, 'movie'), name: 'Miś', season: '3' });
+		expect(film.ok && film.value.season).toBeNull();
+	});
+
+	it('keeps the film fields on a TV edition', () => {
+		const parsed = editionPayload(
+			{ ...editionToForm(null), format: 'bluray', pl_subtitles: 'yes', packaging: ['steelbook'] },
+			1,
+			'tv'
+		);
+		expect(parsed.ok && parsed.value).toMatchObject({
+			format: 'bluray',
+			pl_subtitles: 'yes',
+			packaging: ['steelbook'],
+			binding: null
+		});
+		const missing = editionPayload(editionToForm(null), 1, 'tv');
+		expect(!missing.ok && missing.issue.field).toBe('format');
 	});
 });

@@ -7,7 +7,8 @@
 import type { CollectionItem, CollectionView, Kind, Title, Totals } from '#lib/collection.js';
 
 /** The whole collection's counts, whatever the filter. */
-export type Overview = { totals: Totals; kinds: Record<Kind, number> };
+/** The shelf's totals and copies per kind; a kind counted before it existed reads as none. */
+export type Overview = { totals: Totals; kinds: Partial<Record<Kind, number>> };
 
 /**
  * What the collection showed for the filter of `url`: the copies or the titles without copies.
@@ -20,7 +21,7 @@ export type Listing = ({ url: string; view: CollectionView } | { url: string; ti
 /** What the collection shows of a title: enough for its hero before the title loads. */
 export type TitlePreview = Pick<
 	Title,
-	'kind' | 'name' | 'original_title' | 'polish_title' | 'year' | 'authors' | 'cover_url'
+	'kind' | 'name' | 'original_title' | 'polish_title' | 'year' | 'authors' | 'cover_url' | 'season'
 >;
 
 let listing: Listing | null = null;
@@ -53,6 +54,7 @@ function preview(shown: CollectionItem | Title): TitlePreview {
 		original_title: shown.original_title,
 		polish_title: shown.polish_title,
 		year: shown.year,
+		season: shown.season,
 		authors: shown.authors ?? [],
 		cover_url: shown.cover_url
 	};

@@ -60,7 +60,7 @@ func mapErr(err, notFound error, op string) error {
 	switch code, constraint := pgCode(err); {
 	case code == pgUniqueViolation && constraint == "edition_barcode_key":
 		return ErrDuplicateBarcode
-	case code == pgUniqueViolation && constraint == "title_tmdb_id_key":
+	case code == pgUniqueViolation && (constraint == "title_tmdb_id_key" || constraint == "title_tv_season_key"):
 		return ErrDuplicateTMDB
 	case code == pgUniqueViolation && constraint == "discarded_request_key":
 		return ErrRequestDiscarded
@@ -81,7 +81,7 @@ func hasTag(param string) string {
 }
 
 const titleColumns = `t.id, t.kind, t.name, t.original_title, t.polish_title, t.year,
-	t.tmdb_id, t.authors, t.bn_id, t.openlibrary_id, t.notes, t.cover_url, t.rating, ` + titleTags + `, t.finished, t.finished_on,
+	t.tmdb_id, t.season, t.authors, t.bn_id, t.openlibrary_id, t.notes, t.cover_url, t.rating, ` + titleTags + `, t.finished, t.finished_on,
 	t.created_at, t.updated_at,
 	(SELECT count(*) FROM edition e WHERE e.title_id = t.id),
 	(SELECT count(*) FROM copy c JOIN edition e ON e.id = c.edition_id WHERE e.title_id = t.id),
@@ -93,7 +93,7 @@ func scanTitle(row pgx.Row) (Title, error) {
 	var finished bool
 	var finishedOn *time.Time
 	err := row.Scan(&t.ID, &t.Kind, &t.Name, &t.OriginalTitle, &t.PolishTitle, &t.Year,
-		&t.TMDBID, &t.Authors, &t.BNID, &t.OpenLibraryID, &t.Notes, &t.CoverURL, &t.Rating, &t.Tags, &finished, &finishedOn,
+		&t.TMDBID, &t.Season, &t.Authors, &t.BNID, &t.OpenLibraryID, &t.Notes, &t.CoverURL, &t.Rating, &t.Tags, &finished, &finishedOn,
 		&t.CreatedAt, &t.UpdatedAt, &t.EditionCount, &t.CopyCount, &t.InOwnedBoxSet)
 	if t.Tags == nil {
 		t.Tags = []string{}
@@ -113,7 +113,8 @@ const CoverURL = `COALESCE(` + editionCoverOverrideURL + `, e.cover_url, t.cover
 // editionContents selects the titles box set edition e holds, in their
 // order, as a JSON array.
 const editionContents = `COALESCE((SELECT json_agg(json_build_object('id', ct.id, 'kind', ct.kind,
-	'name', ct.name, 'original_title', ct.original_title, 'polish_title', ct.polish_title, 'year', ct.year)
+	'name', ct.name, 'original_title', ct.original_title, 'polish_title', ct.polish_title, 'year', ct.year,
+	'season', ct.season)
 	ORDER BY ec.position) FROM edition_content ec JOIN title ct ON ct.id = ec.title_id
 	WHERE ec.edition_id = e.id), '[]'::json)`
 
@@ -190,7 +191,7 @@ func (s *Store) ListTitles(ctx context.Context, f TitleFilter) ([]Title, error) 
 		       array_to_string(t.authors, ' '))), lower($2)) > 0)
 		  AND ($3 = 0 OR t.tmdb_id = $3)
 		  AND `+hasTag("$4")+`
-		ORDER BY lower(t.name), t.id`, f.Kind, strings.TrimSpace(f.Query), f.TMDBID, foldCase(strings.TrimSpace(f.Tag)))
+		ORDER BY lower(t.name), t.season, t.id`, f.Kind, strings.TrimSpace(f.Query), f.TMDBID, foldCase(strings.TrimSpace(f.Tag)))
 	if err != nil {
 		return nil, fmt.Errorf("list titles: %w", err)
 	}
@@ -227,12 +228,12 @@ func (s *Store) CreateTitle(ctx context.Context, in *TitleInput) (Title, bool, e
 		var id int64
 		err := tx.QueryRow(ctx, `INSERT INTO title
 			(kind, name, original_title, polish_title, year, tmdb_id, authors, bn_id, openlibrary_id, notes,
-			cover_url, request_key, rating, finished, finished_on)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, ''), $12, $13, COALESCE($14, false), $15)
+			cover_url, request_key, rating, finished, finished_on, season)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, ''), $12, $13, COALESCE($14, false), $15, $16)
 			ON CONFLICT (request_key) DO NOTHING RETURNING id`,
 			in.Kind, in.Name, in.OriginalTitle, in.PolishTitle, in.Year, in.TMDBID, in.Authors,
 			in.BNID, in.OpenLibraryID, in.Notes, in.CoverURL, in.RequestKey, in.Rating,
-			in.Finished, timeOf(in.FinishedOn)).Scan(&id)
+			in.Finished, timeOf(in.FinishedOn), in.Season).Scan(&id)
 		if errors.Is(err, pgx.ErrNoRows) && in.RequestKey != nil {
 			created = false
 			err = tx.QueryRow(ctx, `SELECT id FROM title WHERE request_key = $1`, *in.RequestKey).Scan(&id)
@@ -294,9 +295,11 @@ func (s *Store) UpdateTitle(ctx context.Context, id int64, in *TitleInput) (Titl
 			rating = CASE WHEN $13 THEN rating ELSE $14 END,
 			finished = COALESCE($15, finished),
 			finished_on = CASE WHEN $15::boolean IS NULL THEN finished_on ELSE $16::date END,
+			season = $17,
 			updated_at = now(), edited_at = now() WHERE id = $1`,
 			id, in.Kind, in.Name, in.OriginalTitle, in.PolishTitle, in.Year, in.TMDBID, in.Authors,
-			in.BNID, in.OpenLibraryID, in.Notes, in.CoverURL, in.KeepRating, in.Rating, in.Finished, timeOf(in.FinishedOn))
+			in.BNID, in.OpenLibraryID, in.Notes, in.CoverURL, in.KeepRating, in.Rating, in.Finished, timeOf(in.FinishedOn),
+			in.Season)
 		if err != nil {
 			return mapErr(err, ErrTitleNotFound, "update title")
 		}
@@ -1202,23 +1205,25 @@ type Item struct {
 	Condition     *string `json:"condition" ts:"Condition"`
 	// SoldOn and SalePriceCents are a sold copy's sale, ExpectedOn the day an
 	// ordered copy should arrive.
-	SoldOn         *Date    `json:"sold_on,omitempty" ts:",null"`
-	SalePriceCents *int64   `json:"sale_price_cents,omitempty" ts:",null"`
-	ExpectedOn     *Date    `json:"expected_on,omitempty" ts:",null"`
-	Location       *string  `json:"location,omitempty" ts:",null"`
-	EditionID      int64    `json:"edition_id"`
-	Barcode        *string  `json:"barcode"`
-	Label          string   `json:"label"`
-	Format         *string  `json:"format" ts:"Format"`
-	Binding        *string  `json:"binding" ts:"Binding"`
-	TitleID        int64    `json:"title_id"`
-	Kind           string   `json:"kind" ts:"Kind"`
-	Name           string   `json:"name"`
-	OriginalTitle  *string  `json:"original_title"`
-	PolishTitle    *string  `json:"polish_title"`
-	Year           *int     `json:"year"`
-	CoverURL       *string  `json:"cover_url,omitempty"`
-	Authors        []string `json:"authors,omitempty"`
+	SoldOn         *Date   `json:"sold_on,omitempty" ts:",null"`
+	SalePriceCents *int64  `json:"sale_price_cents,omitempty" ts:",null"`
+	ExpectedOn     *Date   `json:"expected_on,omitempty" ts:",null"`
+	Location       *string `json:"location,omitempty" ts:",null"`
+	EditionID      int64   `json:"edition_id"`
+	Barcode        *string `json:"barcode"`
+	Label          string  `json:"label"`
+	Format         *string `json:"format" ts:"Format"`
+	Binding        *string `json:"binding" ts:"Binding"`
+	TitleID        int64   `json:"title_id"`
+	Kind           string  `json:"kind" ts:"Kind"`
+	Name           string  `json:"name"`
+	OriginalTitle  *string `json:"original_title"`
+	PolishTitle    *string `json:"polish_title"`
+	Year           *int    `json:"year"`
+	// Season is a TV title's season, absent for other kinds.
+	Season   *int     `json:"season,omitempty"`
+	CoverURL *string  `json:"cover_url,omitempty"`
+	Authors  []string `json:"authors,omitempty"`
 	// Rating is the title's rating, absent while it has none.
 	Rating *int `json:"rating,omitempty"`
 	// LoanBorrower and LoanDueOn come from the copy's open loan, if any.
@@ -1241,7 +1246,7 @@ func scanItem(row pgx.Row) (Item, error) {
 	var purchased, sold, due, expected, finishedOn *time.Time
 	err := row.Scan(&it.CopyID, &createdAt, &it.Status, &it.PriceCents, &it.MaxPriceCents, &purchased, &it.Shop,
 		&it.AcquiredAs, &it.Condition, &sold, &it.SalePriceCents, &expected, &it.Location, &it.EditionID, &it.Barcode, &it.Label, &it.Format, &it.Binding,
-		&it.TitleID, &it.Kind, &it.Name, &it.OriginalTitle, &it.PolishTitle, &it.Year, &it.CoverURL, &it.Authors,
+		&it.TitleID, &it.Kind, &it.Name, &it.OriginalTitle, &it.PolishTitle, &it.Year, &it.Season, &it.CoverURL, &it.Authors,
 		&it.Rating, &it.LoanBorrower, &due,
 		&it.Tags, &it.Finished, &finishedOn, &it.Contents)
 	it.FinishedOn = dateOf(finishedOn)
@@ -1260,7 +1265,7 @@ func (s *Store) Collection(ctx context.Context, f Filter) ([]Item, error) {
 	rows, err := s.pool.Query(ctx, `SELECT c.id, c.created_at, c.status, c.price_cents, c.max_price_cents,
 			c.purchased_on, c.shop, c.acquired_as, c.condition, c.sold_on, c.sale_price_cents, c.expected_on,
 			c.location, e.id, e.barcode, e.label, e.format, e.binding,
-			t.id, t.kind, t.name, t.original_title, t.polish_title, t.year,
+			t.id, t.kind, t.name, t.original_title, t.polish_title, t.year, t.season,
 			`+CoverURL+`, t.authors, t.rating, l.borrower, l.due_on, `+titleTags+`, t.finished, t.finished_on,
 			`+editionContents+`
 		FROM copy c JOIN edition e ON e.id = c.edition_id JOIN title t ON t.id = e.title_id
@@ -1273,7 +1278,7 @@ func (s *Store) Collection(ctx context.Context, f Filter) ([]Item, error) {
 		  AND (NOT $6 OR l.id IS NOT NULL)
 		  AND `+hasTag("$7")+`
 		  AND (NOT $8 OR (c.status = 'owned' AND NOT t.finished))
-		ORDER BY lower(t.name), t.id, e.id, c.id`,
+		ORDER BY lower(t.name), t.season, t.id, e.id, c.id`,
 		f.Kind, f.Format, f.Status, strings.TrimSpace(f.Query), strings.TrimSpace(f.Typed), f.Loaned,
 		foldCase(strings.TrimSpace(f.Tag)), f.Unfinished)
 	if err != nil {

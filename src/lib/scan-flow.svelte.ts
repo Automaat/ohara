@@ -144,12 +144,13 @@ export type FlowItem = {
 };
 
 /** The title and medium the user fills in, which a picked candidate replaces. */
-type Draft = Pick<QuickForm, 'kind' | 'name' | 'format' | 'binding' | 'packaging'>;
+type Draft = Pick<QuickForm, 'kind' | 'name' | 'season' | 'format' | 'binding' | 'packaging'>;
 
 function draftOf(f: QuickForm): Draft {
 	return {
 		kind: f.kind,
 		name: f.name,
+		season: f.season,
 		format: f.format,
 		binding: f.binding,
 		packaging: [...f.packaging]
@@ -177,8 +178,8 @@ function refused(err: unknown): boolean {
 /** What a save without a barcode cannot change once its key may have written: title and edition. */
 function sentFor(target: SaveTarget, f: QuickForm): string {
 	const candidate = target.kind === 'new' ? target.candidate : null;
-	const { kind, name, format, binding, packaging } = f;
-	return JSON.stringify([candidate, kind, name.trim(), format, binding, packaging]);
+	const { kind, name, season, format, binding, packaging } = f;
+	return JSON.stringify([candidate, kind, name.trim(), season?.trim(), format, binding, packaging]);
 }
 
 /** Why a changed item without a barcode is not saved: the earlier attempt still stands. */

@@ -148,7 +148,7 @@ func (s *Store) RefreshMarkets(ctx context.Context, wants []Want) error {
 }
 
 // Wants returns every wishlist copy with its edition and title, oldest
-// first, and the market price of its title and format when it has a
+// first, but those of TV series, which the hunter does not look for, and the market price of its title and format when it has a
 // market percent.
 func (s *Store) Wants(ctx context.Context) ([]Want, error) {
 	markets, err := s.marketTable(ctx)
@@ -161,7 +161,7 @@ func (s *Store) Wants(ctx context.Context) ([]Want, error) {
 			e.packaging, e.pl_voiceover, e.pl_subtitles, e.binding
 		FROM copy c JOIN edition e ON e.id = c.edition_id JOIN title t ON t.id = e.title_id
 		`+marketJoin("e", 1)+`
-		WHERE c.status = 'wishlist' ORDER BY c.id`, markets.titles, markets.formats, markets.cents)
+		WHERE c.status = 'wishlist' AND t.kind <> 'tv' ORDER BY c.id`, markets.titles, markets.formats, markets.cents)
 	if err != nil {
 		return nil, fmt.Errorf("wants: %w", err)
 	}
@@ -743,7 +743,7 @@ func pendingAlerts(ctx context.Context, q querier, markets marketTable, only *in
 		`+marketJoin("e", 3)+`
 		WHERE a.sent_at IS NULL AND a.attempts < $1 AND a.created_at > now() - `+alertWindow+`
 			AND (o.price_cents <= c.max_price_cents OR o.price_cents * 100 <= m.cents * c.max_market_percent)
-			AND o.dismissed_at IS NULL AND `+wishNamedBy("c")+`
+			AND o.dismissed_at IS NULL AND `+wishNamedBy("c")+` AND `+huntedWish("c")+`
 			AND (a.alerted_price_cents IS NULL OR o.price_cents < a.alerted_price_cents)
 			AND ($2::bigint IS NULL OR a.observation_id = $2)
 		ORDER BY a.created_at, a.observation_id`, MaxAttempts, only, markets.titles, markets.formats, markets.cents)
@@ -854,13 +854,14 @@ var (
 		LEFT JOIN deal_alert a ON a.observation_id = o.id
 		LEFT JOIN copy w ON w.status = 'wishlist' AND w.id = coalesce(o.wishlist_copy_id, a.copy_id)
 			AND (o.wishlist_copy_id IS NOT NULL OR ` + wishOfListingTitle + `) AND ` + wishNamedBy("w") + `
+			AND ` + huntedWish("w") + `
 		WHERE o.dismissed_at IS NULL`
 	wishedListings = `SELECT o.id, o.observed_at, o.price_cents, o.source, a.sent_at, w.id AS wish_id, w.max_price_cents,
 			w.max_market_percent, w.edition_id AS wish_edition_id
 		FROM copy w
 		JOIN price_observation o ON o.wishlist_copy_id = w.id AND o.dismissed_at IS NULL
 		LEFT JOIN deal_alert a ON a.observation_id = o.id
-		WHERE w.status = 'wishlist' AND ` + wishNamedBy("w") + `
+		WHERE w.status = 'wishlist' AND ` + wishNamedBy("w") + ` AND ` + huntedWish("w") + `
 		UNION ALL
 		SELECT o.id, o.observed_at, o.price_cents, o.source, a.sent_at, w.id, w.max_price_cents,
 			w.max_market_percent, w.edition_id
@@ -868,7 +869,7 @@ var (
 		JOIN deal_alert a ON a.copy_id = w.id
 		JOIN price_observation o ON o.id = a.observation_id AND o.wishlist_copy_id IS NULL
 			AND o.dismissed_at IS NULL
-		WHERE w.status = 'wishlist' AND ` + wishOfListingTitle + ` AND ` + wishNamedBy("w")
+		WHERE w.status = 'wishlist' AND ` + wishOfListingTitle + ` AND ` + wishNamedBy("w") + ` AND ` + huntedWish("w")
 )
 
 // Recent returns the newest deal observations that pass f. It picks the page from the listing
@@ -1090,6 +1091,18 @@ func setDismissed(ctx context.Context, q querier, id int64, dismissed bool) erro
 		return ErrNotFound
 	}
 	return nil
+}
+
+// SearchedWishCount returns how many wishlist copies the hunter looks for:
+// every wish but those of TV series, as Wants reads them.
+func (s *Store) SearchedWishCount(ctx context.Context) (int, error) {
+	var n int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM copy c JOIN edition e ON e.id = c.edition_id
+		JOIN title t ON t.id = e.title_id
+		WHERE c.status = 'wishlist' AND t.kind <> 'tv'`).Scan(&n); err != nil {
+		return 0, fmt.Errorf("searched wish count: %w", err)
+	}
+	return n, nil
 }
 
 // WishCount returns how many copies are on the wishlist.

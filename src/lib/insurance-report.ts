@@ -3,7 +3,8 @@ import {
 	conditionLabels,
 	formatLabels,
 	formatPLN,
-	kindLabels
+	kindLabels,
+	seasonName
 } from '#lib/collection.js';
 import type { CopyValue, Estimate } from '#lib/valuation.js';
 
@@ -74,7 +75,7 @@ export function creatorsCell(authors: readonly string[]): { text: string; full: 
 export function reportRows(copies: readonly CopyValue[]): ReportRow[] {
 	return copies.map((copy) => {
 		const creators = creatorsCell(copy.authors);
-		const title = cut(copy.title_name);
+		const title = cut(seasonName(copy.title_name, copy.season));
 		return {
 			copy,
 			title: title.text,

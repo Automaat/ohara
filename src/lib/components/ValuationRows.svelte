@@ -9,6 +9,7 @@
 		wholeZl,
 		type CopyValue
 	} from '#lib/valuation.js';
+	import { seasonName } from '#lib/collection.js';
 	import CollectionCover from './CollectionCover.svelte';
 	import DiscogsCredit from './DiscogsCredit.svelte';
 
@@ -23,7 +24,7 @@
 				<CollectionCover kind={c.kind} url={c.cover_url} />
 				<span class="details">
 					<span class="title">
-						{c.title_name}
+						{seasonName(c.title_name, c.season)}
 						{#if c.low_confidence}
 							<span class="low">mało danych</span>
 						{/if}

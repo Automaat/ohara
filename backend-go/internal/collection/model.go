@@ -21,6 +21,9 @@ const (
 	KindMovie = "movie"
 	KindBook  = "book"
 	KindMusic = "music"
+	// KindTV is one season of a TV series: its tmdb_id names the TMDB show
+	// and Season the season, 0 for specials.
+	KindTV = "tv"
 
 	StatusOwned    = "owned"
 	StatusWishlist = "wishlist"
@@ -48,10 +51,12 @@ const (
 	// Filmweb and lubimyczytac.pl use.
 	MinRating = 1
 	MaxRating = 10
+	// MaxSeason bounds a TV title's season number.
+	MaxSeason = 9999
 )
 
 var (
-	kinds        = []string{KindMovie, KindBook, KindMusic}
+	kinds        = []string{KindMovie, KindBook, KindMusic, KindTV}
 	movieFormats = []string{"dvd", "bluray", "uhd"}
 	musicFormats = []string{"cd", "vinyl", "cassette"}
 	bookFormats  = []string{FormatAudiobook}
@@ -125,16 +130,19 @@ func (d *Date) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// TitleInput is the body of POST and PUT /api/titles. Movie-only fields:
-// tmdb_id. Book-only fields: bn_id, openlibrary_id. Authors are a book's
-// authors or an album's artists; movies have none.
+// TitleInput is the body of POST and PUT /api/titles. Movie and TV fields:
+// tmdb_id, a film's or a show's. TV-only and required there: season.
+// Book-only fields: bn_id, openlibrary_id. Authors are a book's authors or
+// an album's artists; movies and TV series have none.
 type TitleInput struct {
-	Kind          string   `json:"kind" ts:"Kind"`
-	Name          string   `json:"name"`
-	OriginalTitle *string  `json:"original_title"`
-	PolishTitle   *string  `json:"polish_title"`
-	Year          *int     `json:"year"`
-	TMDBID        *int64   `json:"tmdb_id"`
+	Kind          string  `json:"kind" ts:"Kind"`
+	Name          string  `json:"name"`
+	OriginalTitle *string `json:"original_title"`
+	PolishTitle   *string `json:"polish_title"`
+	Year          *int    `json:"year"`
+	TMDBID        *int64  `json:"tmdb_id"`
+	// Season is a TV title's season, 0 for specials; other kinds have none.
+	Season        *int     `json:"season,omitempty" ts:",null"`
 	Authors       []string `json:"authors"`
 	BNID          *string  `json:"bn_id"`
 	OpenLibraryID *string  `json:"openlibrary_id"`
@@ -168,7 +176,7 @@ type RatingInput struct {
 	Rating *int `json:"rating"`
 }
 
-// Title is a work: a film, a book or an album.
+// Title is a work: a film, a book, an album or one season of a TV series.
 type Title struct {
 	ID int64 `json:"id"`
 	TitleInput
@@ -184,11 +192,11 @@ type Title struct {
 	UpdatedAt     time.Time `json:"updated_at"`
 }
 
-// EditionInput is the body of POST and PUT /api/editions. Movie-only fields:
-// pl_subtitles, pl_voiceover, packaging. Book-only: binding. Music-only:
-// discogs_release_id. Format is required for movies (dvd, bluray, uhd) and
-// music (cd, vinyl, cassette); a book's is audiobook or absent for print,
-// and only print takes a binding.
+// EditionInput is the body of POST and PUT /api/editions. Movie and TV
+// fields: pl_subtitles, pl_voiceover, packaging. Book-only: binding.
+// Music-only: discogs_release_id. Format is required for movies and TV
+// series (dvd, bluray, uhd) and music (cd, vinyl, cassette); a book's is
+// audiobook or absent for print, and only print takes a binding.
 type EditionInput struct {
 	TitleID     int64    `json:"title_id"`
 	Barcode     *string  `json:"barcode"`
@@ -222,6 +230,8 @@ type ContentTitle struct {
 	OriginalTitle *string `json:"original_title"`
 	PolishTitle   *string `json:"polish_title"`
 	Year          *int    `json:"year"`
+	// Season is a TV title's season, absent for other kinds.
+	Season *int `json:"season,omitempty"`
 }
 
 // Edition is a concrete release of a title.
@@ -418,6 +428,9 @@ func (in *TitleInput) Normalize() *httpx.FieldError {
 	if in.TMDBID != nil && *in.TMDBID <= 0 {
 		return fieldErr("tmdb_id", "must be positive")
 	}
+	if in.Season != nil && (*in.Season < 0 || *in.Season > MaxSeason) {
+		return fieldErr("season", "must be a whole number from 0 to 9999")
+	}
 	if fe := in.normalizeFinished(); fe != nil {
 		return fe
 	}
@@ -512,16 +525,26 @@ func normalizeTags(raw TagList) (TagList, *httpx.FieldError) {
 
 func (in *TitleInput) checkKindFields() *httpx.FieldError {
 	switch {
-	case in.Kind != KindMovie && in.TMDBID != nil:
-		return fieldErr("tmdb_id", "applies only to movies")
-	case in.Kind == KindMovie && len(in.Authors) > 0:
+	case !screenKind(in.Kind) && in.TMDBID != nil:
+		return fieldErr("tmdb_id", "applies only to movies and TV series")
+	case screenKind(in.Kind) && len(in.Authors) > 0:
 		return fieldErr("authors", "applies only to books and music")
+	case in.Kind == KindTV && in.Season == nil:
+		return fieldErr("season", "is required for TV series")
+	case in.Kind != KindTV && in.Season != nil:
+		return fieldErr("season", "applies only to TV series")
 	case in.Kind != KindBook && in.BNID != nil:
 		return fieldErr("bn_id", "applies only to books")
 	case in.Kind != KindBook && in.OpenLibraryID != nil:
 		return fieldErr("openlibrary_id", "applies only to books")
 	}
 	return nil
+}
+
+// screenKind says whether titles of kind are watched on a disc: films and
+// TV series, whose editions share the movie fields.
+func screenKind(kind string) bool {
+	return kind == KindMovie || kind == KindTV
 }
 
 // Normalize trims the input in place and checks the fields that do not depend
@@ -629,8 +652,8 @@ func (in *EditionInput) CheckKind(kind string) *httpx.FieldError {
 	if kind != KindMusic && in.DiscogsReleaseID != nil {
 		return fieldErr("discogs_release_id", "applies only to music")
 	}
-	if kind == KindMovie {
-		if e := checkFormat(in.Format, movieFormats, "movies"); e != nil {
+	if screenKind(kind) {
+		if e := checkFormat(in.Format, movieFormats, "movies and TV series"); e != nil {
 			return e
 		}
 		if in.Binding != nil {
@@ -650,11 +673,11 @@ func (in *EditionInput) CheckKind(kind string) *httpx.FieldError {
 	}
 	switch {
 	case in.PLSubtitles != "unknown":
-		return fieldErr("pl_subtitles", "applies only to movies")
+		return fieldErr("pl_subtitles", "applies only to movies and TV series")
 	case in.PLVoiceover != "unknown":
-		return fieldErr("pl_voiceover", "applies only to movies")
+		return fieldErr("pl_voiceover", "applies only to movies and TV series")
 	case len(in.Packaging) > 0:
-		return fieldErr("packaging", "applies only to movies")
+		return fieldErr("packaging", "applies only to movies and TV series")
 	}
 	return nil
 }

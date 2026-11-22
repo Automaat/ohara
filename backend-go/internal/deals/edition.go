@@ -117,6 +117,14 @@ func editionNamed(w *Want, details []string) bool {
 	return true
 }
 
+// huntedWish is SQL that holds when wish w is one the hunter looks for:
+// any wish but one of a TV series, whose listings and alerts stay out of the
+// deals view and the alert queue even when recorded while it was a film's.
+func huntedWish(w string) string {
+	return `NOT EXISTS (SELECT FROM edition he JOIN title ht ON ht.id = he.title_id
+		WHERE he.id = ` + w + `.edition_id AND ht.kind = 'tv')`
+}
+
 // wishNamedBy is SQL that holds when listing o names every detail wish
 // w needs, as editionNamed decides from the details stored with the
 // listing (edition_details). A listing stored before those were kept

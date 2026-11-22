@@ -98,13 +98,13 @@ func scanEdition(row pgx.Row) (Edition, error) {
 }
 
 const copyColumns = `c.id, c.edition_id, c.status, c.price_cents, c.purchased_on, c.shop,
-	c.acquired_as, c.condition, c.notes, c.max_price_cents, c.created_at, c.updated_at`
+	c.acquired_as, c.condition, c.notes, c.max_price_cents, c.max_market_percent, c.created_at, c.updated_at`
 
 func scanCopy(row pgx.Row) (Copy, error) {
 	var c Copy
 	var purchased *time.Time
 	err := row.Scan(&c.ID, &c.EditionID, &c.Status, &c.PriceCents, &purchased, &c.Shop,
-		&c.AcquiredAs, &c.Condition, &c.Notes, &c.MaxPriceCents, &c.CreatedAt, &c.UpdatedAt)
+		&c.AcquiredAs, &c.Condition, &c.Notes, &c.MaxPriceCents, &c.MaxMarketPercent, &c.CreatedAt, &c.UpdatedAt)
 	if purchased != nil {
 		c.PurchasedOn = &Date{*purchased}
 	}
@@ -517,11 +517,11 @@ func (s *Store) CreateCopy(ctx context.Context, in *CopyInput) (Copy, bool, erro
 		}
 		var id int64
 		err := tx.QueryRow(ctx, `INSERT INTO copy (edition_id, status, price_cents, purchased_on,
-			shop, acquired_as, condition, notes, max_price_cents, request_key)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			shop, acquired_as, condition, notes, max_price_cents, max_market_percent, request_key)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 			ON CONFLICT (request_key) DO NOTHING RETURNING id`,
 			in.EditionID, in.Status, in.PriceCents, purchasedOn(in), in.Shop, in.AcquiredAs,
-			in.Condition, in.Notes, in.MaxPriceCents, in.RequestKey).Scan(&id)
+			in.Condition, in.Notes, in.MaxPriceCents, in.MaxMarketPercent, in.RequestKey).Scan(&id)
 		switch {
 		case errors.Is(err, pgx.ErrNoRows) && in.RequestKey != nil:
 			created = false
@@ -547,9 +547,9 @@ func (s *Store) CreateCopy(ctx context.Context, in *CopyInput) (Copy, bool, erro
 func (s *Store) UpdateCopy(ctx context.Context, id int64, in *CopyInput) (Copy, error) {
 	tag, err := s.pool.Exec(ctx, `UPDATE copy SET edition_id = $2, status = $3, price_cents = $4,
 		purchased_on = $5, shop = $6, acquired_as = $7, condition = $8, notes = $9,
-		max_price_cents = $10, updated_at = now() WHERE id = $1`,
+		max_price_cents = $10, max_market_percent = $11, updated_at = now() WHERE id = $1`,
 		id, in.EditionID, in.Status, in.PriceCents, purchasedOn(in), in.Shop, in.AcquiredAs,
-		in.Condition, in.Notes, in.MaxPriceCents)
+		in.Condition, in.Notes, in.MaxPriceCents, in.MaxMarketPercent)
 	if err != nil {
 		if isFKViolation(err, "copy_edition_id_fkey") {
 			return Copy{}, ErrEditionNotFound

@@ -186,8 +186,13 @@ export function copyFacts(c: Copy): CopyFact[] {
 			.filter(Boolean)
 			.join(' · ') || '—';
 	if (c.status === 'wishlist') {
+		const percent =
+			c.max_market_percent == null
+				? []
+				: [{ label: 'Procent ceny rynkowej', value: `${c.max_market_percent}%` }];
 		return [
 			{ label: 'Cena maksymalna', value: formatPLN(c.max_price_cents) || '—' },
+			...percent,
 			{ label: 'Gdzie szukać', value: c.shop || '—' },
 			{ label: 'Stan', value: state }
 		];

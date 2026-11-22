@@ -97,6 +97,23 @@ func NewRunner(store *Store, sources []deals.Source, buybacks []BuyBack, pricer 
 // Window is how far back a price still counts.
 func (r *Runner) Window() time.Duration { return r.cfg.Window }
 
+// DealMarkets is the market price a wish's market percent applies to: the
+// used price GET /api/valuation/market gives every wished title and
+// format, kept only where it rests on at least MinObservations prices.
+func (r *Runner) DealMarkets(ctx context.Context) ([]deals.Market, error) {
+	markets, err := r.store.Markets(ctx, r.cfg.Window, 0)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]deals.Market, 0, len(markets))
+	for _, m := range markets {
+		if m.Count >= MinObservations {
+			out = append(out, deals.Market{TitleID: m.TitleID, Format: m.Format, Cents: m.Cents})
+		}
+	}
+	return out, nil
+}
+
 // Pricer prices the owned album releases; nil without one.
 func (r *Runner) Pricer() ReleasePricer { return r.pricer }
 

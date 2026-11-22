@@ -49,7 +49,8 @@
 		'acquired_as',
 		'condition',
 		'notes',
-		'max_price_cents'
+		'max_price_cents',
+		'max_market_percent'
 	];
 	const general = $derived(issue && !fieldKeys.includes(issue.field) ? issue.message : null);
 </script>
@@ -92,6 +93,14 @@
 		{#if marketLine}
 			<p class="market" id="{marketId}-market">{marketLine}</p>
 		{/if}
+		<Field
+			label="Procent ceny rynkowej (%)"
+			hint="Powiadomienie także o ofercie za ten procent ceny rynkowej lub mniej, gdy rynek ma co najmniej 3 oferty."
+			inputmode="numeric"
+			placeholder="70"
+			bind:value={form.market_percent}
+			error={errorFor('max_market_percent')}
+		/>
 	{/if}
 	<Field
 		label={form.status === 'owned' ? 'Sklep lub sprzedawca' : 'Gdzie szukać'}

@@ -353,10 +353,13 @@ func (h *Handler) createTitle(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if h.covers != nil && emptyCover(in.CoverURL) {
+	// A film looked up by its TMDB ID takes its cover from that lookup, so
+	// the title search would only add a third TMDB request.
+	looked := h.wantsFilmSeries(in)
+	filled := looked && h.fillFilm(r.Context(), in)
+	if h.covers != nil && !looked && emptyCover(in.CoverURL) {
 		in.CoverURL = h.titleCover(r.Context(), in)
 	}
-	filled := h.wantsFilmSeries(in) && h.fillFilmSeries(r.Context(), in)
 	t, created, err := h.store.CreateTitle(r.Context(), in)
 	if filled && in.SeriesNumber != nil && errors.Is(err, ErrDuplicateSeriesNumber) {
 		// Another title of the series has the number the catalog gave:

@@ -20,49 +20,53 @@ type tmdbCollectionPart struct {
 	ReleaseDate string `json:"release_date"`
 }
 
-// FilmSeries finds the TMDB collection of film tmdbID, in Polish, with two
-// requests: /3/movie/{id} names the collection and /3/collection/{id} lists
-// its films. A film in no collection, or in one without a name, is not ok
-// after the first request. Only films released by today count: one with no
-// release date or a later one is neither numbered nor counted.
-func (t TMDB) FilmSeries(ctx context.Context, tmdbID int64) (lookup.FilmSeries, bool, error) {
+// Film reads film tmdbID from TMDB in Polish with at most two requests:
+// /3/movie/{id} gives the poster and names the collection, and
+// /3/collection/{id} lists its films. A film in no collection, or in one
+// without a name, is not InSeries after the first request. Only films
+// released by today count: one with no release date or a later one is
+// neither numbered nor counted.
+func (t TMDB) Film(ctx context.Context, tmdbID int64) (lookup.Film, error) {
 	var film struct {
+		PosterPath string `json:"poster_path"`
 		Collection *struct {
 			ID int64 `json:"id"`
 		} `json:"belongs_to_collection"`
 	}
 	if err := t.getJSON(ctx, "/3/movie/"+strconv.FormatInt(tmdbID, 10), &film); err != nil {
-		return lookup.FilmSeries{}, false, err
+		return lookup.Film{}, err
 	}
 	succeeded("tmdb")
+	out := lookup.Film{CoverURL: TMDBMovie{PosterPath: film.PosterPath}.Poster()}
 	if film.Collection == nil || film.Collection.ID <= 0 {
-		return lookup.FilmSeries{}, false, nil
+		return out, nil
 	}
 	var coll struct {
 		Name  string                `json:"name"`
 		Parts *[]tmdbCollectionPart `json:"parts"`
 	}
 	if err := t.getJSON(ctx, "/3/collection/"+strconv.FormatInt(film.Collection.ID, 10), &coll); err != nil {
-		return lookup.FilmSeries{}, false, err
+		return out, err
 	}
 	if coll.Parts == nil {
-		return lookup.FilmSeries{}, false, parseFailed("tmdb", fmt.Errorf("collection without parts"))
+		return out, parseFailed("tmdb", fmt.Errorf("collection without parts"))
 	}
 	succeeded("tmdb")
 	name := seriesName(coll.Name)
 	if name == "" {
-		return lookup.FilmSeries{}, false, nil
+		return out, nil
 	}
 	released := releasedParts(*coll.Parts, time.Now().UTC().Format(time.DateOnly))
-	series := lookup.FilmSeries{Name: name, Total: len(released)}
+	out.Series = lookup.FilmSeries{Name: name, Total: len(released)}
+	out.InSeries = true
 	for i, p := range released {
 		if p.ID == tmdbID {
 			n := i + 1
-			series.Number = &n
+			out.Series.Number = &n
 			break
 		}
 	}
-	return series, true, nil
+	return out, nil
 }
 
 // getJSON reads one TMDB answer for path, in Polish, into v.

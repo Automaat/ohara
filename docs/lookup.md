@@ -109,9 +109,9 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   user types (TMDB films, Google Books or, without a key, Open Library
   books, Discogs albums), answered as candidates for the barcode being
   added; a kind without its key answers 503.
-- A film's series comes from its TMDB collection (`lookup.SeriesFinder`,
-  `movie.TMDB.FilmSeries`, enabled by `OHARA_TMDB_API_KEY`): two requests
-  in Polish, `/3/movie/{id}` for `belongs_to_collection` and
+- A film's series comes from its TMDB collection (`lookup.FilmFinder`,
+  `movie.TMDB.Film`, enabled by `OHARA_TMDB_API_KEY`): two requests in
+  Polish, `/3/movie/{id}` for the poster and `belongs_to_collection` and
   `/3/collection/{id}` for its name and parts, only for a title being
   created, never per search result, and not cached. A film in no
   collection costs the first request only. The name drops a trailing

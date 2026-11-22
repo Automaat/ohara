@@ -7,18 +7,19 @@ import (
 	"github.com/Automaat/ohara/backend-go/internal/lookup"
 )
 
-// filmSeriesTimeout bounds the series lookup of a film being saved, as
-// coverLookupTimeout bounds its cover.
+// filmSeriesTimeout bounds the film lookup of a title being saved, as
+// coverLookupTimeout bounds its cover search.
 const filmSeriesTimeout = 3 * time.Second
 
 type filmSeries struct {
-	finder  lookup.SeriesFinder
+	finder  lookup.FilmFinder
 	timeout time.Duration
 }
 
 // WithFilmSeries makes a film created with a TMDB ID and without series
-// fields join the series finder names for it.
-func (h *Handler) WithFilmSeries(finder lookup.SeriesFinder) *Handler {
+// fields join the series finder names for it, taking its cover from the
+// same lookup instead of a title search.
+func (h *Handler) WithFilmSeries(finder lookup.FilmFinder) *Handler {
 	h.filmSeries = &filmSeries{finder: finder, timeout: filmSeriesTimeout}
 	return h
 }
@@ -29,23 +30,29 @@ func (h *Handler) wantsFilmSeries(title *TitleInput) bool {
 	return h.filmSeries != nil && title.Kind == KindMovie && title.TMDBID != nil && title.KeepSeries
 }
 
-// fillFilmSeries puts title in its film series, numbered and with the
-// series' total, and reports whether it did. A failed or slow lookup, or a
-// name the API would refuse, leaves the title without a series.
-func (h *Handler) fillFilmSeries(ctx context.Context, title *TitleInput) bool {
+// fillFilm looks the film up once: a title without a cover takes the
+// film's poster, and the title joins its series, numbered and with the
+// series' total. It reports whether the series was filled. A failed or
+// slow lookup, or a name the API would refuse, leaves the title without a
+// series, keeping a poster read before the failure.
+func (h *Handler) fillFilm(ctx context.Context, title *TitleInput) bool {
 	if title.TMDBID == nil {
 		return false
 	}
 	lookupCtx, cancel := context.WithTimeout(ctx, h.filmSeries.timeout)
 	defer cancel()
-	series, ok, err := h.filmSeries.finder.FilmSeries(lookupCtx, *title.TMDBID)
+	film, err := h.filmSeries.finder.Film(lookupCtx, *title.TMDBID)
+	if cover := film.CoverURL; emptyCover(title.CoverURL) && cover != "" && normalizeCoverURL(&cover) == nil {
+		title.CoverURL = &cover
+	}
 	if err != nil {
 		h.logger.WarnContext(ctx, "film series lookup failed", "tmdb_id", *title.TMDBID, "err", err)
 		return false
 	}
-	if !ok {
+	if !film.InSeries {
 		return false
 	}
+	series := film.Series
 	name := series.Name
 	filled := *title
 	filled.SeriesName = &name

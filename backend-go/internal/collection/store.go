@@ -272,7 +272,7 @@ func (s *Store) CreateTitle(ctx context.Context, in *TitleInput) (Title, bool, e
 			return mapErr(err, ErrTitleNotFound, "create title")
 		} else if err := setTags(ctx, tx, id, in.Tags); err != nil {
 			return err
-		} else if err := raiseSeriesTotal(ctx, tx, seriesID, in.SeriesTotal); err != nil {
+		} else if err := setCatalogTotal(ctx, tx, seriesID, in.SeriesTotal); err != nil {
 			return err
 		}
 		t, err = getTitle(ctx, tx, id)
@@ -284,16 +284,16 @@ func (s *Store) CreateTitle(ctx context.Context, in *TitleInput) (Title, bool, e
 	return t, created, nil
 }
 
-// raiseSeriesTotal sets series' total of volumes to total when it is
-// unknown or smaller. Either nil changes nothing.
-func raiseSeriesTotal(ctx context.Context, tx pgx.Tx, series *int64, total *int) error {
+// setCatalogTotal sets series' total of volumes to total, the count a
+// catalog gives. Either nil changes nothing.
+func setCatalogTotal(ctx context.Context, tx pgx.Tx, series *int64, total *int) error {
 	if series == nil || total == nil {
 		return nil
 	}
 	_, err := tx.Exec(ctx, `UPDATE series SET total_volumes = $2, updated_at = now()
-		WHERE id = $1 AND (total_volumes IS NULL OR total_volumes < $2)`, *series, *total)
+		WHERE id = $1 AND total_volumes IS DISTINCT FROM $2`, *series, *total)
 	if err != nil {
-		return fmt.Errorf("raise series total: %w", err)
+		return fmt.Errorf("set series total: %w", err)
 	}
 	return nil
 }

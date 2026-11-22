@@ -11,8 +11,16 @@ type FilmSeries struct {
 	Total  int
 }
 
-// SeriesFinder finds the series of the film a catalog ID names. ok is
-// false, with a nil error, for a film in no series.
-type SeriesFinder interface {
-	FilmSeries(ctx context.Context, tmdbID int64) (series FilmSeries, ok bool, err error)
+// Film is what a catalog knows of one film for a title being saved: its
+// cover, empty when it has none, and its series when InSeries.
+type Film struct {
+	CoverURL string
+	Series   FilmSeries
+	InSeries bool
+}
+
+// FilmFinder reads the film a catalog ID names. On an error the Film still
+// carries what was read before it, such as the cover.
+type FilmFinder interface {
+	Film(ctx context.Context, tmdbID int64) (Film, error)
 }

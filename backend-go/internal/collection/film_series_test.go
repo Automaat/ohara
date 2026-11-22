@@ -15,6 +15,7 @@ import (
 
 	"github.com/Automaat/ohara/backend-go/internal/collection"
 	"github.com/Automaat/ohara/backend-go/internal/dbtest"
+	"github.com/Automaat/ohara/backend-go/internal/lookup"
 	"github.com/Automaat/ohara/backend-go/internal/lookup/movie"
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
 	"github.com/Automaat/ohara/backend-go/internal/server"
@@ -43,6 +44,7 @@ type tmdbDouble struct {
 	mu          sync.Mutex
 	movies      int
 	collections int
+	searches    int
 }
 
 func (d *tmdbDouble) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -55,6 +57,8 @@ func (d *tmdbDouble) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		d.movies++
 	case strings.HasPrefix(r.URL.Path, "/3/collection/"):
 		d.collections++
+	case r.URL.Path == "/3/search/movie":
+		d.searches++
 	}
 	d.mu.Unlock()
 	if d.delay > 0 {
@@ -70,6 +74,8 @@ func (d *tmdbDouble) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	switch r.URL.Path {
+	case "/3/search/movie":
+		fmt.Fprintf(w, `{"results":[{"id":%d,"title":"Samotnik","poster_path":"/search.jpg"}]}`, filmLoner)
 	case "/3/collection/" + strconv.Itoa(collectionID):
 		fmt.Fprintf(w, `{"id":%d,"name":"Harry Potter - kolekcja","parts":[
 			{"id":%d,"release_date":"2004-05-31"},
@@ -79,10 +85,11 @@ func (d *tmdbDouble) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			{"id":%d,"release_date":"2002-11-13"}]}`,
 			collectionID, filmThird, filmUndated, filmFirst, filmUnreleased, filmSecond)
 	case "/3/movie/" + strconv.Itoa(filmLoner):
-		fmt.Fprintf(w, `{"id":%d,"title":"Samotnik","belongs_to_collection":null}`, filmLoner)
+		fmt.Fprintf(w, `{"id":%d,"title":"Samotnik","poster_path":"/loner.jpg","belongs_to_collection":null}`, filmLoner)
 	default:
 		id := strings.TrimPrefix(r.URL.Path, "/3/movie/")
-		fmt.Fprintf(w, `{"id":%s,"belongs_to_collection":{"id":%d,"name":"Harry Potter - kolekcja"}}`, id, collectionID)
+		fmt.Fprintf(w, `{"id":%s,"poster_path":"/hp.jpg","belongs_to_collection":{"id":%d,"name":"Harry Potter - kolekcja"}}`,
+			id, collectionID)
 	}
 }
 
@@ -90,6 +97,12 @@ func (d *tmdbDouble) requests() (int, int) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.movies, d.collections
+}
+
+func (d *tmdbDouble) total() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.movies + d.collections + d.searches
 }
 
 func newFilmSeriesAPI(t *testing.T, double *tmdbDouble) *api {
@@ -100,8 +113,10 @@ func newFilmSeriesAPI(t *testing.T, double *tmdbDouble) *api {
 	pool := dbtest.Migrated(t)
 	logger := slog.New(slog.DiscardHandler)
 	finder := movie.TMDB{Client: tmdb.Client(), BaseURL: tmdb.URL, Key: "test-key"}
-	h := collection.NewHandler(collection.NewStore(pool), logger).WithFilmSeries(finder).
-		WithFilmSeriesTimeout(200 * time.Millisecond)
+	searchers := map[string]lookup.TextSearcher{collection.KindMovie: movie.TextSearch{TMDB: finder}}
+	service := lookup.NewService(&lookup.Registry{}, lookup.NewPGCache(pool), logger)
+	h := collection.NewHandler(collection.NewStore(pool), logger).WithCatalogCovers(searchers, service).
+		WithFilmSeries(finder).WithFilmSeriesTimeout(200 * time.Millisecond)
 	srv := httptest.NewServer(server.New(server.Config{}, logger, server.Deps{DB: pool, API: []server.Mounter{h}}))
 	t.Cleanup(srv.Close)
 	return &api{t: t, url: srv.URL}
@@ -150,8 +165,12 @@ func TestCreateFilmJoinsItsTMDBCollection(t *testing.T) {
 			if total := seriesTotal(a, created.SeriesID); total == nil || *total != 3 {
 				t.Errorf("series total = %v, want 3", intOrNil(total))
 			}
-			if movies, collections := double.requests(); movies != 1 || collections != 1 {
-				t.Errorf("TMDB requests: %d movie, %d collection; want 1 and 1", movies, collections)
+			if movies, collections := double.requests(); movies != 1 || collections != 1 || double.total() != 2 {
+				t.Errorf("TMDB requests: %d movie, %d collection, %d in all; want 1, 1 and 2",
+					movies, collections, double.total())
+			}
+			if created.CoverURL == nil || *created.CoverURL != "https://image.tmdb.org/t/p/w342/hp.jpg" {
+				t.Errorf("cover = %v, want the film's TMDB poster", created.CoverURL)
 			}
 		})
 	}
@@ -202,6 +221,38 @@ func TestCreateFilmWithoutCollectionGetsNoSeries(t *testing.T) {
 				t.Errorf("TMDB requests: %d movie, %d collection; want %d and %d",
 					movies, collections, tt.wantMovies, tt.wantCollections)
 			}
+			if n := double.total(); n > 2 {
+				t.Errorf("TMDB requests in all = %d, want at most 2", n)
+			}
+		})
+	}
+}
+
+func TestCreateFilmTakesItsCoverFromTheFilmLookup(t *testing.T) {
+	own := film("Moja okładka", filmLoner)
+	own["cover_url"] = "https://example.org/mine.jpg"
+	tests := []struct {
+		name string
+		body map[string]any
+		want string
+	}{
+		{name: "film in no collection", body: film("Samotnik", filmLoner), want: "https://image.tmdb.org/t/p/w342/loner.jpg"},
+		{name: "own cover kept", body: own, want: "https://example.org/mine.jpg"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			double := &tmdbDouble{}
+			a := newFilmSeriesAPI(t, double)
+
+			var created collection.Title
+			a.mustDo(http.MethodPost, "/api/titles", tt.body, &created, http.StatusCreated)
+
+			if created.CoverURL == nil || *created.CoverURL != tt.want {
+				t.Errorf("cover = %v, want %s", created.CoverURL, tt.want)
+			}
+			if n := double.total(); n != 1 {
+				t.Errorf("TMDB requests = %d, want the movie request alone", n)
+			}
 		})
 	}
 }
@@ -237,14 +288,12 @@ func TestCreateFilmSavesWithoutSeriesWhenTMDBFails(t *testing.T) {
 	}
 }
 
-func TestCreateFilmSeriesKeepsTakenNumberAndLargerTotal(t *testing.T) {
+func TestCreateFilmSeriesDropsATakenNumber(t *testing.T) {
 	a := newFilmSeriesAPI(t, &tmdbDouble{})
 	mine := film("Komnata tajemnic", filmThird)
 	mine["series_name"], mine["series_number"] = "harry potter", 2
 	var first collection.Title
 	a.mustDo(http.MethodPost, "/api/titles", mine, &first, http.StatusCreated)
-	a.mustDo(http.MethodPut, fmt.Sprintf("/api/series/%d", deref64(first.SeriesID)),
-		map[string]any{"total_volumes": 8}, nil, http.StatusOK)
 
 	var created collection.Title
 	a.mustDo(http.MethodPost, "/api/titles", film("Harry Potter", filmSecond), &created, http.StatusCreated)
@@ -255,27 +304,28 @@ func TestCreateFilmSeriesKeepsTakenNumberAndLargerTotal(t *testing.T) {
 	if created.SeriesNumber != nil {
 		t.Errorf("number = %d, want none: the user's film holds 2", *created.SeriesNumber)
 	}
-	if total := seriesTotal(a, created.SeriesID); total == nil || *total != 8 {
-		t.Errorf("series total = %v, want the user's 8", intOrNil(total))
-	}
 }
 
-func TestCreateFilmSeriesRaisesSmallerTotal(t *testing.T) {
-	a := newFilmSeriesAPI(t, &tmdbDouble{})
-	mine := map[string]any{"kind": collection.KindMovie, "name": "Kamień filozoficzny", "series_name": "Harry Potter"}
-	var first collection.Title
-	a.mustDo(http.MethodPost, "/api/titles", mine, &first, http.StatusCreated)
-	a.mustDo(http.MethodPut, fmt.Sprintf("/api/series/%d", deref64(first.SeriesID)),
-		map[string]any{"total_volumes": 2}, nil, http.StatusOK)
+func TestCreateFilmSeriesSetsTheReleasedCount(t *testing.T) {
+	for _, stored := range []int{2, 8} {
+		t.Run(fmt.Sprintf("stored total %d", stored), func(t *testing.T) {
+			a := newFilmSeriesAPI(t, &tmdbDouble{})
+			mine := map[string]any{"kind": collection.KindMovie, "name": "Kamień filozoficzny", "series_name": "Harry Potter"}
+			var first collection.Title
+			a.mustDo(http.MethodPost, "/api/titles", mine, &first, http.StatusCreated)
+			a.mustDo(http.MethodPut, fmt.Sprintf("/api/series/%d", deref64(first.SeriesID)),
+				map[string]any{"total_volumes": stored}, nil, http.StatusOK)
 
-	var created collection.Title
-	a.mustDo(http.MethodPost, "/api/titles", film("Więzień Azkabanu", filmThird), &created, http.StatusCreated)
+			var created collection.Title
+			a.mustDo(http.MethodPost, "/api/titles", film("Więzień Azkabanu", filmThird), &created, http.StatusCreated)
 
-	if created.SeriesNumber == nil || *created.SeriesNumber != 3 {
-		t.Errorf("number = %v, want 3", intOrNil(created.SeriesNumber))
-	}
-	if total := seriesTotal(a, created.SeriesID); total == nil || *total != 3 {
-		t.Errorf("series total = %v, want 3", intOrNil(total))
+			if created.SeriesNumber == nil || *created.SeriesNumber != 3 {
+				t.Errorf("number = %v, want 3", intOrNil(created.SeriesNumber))
+			}
+			if total := seriesTotal(a, created.SeriesID); total == nil || *total != 3 {
+				t.Errorf("series total = %v, want the 3 released films", intOrNil(total))
+			}
+		})
 	}
 }
 

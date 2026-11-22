@@ -279,7 +279,10 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   quote, so movie discs have no floor. A title page reads
   `GET /api/valuation/copies?title_id=`: that title's owned copies valued
   as `GET /api/valuation` values them, from that title's prices only,
-  with no summary or history.
+  with no summary or history. The summary's `gain` sums the used value
+  and the price paid over the copies that have both; the Wartość hero's
+  difference reads only that, and names its coverage when it counts
+  fewer copies than the collection. History keeps no gain.
 - A barcode no provider resolves goes to `scan_queue`; a trigger on `edition`
   removes it once an edition carries that barcode. `ohara_scan_queue_size`
   counts it on each scrape. The trigger keeps the entry it removes in

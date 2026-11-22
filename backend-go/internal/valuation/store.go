@@ -203,7 +203,7 @@ func (s *Store) valued(ctx context.Context, window time.Duration, titleID int64)
 type HistoryPoint struct {
 	Day        string    `json:"day"`
 	ComputedAt time.Time `json:"computed_at"`
-	Summary
+	Totals
 }
 
 const historyColumns = `to_char(day, 'YYYY-MM-DD'), computed_at, copies, spent_cents,

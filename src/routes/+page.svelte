@@ -435,8 +435,16 @@
 	});
 	const titleRows = $derived(sortTitles(uncopiedTitles(uncopied ?? [], filter), sort));
 	const listed = $derived(listsTitles ? uncopied : collection);
+	/**
+	 * An empty collection greets the reader whatever the filter, except "Bez ceny", which keeps
+	 * "Nic nie pasuje" and its "Wyczyść filtry" like any filter that lists nothing.
+	 */
 	const emptyShelf = $derived(
-		!failure && !listsTitles && overview?.totals.copies === 0 && rows.length === 0
+		!failure &&
+			!listsTitles &&
+			filter.status !== 'unpriced' &&
+			overview?.totals.copies === 0 &&
+			rows.length === 0
 	);
 	const activeFilters = $derived(
 		(

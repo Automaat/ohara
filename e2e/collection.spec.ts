@@ -476,6 +476,20 @@ for (const viewport of viewports) {
 			await expect(page.getByRole('button', { name: /bez ceny$/ })).toHaveCount(0);
 		});
 
+		test('Bez ceny on an empty collection offers to clear the filters', async ({ page }) => {
+			const empty = {
+				items: [],
+				totals: { copies: 0, owned: 0, wishlist: 0, priced: 0, spent_cents: 0 }
+			};
+			await page.route('**/api/collection', (route) => route.fulfill({ json: empty }));
+			await page.route('**/api/titles', (route) => route.fulfill({ json: [] }));
+			await page.goto('/?status=unpriced');
+			await expect(page.getByText('Nic nie pasuje', { exact: true })).toBeVisible();
+			await press(page.getByRole('button', { name: 'Wyczyść filtry' }));
+			await expect(page).toHaveURL(/\/$/);
+			await expect(page.getByText('Kolekcja jest pusta', { exact: true })).toBeVisible();
+		});
+
 		test('empty and failed loads keep their states', async ({ page }) => {
 			const empty = {
 				items: [],

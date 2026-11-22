@@ -321,6 +321,58 @@ for (const viewport of viewports) {
 			expect(sent.length, 'one refresh of the collection').toBeLessThanOrEqual(1);
 		});
 
+		test('Back to a tile drawn in a later part restores the scroll and the cover', async ({
+			page,
+			request
+		}) => {
+			const t = tag();
+			const total = 100;
+			const seeded = await Promise.all(
+				Array.from({ length: total }, (_, i) =>
+					seed(request, { kind: 'book', name: `Tom ${String(i).padStart(3, '0')} ${t}` })
+				)
+			);
+			const address = `/?q=${t}`;
+			await page.goto(address);
+			const tiles = shelf(page).getByRole('listitem');
+			await expect(tiles).toHaveCount(total);
+			await expect(tiles.first()).toHaveAttribute('aria-setsize', String(total));
+			await expect(tiles.last()).toHaveAttribute('aria-posinset', String(total));
+
+			const far = 95;
+			const opened = tile(page, `Tom 0${far} ${t}`);
+			await opened.scrollIntoViewIfNeeded();
+			await page.evaluate(() => window.scrollBy(0, 40));
+			const scrolled = await page.evaluate(() => window.scrollY);
+
+			await press(opened.getByRole('link'));
+			await expect(page).toHaveURL(new RegExp(`/titles/${seeded[far].titleID}$`));
+			await expect(page.getByRole('heading', { name: `Tom 0${far} ${t}` })).toBeVisible();
+
+			await watchLanding(page);
+			await page.goBack();
+
+			await expect(page).toHaveURL(address);
+			await expect.poll(() => landedKeys(page)).toContain(String(seeded[far].copyID));
+			expect(Math.abs((await page.evaluate(() => window.scrollY)) - scrolled)).toBeLessThan(2);
+			await expect(tiles).toHaveCount(total);
+		});
+
+		test('the table layout mounts only what the screen shows', async ({ page, request }) => {
+			const t = tag();
+			const name = `Tabela ${t}`;
+			await seed(request, { kind: 'book', name });
+			await page.addInitScript(() => localStorage.setItem('ohara.collection.layout', 'table'));
+			await page.goto(`/?q=${t}`);
+			if (viewport.touch) {
+				await expect(tile(page, name)).toBeVisible();
+				await expect(page.locator('table')).toHaveCount(0);
+			} else {
+				await expect(page.getByRole('table').getByRole('link', { name })).toBeVisible();
+				await expect(page.locator('ul[aria-label="Egzemplarze w kolekcji"]')).toHaveCount(0);
+			}
+		});
+
 		test('a refresh outlives a switch to Bez egzemplarzy and back', async ({ page, request }) => {
 			const t = tag();
 			const first = `Pierwszy ${t}`;
@@ -375,3 +427,94 @@ for (const viewport of viewports) {
 		});
 	});
 }
+
+/**
+ * Answers `GET /api/collection` with `total` copies made from one seeded through the API, so a
+ * test meets a collection of thousands without adding them. Titles past the first 360 run to
+ * two lines, so the tiles drawn first are shorter than the rest.
+ */
+async function routeCollection(page: Page, request: APIRequestContext, total: number) {
+	const long = ' wydanie specjalne z długim podtytułem';
+	const t = tag();
+	await seed(request, { kind: 'book', name: `Wzór ${t}` });
+	const res = await request.get(`/api/collection?q=${t}`);
+	const [item] = ((await res.json()) as { items: Record<string, unknown>[] }).items;
+	const items = Array.from({ length: total }, (_, i) => ({
+		...item,
+		copy_id: 1_000_000 + i,
+		edition_id: 1_000_000 + i,
+		title_id: 1_000_000 + i,
+		name: `Tom ${String(i).padStart(4, '0')} ${t}${i < 360 ? '' : long}`,
+		cover_url: null
+	}));
+	const totals = { copies: total, owned: total, wishlist: 0, priced: 0, spent_cents: 0 };
+	await page.route('**/api/collection', (route) => route.fulfill({ json: { items, totals } }));
+}
+
+test('the end of a shelf still being drawn is the end of the collection', async ({
+	page,
+	request
+}) => {
+	await routeCollection(page, request, 2000);
+	const cdp = await page.context().newCDPSession(page);
+	await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 });
+	await page.goto('/');
+	const tiles = shelf(page).getByRole('listitem');
+	await expect(tiles.first()).toBeVisible();
+	expect(await tiles.count(), 'tiles drawn when the reader pressed End').toBeLessThan(2000);
+	await page.keyboard.press('End');
+	await expect(tiles).toHaveCount(2000, { timeout: 15_000 });
+	await expect(tiles.last()).toBeInViewport();
+	await expect
+		.poll(() =>
+			page.evaluate(
+				() => document.documentElement.scrollHeight - window.scrollY - window.innerHeight
+			)
+		)
+		.toBeLessThan(2);
+});
+
+test('dragging the scroll bar to the end of a shelf still being drawn reaches the last copy', async ({
+	page,
+	request
+}) => {
+	await routeCollection(page, request, 2000);
+	const cdp = await page.context().newCDPSession(page);
+	await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 });
+	await page.goto('/');
+	const tiles = shelf(page).getByRole('listitem');
+	await expect(tiles.first()).toBeVisible();
+	const drawnAtEnd = await page.evaluate(() => {
+		window.scrollTo(0, document.documentElement.scrollHeight);
+		return document.querySelectorAll('ul[aria-label="Egzemplarze w kolekcji"] > li').length;
+	});
+	expect(drawnAtEnd, 'tiles drawn when the reader went to the end').toBeLessThan(2000);
+	await expect(tiles).toHaveCount(2000, { timeout: 15_000 });
+	await expect(tiles.last()).toBeInViewport();
+});
+
+test('turning a phone sideways and back keeps the place on the shelf', async ({
+	page,
+	request
+}) => {
+	await routeCollection(page, request, 2000);
+	await page.addInitScript(() => localStorage.setItem('ohara.collection.layout', 'table'));
+	await page.goto('/');
+	const tiles = shelf(page).getByRole('listitem');
+	await expect(tiles).toHaveCount(2000);
+	const opened = tiles.nth(1500);
+	await opened.evaluate((el) => el.scrollIntoView({ block: 'start' }));
+	await page.evaluate(() => window.scrollBy(0, 110));
+	const before = await opened.evaluate((el) => el.getBoundingClientRect().top);
+	expect(before).toBeLessThan(0);
+
+	await page.setViewportSize({ width: 844, height: 390 });
+	await expect(page.getByRole('table')).toBeVisible();
+	await expect(shelf(page)).toHaveCount(0);
+	await page.setViewportSize({ width: 390, height: 844 });
+
+	await expect(shelf(page)).toBeVisible();
+	await expect
+		.poll(() => tiles.nth(1500).evaluate((el) => el.getBoundingClientRect().top))
+		.toBeCloseTo(before, 0);
+});

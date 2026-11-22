@@ -49,6 +49,7 @@ function title(over: Partial<Title> = {}): Title {
 		bn_id: null,
 		openlibrary_id: null,
 		notes: '',
+		tags: [],
 		edition_count: 0,
 		copy_count: 0,
 		created_at: '2026-11-22T08:00:00Z',

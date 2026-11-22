@@ -68,16 +68,32 @@ func mapErr(err, notFound error, op string) error {
 	return fmt.Errorf("%s: %w", op, err)
 }
 
+// titleTags selects title t's tags, in the order they were saved in.
+const titleTags = `ARRAY(SELECT g.name FROM title_tag tt JOIN tag g ON g.id = tt.tag_id
+	WHERE tt.title_id = t.id ORDER BY tt.position)`
+
+// hasTag matches title t when it carries the tag whose key (foldCase of the
+// trimmed tag) is the parameter placeholder; an empty key matches every
+// title.
+func hasTag(param string) string {
+	return `(` + param + ` = '' OR EXISTS (SELECT 1 FROM title_tag tt JOIN tag g ON g.id = tt.tag_id
+		WHERE tt.title_id = t.id AND g.key = ` + param + `))`
+}
+
 const titleColumns = `t.id, t.kind, t.name, t.original_title, t.polish_title, t.year,
-	t.tmdb_id, t.authors, t.bn_id, t.openlibrary_id, t.notes, t.cover_url, t.rating, t.created_at, t.updated_at,
+	t.tmdb_id, t.authors, t.bn_id, t.openlibrary_id, t.notes, t.cover_url, t.rating, ` + titleTags + `,
+	t.created_at, t.updated_at,
 	(SELECT count(*) FROM edition e WHERE e.title_id = t.id),
 	(SELECT count(*) FROM copy c JOIN edition e ON e.id = c.edition_id WHERE e.title_id = t.id)`
 
 func scanTitle(row pgx.Row) (Title, error) {
 	var t Title
 	err := row.Scan(&t.ID, &t.Kind, &t.Name, &t.OriginalTitle, &t.PolishTitle, &t.Year,
-		&t.TMDBID, &t.Authors, &t.BNID, &t.OpenLibraryID, &t.Notes, &t.CoverURL, &t.Rating, &t.CreatedAt, &t.UpdatedAt,
-		&t.EditionCount, &t.CopyCount)
+		&t.TMDBID, &t.Authors, &t.BNID, &t.OpenLibraryID, &t.Notes, &t.CoverURL, &t.Rating, &t.Tags,
+		&t.CreatedAt, &t.UpdatedAt, &t.EditionCount, &t.CopyCount)
+	if t.Tags == nil {
+		t.Tags = []string{}
+	}
 	return t, err
 }
 
@@ -138,17 +154,19 @@ type TitleFilter struct {
 	Kind   string
 	Query  string
 	TMDBID int64
+	Tag    string
 }
 
 // ListTitles returns titles of f.Kind whose names or authors contain f.Query
-// and, when set, with TMDB ID f.TMDBID, by name.
+// and, when set, with TMDB ID f.TMDBID and carrying tag f.Tag, by name.
 func (s *Store) ListTitles(ctx context.Context, f TitleFilter) ([]Title, error) {
 	rows, err := s.pool.Query(ctx, `SELECT `+titleColumns+` FROM title t
 		WHERE ($1 = '' OR t.kind = $1)
 		  AND ($2 = '' OR strpos(lower(concat_ws(' ', t.name, t.original_title, t.polish_title,
 		       array_to_string(t.authors, ' '))), lower($2)) > 0)
 		  AND ($3 = 0 OR t.tmdb_id = $3)
-		ORDER BY lower(t.name), t.id`, f.Kind, strings.TrimSpace(f.Query), f.TMDBID)
+		  AND `+hasTag("$4")+`
+		ORDER BY lower(t.name), t.id`, f.Kind, strings.TrimSpace(f.Query), f.TMDBID, foldCase(strings.TrimSpace(f.Tag)))
 	if err != nil {
 		return nil, fmt.Errorf("list titles: %w", err)
 	}
@@ -195,6 +213,8 @@ func (s *Store) CreateTitle(ctx context.Context, in *TitleInput) (Title, bool, e
 			}
 		} else if err != nil {
 			return mapErr(err, ErrTitleNotFound, "create title")
+		} else if err := setTags(ctx, tx, id, in.Tags); err != nil {
+			return err
 		}
 		t, err = getTitle(ctx, tx, id)
 		return err
@@ -227,7 +247,16 @@ func (s *Store) UpdateTitle(ctx context.Context, id int64, in *TitleInput) (Titl
 			updated_at = now(), edited_at = now() WHERE id = $1`,
 			id, in.Kind, in.Name, in.OriginalTitle, in.PolishTitle, in.Year, in.TMDBID, in.Authors,
 			in.BNID, in.OpenLibraryID, in.Notes, in.CoverURL, in.KeepRating, in.Rating)
-		return mapErr(err, ErrTitleNotFound, "update title")
+		if err != nil {
+			return mapErr(err, ErrTitleNotFound, "update title")
+		}
+		if in.Tags == nil {
+			return nil
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM title_tag WHERE title_id = $1`, id); err != nil {
+			return fmt.Errorf("clear title tags: %w", err)
+		}
+		return setTags(ctx, tx, id, in.Tags)
 	})
 	if err != nil {
 		return Title{}, err
@@ -247,6 +276,69 @@ func (s *Store) RateTitle(ctx context.Context, id int64, rating *int) (Title, er
 		return Title{}, ErrTitleNotFound
 	}
 	return s.GetTitle(ctx, id)
+}
+
+// setTags gives title titleID the normalized tags, in their order, on top of
+// none. A tag stored before under the same key (foldCase) is reused with its
+// spelling; one no title carries any more takes the spelling saved now.
+//
+// Each tag's row stays locked until the transaction ends, so the tags are
+// locked in key order: two saves of the same tags in another order would
+// otherwise each hold one and wait for the other. The use check runs after
+// the lock as its own statement, as checkNoEditions does: every transaction
+// that linked the tag before held the same lock, so it has committed and the
+// check sees its link.
+func setTags(ctx context.Context, tx pgx.Tx, titleID int64, tags []string) error {
+	order := make([]int, len(tags))
+	for i := range order {
+		order[i] = i
+	}
+	slices.SortFunc(order, func(a, b int) int {
+		return strings.Compare(foldCase(tags[a]), foldCase(tags[b]))
+	})
+	for _, i := range order {
+		name := tags[i]
+		var tagID int64
+		err := tx.QueryRow(ctx, `INSERT INTO tag (name, key) VALUES ($1, $2)
+			ON CONFLICT (key) DO UPDATE SET name = tag.name RETURNING id`,
+			name, foldCase(name)).Scan(&tagID)
+		if err != nil {
+			return fmt.Errorf("save tag: %w", err)
+		}
+		_, err = tx.Exec(ctx, `UPDATE tag SET name = $2 WHERE id = $1 AND name <> $2
+			AND NOT EXISTS (SELECT 1 FROM title_tag WHERE tag_id = $1)`, tagID, name)
+		if err != nil {
+			return fmt.Errorf("respell tag: %w", err)
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO title_tag (title_id, tag_id, position) VALUES ($1, $2, $3)`,
+			titleID, tagID, i)
+		if err != nil {
+			return fmt.Errorf("tag title: %w", err)
+		}
+	}
+	return nil
+}
+
+// TagCount is a tag in use and how many titles carry it.
+type TagCount struct {
+	Name   string `json:"name"`
+	Titles int    `json:"title_count"`
+}
+
+// ListTags returns the tags titles carry, with their counts, by name. A tag
+// no title carries is left out.
+func (s *Store) ListTags(ctx context.Context) ([]TagCount, error) {
+	rows, err := s.pool.Query(ctx, `SELECT g.name, count(*) FROM tag g
+		JOIN title_tag tt ON tt.tag_id = g.id
+		GROUP BY g.id ORDER BY g.key, g.id`)
+	if err != nil {
+		return nil, fmt.Errorf("list tags: %w", err)
+	}
+	return collect(rows, func(row pgx.Row) (TagCount, error) {
+		var c TagCount
+		err := row.Scan(&c.Name, &c.Titles)
+		return c, err
+	}, "list tags")
 }
 
 // checkNoEditions runs after the title row is locked, as its own statement:
@@ -869,13 +961,14 @@ type Filter struct {
 	Typed    string
 	// Loaned keeps only copies with an open loan.
 	Loaned bool
+	Tag    string
 }
 
-// foldCase lower-cases text one character at a time, the key locations
-// match and merge by, with a final sigma as σ, since ΟΣ and ος name one
-// place. The browser's foldLocation folds the same way, so the filter it
-// applies to the loaded collection lists what this one does; Postgres's
-// lower follows the database's older Unicode tables.
+// foldCase lower-cases text one character at a time, the key locations and
+// tags match and merge by, with a final sigma as σ, since ΟΣ and ος name one
+// place. The browser's foldLocation and tagKey fold the same way, so the
+// filter it applies to the loaded collection lists what this one does;
+// Postgres's lower follows the database's older Unicode tables.
 func foldCase(text string) string {
 	return strings.Map(func(r rune) rune {
 		if r = unicode.ToLower(r); r == 'ς' {
@@ -918,6 +1011,8 @@ type Item struct {
 	// LoanBorrower and LoanDueOn come from the copy's open loan, if any.
 	LoanBorrower *string `json:"loan_borrower,omitempty"`
 	LoanDueOn    *Date   `json:"loan_due_on,omitempty"`
+	// Tags are the title's, so the browser can filter the loaded collection.
+	Tags []string `json:"tags,omitempty"`
 }
 
 func scanItem(row pgx.Row) (Item, error) {
@@ -927,7 +1022,8 @@ func scanItem(row pgx.Row) (Item, error) {
 	err := row.Scan(&it.CopyID, &createdAt, &it.Status, &it.PriceCents, &it.MaxPriceCents, &purchased, &it.Shop,
 		&it.AcquiredAs, &it.Condition, &sold, &it.SalePriceCents, &it.Location, &it.EditionID, &it.Barcode, &it.Label, &it.Format, &it.Binding,
 		&it.TitleID, &it.Kind, &it.Name, &it.OriginalTitle, &it.PolishTitle, &it.Year, &it.CoverURL, &it.Authors,
-		&it.Rating, &it.LoanBorrower, &due)
+		&it.Rating, &it.LoanBorrower, &due,
+		&it.Tags)
 	it.CreatedAtUS = createdAt.UnixMicro()
 	it.PurchasedOn = dateOf(purchased)
 	it.SoldOn = dateOf(sold)
@@ -943,7 +1039,7 @@ func (s *Store) Collection(ctx context.Context, f Filter) ([]Item, error) {
 			c.purchased_on, c.shop, c.acquired_as, c.condition, c.sold_on, c.sale_price_cents, c.location,
 			e.id, e.barcode, e.label, e.format, e.binding,
 			t.id, t.kind, t.name, t.original_title, t.polish_title, t.year,
-			`+CoverURL+`, t.authors, t.rating, l.borrower, l.due_on
+			`+CoverURL+`, t.authors, t.rating, l.borrower, l.due_on, `+titleTags+`
 		FROM copy c JOIN edition e ON e.id = c.edition_id JOIN title t ON t.id = e.title_id
 		LEFT JOIN loan l ON l.copy_id = c.id AND l.returned_on IS NULL
 		WHERE ($1 = '' OR t.kind = $1) AND ($2 = '' OR e.format = $2) AND ($3 = '' OR c.status = $3)
@@ -951,8 +1047,10 @@ func (s *Store) Collection(ctx context.Context, f Filter) ([]Item, error) {
 		       t.polish_title, array_to_string(t.authors, ' '), e.label, c.shop, c.location)), lower($4)) > 0
 		       OR strpos(lower(c.location), lower($5)) > 0)
 		  AND (NOT $6 OR l.id IS NOT NULL)
+		  AND `+hasTag("$7")+`
 		ORDER BY lower(t.name), t.id, e.id, c.id`,
-		f.Kind, f.Format, f.Status, strings.TrimSpace(f.Query), strings.TrimSpace(f.Typed), f.Loaned)
+		f.Kind, f.Format, f.Status, strings.TrimSpace(f.Query), strings.TrimSpace(f.Typed), f.Loaned,
+		foldCase(strings.TrimSpace(f.Tag)))
 	if err != nil {
 		return nil, fmt.Errorf("collection: %w", err)
 	}

@@ -3,8 +3,10 @@
 package collection
 
 import (
+	"encoding/json"
 	"errors"
 	"net/url"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -29,6 +31,7 @@ const (
 	maxText    = 500
 	maxNotes   = 10000
 	maxAuthors = 20
+	maxTags    = 20
 	// MaxPriceCents (1 000 000 zł) keeps collection totals far from int64 overflow.
 	MaxPriceCents = 100_000_000
 	// MinRating and MaxRating bound a title's rating: the 1 to 10 scale
@@ -127,6 +130,9 @@ type TitleInput struct {
 	// KeepRating makes an update leave the stored rating as it is, for a
 	// PUT body without rating. Creates ignore it.
 	KeepRating bool `json:"-"`
+	// Tags are the owner's own groupings of the work. An update without
+	// them (nil) keeps the stored tags; an empty list clears them.
+	Tags TagList `json:"tags,omitempty"`
 	// RequestKey makes a create safe to retry: a second create with the
 	// same key returns the first title. Updates ignore it.
 	RequestKey *string `json:"request_key,omitempty"`
@@ -142,6 +148,9 @@ type RatingInput struct {
 type Title struct {
 	ID int64 `json:"id"`
 	TitleInput
+	// Tags shadows TitleInput.Tags so an answer always lists them, each
+	// with the spelling it was first saved with, in the title's order.
+	Tags         []string  `json:"tags"`
 	EditionCount int       `json:"edition_count"`
 	CopyCount    int       `json:"copy_count"`
 	CreatedAt    time.Time `json:"created_at"`
@@ -326,6 +335,13 @@ func (in *TitleInput) Normalize() *httpx.FieldError {
 		}
 	}
 	in.Authors = authors
+	if in.Tags != nil {
+		tags, fe := normalizeTags(in.Tags)
+		if fe != nil {
+			return fe
+		}
+		in.Tags = tags
+	}
 
 	if !slices.Contains(kinds, in.Kind) {
 		return fieldErr("kind", "must be one of: "+strings.Join(kinds, ", "))
@@ -358,6 +374,68 @@ func (in *TitleInput) Normalize() *httpx.FieldError {
 		}
 	}
 	return in.checkKindFields()
+}
+
+// TagList is the tags a title body carries: a JSON array of strings or
+// null. An element that is not a string, null included, is refused as a
+// type error on `tags` instead of read as a blank tag, which would drop it
+// and clear the title's tags. encoding/json adds no field to an error an
+// UnmarshalJSON returns, so the type names its one field itself.
+type TagList []string
+
+// UnmarshalJSON reads a JSON array of strings, or null as no list.
+func (l *TagList) UnmarshalJSON(b []byte) error {
+	var raw []*string
+	if err := json.Unmarshal(b, &raw); err != nil {
+		if typeErr, ok := errors.AsType[*json.UnmarshalTypeError](err); ok {
+			typeErr.Field = "tags"
+		}
+		return err
+	}
+	if raw == nil {
+		*l = nil
+		return nil
+	}
+	tags := make(TagList, 0, len(raw))
+	for _, tag := range raw {
+		if tag == nil {
+			return &json.UnmarshalTypeError{Value: "null", Type: reflect.TypeFor[string](), Field: "tags"}
+		}
+		tags = append(tags, *tag)
+	}
+	*l = tags
+	return nil
+}
+
+// normalizeTags trims each tag, drops blank ones and keeps the first of
+// those that differ only in case, in their order. A non-nil input gives a
+// non-nil list, so an empty one still clears a title's tags.
+func normalizeTags(raw TagList) (TagList, *httpx.FieldError) {
+	tags := make(TagList, 0, len(raw))
+	seen := make(map[string]bool, len(raw))
+	for _, tag := range raw {
+		tag = strings.TrimSpace(tag)
+		if tag == "" {
+			continue
+		}
+		if e := checkLen("tags", tag, maxText); e != nil {
+			return nil, e
+		}
+		// Postgres text takes neither a NUL byte nor invalid UTF-8.
+		if strings.ContainsRune(tag, 0) || !utf8.ValidString(tag) {
+			return nil, fieldErr("tags", "is not valid")
+		}
+		key := foldCase(tag)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		tags = append(tags, tag)
+	}
+	if len(tags) > maxTags {
+		return nil, fieldErr("tags", "too many tags")
+	}
+	return tags, nil
 }
 
 func (in *TitleInput) checkKindFields() *httpx.FieldError {

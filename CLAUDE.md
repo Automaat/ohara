@@ -258,8 +258,13 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   letter with a diacritic to its base letter ("Bjork" for "Björk") in
   names, listing titles and phrases; search queries keep the want's
   spelling. A run matches listing titles to wishlist copies (all title
-  words, the edition's format for movies, the author's surname in any case
-  for books ("Andrzeja Sapkowskiego", "Lalka Prusa"), the artist's words
+  words; a name of words of at most two letters ("M", "Up", "It") only
+  where it stands as the title: at the start, after a separator, a media
+  word or the author (in any case), and before the end, a separator, a
+  media word, a release year or the author, or anything right after the
+  author, and a lone letter before a space ("M Fritz Lang"); the
+  edition's format for movies, the author's surname in any case for
+  books ("Andrzeja Sapkowskiego", "Lalka Prusa"), the artist's words
   and a fitting medium for
   albums, where a listing naming no medium counts as a CD, minus the
   editable reject phrases a want's own name or artist does not contain),
@@ -272,7 +277,8 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   skips a want for a listing that names another title of its kind
   (wished, owned or neither) more specifically: one phrase, past media
   words and disc counts, holding every word of a want's name it carries
-  and more ("Alien: Covenant" for an "Alien" want), stores
+  and more ("Alien: Covenant" for an "Alien" want; a short name counts
+  its single letters, "X-Men" for an "X" want), stores
   each listing once in `price_observation` (`source`, `external_id`) and
   queues one `deal_alert` per listing at or below the copy's
   `max_price_cents` or its `max_market_percent` (1 to 100) of the
@@ -446,10 +452,30 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   a title's copy days of the last 90 days, and the title page's "Wartość
   dziś" draws the copy's used value as a trend once two days have one, a
   day without one or without a stored row leaving a gap; the card stays
-  with its trend when the copy's prices left the window. The summary's `gain` sums the used value
+  with its trend when the copy's prices left the window. `GET /api/valuation`'s
+  `moves` pair each copy's stored used value on the last valuation day with
+  its value on `moves_from`, the newest valuation day 30 to 37 days before
+  (one day for every copy, so a skipped run still gives a start; null and no
+  moves without one), and Wartość's "Największe zmiany" lists the 5 owned
+  copies that rose and the 5 that fell most in grosze
+  (`movers` in `src/lib/valuation.ts`), as "+20 zł · +50%" (grosze under
+  half a złoty); a copy without a used value on either day, or with the same
+  value, is in neither, and without any the section is hidden. The summary's `gain` sums the used value
   and the price paid over the copies that have both; the Wartość hero's
   difference reads only that, and names its coverage when it counts
   fewer copies than the collection. History keeps no gain.
+  The summary's `realized` is what sold copies made: sale price less
+  purchase price (no fees), summed over the copies sold on or before
+  today that have both, a gift sold for 0 zł losing its price; a sold
+  copy missing either counts in `unpriced`, never as 0 zł. Each run
+  stores it in the day's `valuation_history` row; the row, its copies'
+  values and the gain take the day of the snapshot the run read its
+  owned copies and sales from, so a sale committed or midnight passed
+  before the save counts each copy once (days stored before migration
+  0030 read 0). The
+  Wartość hero shows it as "Zysk ze sprzedaży", signed, with its copies,
+  and nothing without a sold copy; before the first valuation the line
+  stands under the empty state.
   `GET /api/valuation/market` gives each
   wished title and format that used middle from stored listings, owned
   or not (`?title_id=`: every format of one title), and sends no request
@@ -464,6 +490,20 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   a listing it stored met no rule, and queues the alerts of those that now
   meet it, so a listing counts in the market that judges it, as on later
   runs.
+- A title carries the owner's tags (`tag`, `title_tag`): the bodies of
+  `POST` and `PUT /api/titles` take `tags`, each trimmed, blank ones
+  dropped and those differing only in case collapsed, at most 500 bytes
+  each and 20 per title (else 422 on `tags`). A `PUT` without `tags` (or with null) keeps
+  them, `[]` clears them. A tag matches by `tag.key`, the Go case fold
+  `foldCase` locations use (final sigma as σ; the browser's `tagKey`
+  mirrors it, not Postgres's `lower`), and shows with the spelling it was
+  first saved with; one no title carries any more takes the next spelling
+  saved. A save locks its tags in key order, then checks their use in a
+  statement of its own, so concurrent saves neither deadlock nor respell a
+  tag another title carries. `GET /api/tags` lists the tags in use with their
+  title counts. `GET /api/collection?tag=` and `GET /api/titles?tag=`
+  list what carries a tag, case aside; collection items carry their
+  title's tags for the browser's filter.
 - A barcode no provider resolves goes to `scan_queue`; a trigger on `edition`
   removes it once an edition carries that barcode. `ohara_scan_queue_size`
   counts it on each scrape. The trigger keeps the entry it removes in
@@ -547,6 +587,10 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   count as its toggle, hidden at 0.
   Its "Sprzedane" switch (`?status=sold`) lists the sold copies, which
   every other view, the counts and the default shelf leave out.
+  Its "Tag" (`?tag=`) offers the tags the loaded copies and titles carry,
+  "Każdy" first; a title page's tags link there, and its form's "Tagi"
+  suggests `GET /api/tags`. Enter or a suggestion adds a tag; one left
+  typed stays a draft that saving adds.
   Its "Miejsce" (`?location=`) lists the copies stored at one location,
   the whole value, case aside, picked from the loaded copies' locations,
   the most used first. An owned copy's `location` is one free-text place
@@ -595,7 +639,8 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   "Cofnij", "Dodaj tytuł" by hand, the scan sheet sending no deals or queue
   read, the queue count following a queued scan, its add and undo,
   Kolekcja's filters, which also run at 1440 × 900, and its sort orders
-  under active filters, and cover photo uploads. `scripts/e2e.sh` builds
+  under active filters, tags from the title form to Kolekcja's filter, and
+  cover photo uploads. `scripts/e2e.sh` builds
   the image (or takes one as its first argument), starts it from
   `e2e/compose.yaml`
   with Postgres, `OHARA_LOOKUP_STUB=true`, `OHARA_MUSICBRAINZ=false` and no

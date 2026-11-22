@@ -26,6 +26,7 @@
 		displayName,
 		editionPayload,
 		editionToForm,
+		tagHref,
 		titlePayload,
 		titleToForm,
 		type Copy,
@@ -33,6 +34,7 @@
 		type Edition,
 		type FormIssue,
 		type RatingPayload,
+		type TagCount,
 		type Title,
 		type TitleDetail
 	} from '#lib/collection.js';
@@ -105,6 +107,8 @@
 	let titleForm = $state(titleToForm(null));
 	let titleIssue = $state<FormIssue | null>(null);
 	let savingTitle = $state(false);
+	/** The tags in use, read when the title form opens; without them the form takes typed tags. */
+	let tagSuggestions = $state<string[]>([]);
 
 	let copySheet = $state(false);
 	let copyTarget = $state<CopyTarget | null>(null);
@@ -260,6 +264,12 @@
 		titleForm = titleToForm(t);
 		titleIssue = null;
 		titleSheet = true;
+		request<TagCount[]>(fetch, 'GET', '/api/tags').then(
+			(tags) => (tagSuggestions = tags.map((tag) => tag.name)),
+			() => {
+				// Suggestions only help; a tag can still be typed.
+			}
+		);
 	}
 
 	async function saveTitle() {
@@ -598,6 +608,14 @@
 			</Card>
 		{/if}
 
+		{#if t.tags.length > 0}
+			<ul class="tags" aria-label="Tagi">
+				{#each t.tags as tag (tag)}
+					<li><a href={tagHref(tag)} aria-label={`Kolekcja z tagiem ${tag}`}>{tag}</a></li>
+				{/each}
+			</ul>
+		{/if}
+
 		<div class="rating">
 			<Field label="Ocena" error={ratingError ?? undefined}>
 				{#snippet control(c)}
@@ -640,6 +658,7 @@
 			issue={titleIssue}
 			saving={savingTitle}
 			kindLocked={t.edition_count > 0}
+			{tagSuggestions}
 			submitLabel="Zapisz zmiany"
 			onsubmit={saveTitle}
 			oncancel={() => (titleSheet = false)}
@@ -884,5 +903,31 @@
 	.notes {
 		margin: 0;
 		white-space: pre-wrap;
+	}
+	.tags {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.375rem;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+	.tags a {
+		display: inline-flex;
+		align-items: center;
+		min-block-size: 2.75rem;
+		padding: 0 0.75rem;
+		border: 1px solid var(--sui-border-control);
+		border-radius: 999px;
+		color: var(--sui-link);
+		overflow-wrap: anywhere;
+		text-decoration: none;
+	}
+	.tags a:hover {
+		background: var(--sui-row-hover);
+	}
+	.tags a:focus-visible {
+		outline: 2px solid var(--sui-focus);
+		outline-offset: 2px;
 	}
 </style>

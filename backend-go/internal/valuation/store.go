@@ -237,44 +237,86 @@ func copies(ctx context.Context, q querier, titleID int64) ([]CopyValue, error) 
 }
 
 // Valued returns every owned copy with its range and the collection
-// summary, from the prices last seen within window. Copies and prices
-// come from one snapshot, so a copy's Discogs release is the one its
-// Discogs prices were read for.
+// summary, from the prices last seen within window, with the gain
+// realized by the copies sold on or before the snapshot's day. Copies,
+// prices, sales and that day come from one snapshot, so a copy's Discogs
+// release is the one its Discogs prices were read for, and a copy sold
+// meanwhile counts once: as owned, or as sold.
 func (s *Store) Valued(ctx context.Context, window time.Duration) ([]CopyValue, Summary, error) {
-	owned, err := s.valued(ctx, window, 0)
+	owned, sales, err := s.valued(ctx, window, 0)
 	if err != nil {
 		return nil, Summary{}, err
 	}
-	return owned, Summarize(owned), nil
+	sum := Summarize(owned)
+	sum.Realized, sum.day = sales.Realized, sales.day
+	return owned, sum, nil
 }
 
 // TitleValued returns titleID's owned copies with the ranges Valued gives
 // them, reading only that title's copies and prices.
 func (s *Store) TitleValued(ctx context.Context, window time.Duration, titleID int64) ([]CopyValue, error) {
-	return s.valued(ctx, window, titleID)
+	owned, _, err := s.valued(ctx, window, titleID)
+	return owned, err
+}
+
+// sales is the gain realized by the copies sold on or before day, the
+// snapshot's date (YYYY-MM-DD).
+type sales struct {
+	Realized
+	day string
 }
 
 // valued values the owned copies of titleID, or of every title when it
-// is 0, from one snapshot.
-func (s *Store) valued(ctx context.Context, window time.Duration, titleID int64) ([]CopyValue, error) {
+// is 0, from one snapshot. For every title it also sums the sales to the
+// snapshot's day; for one it reads none.
+func (s *Store) valued(ctx context.Context, window time.Duration, titleID int64) ([]CopyValue, sales, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
-		return nil, fmt.Errorf("valued: %w", err)
+		return nil, sales{}, fmt.Errorf("valued: %w", err)
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	owned, err := copies(ctx, tx, titleID)
 	if err != nil {
-		return nil, err
+		return nil, sales{}, err
 	}
 	if s.betweenReads != nil {
 		s.betweenReads()
 	}
 	seen, err := prices(ctx, tx, window, titleID)
 	if err != nil {
-		return nil, err
+		return nil, sales{}, err
 	}
 	Value(owned, NewRanges(seen))
-	return owned, nil
+	var sold sales
+	if titleID == 0 {
+		if sold, err = realized(ctx, tx); err != nil {
+			return nil, sales{}, err
+		}
+	}
+	return owned, sold, nil
+}
+
+// realized sums the sales of the copies sold on or before the
+// transaction's date, as Realized describes, with that date. A sale dated
+// later counts from its day.
+func realized(ctx context.Context, q querier) (sales, error) {
+	rows, err := q.Query(ctx, `SELECT to_char(current_date, 'YYYY-MM-DD'),
+			count(*) FILTER (WHERE price_cents IS NOT NULL AND sale_price_cents IS NOT NULL),
+			coalesce(sum(sale_price_cents - price_cents), 0),
+			count(*) FILTER (WHERE price_cents IS NULL OR sale_price_cents IS NULL)
+		FROM copy WHERE status = 'sold' AND sold_on <= current_date`)
+	if err != nil {
+		return sales{}, fmt.Errorf("realized: %w", err)
+	}
+	r, err := pgx.CollectExactlyOneRow(rows, func(row pgx.CollectableRow) (sales, error) {
+		var r sales
+		err := row.Scan(&r.day, &r.Copies, &r.GainCents, &r.Unpriced)
+		return r, err
+	})
+	if err != nil {
+		return sales{}, fmt.Errorf("realized: %w", err)
+	}
+	return r, nil
 }
 
 // HistoryPoint is one day of the collection's value.
@@ -285,7 +327,8 @@ type HistoryPoint struct {
 }
 
 const historyColumns = `to_char(day, 'YYYY-MM-DD'), computed_at, copies, spent_cents,
-	floor_cents, floor_copies, mid_cents, mid_copies, ceiling_cents, ceiling_copies, low_confidence`
+	floor_cents, floor_copies, mid_cents, mid_copies, ceiling_cents, ceiling_copies, low_confidence,
+	realized_gain_cents, realized_copies, realized_unpriced`
 
 func scanHistory(row pgx.CollectableRow) (HistoryPoint, error) {
 	var p HistoryPoint
@@ -299,18 +342,24 @@ func historyFields(p *HistoryPoint) []any {
 		&p.Day, &p.ComputedAt, &p.Copies, &p.SpentCents,
 		&p.Floor.Cents, &p.Floor.Copies, &p.Mid.Cents, &p.Mid.Copies,
 		&p.Ceiling.Cents, &p.Ceiling.Copies, &p.LowConfidence,
+		&p.Realized.GainCents, &p.Realized.Copies, &p.Realized.Unpriced,
 	}
 }
 
+// saveDaySQL upserts the collection's value of the day $1, today when
+// null.
 const saveDaySQL = `INSERT INTO valuation_history (day, copies, spent_cents,
 		floor_cents, floor_copies, mid_cents, mid_copies, ceiling_cents, ceiling_copies,
-		low_confidence)
-	VALUES (current_date, $1, $2, $3, $4, $5, $6, $7, $8, $9)
+		low_confidence, realized_gain_cents, realized_copies, realized_unpriced)
+	VALUES (coalesce($1::date, current_date), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 	ON CONFLICT (day) DO UPDATE SET copies = EXCLUDED.copies, spent_cents = EXCLUDED.spent_cents,
 		floor_cents = EXCLUDED.floor_cents, floor_copies = EXCLUDED.floor_copies,
 		mid_cents = EXCLUDED.mid_cents, mid_copies = EXCLUDED.mid_copies,
 		ceiling_cents = EXCLUDED.ceiling_cents, ceiling_copies = EXCLUDED.ceiling_copies,
-		low_confidence = EXCLUDED.low_confidence, computed_at = now()
+		low_confidence = EXCLUDED.low_confidence,
+		realized_gain_cents = EXCLUDED.realized_gain_cents,
+		realized_copies = EXCLUDED.realized_copies,
+		realized_unpriced = EXCLUDED.realized_unpriced, computed_at = now()
 	RETURNING ` + historyColumns
 
 // saveCopyDaysSQL upserts each copy's value of the day $1, today when
@@ -344,20 +393,28 @@ func copyDayArgs(day *string, owned []CopyValue) []any {
 	return []any{day, ids, floors, mids, ceilings}
 }
 
-// SaveDay stores sum as today's value and each copy in owned as that
-// copy's value today, replacing what an earlier run stored today for the
-// collection and for those copies. A copy valued earlier today but not in
-// owned, such as one sold since, keeps its row. Both are written in one
-// transaction, so the day is stored with its copies or not at all; the
-// two statements go in one batch to spare a round trip.
+// SaveDay stores sum as the value of the day Valued read it on, today for
+// a summary Valued did not read, and each copy in owned as that copy's
+// value that day, replacing what an earlier run stored that day for the
+// collection and for those copies. The day is the snapshot's, so its
+// owned totals and realized gain count each copy once even when a sale
+// commits or midnight passes before the save. A copy valued earlier that
+// day but not in owned, such as one sold since, keeps its row. Both are
+// written in one transaction, so the day is stored with its copies or not
+// at all; the two statements go in one batch to spare a round trip.
 func (s *Store) SaveDay(ctx context.Context, sum *Summary, owned []CopyValue) (HistoryPoint, error) {
+	var day *string
+	if sum.day != "" {
+		day = &sum.day
+	}
 	var p HistoryPoint
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		batch := &pgx.Batch{}
-		batch.Queue(saveDaySQL, sum.Copies, sum.SpentCents, sum.Floor.Cents, sum.Floor.Copies,
-			sum.Mid.Cents, sum.Mid.Copies, sum.Ceiling.Cents, sum.Ceiling.Copies, sum.LowConfidence).
+		batch.Queue(saveDaySQL, day, sum.Copies, sum.SpentCents, sum.Floor.Cents, sum.Floor.Copies,
+			sum.Mid.Cents, sum.Mid.Copies, sum.Ceiling.Cents, sum.Ceiling.Copies, sum.LowConfidence,
+			sum.Realized.GainCents, sum.Realized.Copies, sum.Realized.Unpriced).
 			QueryRow(func(row pgx.Row) error { return row.Scan(historyFields(&p)...) })
-		batch.Queue(saveCopyDaysSQL, copyDayArgs(nil, owned)...)
+		batch.Queue(saveCopyDaysSQL, copyDayArgs(day, owned)...)
 		return tx.SendBatch(ctx, batch).Close()
 	})
 	if err != nil {
@@ -409,6 +466,46 @@ func (s *Store) CopyHistory(ctx context.Context, titleID int64, n int) ([]CopyDa
 		return nil, fmt.Errorf("copy history: %w", err)
 	}
 	return pgx.CollectRows(rows, pgx.RowToStructByPos[CopyDay])
+}
+
+// Move is a copy's stored used value on the movers' start day (FromCents)
+// and end day (ToCents), in grosze, null for a day the copy had no used
+// value.
+type Move struct {
+	CopyID    int64  `json:"copy_id"`
+	FromCents *int64 `json:"from_cents"`
+	ToCents   *int64 `json:"to_cents"`
+}
+
+// Moves picks the movers' start, the newest valuation day from days to
+// days+slack days before end (YYYY-MM-DD), so a valuation that skipped
+// the day exactly days before still gives one, and returns it with the
+// used value of every copy stored on both days, by copy. Every copy is
+// measured from that one day; a copy without a row on either day is left
+// out. Without a valuation day in that span, it returns false.
+func (s *Store) Moves(ctx context.Context, end string, days, slack int) (string, []Move, bool, error) {
+	var from *string
+	if err := s.pool.QueryRow(ctx, `SELECT to_char(max(day), 'YYYY-MM-DD') FROM valuation_history
+		WHERE day BETWEEN $1::date - ($2::int + $3::int) AND $1::date - $2::int`,
+		end, days, slack).Scan(&from); err != nil {
+		return "", nil, false, fmt.Errorf("moves start: %w", err)
+	}
+	if from == nil {
+		return "", []Move{}, false, nil
+	}
+	rows, err := s.pool.Query(ctx, `SELECT e.copy_id, f.mid_cents, e.mid_cents
+		FROM copy_value_history e
+			JOIN copy_value_history f ON f.copy_id = e.copy_id AND f.day = $2::date
+		WHERE e.day = $1::date
+		ORDER BY e.copy_id`, end, *from)
+	if err != nil {
+		return "", nil, false, fmt.Errorf("moves: %w", err)
+	}
+	moves, err := pgx.CollectRows(rows, pgx.RowToStructByPos[Move])
+	if err != nil {
+		return "", nil, false, fmt.Errorf("moves: %w", err)
+	}
+	return *from, moves, true, nil
 }
 
 // History returns the value of each of the last n days, oldest first.

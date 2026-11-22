@@ -224,7 +224,9 @@ type run struct {
 	holdings []Holding
 	rules    deals.Rules
 	titles   deals.Titles
-	// asOf is when the run read holdings and titles, for RecordAsOf.
+	// asOf is when the run read holdings and titles, for RecordAsOf, on
+	// the database clock, which writes last_seen_at; it is also the cutoff
+	// for gone listings.
 	asOf  time.Time
 	res   RunResult
 	first bool
@@ -326,12 +328,17 @@ func (x *run) report(site string, f *deals.Refused, unit string) {
 	}
 }
 
+// search asks src every query and records the listings that match a
+// holding. For a deals.Pager it then updates which stored listings are
+// gone (gone).
 func (x *run) search(ctx context.Context, src deals.Source, queries []string) error {
 	if !src.PerQuery() {
 		queries = []string{""}
 	}
 	var f deals.Refused
 	defer x.report(src.Name(), &f, "queries")
+	pager, paged := src.(deals.Pager)
+	var complete, seen []string
 	for _, q := range queries {
 		if f.Skip() {
 			continue
@@ -339,7 +346,13 @@ func (x *run) search(ctx context.Context, src deals.Source, queries []string) er
 		if err := x.pause(ctx); err != nil {
 			return err
 		}
-		listings, err := src.Search(ctx, q)
+		var page deals.Page
+		var err error
+		if paged {
+			page, err = pager.SearchPage(ctx, q)
+		} else {
+			page.Listings, err = src.Search(ctx, q)
+		}
 		if err != nil && ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -352,7 +365,12 @@ func (x *run) search(ctx context.Context, src deals.Source, queries []string) er
 			x.fail(src.Name(), err)
 			continue
 		}
+		listings := page.Listings
+		if paged && page.Complete {
+			complete = append(complete, deals.QueryKey(q))
+		}
 		x.res.Listings += len(listings)
+		seen = append(seen, page.Seen...)
 		for i := range listings {
 			l := &listings[i]
 			h := match(x.holdings, l, x.rules, x.titles)
@@ -368,6 +386,26 @@ func (x *run) search(ctx context.Context, src deals.Source, queries []string) er
 				x.res.New++
 			}
 		}
+	}
+	if !paged {
+		return nil
+	}
+	return x.gone(ctx, src.Name(), complete, seen)
+}
+
+// gone clears the gone mark of every stored listing of source an answer
+// of this run held, matching or not, and marks gone those last found by
+// one of the complete queries that no answer held. Only an answer that is
+// every offer the site has for its query tells a listing is gone: one
+// missing from a first page, or from a query that failed or was skipped,
+// may still be offered.
+func (x *run) gone(ctx context.Context, source string, complete, seen []string) error {
+	n, err := x.r.store.UpdateGone(ctx, source, complete, seen, x.asOf)
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		x.r.logger.Info("valuation found listings gone", "source", source, "listings", n)
 	}
 	return nil
 }

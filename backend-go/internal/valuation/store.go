@@ -84,6 +84,12 @@ func (s *Store) RecordAsOf(ctx context.Context, l *deals.Listing, h *Holding, as
 	return isNew, err
 }
 
+// UpdateGone brings the gone marks of source's stored listings up to a
+// run, through the deal hunter's store (deals.Store.UpdateGone).
+func (s *Store) UpdateGone(ctx context.Context, source string, complete, seen []string, since time.Time) (int64, error) {
+	return s.deals.UpdateGone(ctx, source, complete, seen, since)
+}
+
 // Now returns the database's current time, when a run reads its holdings.
 func (s *Store) Now(ctx context.Context) (time.Time, error) {
 	return s.deals.Now(ctx)

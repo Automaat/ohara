@@ -314,7 +314,18 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   wished or without copies; an unowned edition's prices count only when
   first seen, or moved to it from another title (`moved_at`), after its
   last change. A mid from fewer than 3 prices is low
-  confidence. Only a Discogs release has a ceiling. An owned album edition
+  confidence. Only a Discogs release has a ceiling. A stored OLX listing
+  keeps the price it was first seen at (`first_price_cents`, null for rows
+  stored before migration 0021) and the query that last found it
+  (`raw.query`, `deals.QueryKey`). After a valuation run asks OLX every
+  query, a listing last found by a query whose answer held fewer offers
+  than the 50 asked for, each with a readable ID (`deals.Pager`, a
+  complete answer), that no answer of the run held (priced or not) and
+  last seen before the run started on the database clock gets `gone_at`; `last_seen_at` keeps its last
+  sighting. A first page, a failed or skipped query tells nothing, and a
+  gone listing any answer holds again, matching or not, is no longer gone.
+  Gone listings stay stored and price as before; no request is sent per
+  listing. An owned album edition
   with a `discogs_release_id` is
   priced on Discogs (marketplace stats in EUR, price suggestions in the
   seller-settings currency, converted to PLN at the NBP table A rate): its

@@ -11,7 +11,7 @@
 	import { SvelteSet } from 'svelte/reactivity';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { ApiError, errorMessage, request } from '#lib/api.js';
+	import { errorMessage, issueFrom, request } from '#lib/api.js';
 	import {
 		copyPayload,
 		copyToForm,
@@ -95,10 +95,7 @@
 			await load(d.id);
 		} catch (err) {
 			if (d.id !== requested) return;
-			issue = {
-				field: err instanceof ApiError ? (err.field ?? '') : '',
-				message: errorMessage(err)
-			};
+			issue = issueFrom(err);
 		} finally {
 			pendingSaves.delete(d.id);
 		}

@@ -5,6 +5,7 @@ import {
 	errorMessage,
 	isNoAnswer,
 	isSessionExpired,
+	issueFrom,
 	request,
 	sessionExpiredMessage
 } from './api';
@@ -233,5 +234,24 @@ describe('errorMessage', () => {
 	it('reads ApiError messages and hides others', () => {
 		expect(errorMessage(new ApiError('Nie znaleziono.', 404))).toBe('Nie znaleziono.');
 		expect(errorMessage(new Error('boom'))).toBe('Nieznany błąd.');
+	});
+});
+
+describe('issueFrom', () => {
+	it.each([
+		[
+			'an API error naming a field',
+			new ApiError('Podaj nazwę.', 422, 'name'),
+			{ field: 'name', message: 'Podaj nazwę.' }
+		],
+		[
+			'an API error without a field',
+			new ApiError('Konflikt.', 409),
+			{ field: '', message: 'Konflikt.' }
+		],
+		['another error', new Error('boom'), { field: '', message: 'Nieznany błąd.' }],
+		['a thrown string', 'boom', { field: '', message: 'Nieznany błąd.' }]
+	])('builds the form issue for %s', (_name, err, issue) => {
+		expect(issueFrom(err)).toEqual(issue);
 	});
 });

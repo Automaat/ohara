@@ -1,3 +1,5 @@
+import type { FormIssue } from './collection';
+
 /** An API failure with a Polish message and, for validation errors, the field it names. */
 export class ApiError extends Error {
 	constructor(
@@ -168,4 +170,9 @@ export function isSessionExpired(err: unknown): boolean {
 /** The message to show for any thrown value. */
 export function errorMessage(err: unknown): string {
 	return err instanceof ApiError ? err.message : 'Nieznany błąd.';
+}
+
+/** The form issue for a failed save: the field the API named, if any, and the message. */
+export function issueFrom(err: unknown): FormIssue {
+	return { field: err instanceof ApiError ? (err.field ?? '') : '', message: errorMessage(err) };
 }

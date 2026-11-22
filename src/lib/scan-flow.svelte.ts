@@ -4,6 +4,7 @@ import {
 	errorMessage,
 	invalidBarcodeMessage,
 	isNoAnswer,
+	issueFrom,
 	isSessionExpired,
 	requestDeadlineMs
 } from './api';
@@ -80,6 +81,26 @@ export function resultAnnouncement(
 ): string {
 	if (phase.kind !== 'ready' || !code) return '';
 	return name ? `${line}. ${name}` : line;
+}
+
+/** The heading for a phase: the scan sheet's title and the title of /scan/{barcode}. */
+export function phaseTitle(phase: FlowPhase): string {
+	switch (phase.kind) {
+		case 'loading':
+			return 'Sprawdzam kod…';
+		case 'queued':
+			return 'Nie znaleziono';
+		case 'invalid':
+			return 'Nieprawidłowy kod';
+		case 'failed':
+			return 'Nie udało się sprawdzić kodu';
+		case 'offline':
+			return 'Zapisano bez połączenia';
+		case 'expired':
+			return 'Sesja wygasła';
+	}
+	if (phase.status === 'owned') return 'Masz już to wydanie';
+	return phase.status === 'missing' ? 'Dodaj ręcznie' : 'Znaleziono';
 }
 
 /**
@@ -611,12 +632,7 @@ export class ScanFlow {
 			if (!item.barcode && refused(err)) await this.#discard(item);
 			if (!current()) return null;
 			this.issue =
-				err instanceof FormRejected
-					? { field: err.field, message: err.message }
-					: {
-							field: err instanceof ApiError ? (err.field ?? '') : '',
-							message: errorMessage(err)
-						};
+				err instanceof FormRejected ? { field: err.field, message: err.message } : issueFrom(err);
 			if (next) this.notice = `Kod ${next} nie został sprawdzony: zeskanuj go ponownie.`;
 			return null;
 		} finally {

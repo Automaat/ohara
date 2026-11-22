@@ -2,6 +2,7 @@ package deals
 
 import (
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -325,6 +326,7 @@ func TestPreparedWantMatchesAsUnprepared(t *testing.T) {
 		"Łowca androidów DVD", "Blade Runner Blu-ray", "Blade Runner 2049 DVD", "Sapkowski Ostatnie życzenie twarda okładka",
 		"Ostatnie życzenie pudełko Sapkowski", "Rocky II DVD", "Rocky 2 DVD", "Pink Floyd The Wall CD", "Pink Floyd The Wall Live CD",
 		"MC Hammer Vinyl LP", "Hans Zimmer Interstellar soundtrack CD", "Kupię Rocky DVD",
+		"Rocky 99999999999999999999 DVD", "Rocky 9223372036854775807 DVD",
 	}
 	for _, title := range listings {
 		text := NewListingText(title, defaultRules)
@@ -362,5 +364,18 @@ func TestPreparedWantChangedAfterwards(t *testing.T) {
 	}
 	if got := w.Queries(); !slices.Equal(got, []string{"Miecz przeznaczenia kowalski"}) {
 		t.Fatalf("Queries() = %q, want the new name with the new surname", got)
+	}
+}
+
+func TestNumberParsesAsAtoi(t *testing.T) {
+	for _, word := range []string{
+		"", "0", "007", "2", "1999", "2049", "9223372036854775807", "9223372036854775808",
+		"99999999999999999999", "00000000000000000000001", "12a", "a12", "٢", "4k", "dvd",
+	} {
+		want, err := strconv.Atoi(word)
+		got, ok := number(word)
+		if ok != (err == nil) || (ok && got != want) {
+			t.Errorf("number(%q) = %d, %v; strconv.Atoi = %d, %v", word, got, ok, want, err)
+		}
 	}
 }

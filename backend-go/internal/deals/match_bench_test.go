@@ -78,3 +78,18 @@ func BenchmarkPick1000WrongMedium(b *testing.B) {
 		_ = pick(wants, l, benchRules, Titles{})
 	}
 }
+
+// BenchmarkPick1000LongNumber picks among 1,000 matching wishes for a
+// listing whose number is past any int.
+func BenchmarkPick1000LongNumber(b *testing.B) {
+	wants := make([]Want, 1000)
+	for i := range wants {
+		wants[i] = Want{CopyID: int64(i + 1), TitleID: 1, Kind: "movie", Name: "Alien", Format: new("dvd")}
+		wants[i].Prepare()
+	}
+	l := &Listing{Title: "Alien 99999999999999999999 DVD", PriceCents: 2000}
+	b.ReportAllocs()
+	for b.Loop() {
+		_ = pick(wants, l, Rules{}, Titles{})
+	}
+}

@@ -1,8 +1,8 @@
 package deals
 
 import (
+	"math"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -525,20 +525,22 @@ func (p *wantText) carries(kind string, text []string) bool {
 	return false
 }
 
-// number parses a word of ASCII digits. It checks the digits before
-// strconv.Atoi, whose error for any other word allocates; words never
-// carry a sign.
+// number parses a word of ASCII digits as strconv.Atoi would, failing
+// for any other word or one past math.MaxInt, without the error Atoi
+// allocates. Words never carry a sign.
 func number(word string) (int, bool) {
 	if word == "" {
 		return 0, false
 	}
+	n := 0
 	for i := range len(word) {
-		if word[i] < '0' || word[i] > '9' {
+		d := int(word[i]) - '0'
+		if d < 0 || d > 9 || n > (math.MaxInt-d)/10 {
 			return 0, false
 		}
+		n = n*10 + d
 	}
-	n, err := strconv.Atoi(word)
-	return n, err == nil
+	return n, true
 }
 
 // maxNames is how many names a want has at most: Polish, original and

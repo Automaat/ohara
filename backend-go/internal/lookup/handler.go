@@ -64,7 +64,7 @@ func (h *Handler) selectCandidate(w http.ResponseWriter, r *http.Request) {
 	}
 	sel, err := h.service.Select(r.Context(), code, c)
 	if err != nil {
-		httpx.WriteInternal(w, h.logger, "store lookup selection", err)
+		httpx.WriteInternal(w, r, h.logger, "store lookup selection", err)
 		return
 	}
 	httpx.WriteJSON(w, h.logger, http.StatusOK, sel)

@@ -152,7 +152,18 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   answers 409) is logged and retried after 30 s.
   The wish a listing was recorded for (`raw.wishlist_copy_id`) is also the
   generated, indexed column `wishlist_copy_id`, so the deals list's filters
-  start from wished listings instead of reading every observation.
+  start from wished listings instead of reading every observation. They
+  take the listings an alert alone ties to a wish in one query, and read
+  the hunter's own for wishes still on the wishlist newest first
+  (`price_observation_wish_recent_idx`, or `price_observation_wish_idx`
+  when those wishes hold few of them) in steps of 100 or the page size,
+  then twice the last, until the page is full or none are left. All of
+  it reads one snapshot, and a Discogs listing is fresh as of that
+  snapshot's first query, so an alert sent after the listing expired
+  does not bring it back. After a long hunt
+  with alerts, when nearly every stored listing was recorded for a wish,
+  a filtered page so neither sorts nor filters all of them; each
+  listing's `raw` is read only after the cheaper filters kept it.
   A source that answers 403 or 429 is asked nothing more until the next
   run, in a hunt and in a valuation (SkupSzop quotes too); the run's
   errors name the refusal once with the requests it skipped, and skipped

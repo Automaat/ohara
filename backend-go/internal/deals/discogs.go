@@ -193,15 +193,16 @@ func parseDiscogsInventory(ctx context.Context, body []byte, rates Rates) ([]Lis
 			acquired = new("used")
 		}
 		out = append(out, Listing{
-			Source:     DiscogsSource,
-			ExternalID: id,
-			Title:      title,
-			URL:        "https://www.discogs.com/sell/item/" + id,
-			PhotoURL:   imageURL(it.Release.Thumbnail),
-			PriceCents: cents,
-			AcquiredAs: acquired,
-			Medium:     medium,
-			Raw:        raw,
+			DiscogsReleaseID: it.Release.ID,
+			Source:           DiscogsSource,
+			ExternalID:       id,
+			Title:            title,
+			URL:              "https://www.discogs.com/sell/item/" + id,
+			PhotoURL:         imageURL(it.Release.Thumbnail),
+			PriceCents:       cents,
+			AcquiredAs:       acquired,
+			Medium:           medium,
+			Raw:              raw,
 		})
 		seen = append(seen, id)
 	}

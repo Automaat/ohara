@@ -580,8 +580,7 @@ func (r *run) record(ctx context.Context, source string, listings []Listing, tar
 	refreshed := map[string]bool{}
 	for i := range listings {
 		l := &listings[i]
-		text := NewListingText(l.Title, r.rules)
-		text.medium = l.Medium
+		text := l.text(r.rules)
 		w := pickListing(r.wants, r.kinds[l.Source], l, text, r.titles)
 		r.coverListing(source, targets, l, text, w)
 		if w == nil {

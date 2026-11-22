@@ -301,7 +301,8 @@
 				`/api/titles/${t.id}`,
 				finishPayload(t, finished, day)
 			);
-			if (detail?.id === saved.id) Object.assign(detail, saved);
+			// The answer leaves out a day it does not know, so the day shown is cleared first.
+			if (detail?.id === saved.id) Object.assign(detail, { finished_on: null }, saved);
 			finishSheet = false;
 		} catch (err) {
 			finishIssue = issueFrom(err);

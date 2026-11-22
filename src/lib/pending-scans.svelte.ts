@@ -37,6 +37,57 @@ export const browserLock: SendLock = async (run) => {
 	});
 };
 
+/**
+ * Where the code whose POST last got no answer is kept, so the next run starts after it even
+ * after a reload or in another tab.
+ */
+export type SendCursor = {
+	get(): string | null;
+	set(barcode: string): void;
+};
+
+type CursorStorage = Pick<Storage, 'getItem' | 'setItem'>;
+
+const cursorKey = 'ohara-pending-scans-unanswered';
+
+function browserStorage(): CursorStorage | undefined {
+	return globalThis.localStorage;
+}
+
+function writeCursor(storage: () => CursorStorage | undefined, barcode: string): boolean {
+	try {
+		const target = storage();
+		if (!target) return false;
+		target.setItem(cursorKey, barcode);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * The cursor in localStorage, shared by the app's tabs and kept across reloads; where storage is
+ * missing or refuses, this tab keeps it in memory.
+ */
+export function storageCursor(
+	storage: () => CursorStorage | undefined = browserStorage
+): SendCursor {
+	let memory: string | null = null;
+	return {
+		get: () => {
+			if (memory !== null) return memory;
+			try {
+				return storage()?.getItem(cursorKey) ?? null;
+			} catch {
+				return null;
+			}
+		},
+		set: (barcode) => {
+			memory = writeCursor(storage, barcode) ? null : barcode;
+		}
+	};
+}
+
 /** Runs work with a signal that aborts it after ms, and rejects once ms passed either way. */
 function withDeadline<T>(ms: number, work: (signal: AbortSignal) => Promise<T>): Promise<T> {
 	const controller = new AbortController();
@@ -181,17 +232,18 @@ export class PendingScans {
 	readonly #lock: SendLock;
 	#store: Promise<PendingStore | null> | null = null;
 	#sending: Promise<void> | null = null;
-	/** The code whose POST last got no answer in this tab; the next run starts after it. */
-	#unanswered: string | null = null;
+	readonly #cursor: SendCursor;
 
 	constructor(
 		fetchFn: typeof fetch,
 		open: () => Promise<PendingStore | null>,
-		lock: SendLock = browserLock
+		lock: SendLock = browserLock,
+		cursor: SendCursor = storageCursor()
 	) {
 		this.#fetch = fetchFn;
 		this.#open = open;
 		this.#lock = lock;
+		this.#cursor = cursor;
 	}
 
 	/** The store, opened once; a store that failed an operation is opened again next time. */
@@ -259,8 +311,8 @@ export class PendingScans {
 	 * leaves the device once the queue took it (200 or 201, even if the body is lost), an edition
 	 * carries it (409 on barcode) or the queue refuses it (422); any other answer keeps it for the
 	 * next run. No answer within postTimeout, or the sign-in turning the request away, ends the
-	 * run; after no answer, this tab's next run starts with the code after that one and sends it
-	 * last. While another tab sends, this one only reads the count.
+	 * run; after no answer, the next run, after a reload or in another tab too, starts with the
+	 * code after that one and sends it last. While another tab sends, this one only reads the count.
 	 */
 	send(): Promise<void> {
 		this.#sending ??= this.#lock(() => this.#sendAll())
@@ -293,7 +345,7 @@ export class PendingScans {
 		await queueDeletesSettled();
 		const run = { left: false };
 		try {
-			await this.#sendEach(store, sendOrder(codes, this.#unanswered), run);
+			await this.#sendEach(store, sendOrder(codes, this.#cursor.get()), run);
 		} catch {
 			this.#lost();
 			if (run.left) this.departures++;
@@ -314,7 +366,7 @@ export class PendingScans {
 		const [barcode, ...rest] = codes;
 		if (barcode === undefined) return;
 		const outcome = await this.#post(barcode);
-		if (outcome === 'unanswered') this.#unanswered = barcode;
+		if (outcome === 'unanswered') this.#cursor.set(barcode);
 		if (outcome === 'unanswered' || outcome === 'stop') return;
 		if (outcome !== 'kept') {
 			await store.remove(barcode);

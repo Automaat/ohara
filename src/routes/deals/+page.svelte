@@ -32,6 +32,7 @@
 	import WishlistShare from '#lib/components/WishlistShare.svelte';
 	import { DealDismissals } from '#lib/deal-dismissals.svelte.js';
 	import {
+		allegroSearchURL,
 		dealsSummary,
 		dismissalPath,
 		intervalLabel,
@@ -467,6 +468,7 @@
 			{:else}
 				<ul class="wishes" aria-label="Lista życzeń">
 					{#each wishes as wish (wish.copy_id)}
+						{@const allegroURL = allegroSearchURL(wish)}
 						<li>
 							<Card
 								title={displayName(wish)}
@@ -481,6 +483,18 @@
 									>
 										Edytuj
 									</Button>
+								{/snippet}
+								{#snippet footer()}
+									{#if allegroURL}
+										<Button
+											href={allegroURL}
+											target="_blank"
+											rel="noopener noreferrer"
+											aria-label={`Szukaj na Allegro: ${displayName(wish)}`}
+										>
+											Szukaj na Allegro
+										</Button>
+									{/if}
 								{/snippet}
 							</Card>
 						</li>

@@ -37,6 +37,70 @@ export const browserLock: SendLock = async (run) => {
 	});
 };
 
+/**
+ * Where the code whose POST last got no answer is kept, so the next run starts after it even
+ * after a reload or in another tab.
+ */
+export type SendCursor = {
+	get(): string | null;
+	set(barcode: string): void;
+};
+
+type CursorStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
+
+const cursorKey = 'ohara-pending-scans-unanswered';
+
+function browserStorage(): CursorStorage | undefined {
+	return globalThis.localStorage;
+}
+
+/** Takes an older cursor out of storage, so it cannot win over the one this tab keeps. */
+function dropCursor(target: CursorStorage | undefined): boolean {
+	try {
+		target?.removeItem(cursorKey);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/** Stores the cursor; false when storage is missing or refused it, with any older one dropped. */
+function writeCursor(storage: () => CursorStorage | undefined, barcode: string): boolean {
+	let target: CursorStorage | undefined;
+	try {
+		target = storage();
+		if (!target) return false;
+		target.setItem(cursorKey, barcode);
+		return true;
+	} catch {
+		dropCursor(target);
+		return false;
+	}
+}
+
+/**
+ * The cursor in localStorage, shared by the app's tabs and kept across reloads; where storage is
+ * missing or refuses, this tab keeps it in memory until storage holds a cursor again, as one
+ * another tab stored later.
+ */
+export function storageCursor(
+	storage: () => CursorStorage | undefined = browserStorage
+): SendCursor {
+	let memory: string | null = null;
+	return {
+		get: () => {
+			try {
+				return storage()?.getItem(cursorKey) ?? memory;
+			} catch {
+				return memory;
+			}
+		},
+		set: (barcode) => {
+			memory = writeCursor(storage, barcode) ? null : barcode;
+		}
+	};
+}
+
 /** Runs work with a signal that aborts it after ms, and rejects once ms passed either way. */
 function withDeadline<T>(ms: number, work: (signal: AbortSignal) => Promise<T>): Promise<T> {
 	const controller = new AbortController();
@@ -146,9 +210,18 @@ export function openPendingStore(
 
 /**
  * How one waiting code's POST ended: in the queue, off the device for another reason, kept for the
- * next try, or the run stops.
+ * next try, no answer in time, or the sign-in turned it away. The last two end the run.
  */
-type Outcome = 'queued' | 'settled' | 'kept' | 'stop';
+type Outcome = 'queued' | 'settled' | 'kept' | 'unanswered' | 'stop';
+
+/**
+ * The codes in the order a run sends them: after the code whose POST last got no answer, which
+ * then goes last, so one code that never gets an answer cannot hold back the rest.
+ */
+function sendOrder(codes: readonly string[], unanswered: string | null): string[] {
+	const at = unanswered === null ? -1 : codes.indexOf(unanswered);
+	return [...codes.slice(at + 1), ...codes.slice(0, at + 1)];
+}
 
 /**
  * Barcodes scanned while the check got no answer, kept on the device until the scan queue takes
@@ -172,15 +245,18 @@ export class PendingScans {
 	readonly #lock: SendLock;
 	#store: Promise<PendingStore | null> | null = null;
 	#sending: Promise<void> | null = null;
+	readonly #cursor: SendCursor;
 
 	constructor(
 		fetchFn: typeof fetch,
 		open: () => Promise<PendingStore | null>,
-		lock: SendLock = browserLock
+		lock: SendLock = browserLock,
+		cursor: SendCursor = storageCursor()
 	) {
 		this.#fetch = fetchFn;
 		this.#open = open;
 		this.#lock = lock;
+		this.#cursor = cursor;
 	}
 
 	/** The store, opened once; a store that failed an operation is opened again next time. */
@@ -248,7 +324,8 @@ export class PendingScans {
 	 * leaves the device once the queue took it (200 or 201, even if the body is lost), an edition
 	 * carries it (409 on barcode) or the queue refuses it (422); any other answer keeps it for the
 	 * next run. No answer within postTimeout, or the sign-in turning the request away, ends the
-	 * run. While another tab sends, this one only reads the count.
+	 * run; after no answer, the next run, after a reload or in another tab too, starts with the
+	 * code after that one and sends it last. While another tab sends, this one only reads the count.
 	 */
 	send(): Promise<void> {
 		this.#sending ??= this.#lock(() => this.#sendAll())
@@ -281,7 +358,7 @@ export class PendingScans {
 		await queueDeletesSettled();
 		const run = { left: false };
 		try {
-			await this.#sendEach(store, codes, run);
+			await this.#sendEach(store, sendOrder(codes, this.#cursor.get()), run);
 		} catch {
 			this.#lost();
 			if (run.left) this.departures++;
@@ -291,8 +368,8 @@ export class PendingScans {
 	}
 
 	/**
-	 * Sends codes one after another, so a run that gets no answer stops before the rest; run.left
-	 * notes that a code left the device.
+	 * Sends codes one after another, so a run that gets no answer stops before the rest and the
+	 * next run starts after that code; run.left notes that a code left the device.
 	 */
 	async #sendEach(
 		store: PendingStore,
@@ -302,7 +379,8 @@ export class PendingScans {
 		const [barcode, ...rest] = codes;
 		if (barcode === undefined) return;
 		const outcome = await this.#post(barcode);
-		if (outcome === 'stop') return;
+		if (outcome === 'unanswered') this.#cursor.set(barcode);
+		if (outcome === 'unanswered' || outcome === 'stop') return;
 		if (outcome !== 'kept') {
 			await store.remove(barcode);
 			run.left = true;
@@ -321,7 +399,7 @@ export class PendingScans {
 				signal
 			});
 			return this.#outcome(res);
-		}).catch((): Outcome => 'stop');
+		}).catch((): Outcome => 'unanswered');
 	}
 
 	/**

@@ -17,7 +17,9 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   round, only when no book provider returned a candidate (a failed one
   counts as no answer and keeps its error). Both rounds together end within
   17 s, under the client's 20 s request deadline: a second round after a
-  first that hit the 10 s provider timeout gets what is left. The stub
+  first that hit the 10 s provider timeout gets what is left. A provider
+  that implements `lookup.Timed` gets its own fetch limit instead of the
+  10 s, still under the 17 s. The stub
   provider waits in that round too for an ISBN. Book candidates for the scanned ISBN
   from several providers merge into one; registration order is the field
   priority. Every provider gets `ohara_lookup_provider_requests_total`,
@@ -57,10 +59,15 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   Browser-like sites get `fetch.BrowserUserAgent`.
   When some of its sources fail but others answered, it returns a
   `*lookup.PartialError`: the lookup reports the failure next to the
-  candidates and does not cache the answer. The movie chain waits at most
-  4 s for each name source and 6 s for all of them, fallbacks included,
-  so a hanging catalog fails as that source and leaves TMDB the rest of
-  the 10 s lookup. An Allegro token refresh runs on past that wait.
+  candidates and does not cache the answer. The movie chain's fetch may
+  take 15 s. It waits at most 4 s for each name source and then, when
+  they name no searchable title, 6 s for each fallback (UPCitemdb),
+  counted from when the fallbacks are asked, so a slow Allegro miss
+  leaves UPCitemdb its own time and TMDB keeps at least 5 s, unless the
+  17 s lookup budget ends first: an ISBN-range code asks the movie chain
+  in the second round, after the book providers. A source that runs out
+  of time fails as that source; the answer is then partial and not
+  cached. An Allegro token refresh runs on past that wait.
 - Music is the kind `music`: an album title whose `authors` are its credited
   artists, editions with a `cd`, `vinyl` or `cassette` format (required, like
   a movie's `dvd`/`bluray`/`uhd`) and an optional `discogs_release_id`. The
@@ -113,6 +120,28 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   repeated taps cost one request per provider and code per hour even
   while one is in flight or after it failed. The page drops the flag
   from the address once used, so a reload reads the cache.
+- A failed answer is never cached, so a cached provider (one with a
+  TTL) gets at most `lookup.FailureRequests` (3) requests per code within
+  any `lookup.FailureWindow` (10 minutes) while none succeeds, for every
+  lookup path: a scan, a typed code, "Spróbuj ponownie" and "Szukaj
+  ponownie". Each request frees its slot a whole window after it was
+  made. Past the limit the lookup answers with that provider's last
+  failure, partial candidates included, without a request, and a success
+  clears the count. The count lives in memory, so a restart clears it.
+- Requests still in flight count, and a failure the source answered
+  counts even when the client gave up on the lookup, also when it comes
+  with another source's cancellation. A lookup given up
+  on before it starts asks nothing; one given up on before its source
+  answered (for example while it waits behind Discogs' pacing) counts,
+  but such requests alone never refuse another, as they prove nothing
+  about the source.
+- A failure that names a source paused for its rate limit
+  (`lookup.PausedError`, the movie chain's UPCitemdb after a 429) lets
+  one more request past the limit once the provider reports the pause
+  over, so the first lookup after the reset asks again, even when later
+  failures without a pause came in meanwhile. That first request uses
+  the retry even when it fits within the limit. A pause already over when
+  the request failed lets nothing past.
 - A music barcode no source knows falls back to a Discogs text search for
   Allegro's product name.
 - `GET /api/search?kind=&q=&barcode=&format=` searches by the title the

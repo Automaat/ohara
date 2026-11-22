@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+	allegroSearchURL,
 	ageClock,
 	confirmedListings,
 	wishFacts,
@@ -334,6 +335,22 @@ describe('the wish list', () => {
 			authors: 'authors' in wish ? [...wish.authors] : undefined
 		});
 		expect(facts.replace(/\s/g, ' ')).toBe(expected);
+	});
+});
+
+describe('Allegro wish search', () => {
+	it.each<[string, Parameters<typeof allegroSearchURL>[0]]>([
+		['Żółć: A & B + C #2 DVD', { kind: 'movie', name: 'Żółć: A & B + C #2', format: 'dvd' }],
+		['Debut Björk Winyl', { kind: 'music', name: 'Debut', authors: ['Björk'], format: 'vinyl' }],
+		['Dark sezon 2 Blu-ray', { kind: 'tv', name: 'Dark', season: 2, format: 'bluray' }]
+	])('searches for %s', (phrase, wish) => {
+		const url = new URL(allegroSearchURL(wish) ?? '');
+		expect(`${url.origin}${url.pathname}`).toBe('https://allegro.pl/listing');
+		expect([...url.searchParams]).toEqual([['string', phrase]]);
+	});
+
+	it('omits the link for a blank title', () => {
+		expect(allegroSearchURL({ kind: 'book', name: '  ', format: null })).toBeNull();
 	});
 });
 

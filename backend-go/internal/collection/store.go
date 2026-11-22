@@ -810,10 +810,23 @@ func (s *Store) CreateCopy(ctx context.Context, in *CopyInput) (Copy, bool, erro
 		if err := claimRequestKey(ctx, tx, in.RequestKey); err != nil {
 			return err
 		}
+		var id int64
+		if in.RequestKey != nil {
+			// A replay answers with the copy its key made, whatever became
+			// of the edition it named: the key's lock keeps the row stable.
+			err := tx.QueryRow(ctx, `SELECT id FROM copy WHERE request_key = $1`, *in.RequestKey).Scan(&id)
+			switch {
+			case err == nil:
+				created = false
+				c, err = getCopy(ctx, tx, id)
+				return err
+			case !errors.Is(err, pgx.ErrNoRows):
+				return fmt.Errorf("replay copy: %w", err)
+			}
+		}
 		if err := checkGradeKind(ctx, tx, in); err != nil {
 			return err
 		}
-		var id int64
 		err := tx.QueryRow(ctx, `INSERT INTO copy (edition_id, status, price_cents, purchased_on,
 			shop, acquired_as, condition, media_grade, sleeve_grade, notes, max_price_cents,
 			max_market_percent, sold_on, sale_price_cents, location, expected_on, exact_edition, request_key)
@@ -880,13 +893,15 @@ func (s *Store) UpdateCopy(ctx context.Context, id int64, in *CopyInput) (Copy, 
 		}
 		var err error
 		c, err = scanCopy(tx.QueryRow(ctx, `UPDATE copy c SET edition_id = $2, status = $3, price_cents = $4,
-			purchased_on = $5, shop = $6, acquired_as = $7, condition = $8, media_grade = $9,
+			purchased_on = $5, shop = $6, acquired_as = $7,
+			condition = CASE WHEN $19 THEN c.condition ELSE $8 END, media_grade = $9,
 			sleeve_grade = $10, notes = $11, max_price_cents = $12, max_market_percent = $13, sold_on = $14,
 			sale_price_cents = $15, location = $16, expected_on = $17, exact_edition = $18,
 			updated_at = now() WHERE c.id = $1 RETURNING `+copyColumns,
 			id, in.EditionID, in.Status, in.PriceCents, timeOf(in.PurchasedOn), in.Shop, in.AcquiredAs,
 			in.Condition, in.MediaGrade, in.SleeveGrade, in.Notes, in.MaxPriceCents, in.MaxMarketPercent,
-			timeOf(in.SoldOn), in.SalePriceCents, in.Location, timeOf(in.ExpectedOn), in.ExactEdition))
+			timeOf(in.SoldOn), in.SalePriceCents, in.Location, timeOf(in.ExpectedOn), in.ExactEdition,
+			in.KeepCondition))
 		if isFKViolation(err, "copy_edition_id_fkey") {
 			return ErrEditionNotFound
 		}

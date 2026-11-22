@@ -582,9 +582,22 @@ func (h *Handler) getCopy(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, h.logger, http.StatusOK, CopyDetail{Copy: c, Edition: e, Title: t, Loans: loans})
 }
 
+// copyBody reads a copy's condition as it was sent, since an update
+// without one keeps the stored condition and a null clears it.
+type copyBody struct {
+	CopyInput
+	Condition json.RawMessage `json:"condition"`
+}
+
 func (h *Handler) decodeCopy(w http.ResponseWriter, r *http.Request) (*CopyInput, bool) {
-	var in CopyInput
-	if !httpx.DecodeJSONFields(w, r, h.logger, &in, "sale_price_cents") {
+	var body copyBody
+	if !httpx.DecodeJSONFields(w, r, h.logger, &body, "sale_price_cents", "media_grade", "sleeve_grade") {
+		return nil, false
+	}
+	in := body.CopyInput
+	in.KeepCondition = body.Condition == nil
+	if !in.KeepCondition && json.Unmarshal(body.Condition, &in.Condition) != nil {
+		httpx.WriteFieldError(w, h.logger, fieldErr("condition", "must be a string or null"))
 		return nil, false
 	}
 	if fe := in.Normalize(); fe != nil {

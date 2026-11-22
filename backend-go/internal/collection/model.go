@@ -265,6 +265,10 @@ type CopyInput struct {
 	Shop        string  `json:"shop"`
 	AcquiredAs  *string `json:"acquired_as" ts:"AcquiredAs"`
 	Condition   *string `json:"condition" ts:"Condition"`
+	// KeepCondition makes an update leave the stored condition as it is,
+	// for a PUT body without condition, so grading an album copy keeps
+	// it. Creates ignore it.
+	KeepCondition bool `json:"-"`
 	// MediaGrade and SleeveGrade are an album copy's Goldmine grades of
 	// the disc or tape and of its sleeve; a copy of another kind has none.
 	MediaGrade    *string `json:"media_grade,omitempty" ts:"MediaGrade,null"`

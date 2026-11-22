@@ -138,8 +138,9 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   `not_graded`, `no_cover`). A grade on a copy of any other kind, or an
   unknown value, answers 422 on its field; a `PUT` without one clears it.
   They sit beside the five-step `condition`, which stays as stored and
-  which the valuation's Discogs grade still reads; deals and valuation
-  ignore the grades. The album copy form adds "Stan nośnika" and "Stan
+  which the valuation's Discogs grade still reads: a `PUT /api/copies/{id}`
+  without `condition` keeps the stored one (null clears it), so a client
+  that only grades loses nothing. Deals and valuation ignore the grades. The album copy form adds "Stan nośnika" and "Stan
   okładki" with the English names ("Very Good Plus (VG+)"), and the copy's
   facts show "Gradacja: Nośnik VG+ · Okładka NM".
 

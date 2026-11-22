@@ -706,10 +706,54 @@ func TestMusicCopyGrades(t *testing.T) {
 		t.Fatalf("cleared grades = %v, %v", cleared.MediaGrade, cleared.SleeveGrade)
 	}
 
+	// A PUT that leaves condition out keeps the stored one; a null clears it.
+	a.mustDo(http.MethodPut, fmt.Sprintf("/api/copies/%d", c.ID), obj{"edition_id": vinyl, "status": "owned", "condition": "fair"},
+		nil, http.StatusOK)
+	var graded collection.Copy
+	a.mustDo(http.MethodPut, fmt.Sprintf("/api/copies/%d", c.ID), obj{
+		"edition_id": vinyl, "status": "owned", "media_grade": "good", "sleeve_grade": "fair",
+	}, &graded, http.StatusOK)
+	if graded.Condition == nil || *graded.Condition != "fair" || graded.MediaGrade == nil || *graded.MediaGrade != "good" {
+		t.Fatalf("grade-only PUT = condition %v, media grade %v", graded.Condition, graded.MediaGrade)
+	}
+	var ungraded collection.Copy
+	a.mustDo(http.MethodPut, fmt.Sprintf("/api/copies/%d", c.ID), obj{"edition_id": vinyl, "status": "owned", "condition": nil},
+		&ungraded, http.StatusOK)
+	if ungraded.Condition != nil {
+		t.Fatalf("condition after a null = %v", ungraded.Condition)
+	}
+
+	// A wrongly typed grade or condition names its field.
+	for _, field := range []string{"media_grade", "sleeve_grade", "condition"} {
+		a.fails(http.MethodPost, "/api/copies", obj{"edition_id": vinyl, "status": "owned", field: []string{"mint"}},
+			http.StatusUnprocessableEntity, field)
+		a.fails(http.MethodPut, fmt.Sprintf("/api/copies/%d", c.ID), obj{"edition_id": vinyl, "status": "owned", field: 1},
+			http.StatusUnprocessableEntity, field)
+	}
+
 	// Moving a graded copy to a film edition is refused.
 	a.fails(http.MethodPut, fmt.Sprintf("/api/copies/%d", c.ID), obj{
 		"edition_id": film, "status": "owned", "media_grade": "mint",
 	}, http.StatusUnprocessableEntity, "media_grade")
+}
+
+func TestGradedCopyReplayOutlivesItsEdition(t *testing.T) {
+	a := newAPI(t)
+	album := a.title("music", "Giant Steps")
+	first := a.edition(obj{"title_id": album, "format": "cd"})
+	second := a.edition(obj{"title_id": album, "format": "vinyl"})
+	add := obj{"edition_id": first, "status": "owned", "media_grade": "mint", "request_key": "grades-replay"}
+	var c collection.Copy
+	a.mustDo(http.MethodPost, "/api/copies", add, &c, http.StatusCreated)
+	a.mustDo(http.MethodPut, fmt.Sprintf("/api/copies/%d", c.ID), obj{"edition_id": second, "status": "owned", "media_grade": "mint"},
+		nil, http.StatusOK)
+	a.mustDo(http.MethodDelete, fmt.Sprintf("/api/editions/%d", first), nil, nil, http.StatusNoContent)
+
+	var replay collection.Copy
+	a.mustDo(http.MethodPost, "/api/copies", add, &replay, http.StatusOK)
+	if replay.ID != c.ID || replay.EditionID != second {
+		t.Fatalf("replay = copy %d on edition %d, want copy %d on edition %d", replay.ID, replay.EditionID, c.ID, second)
+	}
 }
 
 func TestDuplicateTMDBAndBadBodies(t *testing.T) {

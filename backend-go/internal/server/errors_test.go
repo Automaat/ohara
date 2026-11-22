@@ -108,7 +108,7 @@ func TestRouterErrorBodies(t *testing.T) {
 	}{
 		{"wrong method on status", http.MethodPatch, "/api/status", http.StatusMethodNotAllowed, "method not allowed", []string{http.MethodGet}},
 		{"wrong method on a domain route", http.MethodDelete, "/api/items", http.StatusMethodNotAllowed, "method not allowed", []string{http.MethodGet, http.MethodPost}},
-		{"wrong method on health", http.MethodPost, "/health", http.StatusMethodNotAllowed, "method not allowed", []string{http.MethodGet}},
+		{"wrong method on health", http.MethodPost, "/health", http.StatusMethodNotAllowed, "method not allowed", []string{http.MethodGet, http.MethodHead}},
 		{"wrong method on a QUERY route", http.MethodPatch, "/api/search", http.StatusMethodNotAllowed, "method not allowed", []string{"QUERY"}},
 		{"method chi does not route", "PROPFIND", "/api/status", http.StatusMethodNotAllowed, "method not allowed", nil},
 		{"handler panic", http.MethodGet, "/api/panic", http.StatusInternalServerError, "internal server error", nil},

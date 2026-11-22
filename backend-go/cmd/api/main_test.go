@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -322,9 +324,10 @@ func TestHuntAndValuationSpaceTheirRequestsToOneSite(t *testing.T) {
 		}
 	}
 	newUpstreams(t)
-	sent := &sendTimes{base: http.DefaultTransport}
-	http.DefaultTransport = sent
-	t.Cleanup(func() { http.DefaultTransport = sent.base })
+	base := http.DefaultTransport
+	sent := &sendTimes{}
+	http.DefaultTransport = sent.transport(base.(*http.Transport))
+	t.Cleanup(func() { http.DefaultTransport = base })
 	h, _, r, _, err := newRuns(pool, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatalf("newRuns: %v", err)
@@ -352,24 +355,45 @@ func TestHuntAndValuationSpaceTheirRequestsToOneSite(t *testing.T) {
 	}
 }
 
-// sendTimes stands in for http.DefaultTransport under the paced transport
-// and keeps when each request to OLX was handed on to be sent. The pacer
-// spaces requests by when they are sent, not by when the test server's
-// handler sees them, so arrival times can come out a little short of the
-// gap while send times cannot.
+// sendTimes dials the connections of a stand-in for http.DefaultTransport
+// under the paced transport and keeps when each request to OLX reached its
+// connection. The pacer spaces requests by that moment, not by when the
+// test server's handler sees them, so arrival times can come out a little
+// short of the gap while these cannot. Neither can the time a request is
+// handed to the transport, which HTTP/1 can still hold in a buffer.
 type sendTimes struct {
-	base  http.RoundTripper
 	mu    sync.Mutex
 	times []time.Time
 }
 
-func (s *sendTimes) RoundTrip(req *http.Request) (*http.Response, error) {
-	if strings.HasPrefix(req.URL.Path, "/olx/") {
-		s.mu.Lock()
-		s.times = append(s.times, time.Now())
-		s.mu.Unlock()
+// transport is a clone of base whose connections report to s.
+func (s *sendTimes) transport(base *http.Transport) *http.Transport {
+	t := base.Clone()
+	dial := base.DialContext
+	t.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		conn, err := dial(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		return sendTimesConn{Conn: conn, times: s}, nil
 	}
-	return s.base.RoundTrip(req)
+	return t
+}
+
+type sendTimesConn struct {
+	net.Conn
+	times *sendTimes
+}
+
+// Write keeps the time of a write that starts a request to OLX; the
+// upstreams speak plain HTTP/1.1, so a request starts with its request line.
+func (c sendTimesConn) Write(b []byte) (int, error) {
+	if bytes.HasPrefix(b, []byte("GET /olx/")) {
+		c.times.mu.Lock()
+		c.times.times = append(c.times.times, time.Now())
+		c.times.mu.Unlock()
+	}
+	return c.Conn.Write(b)
 }
 
 func (s *sendTimes) olx() []time.Time {

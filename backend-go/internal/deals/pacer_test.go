@@ -1,12 +1,22 @@
 package deals
 
 import (
+	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
+	"io"
+	"maps"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
+	"net/url"
 	"os"
+	"reflect"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -264,5 +274,556 @@ func TestPacedTransportPacesARedirect(t *testing.T) {
 	}
 	if d := followed.Sub(arrivals["/?other"]); d < gap-networkJitter {
 		t.Fatalf("the redirect's request arrived %v after the other lane's, want about %v", d, gap)
+	}
+}
+
+// writeClock is the dialer of a test transport: it keeps when each write
+// to its connections reached the connection underneath. With stall set,
+// the stallNth write (the first when 0) that starts after the request was
+// reported written waits that long first, like a writer descheduled
+// between writing a request into its buffer and flushing it.
+type writeClock struct {
+	stall    time.Duration
+	stallNth int
+	wrote    atomic.Bool
+	stalling chan struct{}
+	mu       sync.Mutex
+	after    int
+	writes   []time.Time
+}
+
+func newWriteClock(stall time.Duration) *writeClock {
+	return &writeClock{stall: stall, stalling: make(chan struct{})}
+}
+
+// dial dials through c with dial, a zero net.Dialer when nil.
+func (c *writeClock) dial(dial func(ctx context.Context, network, addr string) (net.Conn, error)) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	if dial == nil {
+		dial = (&net.Dialer{}).DialContext
+	}
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		conn, err := dial(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		return clockedConn{Conn: conn, clock: c}, nil
+	}
+}
+
+// transport is a clone of base that dials through c.
+func (c *writeClock) transport(base *http.Transport) *http.Transport {
+	t := base.Clone()
+	t.DialContext = c.dial(base.DialContext)
+	return t
+}
+
+// legacyTransport is a clone of base that dials through c with the
+// deprecated Dial field, set through reflection as naming it fails the
+// linters.
+func (c *writeClock) legacyTransport(base *http.Transport) *http.Transport {
+	t := base.Clone()
+	dial := c.dial(base.DialContext)
+	t.DialContext = nil
+	reflect.ValueOf(t).Elem().FieldByName("Dial").Set(reflect.ValueOf(func(network, addr string) (net.Conn, error) {
+		return dial(context.Background(), network, addr)
+	}))
+	return t
+}
+
+// get asks url through client and marks the request written when its
+// transport reports so.
+func (c *writeClock) get(client *http.Client, target string) (*http.Response, error) {
+	return c.send(client, target, nil)
+}
+
+// send is get with the request changed by configure first, when not nil.
+func (c *writeClock) send(client *http.Client, target string, configure func(*http.Request)) (*http.Response, error) {
+	ctx := httptrace.WithClientTrace(context.Background(), &httptrace.ClientTrace{
+		WroteRequest: func(httptrace.WroteRequestInfo) { c.wrote.Store(true) },
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, http.NoBody)
+	if err != nil {
+		return nil, err
+	}
+	if configure != nil {
+		configure(req)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	return resp, resp.Body.Close()
+}
+
+func (c *writeClock) write() {
+	c.mu.Lock()
+	stall := false
+	if c.wrote.Load() {
+		c.after++
+		stall = c.stall > 0 && c.after == max(c.stallNth, 1)
+	}
+	c.mu.Unlock()
+	if stall {
+		close(c.stalling)
+		time.Sleep(c.stall)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.writes = append(c.writes, time.Now())
+}
+
+// writesAfterWritten counts the writes that started after the request
+// was reported written.
+func (c *writeClock) writesAfterWritten() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.after
+}
+
+func (c *writeClock) times() []time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]time.Time(nil), c.writes...)
+}
+
+type clockedConn struct {
+	net.Conn
+	clock *writeClock
+}
+
+func (c clockedConn) Write(b []byte) (int, error) {
+	c.clock.write()
+	return c.Conn.Write(b)
+}
+
+func okServer(t *testing.T, secure bool) (*httptest.Server, *http.Transport) {
+	t.Helper()
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		_, _ = w.Write([]byte("ok"))
+	})
+	if !secure {
+		srv := httptest.NewServer(handler)
+		t.Cleanup(srv.Close)
+		return srv, http.DefaultTransport.(*http.Transport)
+	}
+	srv := httptest.NewTLSServer(handler)
+	t.Cleanup(srv.Close)
+	return srv, srv.Client().Transport.(*http.Transport)
+}
+
+// connectProxy is an HTTPS proxy that tunnels CONNECT requests.
+func connectProxy(t *testing.T) *url.URL {
+	t.Helper()
+	proxy := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodConnect {
+			http.Error(w, "CONNECT only", http.StatusMethodNotAllowed)
+			return
+		}
+		dst, err := (&net.Dialer{}).DialContext(r.Context(), "tcp", r.Host)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		conn, buf, err := http.NewResponseController(w).Hijack()
+		if err != nil {
+			_ = dst.Close()
+			return
+		}
+		_, _ = conn.Write([]byte("HTTP/1.1 200 Connection established\r\n\r\n"))
+		go func() {
+			_, _ = io.Copy(dst, buf)
+			_ = dst.Close()
+		}()
+		_, _ = io.Copy(conn, dst)
+		_ = conn.Close()
+	}))
+	t.Cleanup(proxy.Close)
+	u, err := url.Parse(proxy.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u
+}
+
+func TestPacedTransportSpacesRequestsByTheirWriteToTheConnection(t *testing.T) {
+	chunkedPost := func(req *http.Request) {
+		body := bytes.Repeat([]byte("a"), 8193)
+		req.Method = http.MethodPost
+		req.Body = io.NopCloser(bytes.NewReader(body))
+		req.ContentLength = int64(len(body))
+		req.TransferEncoding = []string{"chunked"}
+	}
+	for _, tc := range []struct {
+		name       string
+		tls        bool
+		proxy      bool
+		legacyDial bool
+		configure  func(*http.Request)
+		// stallNth is the write after the request was reported written
+		// that stalls; oneFlush expects that write never to come, as
+		// the request's flush is a single write.
+		stallNth int
+		oneFlush bool
+	}{
+		{name: "http"},
+		{name: "https", tls: true},
+		{name: "header larger than the write buffer", configure: padded(5000)},
+		{name: "https through an https proxy", tls: true, proxy: true},
+		{name: "https flush longer than a first TLS record", tls: true, configure: padded(2900), stallNth: 2, oneFlush: true},
+		{name: "chunked body with a Content-Length", configure: chunkedPost},
+		{name: "base dialing through the deprecated Dial", legacyDial: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const gap = 100 * time.Millisecond
+			srv, base := okServer(t, tc.tls)
+			p := NewPacer(gap)
+			slow, quick := newWriteClock(gap*3/2), newWriteClock(0)
+			slow.stallNth = tc.stallNth
+			slowBase := slow.transport(base)
+			if tc.legacyDial {
+				slowBase = slow.legacyTransport(base)
+			}
+			if tc.proxy {
+				slowBase.Proxy = http.ProxyURL(connectProxy(t))
+			}
+			slowClient := pacedClient(p.Lane(), slowBase)
+			quickClient := pacedClient(p.Lane(), quick.transport(base))
+			t.Cleanup(slowClient.CloseIdleConnections)
+			t.Cleanup(quickClient.CloseIdleConnections)
+
+			done := make(chan error, 1)
+			go func() {
+				_, err := slow.send(slowClient, srv.URL, tc.configure)
+				done <- err
+			}()
+			select {
+			case <-slow.stalling:
+				if tc.oneFlush {
+					t.Fatalf("the first lane's flush took %d writes, want one", slow.writesAfterWritten())
+				}
+			case err := <-done:
+				if !tc.oneFlush {
+					t.Fatalf("the first lane's request ended without a write after it was reported written: %v", err)
+				}
+				if n := slow.writesAfterWritten(); n != 1 {
+					t.Fatalf("the first lane's flush took %d writes, want one", n)
+				}
+				done <- err
+			}
+			if _, err := quick.get(quickClient, srv.URL); err != nil {
+				t.Fatalf("second lane: %v", err)
+			}
+			if err := <-done; err != nil {
+				t.Fatalf("first lane: %v", err)
+			}
+
+			slowWrites, writes := slow.times(), quick.times()
+			if len(writes) == 0 || len(slowWrites) == 0 {
+				t.Fatalf("writes: first lane %d, second lane %d", len(slowWrites), len(writes))
+			}
+			if d := writes[0].Sub(slowWrites[len(slowWrites)-1]); d < gap {
+				t.Fatalf("the second lane wrote to its connection %v after the first lane's request last wrote to its own, want at least %v", d, gap)
+			}
+		})
+	}
+}
+
+// padded sets a header of n bytes on a request.
+func padded(n int) func(*http.Request) {
+	return func(req *http.Request) { req.Header.Set("X-Padding", strings.Repeat("a", n)) }
+}
+
+func TestPacedTransportKeepsHTTP2WhereTheBaseHadIt(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		base  *http.Transport
+		force bool
+	}{
+		{name: "zero transport", base: &http.Transport{}, force: true},
+		{name: "default transport", base: http.DefaultTransport.(*http.Transport), force: true},
+		{name: "own TLS config", base: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}}},
+		{name: "own dialer", base: &http.Transport{DialContext: (&net.Dialer{}).DialContext}},
+		{name: "HTTP/2 turned off", base: &http.Transport{TLSNextProto: map[string]func(string, *tls.Conn) http.RoundTripper{}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clone := watchWrites(tc.base)
+			if clone.ForceAttemptHTTP2 != tc.force {
+				t.Fatalf("ForceAttemptHTTP2 = %v, want %v", clone.ForceAttemptHTTP2, tc.force)
+			}
+			if !clone.TLSClientConfig.DynamicRecordSizingDisabled {
+				t.Fatal("the clone sends TLS records in growing sizes")
+			}
+		})
+	}
+}
+
+// arrivals is a server that keeps the path and arrival time of each
+// request.
+func arrivals(t *testing.T) (*httptest.Server, func() map[string]time.Time) {
+	t.Helper()
+	var mu sync.Mutex
+	at := map[string]time.Time{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		at[r.URL.Path] = time.Now()
+		mu.Unlock()
+		_, _ = w.Write([]byte("ok"))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, func() map[string]time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return maps.Clone(at)
+	}
+}
+
+func getURL(ctx context.Context, client *http.Client, target string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, http.NoBody)
+	if err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(io.Discard, resp.Body)
+	return errors.Join(err, resp.Body.Close())
+}
+
+func TestPacedTransportWatchesAZeroTransport(t *testing.T) {
+	const gap = 100 * time.Millisecond
+	srv, arrived := arrivals(t)
+	p := NewPacer(gap)
+	zero := pacedClient(p.Lane(), &http.Transport{})
+	t.Cleanup(zero.CloseIdleConnections)
+	other := pacedClient(p.Lane(), nil)
+
+	stalling := make(chan struct{})
+	ctx := httptrace.WithClientTrace(context.Background(), &httptrace.ClientTrace{
+		WroteRequest: func(httptrace.WroteRequestInfo) {
+			close(stalling)
+			time.Sleep(gap * 3 / 2)
+		},
+	})
+	done := make(chan error, 1)
+	go func() { done <- getURL(ctx, zero, srv.URL+"/first") }()
+	select {
+	case <-stalling:
+	case err := <-done:
+		t.Fatalf("the first request was never reported written: %v", err)
+	}
+	if err := getURL(context.Background(), other, srv.URL+"/second"); err != nil {
+		t.Fatalf("second lane: %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("first lane: %v", err)
+	}
+	at := arrived()
+	if d := at["/second"].Sub(at["/first"]); d < gap-networkJitter {
+		t.Fatalf("the second lane's request arrived %v after the first, want about %v", d, gap)
+	}
+}
+
+// hookedConn runs before ahead of each write; a write it fails sends
+// nothing.
+type hookedConn struct {
+	net.Conn
+	before func() error
+}
+
+func (c hookedConn) Write(b []byte) (int, error) {
+	if err := c.before(); err != nil {
+		return 0, err
+	}
+	return c.Conn.Write(b)
+}
+
+func TestPacedTransportHoldsTheSiteWhileARequestIsTriedAgain(t *testing.T) {
+	const gap = 100 * time.Millisecond
+	srv, base := okServer(t, false)
+	var dials atomic.Int32
+	var broken atomic.Bool
+	redialing, resume := make(chan struct{}), make(chan struct{})
+	var mu sync.Mutex
+	var retried time.Time
+	retrying := base.Clone()
+	retrying.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		n := dials.Add(1)
+		if n == 2 {
+			close(redialing)
+			<-resume
+		}
+		conn, err := (&net.Dialer{}).DialContext(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		before := func() error {
+			mu.Lock()
+			defer mu.Unlock()
+			if retried.IsZero() {
+				retried = time.Now()
+			}
+			return nil
+		}
+		if n == 1 {
+			before = func() error {
+				if broken.Load() {
+					return errors.New("connection reset")
+				}
+				return nil
+			}
+		}
+		return hookedConn{Conn: conn, before: before}, nil
+	}
+	p := NewPacer(gap)
+	first := pacedClient(p.Lane(), retrying)
+	t.Cleanup(first.CloseIdleConnections)
+	quick := newWriteClock(0)
+	second := pacedClient(p.Lane(), quick.transport(base))
+	t.Cleanup(second.CloseIdleConnections)
+	ctx := context.Background()
+
+	if err := getURL(ctx, first, srv.URL+"/warm"); err != nil {
+		t.Fatalf("warming the connection: %v", err)
+	}
+	broken.Store(true)
+	done := make(chan error, 1)
+	go func() { done <- getURL(ctx, first, srv.URL+"/again") }()
+	select {
+	case <-redialing:
+	case err := <-done:
+		t.Fatalf("the transport did not try the request again on a new connection: %v", err)
+	}
+	secondDone := make(chan error, 1)
+	go func() {
+		_, err := quick.get(second, srv.URL+"/second")
+		secondDone <- err
+	}()
+	time.Sleep(gap / 2)
+	close(resume)
+	if err := <-done; err != nil {
+		t.Fatalf("first lane: %v", err)
+	}
+	if err := <-secondDone; err != nil {
+		t.Fatalf("second lane: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	writes := quick.times()
+	if len(writes) == 0 || retried.IsZero() {
+		t.Fatalf("writes: second lane %d, retried at %v", len(writes), retried)
+	}
+	if d := writes[0].Sub(retried); d < gap {
+		t.Fatalf("the second lane wrote %v after the first lane's retried request, want at least %v", d, gap)
+	}
+}
+
+func TestPacedTransportDoesNotHoldTheSiteForAnAnswerOnEachProtocol(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		tls       bool
+		http2     bool
+		protoWant int
+	}{
+		{name: "HTTP/1.1 over TLS", tls: true, protoWant: 1},
+		{name: "HTTP/2 over TLS", tls: true, http2: true, protoWant: 2},
+		{name: "cleartext HTTP/2", http2: true, protoWant: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const gap = 100 * time.Millisecond
+			release := make(chan struct{})
+			defer close(release)
+			srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/held" {
+					select {
+					case <-release:
+					case <-r.Context().Done():
+						return
+					}
+				}
+				_, _ = w.Write([]byte("ok"))
+			}))
+			var base *http.Transport
+			if tc.tls {
+				srv.EnableHTTP2 = tc.http2
+				srv.StartTLS()
+				base = srv.Client().Transport.(*http.Transport)
+			} else {
+				srv.Config.Protocols = new(http.Protocols)
+				srv.Config.Protocols.SetUnencryptedHTTP2(true)
+				srv.Start()
+				base = http.DefaultTransport.(*http.Transport).Clone()
+				base.Protocols = new(http.Protocols)
+				base.Protocols.SetUnencryptedHTTP2(true)
+			}
+			t.Cleanup(srv.Close)
+			p := NewPacer(gap)
+			held, other := newWriteClock(0), newWriteClock(0)
+			heldClient := pacedClient(p.Lane(), held.transport(base))
+			otherClient := pacedClient(p.Lane(), other.transport(base))
+			t.Cleanup(heldClient.CloseIdleConnections)
+			t.Cleanup(otherClient.CloseIdleConnections)
+			go func() { _, _ = held.get(heldClient, srv.URL+"/held") }()
+			time.Sleep(gap / 2)
+
+			finished := make(chan struct{})
+			var resp *http.Response
+			var err error
+			go func() {
+				defer close(finished)
+				resp, err = other.get(otherClient, srv.URL+"/other")
+			}()
+			select {
+			case <-finished:
+			case <-time.After(2 * time.Second):
+				t.Fatal("the other lane still waits beside a request waiting for its answer")
+			}
+			if err != nil {
+				t.Fatalf("other lane: %v", err)
+			}
+			if resp.ProtoMajor != tc.protoWant {
+				t.Fatalf("answered over HTTP/%d, want HTTP/%d", resp.ProtoMajor, tc.protoWant)
+			}
+		})
+	}
+}
+
+// brokenConn fails every write.
+type brokenConn struct{ net.Conn }
+
+func (brokenConn) Write([]byte) (int, error) { return 0, errors.New("connection reset") }
+
+func TestPacedTransportReleasesTheSiteAfterAFailedWrite(t *testing.T) {
+	const gap = 50 * time.Millisecond
+	srv, _ := okServer(t, false)
+	broken := http.DefaultTransport.(*http.Transport).Clone()
+	broken.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		conn, err := (&net.Dialer{}).DialContext(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		return brokenConn{Conn: conn}, nil
+	}
+	p := NewPacer(gap)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	get := func(client *http.Client) error {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, http.NoBody)
+		if err != nil {
+			return err
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return err
+		}
+		return resp.Body.Close()
+	}
+	if err := get(pacedClient(p.Lane(), broken)); err == nil {
+		t.Fatal("a request whose write failed succeeded")
+	}
+	if err := get(pacedClient(p.Lane(), nil)); err != nil {
+		t.Fatalf("the next lane after a failed write: %v", err)
 	}
 }

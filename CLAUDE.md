@@ -164,9 +164,11 @@ router answers 401 (`{"error": "..."}`, never a redirect) to a request
 without a non-empty `Remote-User` header, the one Traefik copies from
 Authelia's answer, so a request that skips the middleware reaches no handler,
 page or file. Only `GET /health` and `GET /metrics` stay open, for the Docker
-healthcheck and Prometheus, and `GET /share/…`, the wishlist's read-only
-share link (see [deals](docs/deals.md)), which the owner chose to open to
-anyone who has its unguessable token; each path is matched as chi routes
+healthcheck and Prometheus, `HEAD /health`, for monitors that probe with
+`HEAD` (it answers like `GET /health` without the body), and
+`GET /share/…`, the wishlist's read-only share link (see
+[deals](docs/deals.md)), which the owner chose to open to anyone who has
+its unguessable token; each path is matched as chi routes
 it, and a 401 still counts in `ohara_http_requests_total`. Production
 needs an Authelia bypass for `/share/` alone, the one prefix that serves
 anything without a login. The guard checks only that the
@@ -199,6 +201,7 @@ browser's `Host` (`changeOrigin: false`) so dev writes pass this check.
 | `OHARA_DEALS_DELAY`                                                                          | `5s`                                               | Pause between two source requests, jittered ±50%                                                                                                           |
 | `OHARA_DEALS_CANARY_QUERY`                                                                   | `dvd`                                              | Query asked of OLX, Świat Książki, Tezeusz and Winylownia every run that should always find listings (`ohara_source_canary_ok`); BlueDVD asks `4k` instead |
 | `OHARA_TELEGRAM_BOT_TOKEN`, `OHARA_TELEGRAM_CHAT_ID`                                         | unset (no alerts)                                  | Telegram bot for deal alerts; set both or neither                                                                                                          |
+| `OHARA_DEALS_AUTOMATIC_ALERTS`                                                               | `false`                                            | Send automatic price deals to the configured Telegram chat for wishes with neither manual limit                                                            |
 | `OHARA_BLUEDVD`                                                                              | `true`                                             | BlueDVD shop (WooCommerce Store API) in the deal hunter; `false` leaves it out of runs and `/metrics`                                                      |
 | `OHARA_DVDMAX`                                                                               | `true`                                             | DVDmax film search. Its canary is `Blade Runner`. Set `false` to disable it.                                                                               |
 | `OHARA_DEALS_DVDMAX_URL`                                                                     | public endpoint                                    | Point DVDmax at a test double                                                                                                                              |

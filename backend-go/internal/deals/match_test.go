@@ -455,6 +455,7 @@ func audiobook(name, author string) Want {
 func TestAudiobookMatches(t *testing.T) {
 	audio := audiobook("Ostatnie życzenie", "Andrzej Sapkowski")
 	paper := book("Ostatnie życzenie", "Andrzej Sapkowski")
+	titled := func(want func(name, author string) Want) Want { return want("Audiobook", "Andrzej Sapkowski") }
 	tests := []struct {
 		name  string
 		want  Want
@@ -477,6 +478,14 @@ func TestAudiobookMatches(t *testing.T) {
 		{"a title naming audiobooks is no medium", book("Audiobook", "Jan Kowalski"), "Audiobook Kowalski książka", true},
 		{"an audiobook titled so needs another word", audiobook("Audiobook", "Jan Kowalski"), "Audiobook Kowalski książka", false},
 		{"movies ignore the word", bladeRunner("dvd"), "Blade Runner DVD audiobook gratis", true},
+		{"bez audiobooka names print", paper, "Ostatnie życzenie Sapkowskiego - książka bez audiobooka", true},
+		{"bez audiobooka is no audiobook", audio, "Ostatnie życzenie Sapkowskiego - książka bez audiobooka", false},
+		{"brak audio book is no audiobook", audio, "Ostatnie życzenie Sapkowski brak audio book", false},
+		{"audiobook before a short title", audiobook("To", "Stephen King"), "Audiobook To Stephen King", true},
+		{"short title before audiobook", audiobook("To", "Stephen King"), "To Stephen King audiobook", true},
+		{"short print title after audiobook", book("To", "Stephen King"), "Audiobook To Stephen King", false},
+		{"a title naming audiobooks, as an audiobook", titled(audiobook), "Audiobook Sapkowskiego — audiobook na CD", true},
+		{"a title naming audiobooks, its audiobook is no print", titled(book), "Audiobook Sapkowskiego — audiobook na CD", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

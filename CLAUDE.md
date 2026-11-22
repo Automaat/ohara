@@ -779,8 +779,8 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   read, the queue count following a queued scan, its add and undo,
   Kolekcja's filters, which also run at 1440 × 900, and its sort orders
   under active filters, tags from the title form to Kolekcja's filter,
-  an audiobook from "Dodaj tytuł" to the shelf, the "Nośnik" filter and
-  the edition form,
+  a book edition marked as an audiobook in its form, on the shelf and in
+  the "Nośnik" filter,
   cover photo uploads, the collection export, and the insurance report
   with its A4 printout. `scripts/e2e.sh` builds
   the image (or takes one as its first argument), starts it from

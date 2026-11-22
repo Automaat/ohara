@@ -489,7 +489,7 @@ func (w *Want) Queries() []string {
 		if artist != "" && !containsAll(words(q), required(artist)) {
 			q = artist + " " + q
 		}
-		if audiobook != "" && !namesAudiobook(words(q), nil) {
+		if audiobook != "" && audiobookMarks(words(q)) == 0 {
 			q += " " + audiobook
 		}
 		out = append(out, q)
@@ -672,37 +672,50 @@ func (l *ListingText) matches(w *Want, p *wantText) bool {
 
 // fitsBookMedium reports whether the listing is the want's book medium: an
 // audiobook listing for an audiobook want, a print one for a print want.
-// The words of the want's names and authors name no medium. Titles known
-// for Outranks have no edition, so this stays out of qualifies.
+// A listing names an audiobook when it marks one more often than a name or
+// author of the want does, so a title called "Audiobook" is no medium.
+// Titles known for Outranks have no edition, so this stays out of
+// qualifies.
 func (l *ListingText) fitsBookMedium(w *Want, p *wantText) bool {
 	if w.Kind != "book" {
 		return true
 	}
+	own := 0
+	for _, ws := range p.ownWords {
+		own = max(own, audiobookMarks(ws))
+	}
 	audiobook := w.Format != nil && *w.Format == FormatAudiobook
-	return namesAudiobook(l.words, p.owns) == audiobook
+	return (audiobookMarks(l.words) > own) == audiobook
 }
 
 // FormatAudiobook is the format of a book edition that is a recording.
 const FormatAudiobook = "audiobook"
 
-// namesAudiobook reports whether a listing's words name an audiobook:
-// "audiobook" in any form ("audiobooka", "audiobooki"), "audiobuk", "audio
-// book" or "audioksiążka", leaving out the words skip reports, which a nil
-// skip keeps.
-func namesAudiobook(text []string, skip func(string) bool) bool {
-	prev := ""
-	for _, t := range text {
-		if skip != nil && skip(t) {
-			prev = ""
+// audiobookMarks counts the places text names an audiobook: "audiobook" in
+// any form ("audiobooka", "audiobooki"), "audiobuk", "audioksiążka" or
+// "audio book", except after "bez" or "brak" ("bez audiobooka", negated).
+func audiobookMarks(text []string) int {
+	n := 0
+	for i, t := range text {
+		start := i
+		switch {
+		case isAudiobookWord(t):
+		case i > 0 && text[i-1] == "audio" && t == "book":
+			start = i - 1
+		default:
 			continue
 		}
-		if strings.HasPrefix(t, "audiobook") || strings.HasPrefix(t, "audiobuk") ||
-			strings.HasPrefix(t, "audioksiazk") || prev == "audio" && t == "book" {
-			return true
+		if !negated(text, start) {
+			n++
 		}
-		prev = t
 	}
-	return false
+	return n
+}
+
+// isAudiobookWord reports whether word names an audiobook on its own.
+func isAudiobookWord(word string) bool {
+	return strings.HasPrefix(word, "audiobook") || strings.HasPrefix(word, "audiobuk") ||
+		strings.HasPrefix(word, "audioksiazk")
 }
 
 // lotFor reports whether the listing sells several titles for the want
@@ -903,11 +916,12 @@ func (l *ListingText) endsTitle(j int, byline []string) bool {
 	return isMediaWord(next) || l.releaseYear(next) || inByline(byline, next)
 }
 
-// isMediaWord reports whether word names a medium: a media word or a word
-// holding a disc format, as "dvd9" or "5xdvd" does.
+// isMediaWord reports whether word names a medium: a media word, a word
+// holding a disc format, as "dvd9" or "5xdvd" does, or one naming an
+// audiobook.
 func isMediaWord(word string) bool {
 	return mediaWords[word] || strings.Contains(word, "dvd") || strings.Contains(word, "bluray") ||
-		strings.Contains(word, "uhd")
+		strings.Contains(word, "uhd") || isAudiobookWord(word)
 }
 
 // inByline reports whether word is a word of byline in some case: the

@@ -2,6 +2,7 @@ package deals
 
 import (
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -309,5 +310,72 @@ func TestPickMostSpecific(t *testing.T) {
 				t.Fatalf("pick(%q) = %+v, want copy %d", tt.title, got, tt.wantCopy)
 			}
 		})
+	}
+}
+
+func TestPreparedWantMatchesAsUnprepared(t *testing.T) {
+	wants := []Want{
+		bladeRunner("dvd"), bladeRunner("bluray"), wiedzmin(), rocky(""), rocky("2"),
+		album("The Wall", "Pink Floyd", "cd"), album("Vinyl", "MC Hammer", "vinyl"), album("Interstellar", "Hans Zimmer", "cd"),
+	}
+	titles := NewTitles([]Want{
+		{TitleID: 900, Kind: "movie", Name: "Blade Runner 2049"},
+		{TitleID: 901, Kind: "music", Name: "The Wall Live", Authors: []string{"Pink Floyd"}},
+	})
+	listings := []string{
+		"Łowca androidów DVD", "Blade Runner Blu-ray", "Blade Runner 2049 DVD", "Sapkowski Ostatnie życzenie twarda okładka",
+		"Ostatnie życzenie pudełko Sapkowski", "Rocky II DVD", "Rocky 2 DVD", "Pink Floyd The Wall CD", "Pink Floyd The Wall Live CD",
+		"MC Hammer Vinyl LP", "Hans Zimmer Interstellar soundtrack CD", "Kupię Rocky DVD",
+		"Rocky 99999999999999999999 DVD", "Rocky 9223372036854775807 DVD",
+	}
+	for _, title := range listings {
+		text := NewListingText(title, defaultRules)
+		for i := range wants {
+			plain := wants[i]
+			prepared := wants[i]
+			prepared.Prepare()
+			if got, want := prepared.Matches(title), plain.Matches(title); got != want {
+				t.Errorf("prepared %q Matches(%q) = %v, unprepared %v", plain.Name, title, got, want)
+			}
+			if got, want := defaultRules.RejectedFor(title, &prepared), defaultRules.RejectedFor(title, &plain); got != want {
+				t.Errorf("prepared %q RejectedFor(%q) = %v, unprepared %v", plain.Name, title, got, want)
+			}
+			if got, want := titles.Outranks(&prepared, title), titles.Outranks(&plain, title); got != want {
+				t.Errorf("prepared %q Outranks(%q) = %v, unprepared %v", plain.Name, title, got, want)
+			}
+			want := plain.Matches(title) && !defaultRules.RejectedFor(title, &plain) && !titles.Outranks(&plain, title)
+			if got := text.Belongs(&prepared, titles); got != want {
+				t.Errorf("Belongs(%q, %q) = %v, want %v", title, plain.Name, got, want)
+			}
+		}
+	}
+}
+
+func TestPreparedWantChangedAfterwards(t *testing.T) {
+	w := wiedzmin()
+	w.Prepare()
+	w.Name = "Miecz przeznaczenia"
+	w.Authors = []string{"Jan Kowalski"}
+	if w.Matches("Sapkowski Ostatnie życzenie") {
+		t.Fatal("a want renamed after Prepare still matches its old name")
+	}
+	if !w.Matches("Miecz przeznaczenia Kowalski") {
+		t.Fatal("a want renamed after Prepare does not match its new name")
+	}
+	if got := w.Queries(); !slices.Equal(got, []string{"Miecz przeznaczenia kowalski"}) {
+		t.Fatalf("Queries() = %q, want the new name with the new surname", got)
+	}
+}
+
+func TestNumberParsesAsAtoi(t *testing.T) {
+	for _, word := range []string{
+		"", "0", "007", "2", "1999", "2049", "9223372036854775807", "9223372036854775808",
+		"99999999999999999999", "00000000000000000000001", "12a", "a12", "٢", "4k", "dvd",
+	} {
+		want, err := strconv.Atoi(word)
+		got, ok := number(word)
+		if ok != (err == nil) || (ok && got != want) {
+			t.Errorf("number(%q) = %d, %v; strconv.Atoi = %d, %v", word, got, ok, want, err)
+		}
 	}
 }

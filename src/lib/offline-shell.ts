@@ -1,11 +1,13 @@
 /**
  * Paths, relative to the base and with their query, that the service worker never answers or
- * keeps: the server's own routes, which are not pages of the app.
+ * keeps: the server's own routes, which are not pages of the app. The shared wishlist under share/
+ * is a page the server renders, so offline it fails instead of showing the app.
  */
 export const serverPaths: readonly RegExp[] = [
 	/^api(?:[/?]|$)/,
 	/^health(?:[/?]|$)/,
-	/^metrics(?:[/?]|$)/
+	/^metrics(?:[/?]|$)/,
+	/^share(?:[/?]|$)/
 ];
 
 const entryFile = /(?:^|\/)entry\/(?:start|app)\.[^/]+\.js$/;

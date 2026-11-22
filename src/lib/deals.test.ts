@@ -15,6 +15,7 @@ import {
 	marketPath,
 	searchedFor,
 	segmentLabel,
+	shareURL,
 	timeAgo,
 	underLimitCount,
 	underLimitLabel,
@@ -360,6 +361,20 @@ describe('searchedFor', () => {
 	it('says when no run finished since the server started', () => {
 		expect(searchedFor(1, status({}), now)).toBe(
 			'Szukamy ofert dla 1 pozycji z listy życzeń. Od uruchomienia serwera nie było wyszukiwania.'
+		);
+	});
+});
+
+describe('shareURL', () => {
+	it('puts the link path on the page origin', () => {
+		expect(shareURL({ url: '/share/abc_-1' }, 'https://ohara.example')).toBe(
+			'https://ohara.example/share/abc_-1'
+		);
+	});
+
+	it('keeps the origin port and drops the page path', () => {
+		expect(shareURL({ url: '/share/t' }, 'http://localhost:5173')).toBe(
+			'http://localhost:5173/share/t'
 		);
 	});
 });

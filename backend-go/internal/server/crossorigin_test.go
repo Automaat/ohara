@@ -46,7 +46,7 @@ func (a *writeAPI) Mount(r chi.Router) {
 	r.Put("/editions/{id}/cover", func(w http.ResponseWriter, r *http.Request) {
 		a.called = append(a.called, "PUT /editions/{id}/cover")
 		if _, err := io.Copy(io.Discard, r.Body); err != nil {
-			httpx.WriteInternal(w, a.logger, "read cover", err)
+			httpx.WriteInternal(w, r, a.logger, "read cover", err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)

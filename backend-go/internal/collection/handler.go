@@ -60,7 +60,7 @@ func (h *Handler) Mount(r chi.Router) {
 
 // writeErr maps store errors to responses. A missing parent named in the
 // body is a 422 on that field; a missing resource in the path is a 404.
-func (h *Handler) writeErr(w http.ResponseWriter, op string, err error) {
+func (h *Handler) writeErr(w http.ResponseWriter, r *http.Request, op string, err error) {
 	var fe *httpx.FieldError
 	switch {
 	case errors.As(err, &fe):
@@ -78,7 +78,7 @@ func (h *Handler) writeErr(w http.ResponseWriter, op string, err error) {
 	case errors.Is(err, ErrHasEditions), errors.Is(err, ErrHasCopies):
 		httpx.WriteError(w, h.logger, http.StatusConflict, err.Error())
 	default:
-		httpx.WriteInternal(w, h.logger, op, err)
+		httpx.WriteInternal(w, r, h.logger, op, err)
 	}
 }
 
@@ -163,7 +163,7 @@ func (h *Handler) collection(w http.ResponseWriter, r *http.Request) {
 	}
 	items, err := h.store.Collection(r.Context(), f)
 	if err != nil {
-		h.writeErr(w, "collection", err)
+		h.writeErr(w, r, "collection", err)
 		return
 	}
 	httpx.WriteJSON(w, h.logger, http.StatusOK, CollectionView{Items: items, Totals: totals(items)})
@@ -186,7 +186,7 @@ func (h *Handler) listTitles(w http.ResponseWriter, r *http.Request) {
 	}
 	titles, err := h.store.ListTitles(r.Context(), f)
 	if err != nil {
-		h.writeErr(w, "list titles", err)
+		h.writeErr(w, r, "list titles", err)
 		return
 	}
 	httpx.WriteJSON(w, h.logger, http.StatusOK, titles)
@@ -231,7 +231,7 @@ func (h *Handler) getTitle(w http.ResponseWriter, r *http.Request) {
 	}
 	detail, err := h.titleDetail(r.Context(), id)
 	if err != nil {
-		h.writeErr(w, "get title", err)
+		h.writeErr(w, r, "get title", err)
 		return
 	}
 	httpx.WriteJSON(w, h.logger, http.StatusOK, detail)
@@ -268,7 +268,7 @@ func (h *Handler) createTitle(w http.ResponseWriter, r *http.Request) {
 	}
 	t, created, err := h.store.CreateTitle(r.Context(), in)
 	if err != nil {
-		h.writeErr(w, "create title", err)
+		h.writeErr(w, r, "create title", err)
 		return
 	}
 	httpx.WriteJSON(w, h.logger, createdStatus(created), t)
@@ -285,7 +285,7 @@ func (h *Handler) updateTitle(w http.ResponseWriter, r *http.Request) {
 	}
 	t, err := h.store.UpdateTitle(r.Context(), id, in)
 	if err != nil {
-		h.writeErr(w, "update title", notFound(err))
+		h.writeErr(w, r, "update title", notFound(err))
 		return
 	}
 	httpx.WriteJSON(w, h.logger, http.StatusOK, t)
@@ -297,7 +297,7 @@ func (h *Handler) deleteTitle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.store.DeleteTitle(r.Context(), id); err != nil {
-		h.writeErr(w, "delete title", notFound(err))
+		h.writeErr(w, r, "delete title", notFound(err))
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -324,7 +324,7 @@ func (h *Handler) listEditions(w http.ResponseWriter, r *http.Request) {
 	}
 	editions, err := h.store.ListEditions(r.Context(), titleID, code)
 	if err != nil {
-		h.writeErr(w, "list editions", err)
+		h.writeErr(w, r, "list editions", err)
 		return
 	}
 	httpx.WriteJSON(w, h.logger, http.StatusOK, editions)
@@ -345,17 +345,17 @@ func (h *Handler) getEdition(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	e, err := h.store.GetEdition(ctx, id)
 	if err != nil {
-		h.writeErr(w, "get edition", notFound(err))
+		h.writeErr(w, r, "get edition", notFound(err))
 		return
 	}
 	t, err := h.store.GetTitle(ctx, e.TitleID)
 	if err != nil {
-		h.writeErr(w, "get edition title", err)
+		h.writeErr(w, r, "get edition title", err)
 		return
 	}
 	copies, err := h.store.ListCopies(ctx, id)
 	if err != nil {
-		h.writeErr(w, "get edition copies", err)
+		h.writeErr(w, r, "get edition copies", err)
 		return
 	}
 	httpx.WriteJSON(w, h.logger, http.StatusOK, EditionDetail{Edition: e, Title: t, Copies: copies})
@@ -380,7 +380,7 @@ func (h *Handler) createEdition(w http.ResponseWriter, r *http.Request) {
 	}
 	e, created, err := h.store.CreateEdition(r.Context(), in)
 	if err != nil {
-		h.writeErr(w, "create edition", parentErr(err, ErrTitleNotFound, "title_id"))
+		h.writeErr(w, r, "create edition", parentErr(err, ErrTitleNotFound, "title_id"))
 		return
 	}
 	httpx.WriteJSON(w, h.logger, createdStatus(created), e)
@@ -397,7 +397,7 @@ func (h *Handler) updateEdition(w http.ResponseWriter, r *http.Request) {
 	}
 	e, err := h.store.UpdateEdition(r.Context(), id, in)
 	if err != nil {
-		h.writeErr(w, "update edition", parentErr(err, ErrTitleNotFound, "title_id"))
+		h.writeErr(w, r, "update edition", parentErr(err, ErrTitleNotFound, "title_id"))
 		return
 	}
 	httpx.WriteJSON(w, h.logger, http.StatusOK, e)
@@ -410,7 +410,7 @@ func (h *Handler) deleteEdition(w http.ResponseWriter, r *http.Request) {
 	}
 	requeue := r.URL.Query().Get("requeue") == "1"
 	if err := h.store.DeleteEdition(r.Context(), id, requeue); err != nil {
-		h.writeErr(w, "delete edition", notFound(err))
+		h.writeErr(w, r, "delete edition", notFound(err))
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -431,17 +431,17 @@ func (h *Handler) getCopy(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, err := h.store.GetCopy(ctx, id)
 	if err != nil {
-		h.writeErr(w, "get copy", err)
+		h.writeErr(w, r, "get copy", err)
 		return
 	}
 	e, err := h.store.GetEdition(ctx, c.EditionID)
 	if err != nil {
-		h.writeErr(w, "get copy edition", err)
+		h.writeErr(w, r, "get copy edition", err)
 		return
 	}
 	t, err := h.store.GetTitle(ctx, e.TitleID)
 	if err != nil {
-		h.writeErr(w, "get copy title", err)
+		h.writeErr(w, r, "get copy title", err)
 		return
 	}
 	httpx.WriteJSON(w, h.logger, http.StatusOK, CopyDetail{Copy: c, Edition: e, Title: t})
@@ -466,7 +466,7 @@ func (h *Handler) createCopy(w http.ResponseWriter, r *http.Request) {
 	}
 	c, created, err := h.store.CreateCopy(r.Context(), in)
 	if err != nil {
-		h.writeErr(w, "create copy", parentErr(err, ErrEditionNotFound, "edition_id"))
+		h.writeErr(w, r, "create copy", parentErr(err, ErrEditionNotFound, "edition_id"))
 		return
 	}
 	if h.covers != nil && r.URL.Query().Get("cover") == "auto" {
@@ -486,7 +486,7 @@ func (h *Handler) updateCopy(w http.ResponseWriter, r *http.Request) {
 	}
 	c, err := h.store.UpdateCopy(r.Context(), id, in)
 	if err != nil {
-		h.writeErr(w, "update copy", parentErr(err, ErrEditionNotFound, "edition_id"))
+		h.writeErr(w, r, "update copy", parentErr(err, ErrEditionNotFound, "edition_id"))
 		return
 	}
 	httpx.WriteJSON(w, h.logger, http.StatusOK, c)
@@ -498,7 +498,7 @@ func (h *Handler) deleteCopy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.store.DeleteCopy(r.Context(), id); err != nil {
-		h.writeErr(w, "delete copy", err)
+		h.writeErr(w, r, "delete copy", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -520,7 +520,7 @@ func (h *Handler) discardRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.store.DiscardRequest(r.Context(), *key); err != nil {
-		h.writeErr(w, "discard request", err)
+		h.writeErr(w, r, "discard request", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

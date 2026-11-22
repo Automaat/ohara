@@ -28,6 +28,7 @@ import (
 	"github.com/Automaat/ohara/backend-go/internal/lookup/movie"
 	"github.com/Automaat/ohara/backend-go/internal/lookup/music"
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
+	"github.com/Automaat/ohara/backend-go/internal/reqlog"
 	"github.com/Automaat/ohara/backend-go/internal/scanqueue"
 	"github.com/Automaat/ohara/backend-go/internal/server"
 	"github.com/Automaat/ohara/backend-go/internal/valuation"
@@ -80,7 +81,7 @@ func healthcheck() int {
 }
 
 func run() int {
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	logger := slog.New(reqlog.NewHandler(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	slog.SetDefault(logger)
 	requireRemoteUser := envOr("OHARA_REQUIRE_REMOTE_USER", "false") == "true"
 	logger.Info("Remote-User check", "enabled", requireRemoteUser)

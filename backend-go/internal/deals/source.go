@@ -1,5 +1,5 @@
 // Package deals hunts for listings of wishlist copies on OLX, BlueDVD,
-// Świat Książki, Pepper.pl and Tezeusz. A run asks every source, keeps the listings that
+// Winylownia, Świat Książki, Pepper.pl and Tezeusz. A run asks every source, keeps the listings that
 // match a wishlist copy, stores each once as a price_observation and sends
 // one Telegram message per new listing at or below the copy's maximum price.
 package deals
@@ -217,19 +217,24 @@ func ObserveSearch(src Source, err error) {
 // response.
 func get(ctx context.Context, client *http.Client, source, endpoint, accept string) ([]byte, error) {
 	resp, err := fetch.Do(ctx, client, fetch.Request{
-		Source: source,
-		URL:    endpoint,
-		Header: http.Header{
-			"User-Agent":      {fetch.BrowserUserAgent},
-			"Accept":          {accept},
-			"Accept-Language": {"pl-PL,pl;q=0.9,en;q=0.8"},
-		},
+		Source:  source,
+		URL:     endpoint,
+		Header:  browserHeader(accept),
 		MaxBody: maxBody,
 	})
 	if err != nil {
 		return nil, err
 	}
 	return resp.Body, nil
+}
+
+// browserHeader is the header of a source request asking for accept.
+func browserHeader(accept string) http.Header {
+	return http.Header{
+		"User-Agent":      {fetch.BrowserUserAgent},
+		"Accept":          {accept},
+		"Accept-Language": {"pl-PL,pl;q=0.9,en;q=0.8"},
+	}
 }
 
 var priceChars = regexp.MustCompile(`[^\d,.]`)

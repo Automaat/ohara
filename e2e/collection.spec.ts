@@ -430,9 +430,11 @@ for (const viewport of viewports) {
 
 /**
  * Answers `GET /api/collection` with `total` copies made from one seeded through the API, so a
- * test meets a collection of thousands without adding them.
+ * test meets a collection of thousands without adding them. Titles past the first 360 run to
+ * two lines, so the tiles drawn first are shorter than the rest.
  */
 async function routeCollection(page: Page, request: APIRequestContext, total: number) {
+	const long = ' wydanie specjalne z długim podtytułem';
 	const t = tag();
 	await seed(request, { kind: 'book', name: `Wzór ${t}` });
 	const res = await request.get(`/api/collection?q=${t}`);
@@ -442,7 +444,7 @@ async function routeCollection(page: Page, request: APIRequestContext, total: nu
 		copy_id: 1_000_000 + i,
 		edition_id: 1_000_000 + i,
 		title_id: 1_000_000 + i,
-		name: `Tom ${String(i).padStart(4, '0')} ${t}`,
+		name: `Tom ${String(i).padStart(4, '0')} ${t}${i < 360 ? '' : long}`,
 		cover_url: null
 	}));
 	const totals = { copies: total, owned: total, wishlist: 0, priced: 0, spent_cents: 0 };
@@ -450,6 +452,29 @@ async function routeCollection(page: Page, request: APIRequestContext, total: nu
 }
 
 test('the end of a shelf still being drawn is the end of the collection', async ({
+	page,
+	request
+}) => {
+	await routeCollection(page, request, 2000);
+	const cdp = await page.context().newCDPSession(page);
+	await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 });
+	await page.goto('/');
+	const tiles = shelf(page).getByRole('listitem');
+	await expect(tiles.first()).toBeVisible();
+	expect(await tiles.count(), 'tiles drawn when the reader pressed End').toBeLessThan(2000);
+	await page.keyboard.press('End');
+	await expect(tiles).toHaveCount(2000, { timeout: 15_000 });
+	await expect(tiles.last()).toBeInViewport();
+	await expect
+		.poll(() =>
+			page.evaluate(
+				() => document.documentElement.scrollHeight - window.scrollY - window.innerHeight
+			)
+		)
+		.toBeLessThan(2);
+});
+
+test('dragging the scroll bar to the end of a shelf still being drawn reaches the last copy', async ({
 	page,
 	request
 }) => {
@@ -477,7 +502,11 @@ test('turning a phone sideways and back keeps the place on the shelf', async ({
 	await page.goto('/');
 	const tiles = shelf(page).getByRole('listitem');
 	await expect(tiles).toHaveCount(2000);
-	await tiles.nth(1500).evaluate((el) => el.scrollIntoView({ block: 'start' }));
+	const opened = tiles.nth(1500);
+	await opened.evaluate((el) => el.scrollIntoView({ block: 'start' }));
+	await page.evaluate(() => window.scrollBy(0, 110));
+	const before = await opened.evaluate((el) => el.getBoundingClientRect().top);
+	expect(before).toBeLessThan(0);
 
 	await page.setViewportSize({ width: 844, height: 390 });
 	await expect(page.getByRole('table')).toBeVisible();
@@ -485,5 +514,7 @@ test('turning a phone sideways and back keeps the place on the shelf', async ({
 	await page.setViewportSize({ width: 390, height: 844 });
 
 	await expect(shelf(page)).toBeVisible();
-	await expect(tiles.nth(1500)).toBeInViewport();
+	await expect
+		.poll(() => tiles.nth(1500).evaluate((el) => el.getBoundingClientRect().top))
+		.toBeCloseTo(before, 0);
 });

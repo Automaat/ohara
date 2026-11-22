@@ -37,8 +37,10 @@
 	 * rest are drawn, so the page scrolls as far as it will once they are all in it.
 	 */
 	let estimate = $state(0);
-	/** The reader went to the end of the page while tiles were still being drawn. */
-	let wentToEnd = false;
+	/** The tile at the top of the screen when the reader last scrolled. */
+	let place: ShelfPlace | null = null;
+	/** A resize is being laid out, so a scroll in its frame is the browser's, not the reader's. */
+	let resizing = false;
 
 	/** Where the drawn tiles end, as a position in the document. */
 	function drawnBottom(el: HTMLElement): number {
@@ -57,7 +59,7 @@
 
 	$effect.pre(() => {
 		void rows;
-		wentToEnd = false;
+		place = null;
 	});
 
 	function drawMore() {
@@ -70,42 +72,81 @@
 		return () => clearTimeout(timer);
 	});
 
-	/** Once the last part is drawn, a reader who went to the end of the page is taken to it. */
-	$effect(() => {
-		if (count < rows.length || !wentToEnd) return;
-		wentToEnd = false;
+	/** Draws every tile left, then shows the end of the page. */
+	async function drawToEnd() {
+		count = rows.length;
+		await tick();
 		window.scrollTo(window.scrollX, document.documentElement.scrollHeight);
-	});
+	}
 
-	/** A reader who scrolls past the drawn tiles gets them drawn at once. */
+	/**
+	 * End, Ctrl+End or Cmd+Down while tiles are still being drawn draws them all before the
+	 * browser scrolls, so it scrolls to the last copy rather than to the height kept for them.
+	 */
+	function onkeydown(event: KeyboardEvent) {
+		if (count >= rows.length || event.defaultPrevented) return;
+		const target = event.target;
+		if (
+			target instanceof HTMLElement &&
+			target.closest('input, textarea, select, [contenteditable]')
+		)
+			return;
+		if (event.key === 'End' || (event.metaKey && event.key === 'ArrowDown')) void drawToEnd();
+	}
+
+	/**
+	 * Notes the tile at the top of the screen, and draws the tiles a scroll reaches: at the end of
+	 * the page, as when the scroll bar is dragged down, every tile left.
+	 */
 	function onscroll() {
+		if (!resizing) place = topTile();
 		if (!list || count >= rows.length) return;
 		const page = document.documentElement;
-		wentToEnd = window.scrollY + window.innerHeight >= page.scrollHeight - 1;
-		void drawTo(window.scrollY);
+		if (window.scrollY + window.innerHeight >= page.scrollHeight - 1) void drawToEnd();
+		else void drawTo(window.scrollY);
+	}
+
+	/** The browser runs a resize's scroll and animation frame steps in that order. */
+	function onresize() {
+		resizing = true;
+		requestAnimationFrame(() => (resizing = false));
 	}
 
 	/** The first tile at the top of the screen, or null when none is drawn there. */
-	export function topTile(): ShelfPlace | null {
-		for (const tile of list?.children ?? []) {
-			const box = tile.getBoundingClientRect();
-			const key = Number(tile.getAttribute('data-cover-key'));
-			if (box.bottom > 0 && Number.isInteger(key)) return { key, offset: box.top };
+	function topTile(): ShelfPlace | null {
+		const tiles = list?.children;
+		if (!tiles?.length) return null;
+		let low = 0;
+		let high = tiles.length - 1;
+		if (tiles[high].getBoundingClientRect().bottom <= 0) return null;
+		while (low < high) {
+			const middle = Math.floor((low + high) / 2);
+			if (tiles[middle].getBoundingClientRect().bottom > 0) high = middle;
+			else low = middle + 1;
 		}
-		return null;
+		const key = Number(tiles[low].getAttribute('data-cover-key'));
+		return Number.isInteger(key) ? { key, offset: tiles[low].getBoundingClientRect().top } : null;
+	}
+
+	/**
+	 * The tile at the top of the screen as the reader last saw it: the one noted at their last
+	 * scroll, which a resize does not move, or else the one there now.
+	 */
+	export function shownTile(): ShelfPlace | null {
+		return place ?? topTile();
 	}
 
 	/** Draws the list down to the tile of `place` and scrolls it back to where it was on screen. */
-	export async function showTile(place: ShelfPlace): Promise<void> {
-		const index = rows.findIndex((row) => row.copy_id === place.key);
+	export async function showTile(shown: ShelfPlace): Promise<void> {
+		const index = rows.findIndex((row) => row.copy_id === shown.key);
 		if (index < 0) return;
 		if (count <= index) count = Math.min(rows.length, index + 1 + tilesPerStep);
 		await tick();
-		const tile = list?.querySelector(`[data-cover-key="${place.key}"]`);
+		const tile = list?.querySelector(`[data-cover-key="${shown.key}"]`);
 		if (!tile) return;
 		window.scrollTo(
 			window.scrollX,
-			window.scrollY + tile.getBoundingClientRect().top - place.offset
+			window.scrollY + tile.getBoundingClientRect().top - shown.offset
 		);
 	}
 
@@ -130,7 +171,7 @@
 	}
 </script>
 
-<svelte:window {onscroll} />
+<svelte:window {onscroll} {onkeydown} {onresize} />
 
 {#if failure}
 	<ErrorState

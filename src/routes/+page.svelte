@@ -423,7 +423,7 @@
 		const shown = layout === 'shelf' || phone.current;
 		const was = shelfBefore;
 		shelfBefore = shown;
-		if (was === true && !shown) shelfPlace = shelf?.topTile() ?? null;
+		if (was === true && !shown) shelfPlace = shelf?.shownTile() ?? null;
 		if (was !== false || !shown || !shelfPlace) return;
 		const place = shelfPlace;
 		shelfPlace = null;

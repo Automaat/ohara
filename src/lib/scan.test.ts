@@ -473,6 +473,26 @@ describe('quickForm', () => {
 		expect(quickForm(null, sticky, '9788324000016')).toMatchObject({ kind: 'book', name: '' });
 		expect(quickForm(null, sticky, '5901234123457')).toMatchObject({ kind: 'movie', name: '' });
 	});
+
+	it('keeps the kind of a film or album found for an ISBN-range barcode', () => {
+		const code = '9788324000016';
+		const isbnAlbum: Candidate = { ...album, edition: { ...album.edition, barcode: code } };
+		const f = quickForm(isbnAlbum, emptySticky, code);
+		expect(f).toMatchObject({ kind: 'music', name: album.title.name, format: 'cd', binding: '' });
+		expect(scanTitlePayload(f, isbnAlbum)).toMatchObject({
+			ok: true,
+			value: { kind: 'music', authors: ['Pink Floyd'] }
+		});
+		expect(scanEditionPayload(f, isbnAlbum, code, 1)).toMatchObject({
+			ok: true,
+			value: { barcode: code, format: 'cd', binding: null, discogs_release_id: 1873013 }
+		});
+		const isbnFilm: Candidate = { ...movie, edition: { ...movie.edition, barcode: code } };
+		expect(quickForm(isbnFilm, emptySticky, code)).toMatchObject({
+			kind: 'movie',
+			format: 'bluray'
+		});
+	});
 });
 
 describe('scan payloads', () => {

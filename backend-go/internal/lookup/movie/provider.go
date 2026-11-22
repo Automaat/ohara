@@ -80,8 +80,10 @@ type Search struct {
 // Name is "movie".
 func (*Provider) Name() string { return "movie" }
 
-// Accepts every barcode except ISBNs: books have their own providers.
-func (*Provider) Accepts(code string) bool { return !barcode.IsBook(code) }
+// Fallback reports ISBN-range codes: book providers answer those first,
+// and the chain is asked only when none of them found the code (a film
+// sold with a book or a magazine).
+func (*Provider) Fallback(code string) bool { return barcode.IsBook(code) }
 
 // Fetch asks every name source concurrently, and the fallbacks only when
 // those name nothing searchable, then searches TMDB for the distinct

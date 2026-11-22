@@ -79,6 +79,16 @@ type Scoped interface {
 	Accepts(barcode string) bool
 }
 
+// Fallback is implemented by providers that answer some barcodes only when
+// the other providers found nothing for them, such as the movie and music
+// chains for an ISBN-range code, which book catalogs answer first. A
+// provider whose Fallback reports true for a code is asked in a second
+// round, only when no provider of the first round returned a candidate; a
+// failed first-round provider counts as no answer and keeps its error.
+type Fallback interface {
+	Fallback(barcode string) bool
+}
+
 // Cache stores raw provider responses keyed by provider and barcode.
 type Cache interface {
 	Get(ctx context.Context, provider, barcode string, maxAge time.Duration) (json.RawMessage, bool, error)
@@ -175,12 +185,19 @@ func needsConfirmation(cands []Candidate) bool {
 	return false
 }
 
+// lookupBudget is how long a lookup may ask providers, both rounds
+// together: under the client's 20-second deadline (requestDeadlineMs in
+// src/lib/api.ts), with room for the answer. A second round after a first
+// that ran into its timeout gets what is left.
+const lookupBudget = 17 * time.Second
+
 // Service runs a lookup across every registered provider.
 type Service struct {
 	registry *Registry
 	cache    Cache
 	logger   *slog.Logger
 	timeout  time.Duration
+	budget   time.Duration
 	now      func() time.Time
 	rechecks recheckLog
 }
@@ -190,7 +207,7 @@ func NewService(registry *Registry, cache Cache, logger *slog.Logger) *Service {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Service{registry: registry, cache: cache, logger: logger, timeout: 10 * time.Second, now: time.Now}
+	return &Service{registry: registry, cache: cache, logger: logger, timeout: 10 * time.Second, budget: lookupBudget, now: time.Now}
 }
 
 // recheckLog remembers when a recheck last asked a provider about a
@@ -233,8 +250,10 @@ type outcome struct {
 // barcode per period.
 const RecheckAfter = time.Hour
 
-// Lookup queries every provider concurrently for a normalized barcode. A
-// failing provider is reported in Result.Errors and does not fail the lookup.
+// Lookup queries every provider concurrently for a normalized barcode, and
+// the providers that are a Fallback for it afterwards, when the others
+// returned no candidate. A failing provider is reported in Result.Errors
+// and does not fail the lookup.
 // A stored selection short-circuits the providers.
 func (s *Service) Lookup(ctx context.Context, code string) Result {
 	return s.lookup(ctx, code, false)
@@ -254,18 +273,12 @@ func (s *Service) lookup(ctx context.Context, code string, recheck bool) Result 
 	if sel, ok := s.selection(ctx, code); ok {
 		return Result{Barcode: code, Candidates: []Candidate{sel}, Errors: []ProviderError{}}
 	}
+	deadline := time.Now().Add(s.budget)
 	outcomes := make([]outcome, len(s.registry.entries))
-	var wg sync.WaitGroup
-	for i, e := range s.registry.entries {
-		if scoped, ok := e.provider.(Scoped); ok && !scoped.Accepts(code) {
-			continue
-		}
-		wg.Go(func() {
-			cands, err := s.query(ctx, e, code, recheck)
-			outcomes[i] = outcome{candidates: cands, err: err}
-		})
+	s.round(ctx, code, recheck, deadline, outcomes, false)
+	if !slices.ContainsFunc(outcomes, func(o outcome) bool { return len(o.candidates) > 0 }) {
+		s.round(ctx, code, recheck, deadline, outcomes, true)
 	}
-	wg.Wait()
 
 	res := Result{Barcode: code, Candidates: []Candidate{}, Errors: []ProviderError{}}
 	order := make(map[string]int, len(outcomes))
@@ -294,6 +307,26 @@ func (s *Service) lookup(ctx context.Context, code string, recheck bool) Result 
 	})
 	res.NeedsConfirmation = needsConfirmation(res.Candidates)
 	return res
+}
+
+// round queries, concurrently, every provider that accepts code and is a
+// fallback for it exactly when fallback is set, storing each answer at the
+// provider's registry index in outcomes. No fetch runs past deadline.
+func (s *Service) round(ctx context.Context, code string, recheck bool, deadline time.Time, outcomes []outcome, fallback bool) {
+	var wg sync.WaitGroup
+	for i, e := range s.registry.entries {
+		if scoped, ok := e.provider.(Scoped); ok && !scoped.Accepts(code) {
+			continue
+		}
+		if f, ok := e.provider.(Fallback); (ok && f.Fallback(code)) != fallback {
+			continue
+		}
+		wg.Go(func() {
+			cands, err := s.query(ctx, e, code, recheck, deadline)
+			outcomes[i] = outcome{candidates: cands, err: err}
+		})
+	}
+	wg.Wait()
 }
 
 // ErrNoCache reports a selection without a cache to keep it in.
@@ -337,7 +370,7 @@ func (s *Service) selection(ctx context.Context, code string) (Candidate, bool) 
 	return c, true
 }
 
-func (s *Service) query(ctx context.Context, e entry, code string, recheck bool) ([]Candidate, error) {
+func (s *Service) query(ctx context.Context, e entry, code string, recheck bool, deadline time.Time) ([]Candidate, error) {
 	p := e.provider
 	if s.cache != nil && e.ttl > 0 {
 		maxAge := e.ttl
@@ -352,7 +385,10 @@ func (s *Service) query(ctx context.Context, e entry, code string, recheck bool)
 			return cands, err
 		}
 	}
-	fetchCtx, cancel := context.WithTimeout(ctx, s.timeout)
+	if limit := time.Now().Add(s.timeout); limit.Before(deadline) {
+		deadline = limit
+	}
+	fetchCtx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
 	metrics.ObserveLookupRequest(p.Name())
 	raw, err := s.fetch(fetchCtx, p, code)

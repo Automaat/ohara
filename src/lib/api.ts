@@ -63,8 +63,8 @@ function messageFor(status: number, body: ErrorBody): string {
 }
 
 /** How long a request may go unanswered before it fails as no answer: above the server's own
- * bounds for a normal answer (10 seconds per lookup provider, 8 seconds per search source) and
- * below its 30-second request timeout. Weak signal can keep a connection up while answers stop. */
+ * bounds for a normal answer (17 seconds for a lookup, both provider rounds together, 8 seconds
+ * per search source) and below its 30-second request timeout. Weak signal can keep a connection up while answers stop. */
 export const requestDeadlineMs = 20_000;
 
 type Method = 'GET' | 'POST' | 'PUT' | 'DELETE';

@@ -19,12 +19,6 @@ test.beforeEach(async ({ request }) => {
 });
 
 /**
- * Node's Buffer, which Playwright takes for an in-memory file; the project carries no Node type
- * definitions, so it is declared here as far as the tests use it.
- */
-declare const Buffer: { from(bytes: Uint8Array): Uint8Array };
-
-/**
  * A JPEG the browser draws at width × height: gradients and shapes, so it compresses like a photo
  * rather than like noise or a flat colour.
  */

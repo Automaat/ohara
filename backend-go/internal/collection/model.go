@@ -21,6 +21,9 @@ const (
 
 	StatusOwned    = "owned"
 	StatusWishlist = "wishlist"
+	// StatusSold is a copy that left the shelf: it keeps its purchase and
+	// adds the day it was sold and, when known, what it sold for.
+	StatusSold = "sold"
 
 	maxText    = 500
 	maxNotes   = 10000
@@ -37,7 +40,7 @@ var (
 	bindings     = []string{"hardcover", "paperback", "other"}
 	triStates    = []string{"yes", "no", "unknown"}
 	packagings   = []string{"steelbook", "slipcover", "digipak", "mediabook"}
-	statuses     = []string{StatusOwned, StatusWishlist}
+	statuses     = []string{StatusOwned, StatusWishlist, StatusSold}
 	acquiredAs   = []string{"new", "used"}
 	conditions   = []string{"mint", "very_good", "good", "fair", "poor"}
 )
@@ -160,7 +163,8 @@ type Edition struct {
 }
 
 // CopyInput is the body of POST and PUT /api/copies. Price and purchase date
-// apply only to owned copies. MaxPriceCents, the most a wishlist copy may
+// apply only to owned and sold copies, the sale's day and price only to sold
+// ones; a sold copy needs its day. MaxPriceCents, the most a wishlist copy may
 // cost, and MaxMarketPercent, the share of the used market price it may
 // cost, apply only to wishlist copies: the deal hunter alerts on listings
 // at or below either.
@@ -177,6 +181,10 @@ type CopyInput struct {
 	// MaxMarketPercent is 1 to 100: a listing at or under that percent of
 	// the used market price of the wished title and format alerts.
 	MaxMarketPercent *int `json:"max_market_percent,omitempty" ts:",null"`
+	// SoldOn is the day a sold copy was sold; SalePriceCents what it sold
+	// for, null when unknown.
+	SoldOn         *Date  `json:"sold_on,omitempty" ts:",null"`
+	SalePriceCents *int64 `json:"sale_price_cents,omitempty" ts:",null"`
 	// RequestKey makes a create safe to retry: a second create with the
 	// same key returns the first copy. Updates ignore it.
 	RequestKey *string `json:"request_key,omitempty"`
@@ -199,7 +207,7 @@ func normalizeRequestKey(key *string) (*string, *httpx.FieldError) {
 	return trimmed, nil
 }
 
-// Copy is one physical item, owned or wanted.
+// Copy is one physical item, owned, wanted or sold.
 type Copy struct {
 	ID int64 `json:"id"`
 	CopyInput
@@ -463,24 +471,30 @@ func (in *CopyInput) Normalize() *httpx.FieldError {
 	if e := checkPrice("max_price_cents", in.MaxPriceCents); e != nil {
 		return e
 	}
-	if in.Status == StatusOwned && in.MaxPriceCents != nil {
+	if e := checkPrice("sale_price_cents", in.SalePriceCents); e != nil {
+		return e
+	}
+	if in.Status != StatusWishlist && in.MaxPriceCents != nil {
 		return fieldErr("max_price_cents", "applies only to wishlist copies")
 	}
 	if p := in.MaxMarketPercent; p != nil {
 		if *p < 1 || *p > 100 {
 			return fieldErr("max_market_percent", "must be between 1 and 100")
 		}
-		if in.Status == StatusOwned {
+		if in.Status != StatusWishlist {
 			return fieldErr("max_market_percent", "applies only to wishlist copies")
 		}
 	}
 	if in.Status == StatusWishlist {
 		if in.PriceCents != nil {
-			return fieldErr("price_cents", "applies only to owned copies")
+			return fieldErr("price_cents", "applies only to owned and sold copies")
 		}
 		if in.PurchasedOn != nil {
-			return fieldErr("purchased_on", "applies only to owned copies")
+			return fieldErr("purchased_on", "applies only to owned and sold copies")
 		}
+	}
+	if e := in.checkSale(); e != nil {
+		return e
 	}
 	return firstErr(
 		checkLen("shop", in.Shop, maxText),
@@ -488,6 +502,24 @@ func (in *CopyInput) Normalize() *httpx.FieldError {
 		checkEnum("acquired_as", in.AcquiredAs, acquiredAs),
 		checkEnum("condition", in.Condition, conditions),
 	)
+}
+
+// checkSale requires the day of a sold copy's sale and keeps a sale off any
+// other copy.
+func (in *CopyInput) checkSale() *httpx.FieldError {
+	if in.Status == StatusSold {
+		if in.SoldOn == nil {
+			return fieldErr("sold_on", "is required for sold copies")
+		}
+		return nil
+	}
+	if in.SoldOn != nil {
+		return fieldErr("sold_on", "applies only to sold copies")
+	}
+	if in.SalePriceCents != nil {
+		return fieldErr("sale_price_cents", "applies only to sold copies")
+	}
+	return nil
 }
 
 func checkPrice(field string, cents *int64) *httpx.FieldError {

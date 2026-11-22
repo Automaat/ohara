@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Button, Field, Modal, SegmentedControl, Select } from '@smykla-skalski/sui';
+	import { Button, Field, Modal, SegmentedControl, Select, Switch } from '@smykla-skalski/sui';
 	import {
 		collectionStatusLabels,
 		formatLabels,
@@ -29,7 +29,10 @@
 	const all = 'all';
 	const formatOptions = [{ value: all, label: 'Każdy' }, ...options(formatLabels)];
 	// "Bez egzemplarzy" lists titles instead of copies, and a title has no format of its own.
-	const statusOptions = [{ value: all, label: 'Każdy' }, ...options(collectionStatusLabels)];
+	// "Sprzedane" is a switch of its own: the segments hold five options before they turn into
+	// a select, and sold copies are the ones no other choice lists.
+	const { sold, ...shelfStatuses } = collectionStatusLabels;
+	const statusOptions = [{ value: all, label: 'Każdy' }, ...options(shelfStatuses)];
 </script>
 
 <Modal bind:open class="collection-filter-sheet" title="Sortowanie i filtry" closeLabel="Zamknij">
@@ -64,9 +67,13 @@
 			label="Status"
 			options={statusOptions}
 			bind:value={
-				() => status || all,
+				() => (status === 'sold' ? null : status || all),
 				(v) => onstatus(v === all || v === null ? '' : (v as CollectionFilter['status']))
 			}
+		/>
+		<Switch
+			label={sold}
+			bind:checked={() => status === 'sold', (on) => onstatus(on ? 'sold' : '')}
 		/>
 	</div>
 	{#snippet footer()}

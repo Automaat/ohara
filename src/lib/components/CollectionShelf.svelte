@@ -205,6 +205,7 @@
 		{#each drawn as row, i (row.copy_id)}
 			{@const name = displayName(row)}
 			{@const wish = row.status === 'wishlist'}
+			{@const sold = row.status === 'sold'}
 			<li
 				data-cover-title={row.title_id}
 				data-cover-key={row.copy_id}
@@ -215,7 +216,7 @@
 					<CollectionCover kind={row.kind} url={row.cover_url} large {name} {wish} />
 				</div>
 				<Link href={`/titles/${row.title_id}`}>{name}</Link>
-				<span class="meta" class:wish>{shelfLine(row)}</span>
+				<span class="meta" class:wish class:sold>{shelfLine(row)}</span>
 			</li>
 		{/each}
 	</ul>
@@ -269,8 +270,13 @@
 		font-variant-numeric: tabular-nums;
 	}
 
+	/* A sale's line, "Sprzedany 10 maj 2026 · 35 zł", in the details' colour. */
+	.meta.sold {
+		font-variant-numeric: tabular-nums;
+	}
+
 	/* Phones: three covers a row, a title of at most two lines and one line of details, two for
-	   a wish and its limit. */
+	   a wish and its limit or a sale. */
 	@media (max-width: 640px) {
 		.shelf {
 			grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -306,7 +312,8 @@
 			white-space: nowrap;
 		}
 
-		.meta.wish {
+		.meta.wish,
+		.meta.sold {
 			white-space: normal;
 			overflow-wrap: anywhere;
 		}

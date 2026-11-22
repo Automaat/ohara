@@ -23,6 +23,8 @@ type Handler struct {
 	store  *Store
 	logger *slog.Logger
 	covers *catalogCovers
+	// filmSeries, when set, fills a created film's series from its TMDB ID.
+	filmSeries *filmSeries
 }
 
 // NewHandler wires the store and logger.
@@ -354,7 +356,14 @@ func (h *Handler) createTitle(w http.ResponseWriter, r *http.Request) {
 	if h.covers != nil && emptyCover(in.CoverURL) {
 		in.CoverURL = h.titleCover(r.Context(), in)
 	}
+	filled := h.wantsFilmSeries(in) && h.fillFilmSeries(r.Context(), in)
 	t, created, err := h.store.CreateTitle(r.Context(), in)
+	if filled && in.SeriesNumber != nil && errors.Is(err, ErrDuplicateSeriesNumber) {
+		// Another title of the series has the number the catalog gave:
+		// the film joins the series without one.
+		in.SeriesNumber = nil
+		t, created, err = h.store.CreateTitle(r.Context(), in)
+	}
 	if err != nil {
 		h.writeErr(w, r, "create title", err)
 		return

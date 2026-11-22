@@ -182,8 +182,9 @@ func TestSaveDayStoresCopiesWithTheDay(t *testing.T) {
 	}
 }
 
-// TestCopyHistoryAPI answers a title's copy days of the last 90 days,
-// owned copies or not, and none of another title's.
+// TestCopyHistoryAPI answers a title's copy days of the last 90 days up
+// to today, owned copies or not, and none of another title's or of a day
+// after today.
 func TestCopyHistoryAPI(t *testing.T) {
 	pool := dbtest.Migrated(t)
 	seed(t, pool)
@@ -195,7 +196,7 @@ func TestCopyHistoryAPI(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	ctx := context.Background()
-	for _, ago := range []int{90, 89, 2, 0} {
+	for _, ago := range []int{90, 89, 2, 0, -1} {
 		values := []CopyValue{
 			{CopyID: 1, Mid: &Estimate{Cents: 2500 + int64(ago)}},
 			{CopyID: 2, Mid: &Estimate{Cents: 4000 + int64(ago)}},

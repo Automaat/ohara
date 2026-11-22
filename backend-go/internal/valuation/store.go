@@ -376,14 +376,16 @@ func estimateCents(e *Estimate) *int64 {
 }
 
 // CopyHistory returns the daily values of titleID's copies, owned or not,
-// over the last n days, by copy and oldest first.
+// over the last n days up to today, by copy and oldest first. A row dated
+// after today, stored before the database's date moved back (a time zone
+// change), is left out.
 func (s *Store) CopyHistory(ctx context.Context, titleID int64, n int) ([]CopyDay, error) {
 	rows, err := s.pool.Query(ctx, `SELECT h.copy_id, to_char(h.day, 'YYYY-MM-DD'),
 			h.floor_cents, h.mid_cents, h.ceiling_cents
 		FROM copy_value_history h
 			JOIN copy c ON c.id = h.copy_id
 			JOIN edition e ON e.id = c.edition_id
-		WHERE e.title_id = $1 AND h.day > current_date - $2::int
+		WHERE e.title_id = $1 AND h.day > current_date - $2::int AND h.day <= current_date
 		ORDER BY h.copy_id, h.day`, titleID, n)
 	if err != nil {
 		return nil, fmt.Errorf("copy history: %w", err)

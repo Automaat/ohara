@@ -1,5 +1,6 @@
 import { IDBFactory } from 'fake-indexeddb';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { logScan, recentScans } from './recent.svelte';
 import {
 	PendingScans,
 	browserLock,
@@ -162,6 +163,18 @@ describe('PendingScans.send', () => {
 		]);
 		expect(device.kept.size).toBe(0);
 		expect(pending.count).toBe(0);
+	});
+
+	it('marks the waiting scans of a code the queue took as queued', async () => {
+		recentScans.list = [];
+		logScan(a, 'waiting', 'Zapisano bez połączenia');
+		logScan(c, 'waiting', 'Zapisano bez połączenia');
+		const pending = new PendingScans(api({ [c]: 422 }).fetchFn, memory([a, c]).open);
+		await pending.send();
+		expect(recentScans.list.map((r) => [r.barcode, r.outcome, r.href])).toEqual([
+			[c, 'waiting', undefined],
+			[a, 'queued', '/scan/queue']
+		]);
 	});
 
 	it('settles a code an edition carries or the queue refuses, and keeps one the server failed', async () => {

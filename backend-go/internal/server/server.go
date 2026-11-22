@@ -68,6 +68,7 @@ func newRouter(cfg Config, logger *slog.Logger, deps Deps, timeout time.Duration
 	r.Use(securityHeaders)
 	r.Use(requestID)
 	r.Use(requestObserver(logger, cfg.AccessLog))
+	r.Use(compress)
 	r.Use(generalOptions(cfg.RequireRemoteUser))
 	r.Use(recoverer(logger))
 	r.Use(timeoutAfter(timeout, logger))

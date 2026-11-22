@@ -1,0 +1,568 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { RecentScan } from './recent.svelte';
+import type { KeyValueStore } from './scan';
+import type { SessionAdd } from './session.svelte';
+import { readVisit, visitLifetime, type StoredVisit } from './visit';
+
+const key = 'ohara.scan.visit';
+const now = Date.parse('2026-11-21T12:00:00Z');
+
+function memory(initial: Record<string, string> = {}): KeyValueStore & {
+	data: Record<string, string>;
+} {
+	const data = { ...initial };
+	return {
+		data,
+		getItem: (k) => data[k] ?? null,
+		setItem: (k, v) => {
+			data[k] = v;
+		}
+	};
+}
+
+const diuna: SessionAdd = {
+	id: 2,
+	copyID: 40,
+	editionID: 21,
+	titleID: 9,
+	createdEdition: true,
+	createdTitle: false,
+	name: 'Diuna: Część druga',
+	medium: '4K UHD',
+	kind: 'movie',
+	cover: 'https://example.com/diuna.jpg',
+	status: 'owned',
+	priceCents: 5000,
+	recentID: 3
+};
+
+const lalka: SessionAdd = {
+	...diuna,
+	id: 1,
+	copyID: 41,
+	name: 'Lalka',
+	medium: '',
+	kind: 'book',
+	cover: undefined,
+	status: 'wishlist',
+	priceCents: null,
+	recentID: null
+};
+
+function stored(visit: Partial<StoredVisit>): KeyValueStore {
+	return memory({
+		[key]: JSON.stringify({ at: now - 1000, adds: [], scans: [], date: '', ...visit })
+	});
+}
+
+describe('readVisit', () => {
+	it('reads back a visit within its lifetime', () => {
+		const scans = [
+			{ id: 3, barcode: '5901234123457', outcome: 'added', label: 'Diuna', href: '/copies/40' },
+			{ id: 1, barcode: '5901234123458', outcome: 'waiting', label: 'Zapisano bez połączenia' }
+		] as const;
+		const v = readVisit(
+			stored({ adds: [diuna, lalka], scans: [...scans], date: '2026-11-20' }),
+			now
+		);
+		expect(v).toEqual({
+			at: now - 1000,
+			adds: [diuna, lalka],
+			scans,
+			date: '2026-11-20'
+		});
+		expect('cover' in v.adds[1]).toBe(false);
+	});
+
+	it.each([
+		['just before its end', visitLifetime - 1, true],
+		['at its end', visitLifetime, false],
+		['past its end', visitLifetime + 60_000, false],
+		['a little ahead of the clock', -60_000, true],
+		['a lifetime ahead of the clock', -visitLifetime, false]
+	])('keeps a visit last active %s: %s', (_, age, kept) => {
+		const v = readVisit(stored({ at: now - age, adds: [diuna] }), now);
+		expect(v.adds).toEqual(kept ? [diuna] : []);
+	});
+
+	it.each([
+		['nothing', memory()],
+		['no store', undefined],
+		['broken JSON', memory({ [key]: '{' })],
+		['an array', memory({ [key]: '[]' })],
+		['no time', memory({ [key]: JSON.stringify({ adds: [diuna] }) })],
+		['a time that is no number', memory({ [key]: JSON.stringify({ at: 'now', adds: [diuna] }) })],
+		[
+			'a store that throws',
+			{
+				getItem: () => {
+					throw new DOMException('denied', 'SecurityError');
+				},
+				setItem: () => undefined
+			}
+		]
+	])('starts empty from %s', (_, store) => {
+		expect(readVisit(store, now)).toEqual({ at: 0, adds: [], scans: [], date: '' });
+	});
+
+	it('leaves out entries that do not read as an add or a scan', () => {
+		const v = readVisit(
+			stored({
+				adds: [
+					diuna,
+					{ ...diuna, id: 0 },
+					{ ...diuna, kind: 'game' },
+					{ ...diuna, priceCents: -1 },
+					{ ...diuna, recentID: 'x' },
+					{ ...diuna, cover: 7 },
+					null
+				] as unknown as SessionAdd[],
+				scans: [
+					{ id: 1, barcode: '1', outcome: 'lost', label: '' },
+					{ id: 2, barcode: '2', outcome: 'added', label: '', href: 3 },
+					{ id: 3, barcode: '3', outcome: 'queued', label: 'Brak danych' }
+				] as unknown as StoredVisit['scans']
+			}),
+			now
+		);
+		expect(v.adds).toEqual([diuna]);
+		expect(v.scans).toEqual([{ id: 3, barcode: '3', outcome: 'queued', label: 'Brak danych' }]);
+	});
+
+	it.each([['21.11.2026'], [7], [null]])('drops a purchase date of %j', (date) => {
+		expect(readVisit(stored({ date } as unknown as StoredVisit), now).date).toBe('');
+	});
+
+	it('reads lists that are not arrays as empty', () => {
+		const v = readVisit(stored({ adds: {}, scans: 'x' } as unknown as StoredVisit), now);
+		expect(v).toMatchObject({ adds: [], scans: [] });
+	});
+});
+
+/** The scanner's modules as a fresh page load starts them, with the browser storage given. */
+async function load(storage: unknown) {
+	vi.resetModules();
+	vi.stubGlobal('localStorage', storage);
+	const session = await import('./session.svelte');
+	const recent = await import('./recent.svelte');
+	const flow = await import('./scan-flow.svelte');
+	return { ...session, ...recent, ...flow };
+}
+
+const code = '5901234123457';
+
+/** A fetch that answers a scan of an edition already in the collection and its copy's add. */
+const copies = { last: 40 };
+
+function shop(): typeof fetch {
+	return async (input, init) => {
+		const url = `${init?.method ?? 'GET'} ${String(input)}`;
+		const replies: Record<string, () => unknown> = {
+			[`GET /api/editions?barcode=${code}`]: () => [{ id: 5, barcode: code }],
+			'GET /api/editions/5': () => ({
+				id: 5,
+				title_id: 3,
+				barcode: code,
+				format: 'dvd',
+				binding: null,
+				label: '',
+				packaging: [],
+				title: { id: 3, name: 'Rejs', kind: 'movie', authors: [], year: 1970 },
+				copies: []
+			}),
+			'POST /api/copies?cover=auto': () => ({
+				id: ++copies.last,
+				edition_id: 5,
+				price_cents: JSON.parse(String(init?.body)).price_cents,
+				max_price_cents: null,
+				status: 'owned'
+			})
+		};
+		const reply = replies[url];
+		if (!reply) throw new TypeError(`unexpected ${url}`);
+		return new Response(JSON.stringify(reply()), { status: url.startsWith('POST') ? 201 : 200 });
+	};
+}
+
+const device = {
+	keep: async () => true,
+	sessionExpired: () => undefined
+};
+
+/** Scans the code and adds a copy at the price, on the date. */
+async function addCopy(m: Awaited<ReturnType<typeof load>>, price: string, date: string) {
+	const flow = new m.ScanFlow(shop(), memory(), device);
+	await flow.load(code);
+	flow.form.price = price;
+	flow.form.purchased_on = date;
+	return flow.save();
+}
+
+describe('the visit across reloads', () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+		vi.useRealTimers();
+	});
+
+	it('keeps the adds, the recent scans and the purchase date', async () => {
+		vi.useFakeTimers({ now, toFake: ['Date'] });
+		const storage = memory();
+		const before = await load(storage);
+		await addCopy(before, '25', '2026-11-20');
+		await addCopy(before, '30,50', '2026-11-20');
+		before.logScan('5901234123458', 'skipped', 'Nie dodano');
+		const adds: SessionAdd[] = JSON.parse(JSON.stringify(before.session.adds));
+		const scans: RecentScan[] = JSON.parse(JSON.stringify(before.recentScans.list));
+		expect(adds).toHaveLength(2);
+
+		vi.setSystemTime(now + visitLifetime - 60_000);
+		const after = await load(storage);
+		expect(after.session.adds).toEqual(adds);
+		expect(after.sessionSpent(after.session.adds)).toBe(5550);
+		expect(after.recentScans.list).toEqual(scans);
+		const flow = new after.ScanFlow(shop(), memory(), device);
+		flow.start('movie');
+		expect(flow.form.purchased_on).toBe('2026-11-20');
+
+		const third = await addCopy(after, '10', '2026-11-20');
+		expect(third?.add.id).toBeGreaterThan(Math.max(...adds.map((a) => a.id)));
+		expect(third?.add.recentID).toBeGreaterThan(Math.max(...scans.map((s) => s.id)));
+		expect(after.session.adds.map((a) => a.copyID)).toEqual([
+			third?.saved.copy.id,
+			...adds.map((a) => a.copyID)
+		]);
+		expect(new Set(after.session.adds.map((a) => a.copyID)).size).toBe(3);
+	});
+
+	it('undoes an add made after a reload, leaving the earlier ones', async () => {
+		vi.useFakeTimers({ now, toFake: ['Date'] });
+		const storage = memory();
+		const before = await load(storage);
+		await addCopy(before, '25', '');
+		const after = await load(storage);
+		const last = await addCopy(after, '10', '');
+		const deleted: string[] = [];
+		const undoFetch: typeof fetch = async (input, init) => {
+			deleted.push(`${init?.method} ${String(input)}`);
+			return new Response(null, { status: 204 });
+		};
+		if (!last) throw new Error('the add did not go through');
+		await after.undoAdd(undoFetch, last.add);
+		expect(deleted).toEqual([`DELETE /api/copies/${last.saved.copy.id}`]);
+		expect(after.session.adds.map((a) => a.priceCents)).toEqual([2500]);
+		expect(after.recentScans.list.map((r) => r.outcome)).toEqual(['undone', 'added']);
+
+		const again = await load(storage);
+		expect(again.session.adds.map((a) => a.priceCents)).toEqual([2500]);
+		expect(again.recentScans.list.map((r) => r.outcome)).toEqual(['undone', 'added']);
+	});
+
+	it('starts empty 12 hours after the last add, an undo since then included', async () => {
+		vi.useFakeTimers({ now, toFake: ['Date'] });
+		const storage = memory();
+		const before = await load(storage);
+		await addCopy(before, '25', '2026-11-20');
+		vi.setSystemTime(now + visitLifetime / 2);
+		await before.undoAdd(async () => new Response(null, { status: 204 }), before.session.adds[0]);
+
+		vi.setSystemTime(now + visitLifetime + 60_000);
+		const after = await load(storage);
+		expect(after.session.adds).toEqual([]);
+		expect(after.recentScans.list).toEqual([]);
+		const flow = new after.ScanFlow(shop(), memory(), device);
+		flow.start('movie');
+		expect(flow.form.purchased_on).toBe('');
+	});
+
+	it('works without storage, keeping the visit until the next load', async () => {
+		const refusing = {
+			getItem: () => {
+				throw new DOMException('denied', 'SecurityError');
+			},
+			setItem: () => {
+				throw new DOMException('full', 'QuotaExceededError');
+			}
+		};
+		const before = await load(refusing);
+		expect(await addCopy(before, '25', '2026-11-20')).not.toBeNull();
+		expect(before.session.adds).toHaveLength(1);
+		expect(before.recentScans.list).toHaveLength(1);
+
+		const after = await load(refusing);
+		expect(after.session.adds).toEqual([]);
+		expect(after.recentScans.list).toEqual([]);
+	});
+
+	it('keeps what two tabs add, each over what the other kept', async () => {
+		const storage = memory();
+		const a = await load(storage);
+		const b = await load(storage);
+		const first = await addCopy(a, '25', '2026-11-20');
+		b.logScan('5901234123458', 'skipped', 'Nie dodano');
+		const second = await addCopy(b, '10', '2026-11-21');
+		expect(second?.add.id).toBeGreaterThan(first?.add.id ?? 0);
+		expect(second?.add.recentID).toBeGreaterThan(first?.add.recentID ?? 0);
+
+		const after = await load(storage);
+		expect(after.session.adds.map((x) => x.priceCents)).toEqual([1000, 2500]);
+		expect(after.recentScans.list.map((r) => r.outcome)).toEqual(['added', 'skipped', 'added']);
+		const flow = new after.ScanFlow(shop(), memory(), device);
+		flow.start('movie');
+		expect(flow.form.purchased_on).toBe('2026-11-21');
+	});
+
+	it('shows what another tab changed once it writes', async () => {
+		vi.stubGlobal('window', new EventTarget());
+		const storage = memory();
+		const a = await load(storage);
+		const b = await load(storage);
+		await addCopy(b, '25', '2026-11-20');
+		window.dispatchEvent(Object.assign(new Event('storage'), { key: 'ohara.other' }));
+		expect(a.session.adds).toEqual([]);
+		window.dispatchEvent(Object.assign(new Event('storage'), { key }));
+		expect(a.session.adds.map((x) => x.priceCents)).toEqual([2500]);
+		expect(a.recentScans.list).toHaveLength(1);
+	});
+
+	it('starts a new visit when a page open past the end adds or scans', async () => {
+		vi.useFakeTimers({ now, toFake: ['Date'] });
+		const storage = memory();
+		const page = await load(storage);
+		await addCopy(page, '25', '2026-11-20');
+
+		vi.setSystemTime(now + visitLifetime);
+		page.logScan('5901234123458', 'skipped', 'Nie dodano');
+		expect(page.session.adds).toEqual([]);
+		expect(page.recentScans.list.map((r) => r.outcome)).toEqual(['skipped']);
+
+		const after = await load(storage);
+		expect(after.session.adds).toEqual([]);
+		expect(after.recentScans.list.map((r) => r.outcome)).toEqual(['skipped']);
+		const flow = new after.ScanFlow(shop(), memory(), device);
+		flow.start('movie');
+		expect(flow.form.purchased_on).toBe('');
+	});
+
+	it('drops an add whose copy is gone on the next load, though its edition is left', async () => {
+		const storage = memory();
+		const page = await load(storage);
+		const recentID = page.logScan('5901234123457', 'added', 'Rejs', '/copies/40');
+		const add = page.recordAdd({
+			copyID: 40,
+			editionID: 21,
+			titleID: 9,
+			createdEdition: true,
+			createdTitle: false,
+			name: 'Rejs',
+			medium: 'DVD',
+			kind: 'movie',
+			status: 'owned',
+			priceCents: 2500,
+			recentID
+		});
+		const timedOut: typeof fetch = async (input) => {
+			if (String(input).startsWith('/api/editions/')) throw new TypeError('Failed to fetch');
+			return new Response(null, { status: 204 });
+		};
+		await expect(page.undoAdd(timedOut, add)).rejects.toThrow();
+		expect(page.session.adds).toHaveLength(1);
+		expect(page.recentScans.list[0].outcome).toBe('added');
+
+		const after = await load(storage);
+		expect(after.session.adds).toEqual([]);
+		expect(after.recentScans.list[0].outcome).toBe('undone');
+		expect(after.recentScans.list[0].href).toBeUndefined();
+	});
+
+	it('keeps an add whole or not at all when storage is full, and catches up later', async () => {
+		const data: Record<string, string> = {};
+		const limit = { full: false };
+		const storage: KeyValueStore = {
+			getItem: (k) => data[k] ?? null,
+			setItem: (k, v) => {
+				if (limit.full) throw new DOMException('full', 'QuotaExceededError');
+				data[k] = v;
+			}
+		};
+		const page = await load(storage);
+		await addCopy(page, '25', '2026-11-20');
+		limit.full = true;
+		await addCopy(page, '10', '2026-11-21');
+		expect(page.session.adds).toHaveLength(2);
+
+		const kept = await load(storage);
+		expect(kept.session.adds.map((x) => x.priceCents)).toEqual([2500]);
+		expect(kept.recentScans.list).toHaveLength(1);
+		const flow = new kept.ScanFlow(shop(), memory(), device);
+		flow.start('movie');
+		expect(flow.form.purchased_on).toBe('2026-11-20');
+
+		limit.full = false;
+		page.logScan('5901234123458', 'skipped', 'Nie dodano');
+		const caught = await load(storage);
+		expect(caught.session.adds.map((x) => x.priceCents)).toEqual([1000, 2500]);
+		expect(caught.recentScans.list.map((r) => r.outcome)).toEqual(['skipped', 'added', 'added']);
+	});
+
+	it('marks a waiting scan queued for the next load once the queue took its code', async () => {
+		const storage = memory();
+		const page = await load(storage);
+		page.logScan('5901234123457', 'waiting', 'Zapisano bez połączenia');
+		page.queueWaiting('5901234123457');
+		const after = await load(storage);
+		expect(after.recentScans.list[0]).toMatchObject({
+			outcome: 'queued',
+			label: 'Zapisano bez połączenia',
+			href: '/scan/queue'
+		});
+	});
+
+	it('lasts until the next load where storage throws, past the 12 hours too', async () => {
+		vi.useFakeTimers({ now, toFake: ['Date'] });
+		const refusing = {
+			getItem: () => {
+				throw new DOMException('denied', 'SecurityError');
+			},
+			setItem: () => {
+				throw new DOMException('denied', 'SecurityError');
+			}
+		};
+		const page = await load(refusing);
+		await addCopy(page, '25', '2026-11-20');
+		vi.setSystemTime(now + visitLifetime);
+		page.logScan('5901234123458', 'skipped', 'Nie dodano');
+		expect(page.session.adds).toHaveLength(1);
+		const flow = new page.ScanFlow(shop(), memory(), device);
+		flow.start('movie');
+		expect(flow.form.purchased_on).toBe('2026-11-20');
+	});
+
+	it('does not carry the purchase date of a visit that ended into the next add', async () => {
+		vi.useFakeTimers({ now, toFake: ['Date'] });
+		const page = await load(memory());
+		await addCopy(page, '25', '2026-11-20');
+		vi.setSystemTime(now + visitLifetime);
+		const flow = new page.ScanFlow(shop(), memory(), device);
+		await flow.load(code);
+		expect(flow.form.purchased_on).toBe('');
+		flow.start('movie');
+		expect(flow.form.purchased_on).toBe('');
+	});
+
+	it('keeps an undone copy gone after a refused write, once storage takes writes again', async () => {
+		const data: Record<string, string> = {};
+		const limit = { full: false };
+		const storage: KeyValueStore = {
+			getItem: (k) => data[k] ?? null,
+			setItem: (k, v) => {
+				if (limit.full) throw new DOMException('full', 'QuotaExceededError');
+				data[k] = v;
+			}
+		};
+		const page = await load(storage);
+		const add = page.recordAdd({ ...rejs, recentID: page.logScan(code, 'added', 'Rejs') });
+		limit.full = true;
+		await expect(page.undoAdd(editionFails, add)).rejects.toThrow();
+		limit.full = false;
+		page.logScan('5901234123458', 'skipped', 'Nie dodano');
+
+		const after = await load(storage);
+		expect(after.session.adds).toEqual([]);
+		expect(after.recentScans.list.map((r) => r.outcome)).toEqual(['skipped', 'undone']);
+	});
+
+	it('leaves the add another tab made while an undo cleans up', async () => {
+		const storage = memory();
+		const a = await load(storage);
+		const b = await load(storage);
+		const undone = a.recordAdd({ ...rejs, recentID: null });
+		let cleanup = (): void => undefined;
+		const slow: typeof fetch = async (input) => {
+			if (String(input).startsWith('/api/editions/')) {
+				await new Promise<void>((resolve) => (cleanup = resolve));
+			}
+			return new Response(null, { status: 204 });
+		};
+		const undo = a.undoAdd(slow, undone);
+		await vi.waitFor(() => expect(storage.data[key]).not.toContain('"copyID":40'));
+		const kept = b.recordAdd({ ...rejs, copyID: 41, recentID: null });
+		cleanup();
+		await undo;
+
+		const after = await load(storage);
+		expect(after.session.adds).toEqual([kept]);
+	});
+});
+
+const rejs: Omit<SessionAdd, 'id' | 'recentID'> = {
+	copyID: 40,
+	editionID: 21,
+	titleID: 9,
+	createdEdition: true,
+	createdTitle: false,
+	name: 'Rejs',
+	medium: 'DVD',
+	kind: 'movie',
+	status: 'owned',
+	priceCents: 2500
+};
+
+const editionFails: typeof fetch = async (input) => {
+	if (String(input).startsWith('/api/editions/')) throw new TypeError('Failed to fetch');
+	return new Response(null, { status: 204 });
+};
+
+describe('ids across visits and tabs', () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+		vi.useRealTimers();
+	});
+
+	it('reads the first entry of an id that is stored twice', () => {
+		const scan = { id: 3, barcode: '3', outcome: 'queued', label: 'Brak danych' } as const;
+		const v = readVisit(
+			stored({
+				adds: [diuna, { ...diuna, name: 'Kopia' }, lalka],
+				scans: [scan, { ...scan, label: 'Kopia' }]
+			}),
+			now
+		);
+		expect(v.adds).toEqual([diuna, lalka]);
+		expect(v.scans).toEqual([scan]);
+	});
+
+	it('never gives a new visit in another tab the ids an earlier visit still holds', async () => {
+		vi.useFakeTimers({ now, toFake: ['Date'] });
+		const storage = memory();
+		const a = await load(storage);
+		const b = await load(storage);
+		const old = await addCopy(a, '25', '');
+		vi.setSystemTime(now + visitLifetime);
+		const fresh = await addCopy(b, '10', '');
+		expect(fresh?.add.id).not.toBe(old?.add.id);
+		expect(fresh?.add.recentID).not.toBe(old?.add.recentID);
+	});
+
+	it('leaves the new scan of another tab alone when an undo ends after the visit did', async () => {
+		vi.useFakeTimers({ now, toFake: ['Date'] });
+		const storage = memory();
+		const a = await load(storage);
+		const b = await load(storage);
+		const old = await addCopy(a, '25', '');
+		let release = (): void => undefined;
+		const held: typeof fetch = async () => {
+			await new Promise<void>((resolve) => (release = resolve));
+			return new Response(null, { status: 204 });
+		};
+		if (!old) throw new Error('the add did not go through');
+		const undo = a.undoAdd(held, old.add);
+		vi.setSystemTime(now + visitLifetime);
+		await addCopy(b, '10', '');
+		release();
+		await undo;
+
+		const after = await load(storage);
+		expect(after.recentScans.list.map((r) => r.outcome)).toEqual(['added']);
+		expect(after.session.adds.map((x) => x.priceCents)).toEqual([1000]);
+	});
+});

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { seasonName } from '#lib/collection.js';
 	import { copyMeta, dayLabel, type Mover } from '#lib/valuation.js';
 	import CollectionCover from './CollectionCover.svelte';
 
@@ -15,7 +16,7 @@
 						<a href={`/copies/${m.copy.copy_id}`}>
 							<CollectionCover kind={m.copy.kind} url={m.copy.cover_url} />
 							<span class="details">
-								<span class="title">{m.copy.title_name}</span>
+								<span class="title">{seasonName(m.copy.title_name, m.copy.season)}</span>
 								<span class="meta">{copyMeta(m.copy)}</span>
 							</span>
 							<span class="change {tone}">{m.change}</span>

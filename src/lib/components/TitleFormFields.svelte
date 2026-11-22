@@ -14,6 +14,7 @@
 		authorsLabel,
 		kindLabels,
 		options,
+		screenKind,
 		type FormIssue,
 		type TitleForm
 	} from '#lib/collection.js';
@@ -46,6 +47,7 @@
 		'year',
 		'authors',
 		'tmdb_id',
+		'season',
 		'polish_title',
 		'original_title',
 		'bn_id',
@@ -127,8 +129,19 @@
 		bind:value={form.name}
 		error={errorFor('name')}
 	/>
+	{#if form.kind === 'tv'}
+		<Field
+			label="Sezon"
+			required
+			requiredLabel="Wymagane"
+			inputmode="numeric"
+			hint="0 dla odcinków specjalnych."
+			bind:value={form.season}
+			error={errorFor('season')}
+		/>
+	{/if}
 	<Field label="Rok" inputmode="numeric" bind:value={form.year} error={errorFor('year')} />
-	{#if form.kind !== 'movie'}
+	{#if !screenKind(form.kind)}
 		<Field
 			label={authorsLabel(form.kind)}
 			hint={form.kind === 'music' ? 'Jeden wykonawca w wierszu.' : 'Jeden autor w wierszu.'}
@@ -160,9 +173,9 @@
 		bind:value={form.original_title}
 		error={errorFor('original_title')}
 	/>
-	{#if form.kind === 'movie'}
+	{#if screenKind(form.kind)}
 		<Field
-			label="Identyfikator TMDB"
+			label={form.kind === 'tv' ? 'Identyfikator TMDB serialu' : 'Identyfikator TMDB'}
 			inputmode="numeric"
 			bind:value={form.tmdb_id}
 			error={errorFor('tmdb_id')}

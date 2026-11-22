@@ -138,16 +138,21 @@ export function kindAndYear(t: Pick<TitleDetail, 'kind' | 'year'>): string {
 	return [kindLabels[t.kind], t.year?.toString()].filter(Boolean).join(' · ');
 }
 
-/** What a finished title is for its kind: watched, read or heard. */
-export const finishedLabels: Record<Kind, string> = {
+/** What a finished title is for its kind: watched, read or heard; a TV season is watched. */
+export const finishedLabels: Record<Exclude<Kind, 'tv'>, string> = {
 	movie: 'Obejrzane',
 	book: 'Przeczytane',
 	music: 'Przesłuchane'
 };
 
+/** What a finished title of kind is, such as "Obejrzane". */
+export function finishedLabel(kind: Kind): string {
+	return finishedLabels[kind === 'tv' ? 'movie' : kind];
+}
+
 /** The action that marks a title finished today, such as "Oznacz jako obejrzane". */
 export function finishAction(kind: Kind): string {
-	return `Oznacz jako ${finishedLabels[kind].toLocaleLowerCase('pl-PL')}`;
+	return `Oznacz jako ${finishedLabel(kind).toLocaleLowerCase('pl-PL')}`;
 }
 
 /**
@@ -156,7 +161,7 @@ export function finishAction(kind: Kind): string {
  */
 export function finishedLine(t: Pick<Title, 'kind' | 'finished' | 'finished_on'>): string | null {
 	if (!t.finished) return null;
-	return [finishedLabels[t.kind], purchaseDate(t.finished_on ?? null)].filter(Boolean).join(' ');
+	return [finishedLabel(t.kind), purchaseDate(t.finished_on ?? null)].filter(Boolean).join(' ');
 }
 
 const warsawDay = new Intl.DateTimeFormat('en-CA', {

@@ -15,6 +15,7 @@
 		kindLabels,
 		options,
 		packagingLabels,
+		screenKind,
 		type Binding,
 		type FormIssue,
 		type Packaging
@@ -56,7 +57,7 @@
 	const acquiredOptions = options(acquiredLabels);
 	const conditionOptions = [{ value: '', label: 'Nie podano' }, ...options(conditionLabels)];
 	const priceFields = ['price_cents', 'max_price_cents', 'purchased_on'];
-	const ownFields = ['name', 'shop', ...priceFields];
+	const ownFields = ['name', 'season', 'shop', ...priceFields];
 
 	let typingShop = $state(false);
 
@@ -122,6 +123,17 @@
 				bind:value={form.kind}
 			/>
 		{/if}
+		{#if form.kind === 'tv'}
+			<Field
+				id="scan-season"
+				label="Sezon"
+				inputmode="numeric"
+				hint="0 dla odcinków specjalnych."
+				bind:value={() => form.season ?? '', (season) => (form.season = season)}
+				error={errorFor('season')}
+				autocomplete="off"
+			/>
+		{/if}
 		{#if formatOptions.length > 0}
 			<SegmentedControl
 				class="seg"
@@ -137,7 +149,7 @@
 				bind:value={form.binding}
 			/>
 		{/if}
-		{#if form.kind === 'movie'}
+		{#if screenKind(form.kind)}
 			<div class="toggles" role="group" aria-label="Opakowanie">
 				{#each packagingOptions as p (p.value)}
 					<button

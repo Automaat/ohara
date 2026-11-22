@@ -395,10 +395,12 @@ func quantile(sorted []int64, q float64) float64 {
 
 // CopyValue is one owned copy with its edition's range.
 type CopyValue struct {
-	CopyID     int64   `json:"copy_id"`
-	EditionID  int64   `json:"edition_id"`
-	TitleID    int64   `json:"title_id"`
-	TitleName  string  `json:"title_name"`
+	CopyID    int64  `json:"copy_id"`
+	EditionID int64  `json:"edition_id"`
+	TitleID   int64  `json:"title_id"`
+	TitleName string `json:"title_name"`
+	// Season is a TV title's season, absent for other kinds.
+	Season     *int    `json:"season,omitempty"`
 	Kind       string  `json:"kind" ts:"Kind"`
 	Format     *string `json:"format" ts:"Format"`
 	Barcode    *string `json:"barcode"`

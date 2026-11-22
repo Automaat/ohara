@@ -49,6 +49,8 @@
 	type Deals = {
 		status: HunterStatus;
 		wishes: number;
+		/** The wishes the hunter looks for: TV series are left out. */
+		searchedWishes: number;
 		all: Observation[];
 		sent: Observation[];
 	};
@@ -94,6 +96,7 @@
 			deals = {
 				status: [under, all, sent].find((v) => v.status.running)?.status ?? all.status,
 				wishes: all.wishes,
+				searchedWishes: all.searched_wishes,
 				all: all.observations,
 				sent: sent.observations
 			};
@@ -230,7 +233,7 @@
 	);
 	const shown = $derived(lists[segment]);
 	const summary = $derived(deals ? dealsSummary(deals.wishes, deals.status, now) : undefined);
-	const searched = $derived(deals ? searchedFor(deals.wishes, deals.status, now) : '');
+	const searched = $derived(deals ? searchedFor(deals.searchedWishes, deals.status, now) : '');
 	const runSummary = $derived(lastRunSummary(status?.last_result ?? null));
 	const sourceErrors = $derived(status?.last_result?.errors ?? []);
 	const busy = $derived(starting || !!status?.running);

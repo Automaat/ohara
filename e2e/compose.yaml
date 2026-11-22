@@ -41,7 +41,10 @@ services:
 
   proxy:
     image: alpine/socat:1.8.1.3@sha256:5aa280c6fc5bee94dbd2bbdf2a58d30f50396eaa110be84b03636945b157ae68
-    command: tcp-listen:8000,fork,reuseaddr tcp-connect:app:8000
+    # socat listens with a backlog of 5 by default: a test that seeds 100
+    # titles at once overflows it, and each dropped connection waits out
+    # TCP's 1 s, 2 s, 4 s… retries, which took seeding past 30 s (#401).
+    command: tcp-listen:8000,fork,reuseaddr,backlog=128 tcp-connect:app:8000
     ports:
       - '127.0.0.1:8100:8000'
     networks: [internal, edge]

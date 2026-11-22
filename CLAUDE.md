@@ -336,6 +336,21 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   from older data) and queues no alert for a wish of another title than
   the listing's. Another edition of the same title keeps the
   stored one.
+  A wish with "Tylko to wydanie" (`copy.exact_edition`, wishes only, off
+  by default, cleared when the copy becomes owned) of a movie or book
+  also needs the listing to name each detail its edition has: every
+  packaging (steelbook, slipcover or "obwoluta", digipak, mediabook), a
+  `yes` Polish voice-over ("lektor", "dubbing") or subtitles ("napisy"),
+  and a hardcover ("twarda oprawa") or paperback ("miękka okładka",
+  "broszurowa") binding (`deals.editionNamed`); `no`, `unknown` and an
+  `other` binding need nothing, and a mention after "bez" or "brak"
+  ("bez lektora", "brak polskich napisów") names nothing. Each stored
+  listing keeps the details its title names (`edition_details`, null
+  before migration 0035, naming none), so a wish turned exact later
+  stops alerting on its stored listings and the wished deals lists
+  (matched, "Pod limitem", "Wysłane", the badge) drop them. The wish form
+  and the quick confirm's wish (Okazje's "Dodaj pozycję" too) offer it,
+  except for albums. Albums and the valuation ignore it.
   A sent alert stores the price it named (`deal_alert.alerted_price_cents`);
   a later price under it, within the limit, queues the same row again and
   its message names the earlier price ("było …"). An alert still waiting
@@ -695,6 +710,20 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   on each page and keeps every row whole. "Drukuj" waits until every
   cover has loaded or failed. Before the first valuation the page says
   none exists and links to Wartość.
+- Statystyki (`/stats`, in the side navigation and the phone's settings
+  sheet, never a tab) reads `GET /api/collection` once and computes in
+  the browser (`src/lib/stats.ts`), over owned copies only: "Wydatki w
+  miesiącach" sums the prices paid in each of the last 12 calendar months
+  in Poland by purchase date (an unpriced copy counts, adds nothing) with
+  one "Bez daty" figure for undated copies; "Przyrost kolekcji" counts
+  owned copies at each month's end by purchase date, else the day the copy
+  was added, and names apart those dated after this month; "Nowe czy
+  używane" splits them new, used and not recorded by count and by money,
+  in whole percents adding up to 100 (a 0 zł price is a price). The months
+  move on once the month in Poland has changed (`src/lib/stats-month.svelte.ts`:
+  checked every minute and when the page is shown again). Charts are plain
+  SVG and CSS, each with its data under "Pokaż dane"; no value figures.
+  Without an owned copy the page offers "Skanuj".
 - Discogs data carries `DiscogsCredit`: "Data provided by Discogs." linked
   to its release page, never `nofollow`, under a quick confirm candidate
   with a `discogs_release_id` and a copy priced from Discogs on Wartość.

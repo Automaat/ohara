@@ -147,6 +147,8 @@ func TestCopyInputNormalize(t *testing.T) {
 		{"market percent of 0", collection.CopyInput{EditionID: 1, Status: "wishlist", MaxMarketPercent: new(0)}, "max_market_percent"},
 		{"market percent over 100", collection.CopyInput{EditionID: 1, Status: "wishlist", MaxMarketPercent: new(101)}, "max_market_percent"},
 		{"owned with market percent", collection.CopyInput{EditionID: 1, Status: "owned", MaxMarketPercent: new(70)}, "max_market_percent"},
+		{"wishlist of only its edition", collection.CopyInput{EditionID: 1, Status: "wishlist", ExactEdition: true}, ""},
+		{"owned of only its edition", collection.CopyInput{EditionID: 1, Status: "owned", ExactEdition: true}, "exact_edition"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

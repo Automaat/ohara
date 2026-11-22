@@ -1,0 +1,395 @@
+[
+ {
+  "id": 27861,
+  "name": "Blade Runner 2049 &#8211; 4K UHD + Blu-ray",
+  "parent": 0,
+  "type": "simple",
+  "variation": "",
+  "permalink": "https://bluedvd.pl/film/blade-runner-2049-4k-uhd-blu-ray-2/",
+  "sku": "UHDRH4933",
+  "short_description": "",
+  "description": "",
+  "on_sale": false,
+  "prices": {
+   "price": "14990",
+   "regular_price": "14990",
+   "sale_price": "14990",
+   "price_range": null,
+   "currency_code": "PLN",
+   "currency_symbol": "zł",
+   "currency_minor_unit": 2,
+   "currency_decimal_separator": ",",
+   "currency_thousand_separator": " ",
+   "currency_prefix": "",
+   "currency_suffix": " zł"
+  },
+  "price_html": "<span class=\"woocommerce-Price-amount amount\">149,90&nbsp;<span class=\"woocommerce-Price-currencySymbol\" dir=\"auto\">&#122;&#322;</span></span>",
+  "average_rating": "0",
+  "review_count": 0,
+  "images": [
+   {
+    "id": 27863,
+    "src": "https://bluedvd.pl/wp-content/uploads/okladki/blade-runner-2049-4k-uhd-blu-ray-uhdrh4933.jpg",
+    "thumbnail": "https://bluedvd.pl/wp-content/uploads/okladki/blade-runner-2049-4k-uhd-blu-ray-uhdrh4933-600x600.jpg",
+    "name": "Blade Runner 2049 &#8211; 4K UHD + Blu-ray",
+    "alt": "Blade Runner 2049 - 4K UHD + Blu-ray"
+   },
+   {
+    "id": 27865,
+    "src": "https://bluedvd.pl/wp-content/uploads/okladki/blade-runner-2049-4k-uhd-blu-ray-uhdrh4933-01.jpg",
+    "thumbnail": "https://bluedvd.pl/wp-content/uploads/okladki/blade-runner-2049-4k-uhd-blu-ray-uhdrh4933-01-600x600.jpg",
+    "name": "Blade Runner 2049 &#8211; 4K UHD + Blu-ray",
+    "alt": "Blade Runner 2049 - 4K UHD + Blu-ray"
+   }
+  ],
+  "categories": [
+   {
+    "id": 74,
+    "name": "Science fiction",
+    "slug": "science-fiction",
+    "link": "https://bluedvd.pl/filmy/science-fiction/"
+   },
+   {
+    "id": 87,
+    "name": "4K UHD",
+    "slug": "blu-ray-4k",
+    "link": "https://bluedvd.pl/filmy/blu-ray-4k/"
+   },
+   {
+    "id": 57,
+    "name": "Dramat",
+    "slug": "dramat",
+    "link": "https://bluedvd.pl/filmy/dramat/"
+   },
+   {
+    "id": 59,
+    "name": "Thriller",
+    "slug": "thriller",
+    "link": "https://bluedvd.pl/filmy/thriller/"
+   }
+  ],
+  "tags": [],
+  "brands": [
+   {
+    "id": 8418,
+    "name": "Sony Pictures",
+    "slug": "sony-pictures",
+    "link": "https://bluedvd.pl/studio/sony-pictures/"
+   }
+  ],
+  "attributes": [],
+  "variations": [],
+  "grouped_products": [],
+  "has_options": false,
+  "is_purchasable": true,
+  "is_in_stock": true,
+  "is_on_backorder": false,
+  "low_stock_remaining": null,
+  "stock_availability": {
+   "text": "Na stanie (może być zamówiony)",
+   "class": "in-stock"
+  },
+  "sold_individually": false,
+  "add_to_cart": {
+   "text": "Do koszyka",
+   "description": "Dodaj do koszyka: &bdquo;Blade Runner 2049 &#8211; 4K UHD + Blu-ray&rdquo;",
+   "url": "/wp-json/wc/store/v1/products?search=blade+runner&#038;per_page=50&#038;add-to-cart=27861",
+   "single_text": "Dodaj do koszyka",
+   "minimum": 1,
+   "maximum": 9999,
+   "multiple_of": 1
+  },
+  "extensions": {}
+ },
+ {
+  "id": 3522,
+  "name": "Blade Runner 2049 Steelbook &#8211; 4K UHD + Blu-ray + Blu-ray 3D",
+  "parent": 0,
+  "type": "simple",
+  "variation": "",
+  "permalink": "https://bluedvd.pl/film/blade-runner-2049-steelbook-4k-uhd-blu-ray-blu-ray-3d/",
+  "sku": "4730",
+  "short_description": "",
+  "description": "",
+  "on_sale": false,
+  "prices": {
+   "price": "25989",
+   "regular_price": "25989",
+   "sale_price": "25989",
+   "price_range": null,
+   "currency_code": "PLN",
+   "currency_symbol": "zł",
+   "currency_minor_unit": 2,
+   "currency_decimal_separator": ",",
+   "currency_thousand_separator": " ",
+   "currency_prefix": "",
+   "currency_suffix": " zł"
+  },
+  "price_html": "<span class=\"woocommerce-Price-amount amount\">259,89&nbsp;<span class=\"woocommerce-Price-currencySymbol\" dir=\"auto\">&#122;&#322;</span></span>",
+  "average_rating": "0",
+  "review_count": 0,
+  "images": [
+   {
+    "id": 9089,
+    "src": "https://bluedvd.pl/wp-content/uploads/2026/07/blade-runner-2049-blu-ray-4k-steelbook.jpg",
+    "thumbnail": "https://bluedvd.pl/wp-content/uploads/2026/07/blade-runner-2049-blu-ray-4k-steelbook-600x600.jpg",
+    "name": "Blade Runner 2049 Steelbook &#8211; 4K UHD + Blu-ray + Blu-ray 3D",
+    "alt": "Blade Runner 2049 Steelbook - 4K UHD + Blu-ray + Blu-ray 3D"
+   }
+  ],
+  "categories": [
+   {
+    "id": 87,
+    "name": "4K UHD",
+    "slug": "blu-ray-4k",
+    "link": "https://bluedvd.pl/filmy/blu-ray-4k/"
+   },
+   {
+    "id": 56,
+    "name": "Blu-ray",
+    "slug": "blu-ray",
+    "link": "https://bluedvd.pl/filmy/blu-ray/"
+   },
+   {
+    "id": 69,
+    "name": "Blu-ray 3D",
+    "slug": "blu-ray-3d",
+    "link": "https://bluedvd.pl/filmy/blu-ray-3d/"
+   },
+   {
+    "id": 72,
+    "name": "Fabularne",
+    "slug": "fabularne",
+    "link": "https://bluedvd.pl/filmy/blu-ray-3d/fabularne/"
+   },
+   {
+    "id": 74,
+    "name": "Science fiction",
+    "slug": "science-fiction",
+    "link": "https://bluedvd.pl/filmy/science-fiction/"
+   },
+   {
+    "id": 85,
+    "name": "Steelbook",
+    "slug": "steelbook",
+    "link": "https://bluedvd.pl/filmy/steelbook/"
+   }
+  ],
+  "tags": [],
+  "brands": [],
+  "attributes": [],
+  "variations": [],
+  "grouped_products": [],
+  "has_options": false,
+  "is_purchasable": true,
+  "is_in_stock": false,
+  "is_on_backorder": false,
+  "low_stock_remaining": null,
+  "stock_availability": {
+   "text": "Brak w magazynie",
+   "class": "out-of-stock"
+  },
+  "sold_individually": false,
+  "add_to_cart": {
+   "text": "Do koszyka",
+   "description": "Przeczytaj więcej o &bdquo;Blade Runner 2049 Steelbook &#8211; 4K UHD + Blu-ray + Blu-ray 3D&rdquo;",
+   "url": "https://bluedvd.pl/film/blade-runner-2049-steelbook-4k-uhd-blu-ray-blu-ray-3d/",
+   "single_text": "Dodaj do koszyka",
+   "minimum": 1,
+   "maximum": 9999,
+   "multiple_of": 1
+  },
+  "extensions": {}
+ },
+ {
+  "id": 3499,
+  "name": "Blade Runner 2049 Steelbook &#8211; Blu-ray",
+  "parent": 0,
+  "type": "simple",
+  "variation": "",
+  "permalink": "https://bluedvd.pl/film/blade-runner-2049-steelbook-blu-ray/",
+  "sku": "4703",
+  "short_description": "",
+  "description": "",
+  "on_sale": false,
+  "prices": {
+   "price": "8989",
+   "regular_price": "8989",
+   "sale_price": "8989",
+   "price_range": null,
+   "currency_code": "PLN",
+   "currency_symbol": "zł",
+   "currency_minor_unit": 2,
+   "currency_decimal_separator": ",",
+   "currency_thousand_separator": " ",
+   "currency_prefix": "",
+   "currency_suffix": " zł"
+  },
+  "price_html": "<span class=\"woocommerce-Price-amount amount\">89,89&nbsp;<span class=\"woocommerce-Price-currencySymbol\" dir=\"auto\">&#122;&#322;</span></span>",
+  "average_rating": "0",
+  "review_count": 0,
+  "images": [
+   {
+    "id": 9064,
+    "src": "https://bluedvd.pl/wp-content/uploads/2026/07/blade-runner-2049-blu-ray-steelbook.jpg",
+    "thumbnail": "https://bluedvd.pl/wp-content/uploads/2026/07/blade-runner-2049-blu-ray-steelbook-600x600.jpg",
+    "name": "Blade Runner 2049 Steelbook &#8211; Blu-ray",
+    "alt": "Blade Runner 2049 Steelbook - Blu-ray"
+   }
+  ],
+  "categories": [
+   {
+    "id": 74,
+    "name": "Science fiction",
+    "slug": "science-fiction",
+    "link": "https://bluedvd.pl/filmy/science-fiction/"
+   },
+   {
+    "id": 56,
+    "name": "Blu-ray",
+    "slug": "blu-ray",
+    "link": "https://bluedvd.pl/filmy/blu-ray/"
+   },
+   {
+    "id": 85,
+    "name": "Steelbook",
+    "slug": "steelbook",
+    "link": "https://bluedvd.pl/filmy/steelbook/"
+   }
+  ],
+  "tags": [],
+  "brands": [
+   {
+    "id": 8418,
+    "name": "Sony Pictures",
+    "slug": "sony-pictures",
+    "link": "https://bluedvd.pl/studio/sony-pictures/"
+   }
+  ],
+  "attributes": [],
+  "variations": [],
+  "grouped_products": [],
+  "has_options": false,
+  "is_purchasable": true,
+  "is_in_stock": false,
+  "is_on_backorder": false,
+  "low_stock_remaining": null,
+  "stock_availability": {
+   "text": "Brak w magazynie",
+   "class": "out-of-stock"
+  },
+  "sold_individually": false,
+  "add_to_cart": {
+   "text": "Do koszyka",
+   "description": "Przeczytaj więcej o &bdquo;Blade Runner 2049 Steelbook &#8211; Blu-ray&rdquo;",
+   "url": "https://bluedvd.pl/film/blade-runner-2049-steelbook-blu-ray/",
+   "single_text": "Dodaj do koszyka",
+   "minimum": 1,
+   "maximum": 9999,
+   "multiple_of": 1
+  },
+  "extensions": {}
+ },
+ {
+  "id": 28081,
+  "name": "Ucieczka z Alcatraz (1979) &#8211; 4K UHD",
+  "parent": 0,
+  "type": "simple",
+  "variation": "",
+  "permalink": "https://bluedvd.pl/film/ucieczka-z-alcatraz-1979-4k-uhd/",
+  "sku": "5320980",
+  "short_description": "",
+  "description": "",
+  "on_sale": false,
+  "prices": {
+   "price": "13999",
+   "regular_price": "13999",
+   "sale_price": "13999",
+   "price_range": null,
+   "currency_code": "PLN",
+   "currency_symbol": "zł",
+   "currency_minor_unit": 2,
+   "currency_decimal_separator": ",",
+   "currency_thousand_separator": " ",
+   "currency_prefix": "",
+   "currency_suffix": " zł"
+  },
+  "price_html": "<span class=\"woocommerce-Price-amount amount\">139,99&nbsp;<span class=\"woocommerce-Price-currencySymbol\" dir=\"auto\">&#122;&#322;</span></span>",
+  "average_rating": "0",
+  "review_count": 0,
+  "images": [
+   {
+    "id": 28083,
+    "src": "https://bluedvd.pl/wp-content/uploads/okladki/ucieczka-z-alcatraz-1979-4k-uhd-5320980.jpg",
+    "thumbnail": "https://bluedvd.pl/wp-content/uploads/okladki/ucieczka-z-alcatraz-1979-4k-uhd-5320980-600x600.jpg",
+    "name": "Ucieczka z Alcatraz (1979) &#8211; 4K UHD",
+    "alt": "Ucieczka z Alcatraz (1979) - 4K UHD"
+   },
+   {
+    "id": 28085,
+    "src": "https://bluedvd.pl/wp-content/uploads/okladki/ucieczka-z-alcatraz-1979-4k-uhd-5320980-01.jpg",
+    "thumbnail": "https://bluedvd.pl/wp-content/uploads/okladki/ucieczka-z-alcatraz-1979-4k-uhd-5320980-01-600x600.jpg",
+    "name": "Ucieczka z Alcatraz (1979) &#8211; 4K UHD",
+    "alt": "Ucieczka z Alcatraz (1979) - 4K UHD"
+   }
+  ],
+  "categories": [
+   {
+    "id": 59,
+    "name": "Thriller",
+    "slug": "thriller",
+    "link": "https://bluedvd.pl/filmy/thriller/"
+   },
+   {
+    "id": 87,
+    "name": "4K UHD",
+    "slug": "blu-ray-4k",
+    "link": "https://bluedvd.pl/filmy/blu-ray-4k/"
+   },
+   {
+    "id": 57,
+    "name": "Dramat",
+    "slug": "dramat",
+    "link": "https://bluedvd.pl/filmy/dramat/"
+   },
+   {
+    "id": 111,
+    "name": "Zapowiedzi",
+    "slug": "zapowiedzi",
+    "link": "https://bluedvd.pl/filmy/zapowiedzi/"
+   }
+  ],
+  "tags": [],
+  "brands": [
+   {
+    "id": 8404,
+    "name": "Paramount Pictures",
+    "slug": "paramount-pictures",
+    "link": "https://bluedvd.pl/studio/paramount-pictures/"
+   }
+  ],
+  "attributes": [],
+  "variations": [],
+  "grouped_products": [],
+  "has_options": false,
+  "is_purchasable": true,
+  "is_in_stock": true,
+  "is_on_backorder": true,
+  "low_stock_remaining": null,
+  "stock_availability": {
+   "text": "",
+   "class": "available-on-backorder"
+  },
+  "sold_individually": false,
+  "add_to_cart": {
+   "text": "Do koszyka",
+   "description": "Dodaj do koszyka: &bdquo;Ucieczka z Alcatraz (1979) &#8211; 4K UHD&rdquo;",
+   "url": "/wp-json/wc/store/v1/products?per_page=100&#038;stock_status=onbackorder&#038;add-to-cart=28081",
+   "single_text": "Dodaj do koszyka",
+   "minimum": 1,
+   "maximum": 9999,
+   "multiple_of": 1
+  },
+  "extensions": {}
+ }
+]

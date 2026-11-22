@@ -29,13 +29,14 @@ type storedListing struct {
 	AlertedPriceCents                               *int64
 }
 
-func stored(t *testing.T, pool *pgxpool.Pool, externalID string) storedListing {
+// stored reads the listing the tests record, OLX listing "1".
+func stored(t *testing.T, pool *pgxpool.Pool) storedListing {
 	t.Helper()
 	var s storedListing
 	if err := pool.QueryRow(context.Background(), `SELECT o.id, o.edition_id, o.title_id, o.wishlist_copy_id,
 			a.copy_id, a.sent_at IS NOT NULL, a.alerted_price_cents
 		FROM price_observation o LEFT JOIN deal_alert a ON a.observation_id = o.id
-		WHERE o.source = 'olx' AND o.external_id = $1`, externalID).Scan(&s.ID, &s.EditionID, &s.TitleID,
+		WHERE o.source = 'olx' AND o.external_id = '1'`).Scan(&s.ID, &s.EditionID, &s.TitleID,
 		&s.WishlistCopyID, &s.AlertCopyID, &s.AlertSent, &s.AlertedPriceCents); err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +55,9 @@ func deref(p *int64) any {
 // TestRecordMovesToAnotherTitle records "Alien Covenant DVD" for an
 // "Alien" wish with a queued alert, then for "Alien: Covenant": a wish
 // with or without a limit, or an owned edition as the valuation run
-// records it. The old wish's alert is sent first in one case.
+// records it. The old wish's alert is sent first in some cases. The deals
+// view, filtered to wished listings or not, shows it under its new title
+// only, with the state of its alert.
 func TestRecordMovesToAnotherTitle(t *testing.T) {
 	listing := Listing{Source: "olx", ExternalID: "1", Title: "Alien Covenant DVD", URL: "https://example.test/1", PriceCents: 3000}
 	tests := []struct {
@@ -63,11 +66,13 @@ func TestRecordMovesToAnotherTitle(t *testing.T) {
 		limit     int64
 		valuation bool
 		pending   string
+		state     string
 	}{
-		{name: "an unsent alert never goes out for the old wish"},
-		{name: "an unsent alert goes out for the new wish", limit: 5000, pending: "Alien: Covenant"},
-		{name: "a sent alert stays recorded", sent: true, limit: 5000},
-		{name: "a valuation match drops the old wish", valuation: true},
+		{name: "an unsent alert never goes out for the old wish", state: AlertPending},
+		{name: "an unsent alert goes out for the new wish", limit: 5000, pending: "Alien: Covenant", state: AlertPending},
+		{name: "a sent alert stays recorded", sent: true, limit: 5000, state: AlertSent},
+		{name: "a valuation match drops the old wish", valuation: true, state: AlertNone},
+		{name: "a valuation match keeps a sent alert off the old wish", sent: true, valuation: true, state: AlertSent},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -94,7 +99,7 @@ func TestRecordMovesToAnotherTitle(t *testing.T) {
 				t.Fatalf("first Record = %v, %v, %v; want a new listing with an alert", isNew, alerted, err)
 			}
 			if tt.sent {
-				if err := store.MarkSent(ctx, stored(t, pool, "1").ID, l.PriceCents); err != nil {
+				if err := store.MarkSent(ctx, stored(t, pool).ID, l.PriceCents); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -103,7 +108,7 @@ func TestRecordMovesToAnotherTitle(t *testing.T) {
 				t.Fatalf("second Record = %v, %v; want the stored listing", isNew, err)
 			}
 
-			got := stored(t, pool, "1")
+			got := stored(t, pool)
 			if !is(got.EditionID, covenant.EditionID) || !is(got.TitleID, covenant.TitleID) {
 				t.Fatalf("listing on edition %v of title %v, want edition %d of title %d",
 					deref(got.EditionID), deref(got.TitleID), covenant.EditionID, covenant.TitleID)
@@ -131,12 +136,28 @@ func TestRecordMovesToAnotherTitle(t *testing.T) {
 				t.Fatalf("pending alerts for %q, want %q", titles, tt.pending)
 			}
 
-			recent, err := store.Recent(ctx, RecentFilter{Limit: 10})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(recent) != 1 || recent[0].TitleName == nil || *recent[0].TitleName != "Alien: Covenant" {
-				t.Fatalf("deals view = %+v, want the listing under Alien: Covenant", recent)
+			for _, matched := range []bool{false, true} {
+				recent, err := store.Recent(ctx, RecentFilter{Limit: 10, Matched: matched})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if matched && tt.valuation {
+					if len(recent) != 0 {
+						t.Fatalf("wished listings = %+v, want none after a valuation match", recent)
+					}
+					continue
+				}
+				if len(recent) != 1 {
+					t.Fatalf("deals view (matched %v) has %d listings, want 1", matched, len(recent))
+				}
+				var name string
+				if recent[0].TitleName != nil {
+					name = *recent[0].TitleName
+				}
+				if name != "Alien: Covenant" || recent[0].Alert != tt.state {
+					t.Fatalf("deals view (matched %v) shows %q with alert %s, want Alien: Covenant with alert %s",
+						matched, name, recent[0].Alert, tt.state)
+				}
 			}
 		})
 	}
@@ -165,9 +186,46 @@ func TestRecordKeepsTheEditionOfTheSameTitle(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	got := stored(t, pool, "1")
+	got := stored(t, pool)
 	if !is(got.EditionID, dvd.EditionID) || !is(got.AlertCopyID, dvd.CopyID) || !is(got.WishlistCopyID, bluray.CopyID) {
 		t.Fatalf("listing = %+v, want edition %d and its alert for wish %d kept, recorded for wish %d",
 			got, dvd.EditionID, dvd.CopyID, bluray.CopyID)
+	}
+}
+
+// TestSendAlertSkipsAnAlertMovedAway reads the "Alien" wish's alert as the
+// hunter does before it sends, then a valuation run moves the listing to
+// "Alien: Covenant": the hunter's send finds nothing to send.
+func TestSendAlertSkipsAnAlertMovedAway(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	ctx := context.Background()
+	store := NewStore(pool)
+	alien := wished(t, pool, Want{Kind: "movie", Name: "Alien", Format: new("dvd"), MaxPriceCents: new(int64(5000))})
+	covenant := wished(t, pool, Want{Kind: "movie", Name: "Alien: Covenant", Format: new("dvd")})
+	if _, err := pool.Exec(ctx, `UPDATE copy SET status = 'owned' WHERE id = $1`, covenant.CopyID); err != nil {
+		t.Fatal(err)
+	}
+	covenant.CopyID = 0
+	l := Listing{Source: "olx", ExternalID: "1", Title: "Alien Covenant DVD", URL: "https://example.test/1", PriceCents: 3000}
+	if _, _, err := store.Record(ctx, &l, &alien, true); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := store.PendingAlerts(ctx)
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("PendingAlerts = %d, %v; want the Alien alert", len(pending), err)
+	}
+	if _, _, err := store.Record(ctx, &l, &covenant, false); err != nil {
+		t.Fatal(err)
+	}
+	var sent []string
+	delivered, err := store.SendAlert(ctx, pending[0].ObservationID, func(a *Alert) error {
+		sent = append(sent, a.TitleName)
+		return nil
+	})
+	if err != nil || delivered || len(sent) != 0 {
+		t.Fatalf("SendAlert = %v, %v, sent %q; want nothing sent after the move", delivered, err, sent)
+	}
+	if got := stored(t, pool); got.AlertSent {
+		t.Fatalf("alert = %+v, want it unsent", got)
 	}
 }

@@ -81,8 +81,9 @@ func (s *Store) Record(ctx context.Context, l *deals.Listing, h *Holding) (bool,
 // window that value an owned edition. OLX prices of an edition without an
 // owned copy count when an edition of the same title and format is owned,
 // as middles pool that group and a listing keeps the edition of its title
-// it was first stored against, often a wished one. Such a price counts only when first seen after the edition last
-// changed: a listing matched before an edit, such as a new format, may not
+// it was first stored against, often a wished one. Such a price counts only when first seen, or moved to the
+// edition from another title, after the edition last changed: a listing
+// matched before an edit, such as a new format, may not
 // fit it, and a match for another edition later keeps it on this one.
 // Floors and Discogs bounds are per edition, so those count only for an
 // owned edition. A Discogs price counts only for the release the edition
@@ -114,7 +115,7 @@ func prices(ctx context.Context, q querier, window time.Duration, titleID int64)
 		WHERE o.source = ANY ($1)
 			AND o.last_seen_at > now() - make_interval(secs => $2)
 			AND (o.edition_id IN (`+ownedEditions+`)
-				OR o.source = ANY ($4) AND o.observed_at > e.updated_at
+				OR o.source = ANY ($4) AND coalesce(o.moved_at, o.observed_at) > e.updated_at
 					AND (e.title_id, coalesce(e.format, '')) IN (
 						SELECT owned.title_id, coalesce(owned.format, '')
 						FROM copy c JOIN edition owned ON owned.id = c.edition_id

@@ -357,6 +357,40 @@ func TestMovedListingPricesNewTitle(t *testing.T) {
 	}
 }
 
+// TestListingMovedToANewerWishPricesItsTitle stores a listing first seen a
+// day ago against seed's owned "Diuna" Blu-ray. A hunt then moves it to a
+// "Diuna: Część druga" Blu-ray wished for today, beside an owned Blu-ray of
+// that title: its price is pooled into that title's mid, since it was
+// matched to the wished edition after the edition last changed.
+func TestListingMovedToANewerWishPricesItsTitle(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	seed(t, pool)
+	ctx := context.Background()
+	exec(t, pool, `INSERT INTO title (id, kind, name) OVERRIDING SYSTEM VALUE
+		VALUES (3, 'movie', 'Diuna: Część druga')`)
+	exec(t, pool, `INSERT INTO edition (id, title_id, barcode, format) OVERRIDING SYSTEM VALUE
+		VALUES (30, 3, '5902600069737', 'bluray'), (31, 3, '5902600069744', 'bluray')`)
+	exec(t, pool, `INSERT INTO copy (edition_id, status) VALUES (30, 'owned'), (31, 'wishlist')`)
+	exec(t, pool, `INSERT INTO price_observation (source, external_id, price_cents, acquired_as, edition_id, title_id,
+			observed_at) VALUES ('olx', 'd1', 4000, 'used', 20, 2, now() - interval '1 day')`)
+	var wish int64
+	if err := pool.QueryRow(ctx, `SELECT id FROM copy WHERE edition_id = 31`).Scan(&wish); err != nil {
+		t.Fatal(err)
+	}
+	l := listing("d1", "Diuna Część druga Blu-ray", 4000, used())
+	want := deals.Want{CopyID: wish, EditionID: 31, TitleID: 3, Kind: "movie", Name: "Diuna: Część druga", Format: new("bluray")}
+	if _, _, err := deals.NewStore(pool).Record(ctx, &l, &want, false); err != nil {
+		t.Fatal(err)
+	}
+	copies, err := NewStore(pool).TitleValued(ctx, 90*24*time.Hour, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(copies) != 1 || copies[0].Mid == nil || copies[0].Mid.Count != 1 || copies[0].Mid.Cents != 4000 {
+		t.Fatalf("Diuna: Część druga copies = %+v, want a mid from the moved listing", copies)
+	}
+}
+
 // wishBluray adds a wished Blu-ray edition 22 of "Diuna" next to seed's
 // owned Blu-ray 20 and records found against it, as the deal hunter does.
 func wishBluray(t *testing.T, pool *pgxpool.Pool, found []deals.Listing) {

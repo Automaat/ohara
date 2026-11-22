@@ -158,11 +158,11 @@ const movedTitle = listingTitle + ` <> EXCLUDED.title_id`
 // Telegram alert in the same transaction. A listing a source already
 // reported keeps its row and first observation time; its price and
 // last_seen_at move to now. It keeps its edition too, unless w belongs to
-// another title: then it moves to w's title and edition, and a valuation
-// match, which names no wish, drops the wish the hunter recorded it for. An unsent alert
-// for a wish of another title than the listing's moves to w, or to no wish
-// when w is not one, so it is never sent for the old wish; an alert
-// already sent stays recorded. The alert is queued when the listing has none
+// another title: then it moves to w's title and edition, its moved_at
+// becomes now, and a valuation match, which names no wish, drops the wish
+// the hunter recorded it for. An unsent alert for a wish of another title
+// than the listing's moves to w, or to no wish when w is not one, so it is
+// never sent for the old wish; an alert already sent stays recorded. The alert is queued when the listing has none
 // yet, so a listing the valuation run stored first, or one whose price
 // dropped under the limit, still alerts. A listing whose alert was sent
 // alerts again when its price is under the one that alert named, unless
@@ -199,7 +199,8 @@ func (s *Store) Record(ctx context.Context, l *Listing, w *Want, alert bool) (bo
 			edition_id = CASE WHEN `+movedTitle+` THEN EXCLUDED.edition_id
 				ELSE coalesce(price_observation.edition_id, EXCLUDED.edition_id) END,
 			title_id = CASE WHEN `+movedTitle+` THEN EXCLUDED.title_id
-				ELSE coalesce(price_observation.title_id, EXCLUDED.title_id) END
+				ELSE coalesce(price_observation.title_id, EXCLUDED.title_id) END,
+			moved_at = CASE WHEN `+movedTitle+` THEN now() ELSE price_observation.moved_at END
 		RETURNING id, xmax = 0, dismissed_at IS NOT NULL, `+listingTitle,
 		l.Source, l.ExternalID, l.PriceCents, l.AcquiredAs, l.URL, w.EditionID, w.TitleID, raw).Scan(&id, &isNew, &dismissed, &titleID)
 	if err != nil {
@@ -417,9 +418,15 @@ type RecentFilter struct {
 	Sent       bool
 }
 
+// wishOfListingTitle holds when wish w is for listing o's title, its edition's or else the one
+// it was stored with. A listing moved to another title keeps its sent alert for the old title's
+// wish, which no longer matches it.
+const wishOfListingTitle = `EXISTS (SELECT FROM edition we WHERE we.id = w.edition_id
+	AND we.title_id = coalesce((SELECT le.title_id FROM edition le WHERE le.id = o.edition_id), o.title_id))`
+
 // Listing rows Recent pages through: each listing with its alert's sent time and the wishlist copy
-// that matches it, the one the hunter recorded it for, else its alert's copy, while that copy is
-// still on the wishlist. allListings is every stored listing; wishedListings only those with a
+// that matches it, the one the hunter recorded it for, else its alert's copy when that copy is for
+// the listing's title, while that copy is still on the wishlist. allListings is every stored listing; wishedListings only those with a
 // matching copy, the only ones a filter keeps, found from the wishlist through
 // price_observation_wish_idx and deal_alert without reading the rest.
 const (
@@ -427,6 +434,7 @@ const (
 		FROM price_observation o
 		LEFT JOIN deal_alert a ON a.observation_id = o.id
 		LEFT JOIN copy w ON w.status = 'wishlist' AND w.id = coalesce(o.wishlist_copy_id, a.copy_id)
+			AND (o.wishlist_copy_id IS NOT NULL OR ` + wishOfListingTitle + `)
 		WHERE o.dismissed_at IS NULL`
 	wishedListings = `SELECT o.id, o.observed_at, o.price_cents, o.source, a.sent_at, w.id AS wish_id, w.max_price_cents
 		FROM copy w
@@ -439,7 +447,7 @@ const (
 		JOIN deal_alert a ON a.copy_id = w.id
 		JOIN price_observation o ON o.id = a.observation_id AND o.wishlist_copy_id IS NULL
 			AND o.dismissed_at IS NULL
-		WHERE w.status = 'wishlist'`
+		WHERE w.status = 'wishlist' AND ` + wishOfListingTitle
 )
 
 // Recent returns the newest deal observations that pass f. It picks the page from the listing
@@ -455,7 +463,7 @@ func (s *Store) Recent(ctx context.Context, f RecentFilter) ([]Observation, erro
             coalesce(CASE WHEN e.cover_photo IS NOT NULL
                 THEN '/api/editions/' || e.id || '/cover?v=' || extract(epoch FROM e.updated_at) END,
                 nullif(e.cover_url, ''), t.cover_url), w.max_price_cents,
-			CASE WHEN a.observation_id IS NULL THEN 'none'
+			CASE WHEN a.observation_id IS NULL OR a.sent_at IS NULL AND a.copy_id IS NULL THEN 'none'
 			     WHEN a.sent_at IS NOT NULL THEN 'sent'
 			     WHEN a.attempts >= $2 THEN 'failed'
 			     ELSE 'pending' END,

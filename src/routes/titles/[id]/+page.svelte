@@ -16,7 +16,7 @@
 	import { onDestroy } from 'svelte';
 	import { afterNavigate, goto, replaceState } from '$app/navigation';
 	import { page } from '$app/state';
-	import { ApiError, errorMessage, request } from '#lib/api.js';
+	import { errorMessage, issueFrom, request } from '#lib/api.js';
 	import { titlePreview } from '#lib/collection-cache.js';
 	import {
 		copyPayload,
@@ -206,10 +206,6 @@
 		if (!page.state.fromCollection || !plainClick(event)) return;
 		event.preventDefault();
 		history.back();
-	}
-
-	function issueFrom(err: unknown): FormIssue {
-		return { field: err instanceof ApiError ? (err.field ?? '') : '', message: errorMessage(err) };
 	}
 
 	function editTitle(t: Title) {

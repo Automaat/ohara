@@ -258,14 +258,6 @@ export function collectionSearch(f: CollectionFilter): string {
 	return qs ? `?${qs}` : '';
 }
 
-/**
- * The request for a filter: its copies from /api/collection, with empty fields left out, or for
- * `none` every title, which `uncopiedTitles` narrows to the filter.
- */
-export function collectionURL(f: CollectionFilter): string {
-	return f.status === 'none' ? '/api/titles' : `/api/collection${collectionSearch(f)}`;
-}
-
 /** The titles that have no copy yet. */
 export function withoutCopies(titles: readonly Title[]): Title[] {
 	return titles.filter((t) => t.copy_count === 0);

@@ -4,7 +4,7 @@
 	import { goto, replaceState } from '$app/navigation';
 	import { page } from '$app/state';
 	import ScanItem from '#lib/components/ScanItem.svelte';
-	import { ScanFlow, type Added } from '#lib/scan-flow.svelte.js';
+	import { ScanFlow, phaseTitle, type Added } from '#lib/scan-flow.svelte.js';
 	import { browserStore, cleanBarcode } from '#lib/scan.js';
 
 	const flow = new ScanFlow(fetch, browserStore());
@@ -12,27 +12,7 @@
 
 	const barcode = $derived(cleanBarcode(page.params.barcode ?? ''));
 	const manual = $derived(page.url.searchParams.get('manual') === '1');
-	const title = $derived(pageTitle());
-
-	function pageTitle(): string {
-		const p = flow.phase;
-		switch (p.kind) {
-			case 'loading':
-				return 'Sprawdzam kod…';
-			case 'queued':
-				return 'Nie znaleziono';
-			case 'invalid':
-				return 'Nieprawidłowy kod';
-			case 'failed':
-				return 'Nie udało się sprawdzić kodu';
-			case 'offline':
-				return 'Zapisano bez połączenia';
-			case 'expired':
-				return 'Sesja wygasła';
-		}
-		if (p.status === 'owned') return 'Masz już to wydanie';
-		return p.status === 'missing' ? 'Dodaj ręcznie' : 'Znaleziono';
-	}
+	const title = $derived(phaseTitle(flow.phase));
 
 	$effect(() => {
 		const code = barcode;

@@ -399,3 +399,43 @@ func TestWantsCarryEditionBarcode(t *testing.T) {
 		}
 	}
 }
+
+func TestWantsCarryEditionDetails(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	ctx := context.Background()
+	w := wished(t, pool, Want{Kind: "movie", Name: "Blade Runner 2049", Format: new("bluray")})
+	if _, err := pool.Exec(ctx, `UPDATE edition SET packaging = '{steelbook}', pl_voiceover = 'yes',
+		pl_subtitles = 'no' WHERE id = $1`, w.EditionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE copy SET exact_edition = true WHERE id = $1`, w.CopyID); err != nil {
+		t.Fatal(err)
+	}
+	book := wished(t, pool, diuna(new("9788381880206")))
+	if _, err := pool.Exec(ctx, `UPDATE edition SET binding = 'hardcover' WHERE id = $1`, book.EditionID); err != nil {
+		t.Fatal(err)
+	}
+	wants, err := NewStore(pool).Wants(ctx)
+	if err != nil {
+		t.Fatalf("Wants: %v", err)
+	}
+	got := map[int64]Want{}
+	for _, w := range wants {
+		got[w.CopyID] = w
+	}
+	movie := got[w.CopyID]
+	if !movie.ExactEdition || !slices.Equal(movie.Packaging, []string{"steelbook"}) ||
+		movie.PLVoiceover != "yes" || movie.PLSubtitles != "no" || movie.Binding != nil {
+		t.Errorf("movie want = %+v, want an exact steelbook with Polish voice-over", movie)
+	}
+	if !movie.Matches("Blade Runner 2049 Blu-ray steelbook lektor") || movie.Matches("Blade Runner 2049 Blu-ray") {
+		t.Error("stored exact movie want matches as a want of any edition")
+	}
+	b := got[book.CopyID]
+	if b.ExactEdition || b.Binding == nil || *b.Binding != "hardcover" || b.PLVoiceover != "unknown" {
+		t.Errorf("book want = %+v, want any edition, hardcover", b)
+	}
+	if !b.Matches("Diuna Frank Herbert Rebis") {
+		t.Error("stored book want of any edition needs its binding")
+	}
+}

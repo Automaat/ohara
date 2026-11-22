@@ -292,6 +292,7 @@
 			{saving}
 			submitLabel="Zapisz zmiany"
 			market={markets.for(d.title.id, d.edition.format)}
+			kind={d.title.kind}
 			onsubmit={() => save(d)}
 		/>
 	</div>

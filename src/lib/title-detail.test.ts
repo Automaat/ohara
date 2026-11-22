@@ -315,6 +315,16 @@ describe('copyFacts', () => {
 			['Stan', 'Nowy']
 		]);
 	});
+
+	it('says a wish takes offers of only its edition', () => {
+		const facts = copyFacts(
+			copy({ status: 'wishlist', price_cents: null, max_price_cents: null, exact_edition: true })
+		);
+		expect(facts.map((f) => [f.label, f.value])).toContainEqual(['Oferty', 'Tylko to wydanie']);
+		expect(
+			copyFacts(copy({ status: 'wishlist', price_cents: null })).map((f) => f.label)
+		).not.toContain('Oferty');
+	});
 });
 
 describe('copyFacts with a location', () => {

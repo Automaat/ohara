@@ -157,7 +157,8 @@ func (s *Store) Wants(ctx context.Context) ([]Want, error) {
 	}
 	rows, err := s.pool.Query(ctx, `SELECT c.id, e.id, t.id, t.kind, t.name, t.original_title,
 			t.polish_title, t.authors, e.format, e.barcode, c.max_price_cents, c.max_market_percent,
-			CASE WHEN c.max_market_percent IS NOT NULL THEN m.cents END
+			CASE WHEN c.max_market_percent IS NOT NULL THEN m.cents END, c.exact_edition,
+			e.packaging, e.pl_voiceover, e.pl_subtitles, e.binding
 		FROM copy c JOIN edition e ON e.id = c.edition_id JOIN title t ON t.id = e.title_id
 		`+marketJoin("e", 1)+`
 		WHERE c.status = 'wishlist' ORDER BY c.id`, markets.titles, markets.formats, markets.cents)
@@ -168,7 +169,7 @@ func (s *Store) Wants(ctx context.Context) ([]Want, error) {
 		var w Want
 		err := row.Scan(&w.CopyID, &w.EditionID, &w.TitleID, &w.Kind, &w.Name, &w.OriginalTitle,
 			&w.PolishTitle, &w.Authors, &w.Format, &w.Barcode, &w.MaxPriceCents, &w.MaxMarketPercent,
-			&w.MarketCents)
+			&w.MarketCents, &w.ExactEdition, &w.Packaging, &w.PLVoiceover, &w.PLSubtitles, &w.Binding)
 		return w, err
 	})
 }
@@ -1045,7 +1046,7 @@ func buyInTx(ctx context.Context, tx pgx.Tx, callbackQueryID string, id, copyID 
 	if _, err := tx.Exec(ctx, `UPDATE copy SET status = 'owned', price_cents = $2,
 			purchased_on = (now() AT TIME ZONE 'Europe/Warsaw')::date, shop = $3,
 			acquired_as = coalesce($4, acquired_as), max_price_cents = NULL, max_market_percent = NULL,
-			updated_at = now()
+			exact_edition = false, updated_at = now()
 		WHERE id = $1`, copyID, priceCents, shop, acquiredAs); err != nil {
 		return fmt.Errorf("buy press: copy: %w", err)
 	}

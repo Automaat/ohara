@@ -319,6 +319,14 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   from older data) and queues no alert for a wish of another title than
   the listing's. Another edition of the same title keeps the
   stored one.
+  A wish with "Tylko to wydanie" (`copy.exact_edition`, wishes only, off
+  by default, cleared when the copy becomes owned) of a movie or book
+  also needs the listing to name each detail its edition has: every
+  packaging (steelbook, slipcover or "obwoluta", digipak, mediabook), a
+  `yes` Polish voice-over ("lektor", "dubbing") or subtitles ("napisy"),
+  and a hardcover ("twarda oprawa") or paperback ("miękka okładka",
+  "broszurowa") binding (`deals.editionNamed`); `no`, `unknown` and an
+  `other` binding need nothing. Albums and the valuation ignore it.
   A sent alert stores the price it named (`deal_alert.alerted_price_cents`);
   a later price under it, within the limit, queues the same row again and
   its message names the earlier price ("było …"). An alert still waiting

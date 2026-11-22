@@ -682,6 +682,7 @@
 				saving={savingCopy}
 				submitLabel={target.mode === 'add' ? 'Dodaj egzemplarz' : 'Zapisz zmiany'}
 				market={copyEdition ? markets.for(copyEdition.title_id, copyEdition.format) : null}
+				kind={t.kind}
 				onsubmit={() => saveCopy(target)}
 				oncancel={() => (copySheet = false)}
 			/>

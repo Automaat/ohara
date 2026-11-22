@@ -40,3 +40,31 @@ func (s PGTokenStore) Save(ctx context.Context, provider string, t Token) error 
 	}
 	return nil
 }
+
+// Swap stores t and returns it with true, unless provider's stored pair has
+// a refresh token outside expected: then it returns that pair with false.
+// The conditional upsert locks the row, so a pair another process saves
+// concurrently is never overwritten.
+func (s PGTokenStore) Swap(ctx context.Context, provider string, expected []string, t Token) (Token, bool, error) {
+	err := s.Pool.QueryRow(ctx, `INSERT INTO oauth_token (provider, access_token, refresh_token, expires_at)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (provider) DO UPDATE SET access_token = EXCLUDED.access_token,
+			refresh_token = EXCLUDED.refresh_token, expires_at = EXCLUDED.expires_at, updated_at = now()
+		WHERE oauth_token.refresh_token = ANY($5)
+		RETURNING true`,
+		provider, t.Access, t.Refresh, t.Expiry, expected).Scan(new(bool))
+	if err == nil {
+		return t, true, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return Token{}, false, fmt.Errorf("write oauth token: %w", err)
+	}
+	stored, ok, err := s.Load(ctx, provider)
+	if err != nil {
+		return Token{}, false, err
+	}
+	if !ok {
+		return Token{}, false, errors.New("write oauth token: stored pair vanished")
+	}
+	return stored, false, nil
+}

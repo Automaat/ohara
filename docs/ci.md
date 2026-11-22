@@ -1,7 +1,7 @@
 # CI details
 
-Read before changing the vulnerability checks, their allowlist or the Go
-version.
+Read before changing the vulnerability checks, their allowlist, the Go
+version or the built-page CSP check.
 
 Moved from `CLAUDE.md`, whose conventions still apply.
 
@@ -24,3 +24,17 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   once all three have the release (`minimumGroupSize: 3`), and CI's
   `scripts/check-go-versions.sh` fails when they differ; the `go`
   language line stays where it is.
+- `npm run build` ends with `scripts/check-csp.mjs`, which reads every
+  built page with an HTML parser (`parse5`, logic in
+  `scripts/csp-problems.mjs`) and judges it as a browser would. Only a
+  `content-security-policy` `<meta>` that is a child of `<head>` counts;
+  one elsewhere is reported, and a page with none fails. A policy covers
+  only the scripts after it, and every such policy must allow each inline
+  script through a hash in its effective `script-src-elem` (falling back
+  to `script-src`, then `default-src`). Directive names and keywords are
+  case-insensitive, a repeated directive is ignored, and no script
+  directive may allow `'unsafe-inline'` or `'unsafe-eval'`. A script with
+  a `src`, an empty one, a `nomodule` classic one and a data block (a
+  `type` that is not JavaScript, `module`, `importmap` or
+  `speculationrules`) need no hash. Fixtures for these cases live in
+  `test/check-csp/`, run by `npm run test:coverage`.

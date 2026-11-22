@@ -21,7 +21,7 @@ export default defineConfig({
 		}
 	},
 	test: {
-		include: ['src/**/*.{test,spec}.{js,ts}'],
+		include: ['src/**/*.{test,spec}.{js,ts}', 'test/**/*.test.ts'],
 		coverage: {
 			provider: 'v8',
 			reporter: ['text', 'json', 'lcov'],

@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="pl">
+	<head>
+		<meta charset="utf-8" />
+		<title>Ohara</title>
+		<meta
+			http-equiv="content-security-policy"
+			content="default-src 'self'; object-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'sha256-PkG1XCaZRZkPqh7fB6KqGpkaQjPf0SXUt8b+mLbonYc='; style-src 'self' 'unsafe-inline'"
+		/>
+	</head>
+	<body>
+		<script data-note=" src=example">
+			console.log('unlisted');
+		</script>
+		<div style="display: contents">
+			<script>
+				console.log('boot');
+			</script>
+		</div>
+	</body>
+</html>

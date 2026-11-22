@@ -72,6 +72,8 @@ type double struct {
 	// commitLate runs.
 	lateAdds int
 	late     []func()
+	// hidden releases answer their lookups 404, as a lagging listing.
+	hidden map[int64]bool
 }
 
 func newDouble(t *testing.T) (*double, *httptest.Server) {
@@ -105,7 +107,7 @@ func newDouble(t *testing.T) (*double, *httptest.Server) {
 		}
 		id := pathInt(r, "release")
 		held := d.instances[id]
-		if len(held) == 0 {
+		if len(held) == 0 || d.hidden[id] {
 			writeJSON(w, http.StatusNotFound, obj{"message": "Release not found in collection."})
 			return
 		}
@@ -212,6 +214,16 @@ func (d *double) moveTo(id, folder int64) {
 	for i := range d.instances[id] {
 		d.instances[id][i].FolderID = folder
 	}
+}
+
+// hide makes release id's lookups answer 404, or answer again.
+func (d *double) hide(id int64, hidden bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.hidden == nil {
+		d.hidden = map[int64]bool{}
+	}
+	d.hidden[id] = hidden
 }
 
 // commitLate makes the instances of the adds answered 503.
@@ -575,6 +587,53 @@ func TestPushFieldEditFailureStoresNoInstance(t *testing.T) {
 	adds, _, _ := d.snapshot()
 	if code != http.StatusOK || len(adds) != 1 || s.InstanceID == nil || *s.InstanceID != adds[0].instance {
 		t.Fatalf("retry = %d %s, adds %+v; want the made instance finished, none added", code, raw, adds)
+	}
+}
+
+// R1: Discogs' listing can lag behind its answer; an instance it named
+// and the listing omits is not given up, so no second one is made.
+func TestPushAnsweredInstanceMissingFromListing(t *testing.T) {
+	d, srv := newDouble(t)
+	a := newAPI(t, srv.URL, discogscollection.DefaultFolder)
+	id := a.album(obj{"status": "owned", "media_grade": "mint"})
+	d.failWith(http.StatusInternalServerError,
+		"POST /users/vinyl%20owner/collection/folders/1/releases/1873013/instances/")
+	if code, raw, _ := a.push(id); code != http.StatusBadGateway {
+		t.Fatalf("push = %d %s, want 502", code, raw)
+	}
+	d.failWith(0, "")
+	d.hide(release, true)
+	code, raw, _ := a.push(id)
+	if adds, _, _ := d.snapshot(); code != http.StatusConflict || !strings.Contains(raw, "nie rozstrzygnęło") || len(adds) != 1 {
+		t.Fatalf("retry while the listing lags = %d %s, adds %+v; want 409 and no second add", code, raw, adds)
+	}
+	d.hide(release, false)
+	code, raw, s := a.push(id)
+	adds, _, _ := d.snapshot()
+	if code != http.StatusOK || len(adds) != 1 || s.InstanceID == nil || *s.InstanceID != adds[0].instance {
+		t.Fatalf("retry once listed = %d %s, adds %+v; want the answered instance linked", code, raw, adds)
+	}
+}
+
+func TestPushAnsweredInstanceGoneLongAfter(t *testing.T) {
+	d, srv := newDouble(t)
+	a := newAPI(t, srv.URL, discogscollection.DefaultFolder)
+	id := a.album(obj{"status": "owned", "media_grade": "mint"})
+	d.failWith(http.StatusInternalServerError,
+		"POST /users/vinyl%20owner/collection/folders/1/releases/1873013/instances/")
+	if code, _, _ := a.push(id); code != http.StatusBadGateway {
+		t.Fatalf("push = %d, want 502", code)
+	}
+	d.failWith(0, "")
+	d.removeRelease(release)
+	if _, err := a.pool.Exec(context.Background(),
+		`UPDATE discogs_add SET sent_at = now() - interval '11 minutes' WHERE copy_id = $1`, id); err != nil {
+		t.Fatal(err)
+	}
+	code, raw, s := a.push(id)
+	adds, _, _ := d.snapshot()
+	if code != http.StatusOK || len(adds) != 2 || s.InstanceID == nil || *s.InstanceID != adds[1].instance {
+		t.Fatalf("push = %d %s, adds %+v; want a new instance once the old one is long gone", code, raw, adds)
 	}
 }
 

@@ -222,7 +222,10 @@ Moved from `CLAUDE.md`, whose conventions still apply.
 - Every add is first recorded in `discogs_add` and committed, apart from
   the push's transaction, then sent. Discogs' answer stores the instance
   ID there; a later push sets the conditions of that instance and links
-  it, adding nothing. A clear refusal (a 4xx, such as 429) drops the
+  it, adding nothing. Discogs' listing can lag behind its answer, so an
+  answered instance the listing omits answers 409 "jeszcze się nie
+  rozstrzygnęło" for 10 minutes after the add, and only then counts as
+  removed by the owner. A clear refusal (a 4xx, such as 429) drops the
   record. Any other failure (no answer, an answer cut off, a 5xx) leaves
   the outcome unknown: no other add of the copy is sent, for any release,
   until it is settled, and Ohara never adopts an instance by its date. A

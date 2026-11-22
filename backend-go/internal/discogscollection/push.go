@@ -337,8 +337,11 @@ func (p *Pusher) push(ctx, dbctx context.Context, lk *Locked, t *Target, adopt b
 // own finds the copy's instance, the release it is of and that release's
 // instances in the collection. An unfinished add comes first: the
 // instance Discogs answered it with, or, when its outcome is unknown, the
-// release's only instance at the owner's word (adopt); an empty
-// collection long after it was sent means it made nothing. Then the
+// release's only instance at the owner's word (adopt). Discogs' listing
+// can lag behind its answer, so an answered instance missing from it, or
+// an empty collection after an add of unknown outcome, settles only
+// settleAfter after the add was sent: then the owner removed it, or it
+// made nothing. Then the
 // linked instance: one Discogs no longer has is dropped, one of another
 // release still there is ErrLinkedElsewhere. With none, it returns the
 // instances of the edition's release, which any add must find empty.
@@ -353,6 +356,9 @@ func (p *Pusher) own(ctx, dbctx context.Context, lk *Locked, t *Target, adopt bo
 		case made != nil:
 			if i := slices.IndexFunc(held, func(h discogs.Instance) bool { return h.InstanceID == *made }); i >= 0 {
 				return &held[i], pending.ReleaseID, held, nil
+			}
+			if time.Since(pending.Since) < settleAfter {
+				return nil, 0, nil, ErrAddUnsettled
 			}
 		case adopt:
 			if len(held) != 1 {

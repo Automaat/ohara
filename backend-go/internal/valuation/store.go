@@ -90,25 +90,30 @@ func (s *Store) Prices(ctx context.Context, window time.Duration) ([]Price, erro
 // prices reads the prices Prices describes, only those of titleID's
 // editions when it is not 0. Every bound of a copy comes from prices of
 // its own title, so filtering by title leaves that title's ranges as
-// they are.
+// they are. The ownership checks then read only that title's copies too,
+// so the cost follows the title, not the collection.
 func prices(ctx context.Context, q querier, window time.Duration, titleID int64) ([]Price, error) {
 	args := []any{valuationSources, window.Seconds(), discogsSources, pooledSources}
-	var byTitle string
+	ownedEditions := `SELECT edition_id FROM copy WHERE status = 'owned'`
+	var byTitle, ownedByTitle string
 	if titleID != 0 {
 		args = append(args, titleID)
+		ownedEditions = `SELECT c.edition_id FROM copy c JOIN edition owned ON owned.id = c.edition_id
+			WHERE c.status = 'owned' AND owned.title_id = $5`
 		byTitle = ` AND e.title_id = $5`
+		ownedByTitle = ` AND owned.title_id = $5`
 	}
 	rows, err := q.Query(ctx, `SELECT o.edition_id, e.title_id, e.format, o.source,
 			o.price_cents, o.acquired_as, o.last_seen_at
 		FROM price_observation o JOIN edition e ON e.id = o.edition_id
 		WHERE o.source = ANY ($1)
 			AND o.last_seen_at > now() - make_interval(secs => $2)
-			AND (o.edition_id IN (SELECT edition_id FROM copy WHERE status = 'owned')
+			AND (o.edition_id IN (`+ownedEditions+`)
 				OR o.source = ANY ($4) AND o.observed_at > e.updated_at
 					AND (e.title_id, coalesce(e.format, '')) IN (
 						SELECT owned.title_id, coalesce(owned.format, '')
 						FROM copy c JOIN edition owned ON owned.id = c.edition_id
-						WHERE c.status = 'owned'))
+						WHERE c.status = 'owned'`+ownedByTitle+`))
 			AND (o.source <> ALL ($3)
 				OR o.external_id = e.discogs_release_id::text || '/' || e.id::text)`+byTitle,
 		args...)

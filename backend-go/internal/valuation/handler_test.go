@@ -1,11 +1,15 @@
 package valuation
 
 import (
+	"cmp"
 	"context"
+	"encoding/json"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strconv"
 	"testing"
 	"time"
@@ -42,6 +46,39 @@ func seedPooledBlurays(t *testing.T, pool *pgxpool.Pool) {
 		       ('olx', 'd1', 1500, 21, 'used', now(), now())`)
 }
 
+func TestTitlePricesAreTheTitlesShare(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	seed(t, pool)
+	seedPooledBlurays(t, pool)
+	ctx := context.Background()
+	window := 90 * 24 * time.Hour
+	all, err := prices(ctx, pool, window, 0)
+	if err != nil {
+		t.Fatalf("prices: %v", err)
+	}
+	byPrice := func(a, b Price) int {
+		return cmp.Or(cmp.Compare(a.EditionID, b.EditionID), cmp.Compare(a.Source, b.Source),
+			cmp.Compare(a.Cents, b.Cents))
+	}
+	for _, title := range []int64{1, 2, 3} {
+		want := []Price{}
+		for _, p := range all {
+			if p.TitleID == title {
+				want = append(want, p)
+			}
+		}
+		got, err := prices(ctx, pool, window, title)
+		if err != nil {
+			t.Fatalf("prices of title %d: %v", title, err)
+		}
+		slices.SortFunc(want, byPrice)
+		slices.SortFunc(got, byPrice)
+		if len(got) != len(want) || (len(want) > 0 && !reflect.DeepEqual(got, want)) {
+			t.Fatalf("prices of title %d = %+v, want the full read's %+v", title, got, want)
+		}
+	}
+}
+
 func TestTitleCopiesAPI(t *testing.T) {
 	pool := dbtest.Migrated(t)
 	seed(t, pool)
@@ -72,6 +109,12 @@ func TestTitleCopiesAPI(t *testing.T) {
 		if len(got.Copies) == 0 || !reflect.DeepEqual(got.Copies, want) {
 			t.Fatalf("title %d copies = %+v, want the full view's %+v", title, got.Copies, want)
 		}
+	}
+
+	var body map[string]json.RawMessage
+	get(t, srv.URL+"/api/valuation/copies?title_id=2", &body)
+	if _, ok := body["copies"]; !ok || len(body) != 1 {
+		t.Fatalf("title answer keys = %v, want only copies", slices.Collect(maps.Keys(body)))
 	}
 
 	var diuna TitleCopies

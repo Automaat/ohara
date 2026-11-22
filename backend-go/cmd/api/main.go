@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -153,12 +154,10 @@ func run() int {
 		discogsShelf,
 	}
 	if dir := os.Getenv("OHARA_WEB_DIR"); dir != "" {
-		webFS := os.DirFS(dir)
-		if err := web.Check(webFS); err != nil {
+		if deps.Web, err = frontend(dir); err != nil {
 			logger.Error("frontend", "dir", dir, "err", err)
 			return 2
 		}
-		deps.Web = webFS
 	}
 
 	metrics.SetBuildInfo(version)
@@ -381,6 +380,15 @@ func newWantlistSyncer(pool *pgxpool.Pool, logger *slog.Logger) *wantlist.Syncer
 	}
 	d.Priority = discogs.Background
 	return wantlist.NewSyncer(store, d, logger)
+}
+
+// frontend is the built SPA in dir, checked to be one.
+func frontend(dir string) (fs.FS, error) {
+	webFS := os.DirFS(dir)
+	if err := web.Check(webFS); err != nil {
+		return nil, err
+	}
+	return webFS, nil
 }
 
 // newDiscogsCollection adds owned album copies to the Discogs collection

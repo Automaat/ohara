@@ -528,3 +528,19 @@ func TestSeriesCountsAVolumeInAnOwnedBoxSetAsOwned(t *testing.T) {
 		t.Fatalf("volumes in an owned box set = %+v", detail.Volumes)
 	}
 }
+
+func TestTVSeasonsJoinASeriesOfTheirOwn(t *testing.T) {
+	a := newAPI(t)
+	var first, second collection.Title
+	a.mustDo(http.MethodPost, "/api/titles",
+		obj{"kind": "tv", "name": "Dark", "season": 1, "series_name": "Dark", "series_number": 1}, &first, http.StatusCreated)
+	a.mustDo(http.MethodPost, "/api/titles",
+		obj{"kind": "tv", "name": "Dark", "season": 2, "series_name": "dark", "series_number": 2}, &second, http.StatusCreated)
+	book := a.seriesTitle("book", "Dark", "Dark", 1)
+	if *second.SeriesID != *first.SeriesID || *book.SeriesID == *first.SeriesID {
+		t.Fatalf("tv series %s and %s, book series %s", seriesLine(first), seriesLine(second), seriesLine(book))
+	}
+	if detail := a.seriesDetail(*first.SeriesID); detail.Kind != "tv" || detail.TitleCount != 2 {
+		t.Fatalf("tv series = %+v", detail.Series)
+	}
+}

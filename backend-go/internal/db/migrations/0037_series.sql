@@ -9,7 +9,8 @@
 -- total_volumes is how many volumes the series has, when the owner knows.
 CREATE TABLE series (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    kind text NOT NULL CHECK (kind IN ('movie', 'book', 'music')),
+    -- The title_series_fkey reference to (id, kind) keeps it to a title kind.
+    kind text NOT NULL,
     name text NOT NULL CHECK (btrim(name) <> '' AND octet_length(name) <= 500),
     key text NOT NULL CHECK (key <> ''),
     total_volumes integer CHECK (total_volumes BETWEEN 1 AND 10000),

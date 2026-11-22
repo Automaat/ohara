@@ -59,6 +59,7 @@ func Ohara() API {
 			Of[collection.Item]("CollectionItem"),
 			Of[collection.Totals]("Totals"),
 			Of[collection.CollectionView]("CollectionView"),
+			Of[collection.TagCount]("TagCount"),
 
 			Of[lookup.TitleFields]("CandidateTitle"),
 			Of[lookup.EditionFields]("CandidateEdition"),

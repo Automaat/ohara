@@ -25,7 +25,7 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   edition's format for movies, the author's surname in any case for
   books ("Andrzeja Sapkowskiego", "Lalka Prusa") and, for an audiobook
   only, a word naming one ("audiobook", "audiobooka", "audiobuk",
-  "audioksiążka", not after "bez" or "brak", and more often than the
+  "audioksiążka", not after "bez", "brak" or "nie", and more often than the
   want's own name or author does; a print book skips such listings, and
   an audiobook's queries add "audiobook"), the artist's words
   and a fitting medium for

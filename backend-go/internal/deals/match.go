@@ -693,7 +693,8 @@ const FormatAudiobook = "audiobook"
 
 // audiobookMarks counts the places text names an audiobook: "audiobook" in
 // any form ("audiobooka", "audiobooki"), "audiobuk", "audioksiążka" or
-// "audio book", except after "bez" or "brak" ("bez audiobooka", negated).
+// "audio book", except after "bez" or "brak" ("bez audiobooka", negated),
+// "nie" or "nie jest" ("wydanie papierowe (nie audiobook)").
 func audiobookMarks(text []string) int {
 	n := 0
 	for i, t := range text {
@@ -705,11 +706,18 @@ func audiobookMarks(text []string) int {
 		default:
 			continue
 		}
-		if !negated(text, start) {
+		if !negated(text, start) && !deniedByNie(text, start) {
 			n++
 		}
 	}
 	return n
+}
+
+// deniedByNie reports whether "nie" or "nie jest" stands right before
+// text[i]. Only an audiobook mark takes it: a listing says what it is not
+// ("nie audiobook"), while "nie" before an edition detail is rare.
+func deniedByNie(text []string, i int) bool {
+	return i >= 1 && text[i-1] == "nie" || i >= 2 && text[i-2] == "nie" && text[i-1] == "jest"
 }
 
 // isAudiobookWord reports whether word names an audiobook on its own.

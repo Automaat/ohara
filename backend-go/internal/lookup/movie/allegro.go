@@ -59,6 +59,7 @@ type Allegro struct {
 type tokenOp struct {
 	done    chan struct{}
 	refresh bool
+	unsaved bool
 	chain   []string
 	access  string
 	err     error
@@ -220,7 +221,10 @@ func (a *Allegro) currentToken(ctx context.Context, force bool) (string, *tokenO
 // caller holds a.mu. The op may outlive the lookup that started it, so its
 // context drops the request's log info.
 func (a *Allegro) startOp(ctx context.Context, t Token, refresh bool) {
-	op := &tokenOp{done: make(chan struct{}), refresh: refresh, chain: append(slices.Clone(a.chain), t.Refresh)}
+	op := &tokenOp{
+		done: make(chan struct{}), refresh: refresh, unsaved: a.unsaved,
+		chain: append(slices.Clone(a.chain), t.Refresh),
+	}
 	a.op = op
 	go a.runOp(reqlog.Detach(context.WithoutCancel(ctx)), op, t)
 }
@@ -259,7 +263,21 @@ func (a *Allegro) load(ctx context.Context, op *tokenOp) {
 // the pair `api allegro-login` stores.
 func (a *Allegro) runOp(ctx context.Context, op *tokenOp, t Token) {
 	defer close(op.done)
-	if op.refresh {
+	saved := false
+	if op.refresh && op.unsaved {
+		loadCtx, cancel := context.WithTimeout(ctx, a.timeout())
+		stored, newer, err := a.loadNewLogin(loadCtx, op.chain)
+		cancel()
+		if err != nil {
+			slog.WarnContext(ctx, "allegro: check for a stored login before refresh", "err", err)
+		}
+		if newer {
+			t = stored
+			op.chain = []string{t.Refresh}
+			saved = a.now().Add(tokenLeeway).Before(t.Expiry)
+		}
+	}
+	if op.refresh && !saved {
 		next, err := a.refresh(ctx, t.Refresh)
 		if err != nil {
 			op.err = err
@@ -274,7 +292,9 @@ func (a *Allegro) runOp(ctx context.Context, op *tokenOp, t Token) {
 		t = next
 		op.chain = append(op.chain, t.Refresh)
 	}
-	t, saved := a.persist(ctx, t, op.chain)
+	if !saved {
+		t, saved = a.persist(ctx, t, op.chain)
+	}
 	op.access = t.Access
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -311,14 +331,16 @@ func (a *Allegro) save(ctx context.Context, t Token, chain []string) (Token, boo
 		stored, swapped, err := s.Swap(ctx, a.Name(), chain, t)
 		return stored, !swapped && err == nil, err
 	}
-	stored, ok, err := a.Store.Load(ctx, a.Name())
-	if err != nil {
-		return Token{}, false, err
-	}
-	if ok && !slices.Contains(chain, stored.Refresh) {
-		return stored, true, nil
+	stored, newer, err := a.loadNewLogin(ctx, chain)
+	if err != nil || newer {
+		return stored, newer, err
 	}
 	return Token{}, false, a.Store.Save(ctx, a.Name(), t)
+}
+
+func (a *Allegro) loadNewLogin(ctx context.Context, chain []string) (Token, bool, error) {
+	stored, ok, err := a.Store.Load(ctx, a.Name())
+	return stored, err == nil && ok && !slices.Contains(chain, stored.Refresh), err
 }
 
 // refresh trades refreshToken for a new pair.

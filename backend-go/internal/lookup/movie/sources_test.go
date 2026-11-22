@@ -461,6 +461,32 @@ func TestAllegroSaveRetryKeepsAPairALoginStored(t *testing.T) {
 	}
 }
 
+func TestAllegroUsesStoredLoginBeforeRefreshingAnUnsavedPair(t *testing.T) {
+	now := time.Now()
+	store := &memStore{token: &Token{Access: accessFor(0), Refresh: refreshFor(0), Expiry: now}, failSaves: 1}
+	srv := &allegroServer{}
+	a := newAllegro(t, srv, store, now)
+	a.Store = swapStore{store}
+	var elapsed atomic.Int64
+	a.Now = func() time.Time { return now.Add(time.Duration(elapsed.Load())) }
+	ctx := context.Background()
+	if _, err := a.Products(ctx, "5906190326195"); err != nil {
+		t.Fatal(err)
+	}
+	elapsed.Store(int64(12 * time.Hour))
+	if err := otherProcess(a).Login(ctx, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	calls := srv.tokenCallCount()
+
+	if _, err := a.Products(ctx, "5906190326195"); err != nil {
+		t.Fatalf("first lookup after login: %v", err)
+	}
+	if got := srv.tokenCallCount(); got != calls {
+		t.Fatalf("token requests = %d, want %d", got, calls)
+	}
+}
+
 func TestAllegroKeepsRotatingAfterASaveThatCommittedButFailed(t *testing.T) {
 	now := time.Now()
 	store := &memStore{token: &Token{Access: accessFor(0), Refresh: refreshFor(0), Expiry: now.Add(30 * time.Second)}, lostReplies: 1}

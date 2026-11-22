@@ -22,6 +22,100 @@ type Want struct {
 	Authors       []string
 	Format        *string
 	MaxPriceCents *int64
+
+	// prepared is the text work matching needs from the names and
+	// authors, kept by Prepare.
+	prepared *wantText
+}
+
+// Prepare does the text work matching needs from w's names and authors
+// once, so matching many listings against w does not repeat it. A want
+// whose names or authors change afterwards is matched as it is then.
+func (w *Want) Prepare() {
+	w.prepared = newWantText(w)
+}
+
+// wantText is a want's names and authors split into the words matching
+// compares.
+type wantText struct {
+	// The fields it was made from, to notice a want changed since.
+	name, polish, original string
+	hasPolish, hasOriginal bool
+	authors                []string
+
+	names    []nameText // the titles the want is sold under
+	ownWords [][]string // the words of each name, then of each author
+	surname  string     // the last word of the first author
+	artist   []string   // the required words of the first author
+}
+
+// nameText is one of a want's names with its words and the words a
+// listing must contain to carry it.
+type nameText struct {
+	name  string
+	words []string
+	req   []string
+}
+
+// newWantText splits w's names and authors. Its names are the titles a
+// want is sold under: Polish, original and the name it was entered with,
+// without duplicates.
+func newWantText(w *Want) *wantText {
+	p := &wantText{name: w.Name, authors: slices.Clone(w.Authors)}
+	if w.PolishTitle != nil {
+		p.polish, p.hasPolish = *w.PolishTitle, true
+	}
+	if w.OriginalTitle != nil {
+		p.original, p.hasOriginal = *w.OriginalTitle, true
+	}
+	seen := map[string]bool{}
+	for _, n := range []*string{w.PolishTitle, w.OriginalTitle, &w.Name} {
+		if n == nil {
+			continue
+		}
+		ws := words(*n)
+		key := strings.Join(ws, " ")
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		p.names = append(p.names, nameText{name: *n, words: ws, req: significant(ws)})
+		p.ownWords = append(p.ownWords, ws)
+	}
+	for _, a := range w.Authors {
+		p.ownWords = append(p.ownWords, words(a))
+	}
+	if len(w.Authors) > 0 {
+		if ws := words(w.Authors[0]); len(ws) > 0 {
+			p.surname = ws[len(ws)-1]
+		}
+		p.artist = required(w.Authors[0])
+	}
+	return p
+}
+
+// from reports whether p was made from w's current names and authors.
+func (p *wantText) from(w *Want) bool {
+	return p.name == w.Name &&
+		sameText(p.hasPolish, p.polish, w.PolishTitle) &&
+		sameText(p.hasOriginal, p.original, w.OriginalTitle) &&
+		slices.Equal(p.authors, w.Authors)
+}
+
+func sameText(has bool, s string, p *string) bool {
+	if p == nil {
+		return !has
+	}
+	return has && s == *p
+}
+
+// text returns w's prepared text, or splits it now when w was not
+// prepared or changed since.
+func (w *Want) text() *wantText {
+	if p := w.prepared; p != nil && p.from(w) {
+		return p
+	}
+	return newWantText(w)
 }
 
 // Rules are the editable reject and accept phrases.
@@ -68,18 +162,22 @@ func findPhrase(text, phrase []string) int {
 // Rejected reports whether title contains a reject phrase once every accept
 // phrase is cut from it.
 func (r Rules) Rejected(title string) bool {
-	return r.rejected(title, nil)
+	return NewListingText(title, r).rejectedFor(nil)
 }
 
 // RejectedFor is Rejected for a listing of w: a reject phrase that w's own
 // names or artist contain does not count, so "soundtrack", which keeps
 // soundtrack CDs away from films, still finds a wanted soundtrack album.
 func (r Rules) RejectedFor(title string, w *Want) bool {
-	return r.rejected(title, w)
+	if w == nil {
+		return r.Rejected(title)
+	}
+	return NewListingText(title, r).rejectedFor(w.text())
 }
 
-func (r Rules) rejected(title string, w *Want) bool {
-	text := words(title)
+// rejects returns the reject phrases text contains once every accept
+// phrase is cut from it.
+func (r Rules) rejects(text []string) [][]string {
 	for _, a := range r.Accept {
 		phrase := words(a)
 		for {
@@ -90,19 +188,66 @@ func (r Rules) rejected(title string, w *Want) bool {
 			text = slices.Delete(slices.Clone(text), i, i+len(phrase))
 		}
 	}
+	var out [][]string
 	for _, reject := range r.Reject {
-		phrase := words(reject)
-		if findPhrase(text, phrase) >= 0 && (w == nil || !w.mentions(phrase)) {
+		if phrase := words(reject); findPhrase(text, phrase) >= 0 {
+			out = append(out, phrase)
+		}
+	}
+	return out
+}
+
+// mentions reports whether one of the want's names or authors contains
+// phrase.
+func (p *wantText) mentions(phrase []string) bool {
+	for _, ws := range p.ownWords {
+		if findPhrase(ws, phrase) >= 0 {
 			return true
 		}
 	}
 	return false
 }
 
-// mentions reports whether one of w's names or authors contains phrase.
-func (w *Want) mentions(phrase []string) bool {
-	for _, n := range append(w.titleNames(), w.Authors...) {
-		if findPhrase(words(n), phrase) >= 0 {
+// ListingText is a listing title readied for matching against many wants:
+// its words, the format it names and the reject phrases it carries are
+// worked out once.
+type ListingText struct {
+	words   []string
+	format  string
+	rejects [][]string
+	// plain is words without disc counts, and significant that without
+	// stop words and single letters, for Outranks.
+	plain       []string
+	significant []string
+}
+
+// NewListingText readies a listing title for matching under rules.
+func NewListingText(title string, rules Rules) *ListingText {
+	text := words(title)
+	plain := withoutDiscCounts(text)
+	return &ListingText{
+		words:       text,
+		format:      listingFormat(text),
+		rejects:     rules.rejects(text),
+		plain:       plain,
+		significant: significant(plain),
+	}
+}
+
+// Belongs reports whether the listing is a copy of w: w matches it
+// (Want.Matches), it holds no reject phrase w's names and authors lack
+// (Rules.RejectedFor) and it names no other title of titles more
+// specifically (Titles.Outranks).
+func (l *ListingText) Belongs(w *Want, titles Titles) bool {
+	p := w.text()
+	return l.matches(w, p) && !l.rejectedFor(p) && !titles.outranks(w, p, l)
+}
+
+// rejectedFor reports whether the listing holds a reject phrase the want
+// of p does not mention; any reject phrase counts when p is nil.
+func (l *ListingText) rejectedFor(p *wantText) bool {
+	for _, phrase := range l.rejects {
+		if p == nil || !p.mentions(phrase) {
 			return true
 		}
 	}
@@ -135,38 +280,6 @@ func significant(ws []string) []string {
 	return out
 }
 
-// titleNames are the titles a want is sold under: Polish, original and the
-// name it was entered with, without duplicates.
-func (w *Want) titleNames() []string {
-	var out []string
-	seen := map[string]bool{}
-	for _, n := range []*string{w.PolishTitle, w.OriginalTitle, &w.Name} {
-		if n == nil {
-			continue
-		}
-		key := strings.Join(words(*n), " ")
-		if key == "" || seen[key] {
-			continue
-		}
-		seen[key] = true
-		out = append(out, *n)
-	}
-	return out
-}
-
-// surname is the last word of the first author, which book listings carry
-// far more often than first names.
-func (w *Want) surname() string {
-	if len(w.Authors) == 0 {
-		return ""
-	}
-	parts := words(w.Authors[0])
-	if len(parts) == 0 {
-		return ""
-	}
-	return parts[len(parts)-1]
-}
-
 // artist is the first credited artist of an album.
 func (w *Want) artist() string {
 	if w.Kind != "music" || len(w.Authors) == 0 {
@@ -183,17 +296,20 @@ var formatKeyword = map[string]string{"dvd": "dvd", "bluray": "blu-ray", "uhd": 
 // for an album ("Pink Floyd The Wall"), as album titles alone are often
 // generic. An album query names no medium: CD listings often do not.
 func (w *Want) Queries() []string {
+	p := w.text()
 	suffix := ""
 	switch {
 	case w.Kind == "movie" && w.Format != nil:
 		suffix = formatKeyword[*w.Format]
 	case w.Kind == "book":
-		suffix = w.surname()
+		// Book listings carry the author's surname far more often than
+		// first names.
+		suffix = p.surname
 	}
 	artist := strings.TrimSpace(w.artist())
 	var out []string
-	for _, n := range w.titleNames() {
-		q := strings.TrimSpace(n)
+	for _, n := range p.names {
+		q := strings.TrimSpace(n.name)
 		if suffix != "" && !slices.Contains(words(q), suffix) {
 			q += " " + suffix
 		}
@@ -238,22 +354,27 @@ func listingFormat(text []string) string {
 	return ""
 }
 
-// withoutOwnWords drops from text the words of w's names and artists, so
-// "MC Hammer" or an album called "Vinyl" names no medium.
-func (w *Want) withoutOwnWords(text []string) []string {
-	own := map[string]bool{}
-	for _, n := range append(w.titleNames(), w.Authors...) {
-		for _, word := range words(n) {
-			own[word] = true
-		}
-	}
+// withoutOwnWords drops from text the words of the want's names and
+// artists, so "MC Hammer" or an album called "Vinyl" names no medium.
+func (p *wantText) withoutOwnWords(text []string) []string {
 	out := make([]string, 0, len(text))
 	for _, t := range text {
-		if !own[t] {
+		if !p.owns(t) {
 			out = append(out, t)
 		}
 	}
 	return out
+}
+
+// owns reports whether word is a word of one of the want's names or
+// authors.
+func (p *wantText) owns(word string) bool {
+	for _, ws := range p.ownWords {
+		if slices.Contains(ws, word) {
+			return true
+		}
+	}
+	return false
 }
 
 // albumFormat is the medium an album listing names: vinyl ("winyl", "LP"),
@@ -303,12 +424,12 @@ var ordinalParts = map[string]bool{
 // partWords introduce a sequel number and are skipped before it.
 var partWords = map[string]bool{"part": true, "czesc": true, "cz": true, "chapter": true, "rozdzial": true}
 
-// sequelAfter reports whether text names a sequel of name: right after
-// name's last word, past a "Part" or "Część", comes a number or numeral
-// that name lacks and that is no release year, as in "Blade Runner 2049",
-// "Rocky II" or "Dune: Part Two" for "Dune". "Part 1" is the first film.
-func sequelAfter(text []string, name string) bool {
-	nameWords := words(name)
+// sequelAfter reports whether text names a sequel of the name of
+// nameWords: right after its last word, past a "Part" or "Część", comes a
+// number or numeral the name lacks and that is no release year, as in
+// "Blade Runner 2049", "Rocky II" or "Dune: Part Two" for "Dune". "Part 1"
+// is the first film.
+func sequelAfter(text, nameWords []string) bool {
 	if len(nameWords) == 0 {
 		return false
 	}
@@ -344,40 +465,61 @@ func sequelAfter(text []string, name string) bool {
 // edition's for an album. A movie listing naming a sequel of that name does
 // not match.
 func (w *Want) Matches(title string) bool {
-	text := words(title)
-	return w.qualifies(text) && len(w.carried(text)) > 0
+	return NewListingText(title, Rules{}).matches(w, w.text())
 }
 
-// qualifies reports whether listing text fits w apart from its names: the
+// matches is Matches for the want of p. It checks the names before the
+// album medium, the one check that builds a slice.
+func (l *ListingText) matches(w *Want, p *wantText) bool {
+	return p.carries(w.Kind, l.words) && qualifies(w, p, l)
+}
+
+// qualifies reports whether a listing fits w apart from its names: the
 // edition's format for a movie, the author's surname for a book, and the
 // artist's words and a fitting medium for an album.
-func (w *Want) qualifies(text []string) bool {
-	if w.Kind == "movie" && w.Format != nil && listingFormat(text) != *w.Format {
+func qualifies(w *Want, p *wantText, l *ListingText) bool {
+	text := l.words
+	if w.Kind == "movie" && w.Format != nil && l.format != *w.Format {
 		return false
 	}
-	if s := w.surname(); w.Kind == "book" && s != "" && !slices.Contains(text, s) {
+	if w.Kind == "book" && p.surname != "" && !slices.Contains(text, p.surname) {
 		return false
 	}
 	if w.Kind == "music" {
-		if w.Format != nil && !albumFormatMatches(*w.Format, w.withoutOwnWords(text)) {
+		if !containsAll(text, p.artist) {
 			return false
 		}
-		if a := w.artist(); a != "" && !containsAll(text, required(a)) {
+		if w.Format != nil && !albumFormatMatches(*w.Format, p.withoutOwnWords(text)) {
 			return false
 		}
 	}
 	return true
 }
 
-// carried returns the required words of each of w's names that listing
-// text carries. A movie listing naming a sequel of a name does not carry
-// that name.
-func (w *Want) carried(text []string) [][]string {
+// carriedBy reports whether listing text carries n: it holds every
+// required word of n and, for a movie, names no sequel of n.
+func (n *nameText) carriedBy(kind string, text []string) bool {
+	return len(n.req) > 0 && containsAll(text, n.req) &&
+		(kind != "movie" || !sequelAfter(text, n.words))
+}
+
+// carries reports whether listing text carries one of the want's names.
+func (p *wantText) carries(kind string, text []string) bool {
+	for i := range p.names {
+		if p.names[i].carriedBy(kind, text) {
+			return true
+		}
+	}
+	return false
+}
+
+// carried returns the required words of each of the want's names that
+// listing text carries.
+func (p *wantText) carried(kind string, text []string) [][]string {
 	var out [][]string
-	for _, n := range w.titleNames() {
-		if req := required(n); len(req) > 0 && containsAll(text, req) &&
-			(w.Kind != "movie" || !sequelAfter(text, n)) {
-			out = append(out, req)
+	for i := range p.names {
+		if n := &p.names[i]; n.carriedBy(kind, text) {
+			out = append(out, n.req)
 		}
 	}
 	return out
@@ -391,12 +533,7 @@ type Titles struct {
 
 type knownTitle struct {
 	title Want
-	names []knownName
-}
-
-type knownName struct {
-	name string
-	req  []string
+	names []nameText
 }
 
 // NewTitles readies titles, each a Want without an edition, for Outranks.
@@ -404,10 +541,11 @@ func NewTitles(titles []Want) Titles {
 	t := Titles{byKind: map[string][]knownTitle{}}
 	for _, w := range titles {
 		w.Format = nil
+		w.Prepare()
 		k := knownTitle{title: w}
-		for _, n := range w.titleNames() {
-			if req := required(n); len(req) > 0 {
-				k.names = append(k.names, knownName{name: n, req: req})
+		for _, n := range w.text().names {
+			if len(n.req) > 0 {
+				k.names = append(k.names, n)
 			}
 		}
 		t.byKind[w.Kind] = append(t.byKind[w.Kind], k)
@@ -425,24 +563,31 @@ func NewTitles(titles []Want) Titles {
 // known, while "Gladiator DVD 2 płyty" stays with "Gladiator" when
 // "Gladiator 2" is.
 func (t Titles) Outranks(w *Want, title string) bool {
+	if len(t.byKind[w.Kind]) == 0 {
+		return false
+	}
+	return t.outranks(w, w.text(), NewListingText(title, Rules{}))
+}
+
+func (t Titles) outranks(w *Want, p *wantText, l *ListingText) bool {
 	known := t.byKind[w.Kind]
 	if len(known) == 0 {
 		return false
 	}
-	text := words(title)
-	mine := w.carried(text)
+	mine := p.carried(w.Kind, l.words)
 	if len(mine) == 0 {
 		return false
 	}
-	plain := withoutDiscCounts(text)
 	for i := range known {
 		k := &known[i]
 		if k.title.TitleID == w.TitleID {
 			continue
 		}
-		for _, n := range k.names {
-			if extendsAny(n.req, mine) && carriesPhrase(plain, n.req) &&
-				(k.title.Kind != "movie" || !sequelAfter(plain, n.name)) && k.title.qualifies(text) {
+		for j := range k.names {
+			n := &k.names[j]
+			if extendsAny(n.req, mine) && carriesPhrase(l.significant, n.req) &&
+				(k.title.Kind != "movie" || !sequelAfter(l.plain, n.words)) &&
+				qualifies(&k.title, k.title.text(), l) {
 				return true
 			}
 		}
@@ -465,15 +610,26 @@ func extends(name, shorter []string) bool {
 	if len(name) <= len(shorter) {
 		return false
 	}
-	left := slices.Clone(name)
-	for _, w := range shorter {
-		i := slices.Index(left, w)
-		if i < 0 {
+	for i, w := range shorter {
+		if slices.Contains(shorter[:i], w) {
+			continue
+		}
+		if occurrences(name, w) < occurrences(shorter, w) {
 			return false
 		}
-		left = slices.Delete(left, i, i+1)
 	}
 	return true
+}
+
+// occurrences is how often w occurs in ws.
+func occurrences(ws []string, w string) int {
+	n := 0
+	for _, x := range ws {
+		if x == w {
+			n++
+		}
+	}
+	return n
 }
 
 // mediaWords name a disc format or medium, which sellers put anywhere in
@@ -506,22 +662,28 @@ func withoutDiscCounts(text []string) []string {
 	return out
 }
 
-// carriesPhrase reports whether text holds req as consecutive words once
-// stop words, single letters and the media words req lacks are left out.
-func carriesPhrase(text, req []string) bool {
-	run := make([]string, 0, len(text))
-	for _, t := range significant(text) {
-		if !mediaWords[t] || slices.Contains(req, t) {
-			run = append(run, t)
-		}
+// carriesPhrase reports whether significant, listing words without stop
+// words and single letters, holds req as consecutive words once the media
+// words req lacks are left out.
+func carriesPhrase(significant, req []string) bool {
+	if len(req) == 0 {
+		return true
 	}
-	return hasRun(run, req)
-}
-
-// hasRun reports whether phrase occurs in text as consecutive words.
-func hasRun(text, phrase []string) bool {
-	for i := 0; i+len(phrase) <= len(text); i++ {
-		if slices.Equal(text[i:i+len(phrase)], phrase) {
+	skipped := func(t string) bool { return mediaWords[t] && !slices.Contains(req, t) }
+	for i := range significant {
+		if skipped(significant[i]) {
+			continue
+		}
+		j := 0
+		for k := i; k < len(significant) && j < len(req); k++ {
+			if t := significant[k]; !skipped(t) {
+				if t != req[j] {
+					break
+				}
+				j++
+			}
+		}
+		if j == len(req) {
 			return true
 		}
 	}
@@ -534,10 +696,11 @@ func hasRun(text, phrase []string) bool {
 // the listing meets, so a cheap listing alerts even when an earlier want
 // for the same title has a lower limit.
 func pick(wants []Want, l *Listing, rules Rules, titles Titles) *Want {
+	text := NewListingText(l.Title, rules)
 	var first *Want
 	for i := range wants {
 		w := &wants[i]
-		if !w.Matches(l.Title) || rules.RejectedFor(l.Title, w) || titles.Outranks(w, l.Title) {
+		if !text.Belongs(w, titles) {
 			continue
 		}
 		if w.MaxPriceCents != nil && l.PriceCents <= *w.MaxPriceCents {

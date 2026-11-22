@@ -24,6 +24,8 @@
 		keywordPayload,
 		keywordsOf,
 		lastRunSummary,
+		marketFor,
+		marketPath,
 		matchedPath,
 		searchedFor,
 		segmentLabel,
@@ -33,6 +35,8 @@
 		type HunterStatus,
 		type Keyword,
 		type KeywordKind,
+		type MarketPrice,
+		type MarketView,
 		type Observation
 	} from '#lib/deals.js';
 
@@ -44,6 +48,7 @@
 	};
 
 	let deals = $state<Deals | null>(null);
+	let markets = $state<MarketPrice[]>([]);
 	let now = $state(new Date());
 	let segment = $state<DealSegment>('under');
 	let failure = $state<string | null>(null);
@@ -66,18 +71,22 @@
 	 * a navigation or a returning tab moves the segment and the badge together. The page asks again
 	 * when the tab becomes visible, so the other segments follow. An answer that arrives after a
 	 * later request's answer is dropped. The search counts as running while any answer says so.
+	 * The wishes' market prices come along; when they fail, the cards keep the last ones or show
+	 * none, and the listings still load.
 	 */
 	async function load() {
 		const ticket = ++issued;
 		loading = true;
 		try {
-			const [under, all, sent] = await Promise.all([
+			const [under, all, sent, market] = await Promise.all([
 				loadUnderLimit(fetch),
 				request<DealsView>(fetch, 'GET', matchedPath),
-				request<DealsView>(fetch, 'GET', sentPath)
+				request<DealsView>(fetch, 'GET', sentPath),
+				request<MarketView>(fetch, 'GET', marketPath()).catch(() => null)
 			]);
 			if (ticket !== issued) return;
 			now = new Date();
+			if (market) markets = market.markets;
 			deals = {
 				status: [under, all, sent].find((v) => v.status.running)?.status ?? all.status,
 				wishes: all.wishes,
@@ -246,7 +255,7 @@
 			{#if shown.length > 0}
 				<ul class="deals" aria-label={segmentLabel(segment, shown.length)}>
 					{#each shown as deal (deal.id)}
-						<li><DealCard {deal} /></li>
+						<li><DealCard {deal} market={marketFor(markets, deal.title_id, deal.format)} /></li>
 					{/each}
 				</ul>
 			{:else if segment === 'under' && lists.all.length > 0}

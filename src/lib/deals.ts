@@ -70,11 +70,64 @@ export function underLimitCount(
 
 const pluralRules = new Intl.PluralRules('pl-PL');
 
-/** The count of listings under the limit in words, as "3 oferty pod limitem". */
-export function underLimitLabel(count: number): string {
+/** A count of listings in words, as "1 oferta", "3 oferty" or "5 ofert". */
+function offers(count: number): string {
 	const plural = pluralRules.select(count);
 	const noun = plural === 'one' ? 'oferta' : plural === 'few' ? 'oferty' : 'ofert';
-	return `${count} ${noun} pod limitem`;
+	return `${count} ${noun}`;
+}
+
+/** The count of listings under the limit in words, as "3 oferty pod limitem". */
+export function underLimitLabel(count: number): string {
+	return `${offers(count)} pod limitem`;
+}
+
+/**
+ * The used price of a title in one format: the median of OLX prices not marked new, seen within
+ * the valuation window, outliers dropped, as the valuation prices an owned copy. A null format is
+ * a title whose editions name none, such as a book.
+ */
+export type MarketPrice = {
+	title_id: number;
+	format: Format | null;
+	cents: number;
+	source: string;
+	/** The listings the price rests on, outliers left out. */
+	count: number;
+	/** The outliers left out. */
+	trimmed: number;
+};
+
+/** GET /api/valuation/market: the used prices and the days of listings they come from. */
+export type MarketView = { window_days: number; markets: MarketPrice[] };
+
+/** Every wished title and format, or with a title every format of it. */
+export function marketPath(titleId?: number): string {
+	return titleId == null ? '/api/valuation/market' : `/api/valuation/market?title_id=${titleId}`;
+}
+
+/** The fewest listings a market price needs before it is trusted, the server's MinObservations. */
+export const marketMinListings = 3;
+
+/** The market price of one title in one format, null when it has none. */
+export function marketFor(
+	markets: readonly MarketPrice[] | null | undefined,
+	titleId: number | null,
+	format: Format | null
+): MarketPrice | null {
+	if (titleId == null) return null;
+	return markets?.find((m) => m.title_id === titleId && m.format === format) ?? null;
+}
+
+/**
+ * The market price in words, as "Rynek ok. 42,50 zł (4 oferty)", with "mało danych" when it rests
+ * on fewer than 3 listings; null without a price.
+ */
+export function marketLabel(market: Pick<MarketPrice, 'cents' | 'count'> | null): string | null {
+	if (market == null || market.count <= 0) return null;
+	const basis = offers(market.count);
+	const note = market.count < marketMinListings ? `${basis}, mało danych` : basis;
+	return `Rynek ok. ${dealPrice(market.cents)} (${note})`;
 }
 
 export type RunResult = {

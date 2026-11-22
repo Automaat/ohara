@@ -32,6 +32,7 @@ func NewHandler(store *Store, runner *Runner, logger *slog.Logger) *Handler {
 func (h *Handler) Mount(r chi.Router) {
 	r.Get("/valuation", h.view)
 	r.Get("/valuation/copies", h.titleCopies)
+	r.Get("/valuation/market", h.market)
 	r.Post("/valuation/run", h.run)
 }
 
@@ -102,6 +103,36 @@ func (h *Handler) titleCopies(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, h.logger, http.StatusOK, TitleCopies{Copies: copies})
+}
+
+// MarketView is the GET /api/valuation/market body: the used price of
+// every wished title and format, or with ?title_id= of every format of
+// that title, from the prices of the last WindowDays days.
+type MarketView struct {
+	WindowDays int      `json:"window_days"`
+	Markets    []Market `json:"markets"`
+}
+
+func (h *Handler) market(w http.ResponseWriter, r *http.Request) {
+	var id int64
+	if raw := r.URL.Query().Get("title_id"); raw != "" {
+		var err error
+		id, err = strconv.ParseInt(raw, 10, 64)
+		if err != nil || id <= 0 {
+			httpx.WriteFieldError(w, h.logger, &httpx.FieldError{Field: "title_id", Msg: "must be a positive integer"})
+			return
+		}
+	}
+	window := h.runner.Window()
+	markets, err := h.store.Markets(r.Context(), window, id)
+	if err != nil {
+		httpx.WriteInternal(w, r, h.logger, "market prices", err)
+		return
+	}
+	httpx.WriteJSON(w, h.logger, http.StatusOK, MarketView{
+		WindowDays: int(window.Hours() / 24),
+		Markets:    markets,
+	})
 }
 
 func (h *Handler) run(w http.ResponseWriter, _ *http.Request) {

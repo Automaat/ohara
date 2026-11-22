@@ -266,7 +266,11 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   quote, so movie discs have no floor. A title page reads
   `GET /api/valuation/copies?title_id=`: that title's owned copies valued
   as `GET /api/valuation` values them, from that title's prices only,
-  with no summary or history.
+  with no summary or history. `GET /api/valuation/market` gives each
+  wished title and format that used middle from stored listings, owned
+  or not (`?title_id=`: every format of one title), and sends no request
+  out: Okazje's deal cards and a wish form's "Cena maksymalna" show it as
+  "Rynek ok. 42,50 zł (4 oferty)", with "mało danych" under 3 listings.
 - A barcode no provider resolves goes to `scan_queue`; a trigger on `edition`
   removes it once an edition carries that barcode. `ohara_scan_queue_size`
   counts it on each scrape. The trigger keeps the entry it removes in

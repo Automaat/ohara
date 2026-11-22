@@ -10,6 +10,8 @@
 package valuation
 
 import (
+	"cmp"
+	"maps"
 	"math"
 	"slices"
 	"time"
@@ -164,6 +166,36 @@ func (r Ranges) For(editionID, titleID int64, format *string) Range {
 	out := Range{Floor: r.floors[editionID], Mid: r.mids[g], Ceiling: r.discogsCeils[editionID]}
 	if e := r.discogsMids[editionID]; e != nil {
 		out.Mid = e
+	}
+	return out
+}
+
+// Market is the used price of one title in one format: the middle a copy
+// of it gets before a Discogs suggestion replaces it. A null Format is a
+// title whose editions name none, such as a book.
+type Market struct {
+	TitleID int64   `json:"title_id"`
+	Format  *string `json:"format"`
+	Estimate
+}
+
+// Markets lists the middle of every title and format with used prices,
+// by title, then format.
+func (r Ranges) Markets() []Market {
+	groups := slices.SortedFunc(maps.Keys(r.mids), func(a, b group) int {
+		return cmp.Or(cmp.Compare(a.titleID, b.titleID), cmp.Compare(a.format, b.format))
+	})
+	out := make([]Market, 0, len(groups))
+	for _, g := range groups {
+		e := r.mids[g]
+		if e == nil {
+			continue
+		}
+		m := Market{TitleID: g.titleID, Estimate: *e}
+		if g.format != "" {
+			m.Format = &g.format
+		}
+		out = append(out, m)
 	}
 	return out
 }

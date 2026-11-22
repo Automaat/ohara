@@ -8,6 +8,9 @@ import {
 	keywordsOf,
 	lastRunSummary,
 	limitComparison,
+	marketFor,
+	marketLabel,
+	marketPath,
 	searchedFor,
 	segmentLabel,
 	timeAgo,
@@ -16,8 +19,10 @@ import {
 	wishLimit,
 	type HunterStatus,
 	type Keyword,
+	type MarketPrice,
 	type RunResult
 } from './deals';
+import type { Format } from './collection';
 
 const status = (patch: Partial<HunterStatus>): HunterStatus => ({
 	running: false,
@@ -148,6 +153,61 @@ describe('underLimitLabel', () => {
 		[22, '22 oferty pod limitem']
 	] as const)('%s → %s', (count, expected) => {
 		expect(underLimitLabel(count)).toBe(expected);
+	});
+});
+
+describe('marketLabel', () => {
+	it.each([
+		[4250, 4, 'Rynek ok. 42,50 zł (4 oferty)'],
+		[4000, 3, 'Rynek ok. 40 zł (3 oferty)'],
+		[4000, 2, 'Rynek ok. 40 zł (2 oferty, mało danych)'],
+		[3500, 1, 'Rynek ok. 35 zł (1 oferta, mało danych)'],
+		[2500, 12, 'Rynek ok. 25 zł (12 ofert)']
+	] as const)('%s grosze from %s listings → %s', (cents, count, expected) => {
+		expect(marketLabel({ cents, count })).toBe(expected);
+	});
+
+	it('shows nothing without listings', () => {
+		expect(marketLabel(null)).toBeNull();
+		expect(marketLabel({ cents: 0, count: 0 })).toBeNull();
+	});
+});
+
+describe('marketFor', () => {
+	const market = (titleId: number, format: Format | null): MarketPrice => ({
+		title_id: titleId,
+		format,
+		cents: 4250,
+		source: 'olx',
+		count: 4,
+		trimmed: 1
+	});
+	const markets = [market(2, 'bluray'), market(2, 'dvd'), market(7, null)];
+
+	it('finds the market of a wish by title and format', () => {
+		expect(marketFor(markets, 2, 'dvd')).toBe(markets[1]);
+		expect(marketFor(markets, 7, null)).toBe(markets[2]);
+	});
+
+	it('is null for another format, a deleted title or before the prices load', () => {
+		expect(marketFor(markets, 2, 'uhd')).toBeNull();
+		expect(marketFor(markets, 7, 'dvd')).toBeNull();
+		expect(marketFor(markets, null, 'dvd')).toBeNull();
+		expect(marketFor(null, 2, 'dvd')).toBeNull();
+	});
+
+	it('labels each deal card with its wish market', () => {
+		const deal = { title_id: 2, format: 'dvd' as const };
+		expect(marketLabel(marketFor(markets, deal.title_id, deal.format))).toBe(
+			'Rynek ok. 42,50 zł (4 oferty)'
+		);
+	});
+});
+
+describe('marketPath', () => {
+	it('asks for every wish, or for every format of one title', () => {
+		expect(marketPath()).toBe('/api/valuation/market');
+		expect(marketPath(12)).toBe('/api/valuation/market?title_id=12');
 	});
 });
 

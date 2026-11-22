@@ -23,7 +23,9 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   its value sections, the insurance report
   with its A4 printout, and the wishlist share link from Okazje with its
   public page, opened in a context without cookies and asking nothing
-  outside `/share/`. `scripts/e2e.sh` builds
+  outside `/share/`, and the app opened offline, whose "Brak połączenia"
+  notice rests above the tab bar so every tab still takes its taps.
+  `scripts/e2e.sh` builds
   the image (or takes one as its first argument), starts it from
   `e2e/compose.yaml`
   with Postgres, `OHARA_LOOKUP_STUB=true`, `OHARA_MUSICBRAINZ=false` and no

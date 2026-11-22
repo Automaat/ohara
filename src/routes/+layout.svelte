@@ -54,6 +54,7 @@
 </AppShell>
 <ServiceWorkerStatus
 	{worker}
+	class="ohara-sw-status"
 	readyTitle="Nowa wersja jest gotowa"
 	readyDescription="Przeładuj, aby jej użyć."
 	reloadLabel="Przeładuj"
@@ -123,9 +124,18 @@
 		flex: 1 0 auto;
 	}
 
-	/* A control focused near the foot of the screen scrolls clear of the floating tab bar. */
+	/* The floating tab bar's 4rem with its gap below and one above it. A control focused near the
+	   foot of the screen scrolls clear of the bar. */
 	:global(:root:has(.ohara-phone)) {
-		scroll-padding-block-end: calc(4rem + 2 * max(env(safe-area-inset-bottom, 0px), 0.75rem));
+		--ohara-tab-bar-clearance: calc(4rem + 2 * max(env(safe-area-inset-bottom, 0px), 0.75rem));
+
+		scroll-padding-block-end: var(--ohara-tab-bar-clearance);
+	}
+
+	/* SUI floats the offline and update notice at the foot of a phone's screen, over the tab bar,
+	   where it would catch taps meant for the tabs (#303). It rests above the bar instead. */
+	:global(:root:has(.ohara-phone) .ohara-sw-status:not(.preview)) {
+		inset-block-end: var(--ohara-tab-bar-clearance);
 	}
 
 	/* WebKit hides native select text when SUI supplies a selectedcontent button. */

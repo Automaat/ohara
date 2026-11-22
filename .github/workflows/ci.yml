@@ -88,6 +88,65 @@ jobs:
         run: go test -race ./...
         working-directory: backend-go
 
+  # Two PRs can each add a migration with one NNNN under another name: both
+  # merge cleanly and each passes CI against the main it started from, then
+  # the app refuses to start. A PR run checks its merge commit and the main
+  # of the moment; a push to main checks main itself.
+  migrations:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Migration versions are unique
+        run: |
+          git fetch --no-tags --depth=1 origin +refs/heads/main:refs/remotes/origin/main
+          ./scripts/check-migrations.sh origin/main
+
+  # Nothing reruns a PR's CI when main moves, and a PR that passed against
+  # an older main still looks mergeable. The commit status this job puts on
+  # each PR head that adds migrations turns such a PR red until it is
+  # renumbered; PRs without migrations get no status.
+  migrations-open-prs:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-26.04
+    # Queued in push order, so the newest main sets the last status.
+    concurrency:
+      group: migrations-open-prs
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      pull-requests: read
+      statuses: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check open PRs against this main
+        run: |
+          set -euo pipefail
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          gh pr list --state open --limit 1000 --json number --jq '.[].number' |
+            while read -r number; do
+              ref="refs/remotes/pr/$number"
+              git fetch --no-tags --depth=1 origin "+refs/pull/$number/head:$ref"
+              if git diff --quiet --diff-filter=A origin/main "$ref" -- 'backend-go/internal/db/migrations/*.sql'; then
+                continue
+              fi
+              # Plain error lines: an annotation would mark main's run, not the PR.
+              if out="$(GITHUB_ACTIONS=false ./scripts/check-migrations.sh origin/main "$ref" 2>&1)"; then
+                state=success
+                description="No migration version taken on main ${GITHUB_SHA:0:7}"
+              else
+                state=failure
+                description="$(printf '%s\n' "$out" | sed -n '1s/^error: //p')"
+              fi
+              echo "#$number: $state: $out"
+              gh api --silent "repos/$GITHUB_REPOSITORY/statuses/$(git rev-parse "$ref")" \
+                -f state="$state" -f context="migrations against main" \
+                -f description="${description:0:140}" -f target_url="$run_url"
+            done
+
   lint-go:
     runs-on: ubuntu-26.04
     steps:
@@ -178,7 +237,7 @@ jobs:
 
   docker:
     runs-on: ubuntu-26.04
-    needs: [frontend, go-tests, govulncheck, lint-go, lint-nilaway, e2e]
+    needs: [frontend, go-tests, govulncheck, lint-go, lint-nilaway, e2e, migrations]
     permissions:
       contents: read
       packages: write

@@ -20,13 +20,17 @@ type CopyValue = {
 	ceiling: Estimate | null;
 	low_confidence: boolean;
 	likely_sold: Estimate | null;
+	mid_grade?: string;
+	discogs_release_id?: number | null;
+	condition: string | null;
+	authors: string[];
+	binding: string | null;
 };
 type View = {
 	summary: { copies: number; spent_cents: number; mid: Bound; ceiling: Bound };
 	copies: CopyValue[];
 	last_valuation: string | null;
 };
-type Item = { copy_id: number; [key: string]: unknown };
 
 const pln = new Intl.NumberFormat('pl-PL', { style: 'currency', currency: 'PLN' });
 const amount = (cents: number) => pln.format(cents / 100);
@@ -167,7 +171,8 @@ test('Raport dla ubezpieczyciela lists every owned copy with totals of the valua
 		await expect(total('Wartość (nowe)')).toContainText(
 			`${v.summary.ceiling.copies} z ${all} egzemplarz`
 		);
-		await expect(total('Data wyceny')).toBeVisible();
+		await expect(total('Ostatnia wycena')).toBeVisible();
+		await expect(total('Kwoty według cen na dzień')).toBeVisible();
 		await expectNoSourceRequests(request);
 	} finally {
 		await Promise.all([valued, unvalued].map((id) => request.delete(`/api/copies/${id}`)));
@@ -186,7 +191,10 @@ test('Raport dla ubezpieczyciela says no valuation exists before the first one',
 	);
 	try {
 		await patchValuation(page, (v) => ({ ...v, last_valuation: null }));
-		await page.goto('/valuation/report');
+		await page.goto('/valuation');
+		await expect(page.getByText('Kolekcja nie ma jeszcze wyceny')).toBeVisible();
+		await page.getByRole('link', { name: 'Raport dla ubezpieczyciela' }).click();
+		await expect(page).toHaveURL(/\/valuation\/report$/);
 		await expect(page.getByText('Kolekcja nie ma jeszcze wyceny')).toBeVisible();
 		await expect(reportTable(page)).toHaveCount(0);
 		await page.getByRole('link', { name: 'Przejdź do wyceny' }).click();
@@ -203,10 +211,6 @@ test('Raport dla ubezpieczyciela shows an empty state without an owned copy', as
 		copies: [],
 		summary: { ...v.summary, copies: 0, spent_cents: 0 }
 	}));
-	await page.route(
-		(url) => url.pathname === '/api/collection',
-		(route) => route.fulfill({ json: { items: [], totals: {} } })
-	);
 	await page.goto('/valuation/report');
 	await expect(page.getByText('Brak posiadanych egzemplarzy')).toBeVisible();
 	await expect(reportTable(page)).toHaveCount(0);
@@ -216,17 +220,38 @@ test('Raport dla ubezpieczyciela shows an empty state without an owned copy', as
 	);
 });
 
-/** Sixty owned copies of every kind, valued in parts, each with a cover from the app's origin. */
-function sixty(): { copies: CopyValue[]; items: Item[] } {
+/** One creator name of 500 letters without a space, as long as the API takes. */
+const unbroken = 'W'.repeat(500);
+
+/** Twenty creators of 495 letters each, far more than one printed row holds. */
+const crowd = Array.from(
+	{ length: 20 },
+	(_, i) => `${'Ł'.repeat(490)} ${String(i).padStart(3, '0')}`
+);
+
+const discogsRelease = 4242;
+
+/**
+ * Sixty owned copies of every kind, valued in parts, each with a cover from the app's origin.
+ * Copy 2 has an unbroken 500-letter creator, copy 3 twenty long ones, and copy 5 a Discogs
+ * release priced at Very Good Plus.
+ */
+function sixty(): CopyValue[] {
 	const kinds = ['movie', 'book', 'music'] as const;
 	const formats = { movie: 'bluray', book: null, music: 'vinyl' } as const;
-	const est = (cents: number): Estimate => ({ cents, source: 'olx', count: 3, trimmed: 0 });
-	const copies: CopyValue[] = [];
-	const items: Item[] = [];
-	for (let i = 1; i <= 60; i++) {
+	const est = (cents: number, source = 'olx'): Estimate => ({
+		cents,
+		source,
+		count: 3,
+		trimmed: 0
+	});
+	return Array.from({ length: 60 }, (_, n) => {
+		const i = n + 1;
 		const kind = kinds[i % 3];
 		const id = 900_000 + i;
-		copies.push({
+		const authors =
+			i === 2 ? [unbroken] : i === 3 ? crowd : kind === 'movie' ? [] : [`Twórca ${i}`, 'Drugi'];
+		return {
 			copy_id: id,
 			edition_id: id,
 			title_id: id,
@@ -237,23 +262,21 @@ function sixty(): { copies: CopyValue[]; items: Item[] } {
 			price_cents: i % 4 === 0 ? null : 1000 + i * 100,
 			cover_url: i % 2 === 0 ? '/pwa-192x192.png' : '/pwa-512x512.png',
 			floor: null,
-			mid: i % 3 === 0 ? null : est(2000 + i * 50),
-			ceiling: i % 5 === 0 ? est(5000 + i * 10) : null,
+			mid: i === 5 ? est(12000, 'discogs') : i % 3 === 0 ? null : est(2000 + i * 50),
+			ceiling: i === 5 ? est(20000, 'discogs') : i % 5 === 0 ? est(5000 + i * 10) : null,
+			mid_grade: i === 5 ? 'VG+' : undefined,
+			discogs_release_id: i === 5 ? discogsRelease : null,
 			low_confidence: false,
-			likely_sold: null
-		});
-		items.push({
-			copy_id: id,
-			authors: kind === 'movie' ? [] : [`Twórca ${i}`, 'Drugi Twórca'],
-			binding: kind === 'book' ? 'paperback' : null,
-			condition: 'good'
-		});
-	}
-	return { copies, items };
+			likely_sold: null,
+			condition: i === 5 ? 'poor' : 'good',
+			authors,
+			binding: kind === 'book' ? 'paperback' : null
+		};
+	});
 }
 
 async function fulfillSixty(page: Page) {
-	const { copies, items } = sixty();
+	const copies = sixty();
 	await page.route('**/api/valuation', async (route: Route) => {
 		const res = await route.fetch();
 		const v = (await res.json()) as View;
@@ -262,10 +285,7 @@ async function fulfillSixty(page: Page) {
 			json: { ...v, last_valuation: pastDay(), copies, summary: { ...v.summary, copies: 60 } }
 		});
 	});
-	await page.route(
-		(url) => url.pathname === '/api/collection',
-		(route) => route.fulfill({ json: { items, totals: {} } })
-	);
+	return copies;
 }
 
 /** Whether every image the locator finds has loaded. */
@@ -281,6 +301,23 @@ function drawn(imgs: Element[]): boolean {
 	});
 }
 
+/** The width and height in points of every page of a PDF, from its media boxes. */
+function pageSizes(pdf: Awaited<ReturnType<Page['pdf']>>): string[] {
+	const boxes = pdf.toString('latin1').matchAll(/\/MediaBox\s*\[\s*0 0 ([\d.]+) ([\d.]+)\s*\]/g);
+	return [...boxes].map((m) => `${Math.round(Number(m[1]))}x${Math.round(Number(m[2]))}`);
+}
+
+/**
+ * The amount cells of every row that end past the table or the page: none when the columns fit
+ * the printable width.
+ */
+function clipped(table: Element): number {
+	const right = Math.min(table.getBoundingClientRect().right, document.documentElement.clientWidth);
+	return [...table.querySelectorAll('tbody td.num')].filter(
+		(cell) => cell.getBoundingClientRect().right > right + 0.5
+	).length;
+}
+
 test('Raport dla ubezpieczyciela prints on A4 with every cover and no controls', async ({
 	page
 }) => {
@@ -289,31 +326,93 @@ test('Raport dla ubezpieczyciela prints on A4 with every cover and no controls',
 	page.on('response', (res) => {
 		if (res.request().resourceType() === 'image' && !res.ok()) failed.push(res.url());
 	});
-	await fulfillSixty(page);
+	const copies = await fulfillSixty(page);
 	await page.goto('/valuation/report');
+	await expect(
+		page.getByText(/^Ostatnia wycena: .+ Kwoty według cen z ostatnich \d+ dni/)
+	).toBeVisible();
 	const table = reportTable(page);
 	await expect(table.locator('tbody tr')).toHaveCount(60);
 
 	const covers = table.locator('tbody img');
 	await expect(covers).toHaveCount(60);
 	await expect.poll(() => covers.evaluateAll(loaded)).toBe(true);
+	expect(await covers.evaluateAll((imgs) => imgs.map((i) => i.getAttribute('src')))).toEqual(
+		copies.map((c) => c.cover_url)
+	);
+	await expect(page.getByRole('button', { name: 'Drukuj' })).toBeEnabled();
 
+	const row = (n: string) => table.locator('tbody tr').filter({ hasText: `Pozycja ${n}` });
+	const discogs = row('05');
+	await expect(discogs).toContainText('Słaby');
+	await expect(discogs).toContainText('ocena VG+');
+	await expect(discogs.getByRole('link', { name: /Data provided by Discogs\./ })).toHaveAttribute(
+		'href',
+		new RegExp(`/release/${discogsRelease}$`)
+	);
+	await expect(row('02')).toContainText('(pełna lista: przypis 1)');
+	await expect(row('03')).toContainText('(pełna lista: przypis 2)');
+	const appendix = page.getByRole('region', { name: 'Przypisy: pełne listy twórców' });
+	await expect(appendix.getByRole('listitem')).toHaveCount(2);
+	await expect(appendix.getByRole('listitem').first()).toContainText(unbroken);
+	await expect(appendix.getByRole('listitem').last()).toContainText(crowd[19]);
+
+	await page.setViewportSize({ width: 718, height: 1047 });
 	await page.emulateMedia({ media: 'print' });
 	await expect(page.getByRole('navigation', { name: 'Główne strony' })).toBeHidden();
 	await expect(page.getByRole('button')).toHaveCount(0);
-	await expect(page.getByRole('link')).toHaveCount(0);
+	await expect(page.getByRole('link')).toHaveCount(1);
+	await expect(page.getByRole('link')).toHaveText(/Data provided by Discogs\./);
 	expect(await covers.evaluateAll(drawn)).toBe(true);
+	expect(await table.evaluate(clipped)).toBe(0);
 	const layout = await table.evaluate((t) => ({
 		head: getComputedStyle(t.querySelector('thead') as Element).display,
-		rows: [...t.querySelectorAll('tbody tr')].map((r) => getComputedStyle(r).breakInside)
+		rows: [...t.querySelectorAll('tbody tr')].map((r) => getComputedStyle(r).breakInside),
+		page: getComputedStyle(t.closest('.report') as Element).page
 	}));
 	expect(layout.head).toBe('table-header-group');
 	expect(new Set(layout.rows)).toEqual(new Set(['avoid']));
+	expect(layout.page).toBe('insurance-report');
 
 	const saved = test.info().outputPath('insurance-report.pdf');
-	const pdf = await page.pdf({ path: saved, format: 'A4', printBackground: true });
-	const pages = (pdf.toString('latin1').match(/\/Type\s*\/Page[^s]/g) ?? []).length;
-	expect(pages).toBeGreaterThan(1);
+	const pdf = await page.pdf({ path: saved, preferCSSPageSize: true, printBackground: true });
+	const sizes = pageSizes(pdf);
+	expect(sizes.length).toBeGreaterThan(1);
+	expect(new Set(sizes)).toEqual(new Set(['595x842']));
 	await test.info().attach('insurance-report.pdf', { path: saved, contentType: 'application/pdf' });
 	expect(failed, 'failed requests').toEqual([]);
+});
+
+test('Raport dla ubezpieczyciela sets A4 only for itself', async ({ page }) => {
+	await fulfillSixty(page);
+	await page.goto('/valuation');
+	await page.getByRole('link', { name: 'Raport dla ubezpieczyciela' }).click();
+	await expect(reportTable(page).locator('tbody tr')).toHaveCount(60);
+	await page.getByRole('link', { name: 'Wartość' }).first().click();
+	await expect(page).toHaveURL(/\/valuation$/);
+	await expect(reportTable(page)).toHaveCount(0);
+	const pdf = await page.pdf({ preferCSSPageSize: true });
+	expect(pageSizes(pdf).length).toBeGreaterThan(0);
+	expect(new Set(pageSizes(pdf))).not.toContain('595x842');
+});
+
+test('Raport dla ubezpieczyciela offers printing only once every cover has loaded', async ({
+	page
+}) => {
+	await fulfillSixty(page);
+	let release: () => void = () => {};
+	const held = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	await page.route('**/pwa-512x512.png', async (route) => {
+		await held;
+		await route.continue();
+	});
+	await page.goto('/valuation/report');
+	await expect(reportTable(page).locator('tbody tr')).toHaveCount(60);
+	await expect(page.getByRole('button', { name: 'Wczytywanie okładek…' })).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Drukuj' })).toHaveCount(0);
+	release();
+	await expect(page.getByRole('button', { name: 'Drukuj' })).toBeEnabled();
+	await expect.poll(() => reportTable(page).locator('tbody img').evaluateAll(loaded)).toBe(true);
 });

@@ -626,17 +626,24 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   browser cannot decode, sends nothing, and a photo still shrinking when
   its sheet is gone is never sent. The server's 8 MiB and 16 megapixel
   limits stay as a backstop.
-- Wartość's "Raport dla ubezpieczyciela" (`/valuation/report`) lists every
-  owned copy for an insurer: cover, title, creators, format or binding,
-  barcode, condition, price paid and the used and new values, "brak
-  wyceny" for a missing one, then totals that each name the copies they
-  cover (`src/lib/insurance-report.ts`) and the last valuation's day. It
-  joins `GET /api/valuation` with `GET /api/collection?status=owned` by
-  copy for the condition, creators and binding; the values are Wartość's.
+- Wartość's "Raport dla ubezpieczyciela" (`/valuation/report`, linked
+  before the first valuation too) lists every owned copy for an insurer:
+  cover (the supplied URL, no thumbnail), title, creators, format or
+  binding, barcode, condition, price paid and the used and new values,
+  "brak wyceny" for a missing one, the Discogs grade beside a Discogs used
+  value and `DiscogsCredit` beside a Discogs-priced copy, then totals that
+  each name the copies they cover (`src/lib/insurance-report.ts`), the
+  last valuation's day and the day the amounts stand for. It reads only
+  `GET /api/valuation`, whose copies carry `condition`, `authors` and
+  `binding` from the snapshot that priced them. Creators past 160
+  characters are cut in the row and listed whole in a footnote appendix.
   The browser's Print to PDF makes the document: an `@media print` rule
-  hides the navigation, tab bar and buttons, repeats the table header on
-  each A4 page and keeps every row whole, and covers load eagerly.
-  Before the first valuation it says none exists and links to Wartość.
+  puts the report on its own A4 page type (`@page insurance-report`, so
+  other pages keep the printer's paper), hides the navigation, tab bar and
+  buttons, fixes the column widths to the page, repeats the table header
+  on each page and keeps every row whole. "Drukuj" waits until every
+  cover has loaded or failed. Before the first valuation the page says
+  none exists and links to Wartość.
 - Discogs data carries `DiscogsCredit`: "Data provided by Discogs." linked
   to its release page, never `nofollow`, under a quick confirm candidate
   with a `discogs_release_id` and a copy priced from Discogs on Wartość.

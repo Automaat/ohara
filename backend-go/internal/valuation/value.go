@@ -419,7 +419,12 @@ type CopyValue struct {
 	// guess at what a copy fetches, apart from the range and the totals.
 	LikelySold *Estimate `json:"likely_sold"`
 	// Condition is the copy's condition, which picks its Discogs grade.
-	Condition *string `json:"-"`
+	Condition *string `json:"condition" ts:"Condition"`
+	// Authors and Binding are the title's creators and the edition's
+	// binding, read in the snapshot the range was priced in, so a printed
+	// report pairs each copy with the details its value was priced for.
+	Authors []string `json:"authors"`
+	Binding *string  `json:"binding" ts:"Binding"`
 }
 
 // Bound is one bound summed over the collection: the total of the copies

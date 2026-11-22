@@ -1,36 +1,36 @@
 <script lang="ts">
 	import { BackLink, Button, EmptyState, ErrorState, PageHeader } from '@smykla-skalski/sui';
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 	import { errorMessage, request } from '#lib/api.js';
-	import { isoDate, type CollectionView } from '#lib/collection.js';
+	import { isoDate } from '#lib/collection.js';
 	import CollectionCover from '#lib/components/CollectionCover.svelte';
+	import DiscogsCredit from '#lib/components/DiscogsCredit.svelte';
 	import {
 		boundCell,
 		coverage,
+		imagesSettled,
+		midGrade,
 		paidCell,
+		reportDating,
 		reportDay,
 		reportRows,
 		reportTitle,
 		reportTotals,
 		totalCell
 	} from '#lib/insurance-report.js';
-	import type { ValuationView } from '#lib/valuation.js';
+	import { discogsRelease, type ValuationView } from '#lib/valuation.js';
 
-	type Report = { view: ValuationView; items: CollectionView['items'] };
-
-	let report = $state<Report | null>(null);
+	let view = $state<ValuationView | null>(null);
 	let failure = $state<string | null>(null);
 	let loading = $state(true);
+	let table = $state<HTMLTableElement>();
+	let coversReady = $state(false);
 
-	/** Reads the values and, for their condition, creators and binding, the owned copies. */
+	/** Reads the owned copies, their values and their details from one snapshot. */
 	async function load() {
 		loading = true;
 		try {
-			const [view, collection] = await Promise.all([
-				request<ValuationView>(fetch, 'GET', '/api/valuation'),
-				request<CollectionView>(fetch, 'GET', '/api/collection?status=owned')
-			]);
-			report = { view, items: collection.items };
+			view = await request<ValuationView>(fetch, 'GET', '/api/valuation');
 			failure = null;
 		} catch (err) {
 			failure = errorMessage(err);
@@ -43,15 +43,39 @@
 		void load();
 	});
 
-	const rows = $derived(report ? reportRows(report.view.copies, report.items) : []);
-	const totals = $derived(reportTotals(report?.view.copies ?? []));
-	const lastValuation = $derived(report?.view.last_valuation ?? null);
+	const rows = $derived(view ? reportRows(view.copies) : []);
+	const totals = $derived(reportTotals(view?.copies ?? []));
+	const lastValuation = $derived(view?.last_valuation ?? null);
 	const today = isoDate(new Date());
 	const description = $derived(
-		lastValuation
-			? `Wycena z dnia ${reportDay(lastValuation)}. Sporządzono ${reportDay(today)}.`
-			: undefined
+		view && lastValuation ? reportDating(lastValuation, today, view.window_days) : undefined
 	);
+	/** The rows whose creators were cut, numbered for the appendix that lists them whole. */
+	const appendix = $derived(rows.filter((r) => r.fullCreators !== null));
+
+	/**
+	 * Marks the covers ready once every one in root has loaded or failed, so printing never misses
+	 * a cover still on its way. Returns the cleanup that drops a check a newer one replaced.
+	 */
+	function watchCovers(root: HTMLTableElement | undefined): () => void {
+		coversReady = false;
+		let current = true;
+		if (root) {
+			void tick()
+				.then(() => imagesSettled(root.querySelectorAll('img')))
+				.then(() => {
+					if (current) coversReady = true;
+				});
+		}
+		return () => {
+			current = false;
+		};
+	}
+
+	$effect(() => {
+		void rows;
+		return watchCovers(table);
+	});
 </script>
 
 <svelte:head>
@@ -59,7 +83,9 @@
 </svelte:head>
 
 {#snippet printButton()}
-	<Button tone="signal" onclick={() => window.print()}>Drukuj</Button>
+	<Button tone="signal" loading={!coversReady} onclick={() => window.print()}>
+		{coversReady ? 'Drukuj' : 'Wczytywanie okładek…'}
+	</Button>
 {/snippet}
 
 <div class="report">
@@ -73,7 +99,7 @@
 	/>
 
 	<div class="content">
-		{#if !report}
+		{#if !view}
 			{#if failure}
 				<ErrorState
 					title="Nie udało się wczytać raportu"
@@ -105,34 +131,49 @@
 				{/snippet}
 			</EmptyState>
 		{:else}
-			<table class="copies" aria-label="Egzemplarze w raporcie">
+			<table class="copies" aria-label="Egzemplarze w raporcie" bind:this={table}>
 				<thead>
 					<tr>
-						<th scope="col"><span class="visually-hidden">Okładka</span></th>
-						<th scope="col">Tytuł</th>
-						<th scope="col">Twórcy</th>
-						<th scope="col">Wydanie</th>
-						<th scope="col">Kod kreskowy</th>
-						<th scope="col">Stan</th>
-						<th scope="col" class="num">Zapłacono</th>
-						<th scope="col" class="num">Wartość (używane)</th>
-						<th scope="col" class="num">Wartość (nowe)</th>
+						<th scope="col" class="cover-col"><span class="visually-hidden">Okładka</span></th>
+						<th scope="col" class="title-col">Tytuł</th>
+						<th scope="col" class="creators-col">Twórcy</th>
+						<th scope="col" class="edition-col">Wydanie</th>
+						<th scope="col" class="code-col">Kod kreskowy</th>
+						<th scope="col" class="condition-col">Stan</th>
+						<th scope="col" class="num money-col">Zapłacono</th>
+						<th scope="col" class="num money-col">Wartość (używane)</th>
+						<th scope="col" class="num money-col">Wartość (nowe)</th>
 					</tr>
 				</thead>
 				<tbody>
 					{#each rows as row (row.copy.copy_id)}
+						{@const note = appendix.indexOf(row) + 1}
+						{@const grade = midGrade(row.copy)}
 						<tr>
 							<td class="cover-cell">
-								<CollectionCover kind={row.copy.kind} url={row.copy.cover_url} eager />
+								<CollectionCover kind={row.copy.kind} url={row.copy.cover_url} large eager />
 							</td>
 							<th scope="row" class="title">{row.copy.title_name}</th>
-							<td data-label="Twórcy" class="creators">{row.creators || '—'}</td>
+							<td data-label="Twórcy" class="creators">
+								{row.creators || '—'}
+								{#if note > 0}
+									<span class="note-ref">(pełna lista: przypis {note})</span>
+								{/if}
+							</td>
 							<td data-label="Wydanie">{row.edition}</td>
 							<td data-label="Kod kreskowy" class="code">{row.copy.barcode ?? '—'}</td>
 							<td data-label="Stan">{row.condition || '—'}</td>
 							<td data-label="Zapłacono" class="num">{paidCell(row.copy.price_cents)}</td>
-							<td data-label="Wartość (używane)" class="num">{boundCell(row.copy.mid)}</td>
-							<td data-label="Wartość (nowe)" class="num">{boundCell(row.copy.ceiling)}</td>
+							<td data-label="Wartość (używane)" class="num">
+								{boundCell(row.copy.mid)}
+								{#if grade}
+									<span class="grade">ocena {grade}</span>
+								{/if}
+							</td>
+							<td data-label="Wartość (nowe)" class="num">
+								{boundCell(row.copy.ceiling)}
+								<DiscogsCredit class="credit" release={discogsRelease(row.copy)} />
+							</td>
 						</tr>
 					{/each}
 				</tbody>
@@ -167,16 +208,32 @@
 						</dd>
 					</div>
 					<div>
-						<dt>Data wyceny</dt>
+						<dt>Ostatnia wycena</dt>
 						<dd>{reportDay(lastValuation)}</dd>
+					</div>
+					<div>
+						<dt>Kwoty według cen na dzień</dt>
+						<dd>{reportDay(today)}</dd>
 					</div>
 				</dl>
 				<p class="note">
-					Wartość używanych egzemplarzy to mediana cen ofertowych z OLX, a dla płyt powiązanych z
-					Discogs sugerowana cena dla stanu egzemplarza. Wartość nowych to sugerowana cena Discogs
-					dla stanu Mint. Ceny ofertowe nie są cenami transakcji.
+					Wartość używanych egzemplarzy to mediana cen ofertowych z OLX z ostatnich {view.window_days}
+					dni, a dla płyt powiązanych z Discogs sugerowana cena Discogs dla oceny podanej przy kwocie:
+					stanu egzemplarza, a gdy Discogs nie podaje ceny dla tego stanu lub egzemplarz nie ma stanu,
+					VG+. Wartość nowych to sugerowana cena Discogs dla stanu Mint. Ceny ofertowe nie są cenami transakcji.
 				</p>
 			</section>
+
+			{#if appendix.length > 0}
+				<section class="appendix" aria-labelledby="report-appendix">
+					<h2 id="report-appendix">Przypisy: pełne listy twórców</h2>
+					<ol>
+						{#each appendix as row (row.copy.copy_id)}
+							<li><strong>{row.copy.title_name}:</strong> {row.fullCreators}</li>
+						{/each}
+					</ol>
+				</section>
+			{/if}
 		{/if}
 	</div>
 </div>
@@ -230,6 +287,20 @@
 
 	.creators {
 		min-inline-size: 6rem;
+		overflow-wrap: anywhere;
+	}
+
+	.note-ref,
+	.grade {
+		display: block;
+		color: var(--sui-text-muted);
+		font-size: 0.6875rem;
+	}
+
+	.copies :global(.credit) {
+		margin: 0.125rem 0 0;
+		font-size: 0.6875rem;
+		white-space: normal;
 	}
 
 	.cover-cell {
@@ -247,7 +318,8 @@
 		white-space: nowrap;
 	}
 
-	.totals h2 {
+	.totals h2,
+	.appendix h2 {
 		margin: 0 0 0.5rem;
 		font-size: 1rem;
 	}
@@ -287,6 +359,15 @@
 		font-size: 0.75rem;
 	}
 
+	.appendix ol {
+		display: grid;
+		gap: 0.375rem;
+		margin: 0;
+		padding-inline-start: 1.5rem;
+		font-size: 0.75rem;
+		overflow-wrap: anywhere;
+	}
+
 	/* On a phone each copy is a card: its cover and title, then the other cells labelled. */
 	@media screen and (max-width: 47.9375rem) {
 		.copies thead {
@@ -323,7 +404,8 @@
 
 		.copies td[data-label] {
 			display: flex;
-			gap: 0.5rem;
+			flex-wrap: wrap;
+			gap: 0 0.5rem;
 			justify-content: space-between;
 			text-align: end;
 		}
@@ -333,10 +415,21 @@
 			color: var(--sui-text-muted);
 			text-align: start;
 		}
+
+		.note-ref,
+		.grade,
+		.copies :global(.credit) {
+			flex-basis: 100%;
+		}
 	}
 
-	/* Printed: the report alone, on white, every row whole and the header on every page. */
+	/* Printed: the report alone on its own A4 page type, on white, every row whole and the header
+	   on every page. The columns share the page's width, so no text pushes the amounts off it. */
 	@media print {
+		.report {
+			page: insurance-report;
+		}
+
 		:global(:root:has(.report)) {
 			background: #fff;
 		}
@@ -371,17 +464,67 @@
 			padding: 0;
 		}
 
-		.totals {
-			margin-block-start: 1.5rem;
-			break-inside: avoid;
-		}
-
 		.copies {
-			font-size: 9pt;
+			table-layout: fixed;
+			font-size: 8pt;
 		}
 
-		.code {
+		.copies th,
+		.copies td {
+			padding: 1.5mm 1mm;
+			border-color: #999;
+			color: #000;
+		}
+
+		.copies thead th {
+			font-size: 7pt;
+		}
+
+		.copies tbody th,
+		.copies tbody td {
+			overflow-wrap: anywhere;
+		}
+
+		.copies tbody .code {
+			overflow-wrap: normal;
 			white-space: nowrap;
+		}
+
+		.copies .title,
+		.creators {
+			min-inline-size: 0;
+		}
+
+		.copies .num {
+			white-space: normal;
+		}
+
+		.cover-col {
+			inline-size: 12mm;
+		}
+
+		.title-col {
+			inline-size: 20%;
+		}
+
+		.creators-col {
+			inline-size: 16%;
+		}
+
+		.edition-col {
+			inline-size: 10%;
+		}
+
+		.code-col {
+			inline-size: 15%;
+		}
+
+		.condition-col {
+			inline-size: 8%;
+		}
+
+		.money-col {
+			inline-size: 10%;
 		}
 
 		.copies thead {
@@ -392,19 +535,24 @@
 			break-inside: avoid;
 		}
 
-		.copies th,
-		.copies td {
-			border-color: #999;
-			color: #000;
+		.totals {
+			margin-block-start: 1.5rem;
+			break-inside: avoid;
+		}
+
+		.appendix {
+			margin-block-start: 1.5rem;
 		}
 
 		.covers,
-		.note {
+		.note,
+		.note-ref,
+		.grade {
 			color: #333;
 		}
 	}
 
-	@page {
+	@page insurance-report {
 		size: A4;
 		margin: 12mm;
 	}

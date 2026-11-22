@@ -2,13 +2,18 @@ import { describe, expect, it } from 'vitest';
 import {
 	boundCell,
 	coverage,
+	creatorsCell,
+	creatorsLimit,
+	imagesSettled,
+	midGrade,
 	paidCell,
+	reportDating,
 	reportDay,
 	reportRows,
 	reportTotals,
 	totalCell,
 	unvalued,
-	type ReportItem
+	type Settling
 } from './insurance-report.js';
 import type { CopyValue, Estimate } from './valuation.js';
 
@@ -30,6 +35,9 @@ function copy(over: Partial<CopyValue> = {}): CopyValue {
 		ceiling: null,
 		low_confidence: true,
 		likely_sold: null,
+		condition: null,
+		authors: [],
+		binding: null,
 		...over
 	};
 }
@@ -116,45 +124,99 @@ describe('cells', () => {
 	it('shows a total with grosze', () => {
 		expect(plain(totalCell({ cents: 1999, copies: 1 }))).toBe('19,99 zł');
 	});
+
+	it('names the Discogs grade of a used value, and none for an OLX one', () => {
+		expect(midGrade({ mid: discogs(12000), mid_grade: 'VG+' })).toBe('VG+');
+		expect(midGrade({ mid: olx(12000), mid_grade: undefined })).toBeNull();
+		expect(midGrade({ mid: null, mid_grade: undefined })).toBeNull();
+	});
+});
+
+describe('creatorsCell', () => {
+	it('keeps a list up to the limit whole', () => {
+		expect(creatorsCell(['Frank Herbert', 'Brian Herbert'])).toEqual({
+			text: 'Frank Herbert, Brian Herbert',
+			full: null
+		});
+		expect(creatorsCell([])).toEqual({ text: '', full: null });
+		const exact = 'ż'.repeat(creatorsLimit);
+		expect(creatorsCell([exact])).toEqual({ text: exact, full: null });
+	});
+
+	it('cuts a longer list at the limit and keeps the whole one for the appendix', () => {
+		const names = Array.from({ length: 20 }, (_, i) => `${'Ł'.repeat(490)} ${i}`);
+		const cell = creatorsCell(names);
+		expect([...cell.text]).toHaveLength(creatorsLimit);
+		expect(cell.text.endsWith('…')).toBe(true);
+		expect(cell.full).toBe(names.join(', '));
+	});
 });
 
 describe('reportRows', () => {
-	const items: ReportItem[] = [
-		{ copy_id: 1, authors: ['Denis Villeneuve'], binding: null, condition: 'very_good' },
-		{
-			copy_id: 2,
-			authors: ['Frank Herbert', 'Brian Herbert'],
-			binding: 'hardcover',
-			condition: null
-		},
-		{ copy_id: 3, binding: null, condition: 'mint' }
-	];
-
-	it('joins each copy with its creators, condition and edition, in the valuation order', () => {
-		const rows = reportRows(
-			[
-				copy({ copy_id: 2, kind: 'book', format: null }),
-				copy({ copy_id: 1 }),
-				copy({ copy_id: 3, kind: 'music', format: 'vinyl' })
-			],
-			items
-		);
+	it('labels each copy with its creators, condition and edition, in the valuation order', () => {
+		const rows = reportRows([
+			copy({
+				copy_id: 2,
+				kind: 'book',
+				format: null,
+				binding: 'hardcover',
+				authors: ['Frank Herbert', 'Brian Herbert']
+			}),
+			copy({ copy_id: 1, condition: 'very_good' }),
+			copy({ copy_id: 3, kind: 'music', format: 'vinyl', condition: 'mint', authors: ['Björk'] })
+		]);
 		expect(rows.map((r) => [r.copy.copy_id, r.creators, r.edition, r.condition])).toEqual([
 			[2, 'Frank Herbert, Brian Herbert', 'Książka · Twarda oprawa', ''],
-			[1, 'Denis Villeneuve', 'Film · Blu-ray', 'Bardzo dobry'],
-			[3, '', 'Muzyka · Winyl', 'Idealny']
+			[1, '', 'Film · Blu-ray', 'Bardzo dobry'],
+			[3, 'Björk', 'Muzyka · Winyl', 'Idealny']
 		]);
+		expect(rows.every((r) => r.fullCreators === null)).toBe(true);
 	});
 
-	it('keeps a copy the collection no longer lists, without its details', () => {
-		const rows = reportRows([copy({ copy_id: 9, kind: 'book', format: null })], items);
-		expect(rows).toHaveLength(1);
-		expect(rows[0]).toMatchObject({ creators: '', edition: 'Książka', condition: '' });
+	it('names only the kind of a book without a binding', () => {
+		expect(reportRows([copy({ kind: 'book', format: null })])[0].edition).toBe('Książka');
 	});
 });
 
-describe('reportDay', () => {
+describe('dates', () => {
 	it('writes a valuation day in full', () => {
 		expect(reportDay('2026-11-17')).toBe('17 listopada 2026');
+	});
+
+	it('tells the last run apart from the day the amounts stand for', () => {
+		expect(reportDating('2026-11-17', '2026-11-22', 90)).toBe(
+			'Ostatnia wycena: 17 listopada 2026. Kwoty według cen z ostatnich 90 dni, stan na 22 listopada 2026.'
+		);
+	});
+});
+
+/** An image stand-in that settles when told to. */
+function image(complete: boolean): Settling & { fire: (type: 'load' | 'error') => void } {
+	const target = new EventTarget();
+	return {
+		complete,
+		addEventListener: target.addEventListener.bind(target) as Settling['addEventListener'],
+		fire: (type) => target.dispatchEvent(new Event(type))
+	};
+}
+
+describe('imagesSettled', () => {
+	it('resolves at once when every image is complete', async () => {
+		await expect(imagesSettled([image(true), image(true)])).resolves.toBeUndefined();
+	});
+
+	it('waits until each pending image loads or fails', async () => {
+		const loading = image(false);
+		const failing = image(false);
+		let done = false;
+		const settled = imagesSettled([image(true), loading, failing]).then(() => {
+			done = true;
+		});
+		loading.fire('load');
+		await Promise.resolve();
+		expect(done).toBe(false);
+		failing.fire('error');
+		await settled;
+		expect(done).toBe(true);
 	});
 });

@@ -304,8 +304,10 @@ func (h *Hunter) Run(ctx context.Context) (RunResult, error) {
 	if err != nil {
 		return RunResult{}, err
 	}
-	r := &run{h: h, wants: wants, rules: rules, titles: titles, asOf: asOf, first: true, tried: map[int64]bool{},
-		missed: map[string]Listing{}}
+	r := &run{
+		h: h, wants: wants, rules: rules, titles: titles, asOf: asOf, first: true, tried: map[int64]bool{},
+		missed: map[string]Listing{},
+	}
 	for i := range wants {
 		wants[i].Prepare()
 		r.percent = r.percent || wants[i].MaxMarketPercent != nil

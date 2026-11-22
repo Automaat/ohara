@@ -572,7 +572,7 @@
 					</Button>
 				{/snippet}
 				<dl class="facts">
-					{#each copyFacts(s.copy) as fact (fact.label)}
+					{#each copyFacts(s.copy, s.edition.limited_to) as fact (fact.label)}
 						<div>
 							<dt>{fact.label}</dt>
 							<dd>{fact.value}</dd>

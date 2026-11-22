@@ -22,6 +22,7 @@ import {
 	loanPayload,
 	loanSummary,
 	loanToForm,
+	marksLine,
 	options,
 	orderLine,
 	returnDay,
@@ -1500,5 +1501,64 @@ describe('TV seasons', () => {
 		});
 		const missing = editionPayload(editionToForm(null), 1, 'tv');
 		expect(!missing.ok && missing.issue.field).toBe('format');
+	});
+});
+
+describe('collector marks', () => {
+	const owned: CopyForm = { ...copyToForm(null), price: '', signed: true, copy_number: ' 123 ' };
+
+	it('reads a signed, numbered copy into the form and sends both marks', () => {
+		const form = copyToForm({ ...copyPayloadOf(owned), status: 'sold', sold_on: '2026-01-02' });
+		expect([form.signed, form.copy_number]).toEqual([true, '123']);
+		const parsed = copyPayload(form, 3);
+		expect(parsed.ok && parsed.value).toMatchObject({ signed: true, copy_number: 123 });
+		const ordered = copyPayload({ ...owned, status: 'ordered' }, 3);
+		expect(ordered.ok && ordered.value).toMatchObject({ signed: true, copy_number: 123 });
+	});
+
+	it('leaves out marks a copy does not carry', () => {
+		const plain = copyPayload({ ...owned, signed: false, copy_number: '' }, 3);
+		expect(plain.ok && 'signed' in plain.value).toBe(false);
+		expect(plain.ok && 'copy_number' in plain.value).toBe(false);
+		const wish = copyPayload({ ...owned, status: 'wishlist' }, 3);
+		expect(wish.ok && 'signed' in wish.value).toBe(false);
+		expect(wish.ok && 'copy_number' in wish.value).toBe(false);
+		expect(copyToForm(null)).toMatchObject({ signed: false, copy_number: '' });
+	});
+
+	it.each(['0', '-1', '1,5', 'nr 5', '1000001'])('refuses copy number %s', (input) => {
+		expect(copyPayload({ ...owned, copy_number: input }, 3)).toEqual({
+			ok: false,
+			issue: { field: 'copy_number', message: 'Numer egzemplarza to liczba od 1 do 1 000 000.' }
+		});
+	});
+
+	it.each([
+		{
+			c: { signed: true, copy_number: 123 },
+			run: 500,
+			want: 'Z autografem · Egzemplarz nr 123/500'
+		},
+		{ c: { copy_number: 123 }, run: null, want: 'Egzemplarz nr 123' },
+		{ c: { copy_number: 7 }, run: undefined, want: 'Egzemplarz nr 7' },
+		{ c: { signed: true, copy_number: null }, run: 500, want: 'Z autografem' },
+		{ c: {}, run: 500, want: '' }
+	])('describes $c against run $run', ({ c, run, want }) => {
+		expect(marksLine(c, run)).toBe(want);
+	});
+
+	it('says a signed copy on the shelf is signed', () => {
+		const item = {
+			status: 'owned' as const,
+			max_price_cents: null,
+			authors: ['Stanisław Lem'],
+			format: null,
+			binding: 'hardcover' as const,
+			label: ''
+		};
+		expect(shelfLine({ ...item, signed: true })).toBe(
+			'Stanisław Lem · Twarda oprawa · z autografem'
+		);
+		expect(shelfLine({ ...item, signed: false })).toBe('Stanisław Lem · Twarda oprawa');
 	});
 });

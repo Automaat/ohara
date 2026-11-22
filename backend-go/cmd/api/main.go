@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -573,6 +574,11 @@ func newHunter(pool *pgxpool.Pool, lane *deals.Lane, logger *slog.Logger) (*deal
 	if envOr("OHARA_TEZEUSZ", "true") == "true" {
 		sources = append(sources, deals.Tezeusz{Client: client, BaseURL: envOr("OHARA_DEALS_TEZEUSZ_URL", deals.TezeuszURL)})
 	}
+	sellers, err := discogsSellers(client)
+	if err != nil {
+		return nil, nil, err
+	}
+	sources = append(sources, sellers...)
 	store := deals.NewStore(pool)
 	var notifier deals.Notifier
 	var poller *deals.TelegramPoller
@@ -588,13 +594,51 @@ func newHunter(pool *pgxpool.Pool, lane *deals.Lane, logger *slog.Logger) (*deal
 	case token != "" || chat != "":
 		return nil, nil, errors.New("set both OHARA_TELEGRAM_BOT_TOKEN and OHARA_TELEGRAM_CHAT_ID, or neither")
 	}
-	logger.Info("deal hunter", "interval", interval, "delay", delay, "telegram", notifier != nil)
+	logger.Info("deal hunter", "interval", interval, "delay", delay, "telegram", notifier != nil,
+		"discogs_sellers", len(sellers))
 	cfg := deals.Config{Interval: interval, Delay: delay, CanaryQuery: envOr("OHARA_DEALS_CANARY_QUERY", "dvd")}
 	hunter := deals.NewHunter(store, sources, notifier, cfg, logger)
 	if poller != nil {
 		hunter.PollTelegram(poller)
 	}
 	return hunter, store, nil
+}
+
+// discogsSeller is a Discogs username.
+var discogsSeller = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// discogsSellers are the deal sources of the Discogs sellers in
+// OHARA_DISCOGS_SELLERS, a comma-separated list of usernames, each once:
+// none without the list or without OHARA_DISCOGS_TOKEN. Their prices turn
+// into złoty at the NBP rates of OHARA_VALUATION_NBP_URL, fetched through
+// client, and their requests yield the token's budget to scans and title
+// searches.
+func discogsSellers(client *http.Client) ([]deals.Source, error) {
+	var names []string
+	for name := range strings.SplitSeq(os.Getenv("OHARA_DISCOGS_SELLERS"), ",") {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if !discogsSeller.MatchString(name) {
+			return nil, fmt.Errorf("OHARA_DISCOGS_SELLERS: %q is not a Discogs username", name)
+		}
+		if !slices.ContainsFunc(names, func(n string) bool { return strings.EqualFold(n, name) }) {
+			names = append(names, name)
+		}
+	}
+	d := newDiscogs()
+	if d == nil || len(names) == 0 {
+		return nil, nil
+	}
+	d.Priority = discogs.Background
+	metrics.InitSource(valuation.SourceNBP)
+	rates := &valuation.NBP{Client: client, BaseURL: envOr("OHARA_VALUATION_NBP_URL", valuation.NBPURL)}
+	sources := make([]deals.Source, 0, len(names))
+	for _, name := range names {
+		sources = append(sources, deals.DiscogsSeller{Client: d, Rates: rates, Seller: name})
+	}
+	return sources, nil
 }
 
 // sourceDelay is the pause between two requests to the deal and valuation

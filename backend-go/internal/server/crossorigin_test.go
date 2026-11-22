@@ -81,6 +81,8 @@ func TestCrossOriginWrites(t *testing.T) {
 		{"same-origin Sec-Fetch-Site, foreign Origin", http.MethodPost, "/api/titles", "text/plain", `{"name":"x"}`, map[string]string{"Origin": "https://other.mskalski.dev", "Sec-Fetch-Site": "same-origin"}, http.StatusForbidden, ""},
 		{"user-initiated, foreign Origin", http.MethodPost, "/api/titles", "text/plain", `{"name":"x"}`, map[string]string{"Origin": "https://other.mskalski.dev", "Sec-Fetch-Site": "none"}, http.StatusForbidden, ""},
 		{"own host on another port", http.MethodPost, "/api/titles", "text/plain", `{"name":"x"}`, map[string]string{"Origin": appOrigin + ":8443"}, http.StatusForbidden, ""},
+		{"sibling site write, no Origin", http.MethodPost, "/api/titles", "text/plain", `{"name":"x"}`, map[string]string{"Sec-Fetch-Site": "same-site"}, http.StatusForbidden, ""},
+		{"cross-site write, no Origin", http.MethodPost, "/api/titles", "application/json", `{"name":"x"}`, map[string]string{"Sec-Fetch-Site": "cross-site"}, http.StatusForbidden, ""},
 		{"unknown Sec-Fetch-Site value", http.MethodPost, "/api/titles", "text/plain", `{"name":"x"}`, map[string]string{"Origin": appOrigin, "Sec-Fetch-Site": "bogus"}, http.StatusForbidden, ""},
 		{"sibling site delete", http.MethodDelete, "/api/titles/1", "", "", sameSite, http.StatusForbidden, ""},
 		{"sibling site deal run", http.MethodPost, "/api/deals/run", "", "", sameSite, http.StatusForbidden, ""},

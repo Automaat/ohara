@@ -397,7 +397,7 @@ export class PendingScans {
 	 * next run. No answer within postTimeout, or the sign-in turning the request away, ends the
 	 * run; after no answer, the next run, after a reload or in another tab too, starts with the
 	 * code after that one and sends it last. While another tab sends, this one only reads the count.
-	 * A run that took codes off the device tells the app's other tabs.
+	 * Each code the server took off the device is news for the app's other tabs.
 	 */
 	send(): Promise<void> {
 		this.#sending ??= this.#lock(() => this.#sendAll())
@@ -435,15 +435,15 @@ export class PendingScans {
 			this.#lost();
 			if (run.left) this.departures++;
 			return;
-		} finally {
-			if (run.left) this.#news.post();
 		}
 		await this.#recount(store, run.left);
 	}
 
 	/**
 	 * Sends codes one after another, so a run that gets no answer stops before the rest and the
-	 * next run starts after that code; run.left notes that a code left the device.
+	 * next run starts after that code; run.left notes that the server took a code off the device.
+	 * The other tabs hear of each such code once its removal settled, whether or not it failed, so
+	 * a tab closed later in the run or a removal that fails cannot keep the news from them.
 	 */
 	async #sendEach(
 		store: PendingStore,
@@ -456,8 +456,12 @@ export class PendingScans {
 		if (outcome === 'unanswered') this.#cursor.set(barcode);
 		if (outcome === 'unanswered' || outcome === 'stop') return;
 		if (outcome !== 'kept') {
-			await store.remove(barcode);
 			run.left = true;
+			try {
+				await store.remove(barcode);
+			} finally {
+				this.#news.post();
+			}
 		}
 		if (outcome === 'queued') queueWaiting(barcode);
 		await this.#sendEach(store, rest, run);

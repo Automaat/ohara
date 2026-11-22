@@ -27,7 +27,7 @@
 	import SessionTray from '#lib/components/SessionTray.svelte';
 	import { phoneLayout, shortScreen } from '#lib/nav.js';
 	import { pendingScans } from '#lib/pending-scans.svelte.js';
-	import { queueTally } from '#lib/queue-tally.svelte.js';
+	import { queueTally, retryUnknown } from '#lib/queue-tally.svelte.js';
 	import { outcomeLabels, outcomeTones, recentScans } from '#lib/recent.svelte.js';
 	import { ScanFlow, phaseTitle, type Added } from '#lib/scan-flow.svelte.js';
 	import { SheetHistory } from '#lib/scan-sheet.js';
@@ -296,6 +296,8 @@
 		flow.detach();
 		addToasts.destroy();
 	});
+
+	onMount(() => retryUnknown(queueTally, fetch, window, document));
 
 	onMount(() => {
 		void queueTally.load(fetch);

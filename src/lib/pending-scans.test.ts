@@ -715,7 +715,7 @@ describe('broadcastDepartures', () => {
 });
 
 describe('PendingScans news to other tabs', () => {
-	it('tells the other tabs once for a run that took codes off the device', async () => {
+	it('tells the other tabs of each code the server took off the device', async () => {
 		const tab = browserTabs();
 		const news = tab();
 		const device = memory([a, b]);
@@ -732,7 +732,7 @@ describe('PendingScans news to other tabs', () => {
 		expect(news.posts).toBe(1);
 	});
 
-	it('tells the other tabs when the store failed after a code left', async () => {
+	it('tells the other tabs of a code the server took though its removal failed', async () => {
 		const tab = browserTabs();
 		const news = tab();
 		const device = memory([a, b]);
@@ -748,7 +748,7 @@ describe('PendingScans news to other tabs', () => {
 			news
 		);
 		await pending.send();
-		expect(news.posts).toBe(1);
+		expect(news.posts).toBe(2);
 		expect(pending.departures).toBe(1);
 	});
 
@@ -791,20 +791,52 @@ describe('PendingScans news to other tabs', () => {
 		await vi.advanceTimersByTimeAsync(0);
 		expect(s.codes()).toEqual([a, b]);
 		expect(here.count).toBe(0);
-		expect(here.departures).toBe(1);
+		expect(here.departures).toBe(2);
 
 		await there.keep(c);
 		await here.keep(a);
 		await there.send();
 		await vi.advanceTimersByTimeAsync(0);
 		expect(here.count).toBe(0);
-		expect(here.departures).toBe(2);
+		expect(here.departures).toBe(4);
 
 		stop();
 		await there.keep(b);
 		await there.send();
 		await vi.advanceTimersByTimeAsync(0);
-		expect(here.departures).toBe(2);
+		expect(here.departures).toBe(4);
+		vi.useRealTimers();
+	});
+
+	it('has told the other tabs of a code before the run stops on a later one', async () => {
+		vi.useFakeTimers();
+		const tab = browserTabs();
+		const device = memory([a, b]);
+		const fromStart = { get: () => null, set: () => {} };
+		const otherTabSends = async () => false;
+		let release: () => void = () => {};
+		const hung = new Promise<Response>((resolve) => {
+			release = () => resolve(new Response('{}', { status: 201 }));
+		});
+		const there = new PendingScans(
+			async (_input, init) =>
+				String(init?.body).includes(b) ? hung : new Response('{}', { status: 201 }),
+			device.open,
+			undefined,
+			fromStart,
+			tab()
+		);
+		const here = new PendingScans(api().fetchFn, device.open, otherTabSends, fromStart, tab());
+		const { win, doc } = page();
+		const stop = here.start(win, doc, 60_000);
+		await vi.advanceTimersByTimeAsync(0);
+		void there.send();
+		await vi.advanceTimersByTimeAsync(0);
+		expect([...device.kept]).toEqual([b]);
+		expect(here.departures).toBe(1);
+		expect(here.count).toBe(1);
+		release();
+		stop();
 		vi.useRealTimers();
 	});
 

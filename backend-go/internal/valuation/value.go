@@ -4,8 +4,9 @@
 // price_observation and stores the day's collection total. Each copy gets
 // a range: the buy-back offer as its floor and the median used asking price
 // on OLX as its middle. An album edition with Discogs prices
-// takes the cheapest Discogs copy for sale as its floor and the suggested
-// Very Good Plus and Mint prices as its middle and ceiling; other copies
+// takes the cheapest Discogs copy for sale as its floor, the suggested
+// price of the grade its condition maps to (Very Good Plus without one) as
+// its middle and the suggested Mint price as its ceiling; other copies
 // have no ceiling.
 package valuation
 
@@ -24,10 +25,48 @@ const (
 )
 
 var (
-	discogsSources   = []string{SourceDiscogsLowest, SourceDiscogsVGPlus, SourceDiscogsMint}
+	discogsSources = []string{
+		SourceDiscogsLowest, SourceDiscogsMint, SourceDiscogsNearMint, SourceDiscogsVGPlus,
+		SourceDiscogsVG, SourceDiscogsGood, SourceDiscogsPoor,
+	}
 	valuationSources = append([]string{SourceOLX, SourceSkupSzop}, discogsSources...)
 	pooledSources    = []string{SourceOLX}
 )
+
+// Grades of the Discogs suggestion a copy's middle is, as the page names
+// them.
+const (
+	GradeNearMint = "NM"
+	GradeVGPlus   = "VG+"
+	GradeVG       = "VG"
+	GradeGood     = "G"
+	GradePoor     = "P"
+)
+
+// Grades lists the grades a middle can name, best first.
+var Grades = []string{GradeNearMint, GradeVGPlus, GradeVG, GradeGood, GradePoor}
+
+// gradeSources maps each grade to the source its suggestion is stored
+// under.
+var gradeSources = map[string]string{
+	GradeNearMint: SourceDiscogsNearMint,
+	GradeVGPlus:   SourceDiscogsVGPlus,
+	GradeVG:       SourceDiscogsVG,
+	GradeGood:     SourceDiscogsGood,
+	GradePoor:     SourceDiscogsPoor,
+}
+
+// conditionGrades maps a copy's condition to the Discogs grade its used
+// value is priced at. A worse condition never maps to a better grade; a
+// mint copy is no sealed one, so it takes Near Mint and leaves Mint to the
+// ceiling.
+var conditionGrades = map[string]string{
+	"mint":      GradeNearMint,
+	"very_good": GradeVGPlus,
+	"good":      GradeVG,
+	"fair":      GradeGood,
+	"poor":      GradePoor,
+}
 
 // MinObservations is the fewest used prices a middle value needs before it
 // is trusted; a copy with fewer is low confidence.
@@ -95,7 +134,7 @@ func groupOf(titleID int64, format *string) group {
 type Ranges struct {
 	floors       map[int64]*Estimate
 	mids         map[group]*Estimate
-	discogsMids  map[int64]*Estimate
+	discogsMids  map[int64]map[string]*Estimate
 	discogsCeils map[int64]*Estimate
 }
 
@@ -108,10 +147,14 @@ type editionPrice struct {
 // estimateSources are the sources whose latest price per edition is a
 // bound as is, and the source that bound names.
 var estimateSources = map[string]string{
-	SourceSkupSzop:      SourceSkupSzop,
-	SourceDiscogsLowest: SourceDiscogs,
-	SourceDiscogsVGPlus: SourceDiscogs,
-	SourceDiscogsMint:   SourceDiscogs,
+	SourceSkupSzop:        SourceSkupSzop,
+	SourceDiscogsLowest:   SourceDiscogs,
+	SourceDiscogsMint:     SourceDiscogs,
+	SourceDiscogsNearMint: SourceDiscogs,
+	SourceDiscogsVGPlus:   SourceDiscogs,
+	SourceDiscogsVG:       SourceDiscogs,
+	SourceDiscogsGood:     SourceDiscogs,
+	SourceDiscogsPoor:     SourceDiscogs,
 }
 
 // NewRanges sorts prices into floors and Discogs bounds per edition and
@@ -140,18 +183,21 @@ func NewRanges(prices []Price) Ranges {
 	r := Ranges{
 		floors:       map[int64]*Estimate{},
 		mids:         make(map[group]*Estimate, len(used)),
-		discogsMids:  map[int64]*Estimate{},
+		discogsMids:  map[int64]map[string]*Estimate{},
 		discogsCeils: map[int64]*Estimate{},
 	}
 	for k, p := range latest {
 		e := &Estimate{Cents: p.Cents, Source: estimateSources[k.source], Count: 1}
 		switch k.source {
-		case SourceDiscogsVGPlus:
-			r.discogsMids[k.editionID] = e
+		case SourceSkupSzop, SourceDiscogsLowest:
+			r.floors[k.editionID] = e
 		case SourceDiscogsMint:
 			r.discogsCeils[k.editionID] = e
 		default:
-			r.floors[k.editionID] = e
+			if r.discogsMids[k.editionID] == nil {
+				r.discogsMids[k.editionID] = map[string]*Estimate{}
+			}
+			r.discogsMids[k.editionID][k.source] = e
 		}
 	}
 	for g, v := range used {
@@ -160,14 +206,34 @@ func NewRanges(prices []Price) Ranges {
 	return r
 }
 
-// For is the range of one edition of titleID in format.
+// For is the range of one edition of titleID in format, for a copy
+// without a condition.
 func (r Ranges) For(editionID, titleID int64, format *string) Range {
+	out, _ := r.ForCopy(editionID, titleID, format, nil)
+	return out
+}
+
+// ForCopy is the range of a copy of one edition of titleID in format in
+// condition, with the grade of the Discogs suggestion its middle is, or ""
+// when the middle is none. The suggestion of the grade the condition maps
+// to is the middle; without a condition or a suggestion for its grade,
+// the Very Good Plus one is.
+func (r Ranges) ForCopy(editionID, titleID int64, format, condition *string) (Range, string) {
 	g := groupOf(titleID, format)
 	out := Range{Floor: r.floors[editionID], Mid: r.mids[g], Ceiling: r.discogsCeils[editionID]}
-	if e := r.discogsMids[editionID]; e != nil {
-		out.Mid = e
+	suggested := r.discogsMids[editionID]
+	grade := GradeVGPlus
+	if condition != nil {
+		if c, ok := conditionGrades[*condition]; ok && suggested[gradeSources[c]] != nil {
+			grade = c
+		}
 	}
-	return out
+	e := suggested[gradeSources[grade]]
+	if e == nil {
+		return out, ""
+	}
+	out.Mid = e
+	return out, grade
 }
 
 // Market is the used price of one title in one format: the middle a copy
@@ -255,7 +321,12 @@ type CopyValue struct {
 	Floor            *Estimate `json:"floor"`
 	Mid              *Estimate `json:"mid"`
 	Ceiling          *Estimate `json:"ceiling"`
-	LowConfidence    bool      `json:"low_confidence"`
+	// MidGrade is the grade of the Discogs suggestion the middle is;
+	// absent when the middle is no suggestion.
+	MidGrade      string `json:"mid_grade,omitempty" ts:"DiscogsGrade"`
+	LowConfidence bool   `json:"low_confidence"`
+	// Condition is the copy's condition, which picks its Discogs grade.
+	Condition *string `json:"-"`
 }
 
 // Bound is one bound summed over the collection: the total of the copies
@@ -290,12 +361,13 @@ type Summary struct {
 	Gain Gain `json:"gain"`
 }
 
-// Value fills each copy's range from ranges.
+// Value fills each copy's range from ranges, at the copy's condition.
 func Value(copies []CopyValue, ranges Ranges) {
 	for i := range copies {
 		c := &copies[i]
-		r := ranges.For(c.EditionID, c.TitleID, c.Format)
+		r, grade := ranges.ForCopy(c.EditionID, c.TitleID, c.Format, c.Condition)
 		c.Floor, c.Mid, c.Ceiling = r.Floor, r.Mid, r.Ceiling
+		c.MidGrade = grade
 		c.LowConfidence = r.LowConfidence()
 	}
 }

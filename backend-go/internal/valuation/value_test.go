@@ -2,8 +2,11 @@ package valuation
 
 import (
 	"reflect"
+	"slices"
 	"testing"
 	"time"
+
+	"github.com/Automaat/ohara/backend-go/internal/collection"
 )
 
 func TestTrimmedMedian(t *testing.T) {
@@ -273,5 +276,28 @@ func TestIsISBN(t *testing.T) {
 		if got := isISBN(tt.in); got != tt.want {
 			t.Errorf("isISBN(%v) = %v, want %v", tt.in, got, tt.want)
 		}
+	}
+}
+
+func TestConditionGradesNeverImprove(t *testing.T) {
+	// Conditions run from best to worst, as do the grades.
+	conditions := collection.Enums()["Condition"]
+	last := -1
+	for _, c := range conditions {
+		g, ok := conditionGrades[c]
+		if !ok {
+			t.Fatalf("condition %q maps to no grade", c)
+		}
+		i := slices.Index(Grades, g)
+		if i < 0 || gradeSources[g] == "" {
+			t.Fatalf("condition %q maps to unknown grade %q", c, g)
+		}
+		if i < last {
+			t.Fatalf("condition %q maps to %s, better than a better condition's", c, g)
+		}
+		last = i
+	}
+	if len(conditionGrades) != len(conditions) {
+		t.Fatalf("grades for %d conditions, want %d", len(conditionGrades), len(conditions))
 	}
 }

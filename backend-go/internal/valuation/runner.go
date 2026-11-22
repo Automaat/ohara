@@ -462,14 +462,16 @@ func (x *run) recordRelease(ctx context.Context, h *Holding, id int64, p Release
 	}
 	key := strconv.FormatInt(id, 10) + "/" + strconv.FormatInt(h.Want.EditionID, 10)
 	release := "https://www.discogs.com/release/" + strconv.FormatInt(id, 10)
-	prices := []struct {
+	type price struct {
 		source string
 		cents  *int64
 		url    string
-	}{
+	}
+	prices := []price{
 		{SourceDiscogsLowest, p.LowestCents, "https://www.discogs.com/sell/release/" + strconv.FormatInt(id, 10)},
-		{SourceDiscogsVGPlus, p.VGPlusCents, release},
-		{SourceDiscogsMint, p.MintCents, release},
+	}
+	for _, s := range p.suggested() {
+		prices = append(prices, price{s.source, *s.cents, release})
 	}
 	recorded := false
 	for _, pr := range prices {

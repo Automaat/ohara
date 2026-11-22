@@ -23,6 +23,7 @@ import (
 
 	"github.com/Automaat/ohara/backend-go/internal/dbtest"
 	"github.com/Automaat/ohara/backend-go/internal/deals"
+	"github.com/Automaat/ohara/backend-go/internal/discogs"
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
 	"github.com/Automaat/ohara/backend-go/internal/server"
 )
@@ -810,6 +811,113 @@ func TestValuedReadsOneSnapshot(t *testing.T) {
 	c = copies[0]
 	if c.DiscogsReleaseID == nil || *c.DiscogsReleaseID != 200 || c.Mid == nil || c.Mid.Cents != vgPlus {
 		t.Fatalf("after the edit: release %v, mid %+v", c.DiscogsReleaseID, c.Mid)
+	}
+}
+
+// gradedMarket answers each release's stats and suggestions and counts the
+// requests per release.
+type gradedMarket struct {
+	suggestions map[int64]discogs.Suggestions
+	stats       map[int64]int
+	suggested   map[int64]int
+}
+
+func (m *gradedMarket) Stats(_ context.Context, id int64, _ string) (discogs.Stats, error) {
+	m.stats[id]++
+	return discogs.Stats{LowestPrice: &discogs.Money{Currency: "EUR", Value: 10}, NumForSale: 3}, nil
+}
+
+func (m *gradedMarket) PriceSuggestions(_ context.Context, id int64) (discogs.Suggestions, error) {
+	m.suggested[id]++
+	return m.suggestions[id], nil
+}
+
+func TestDiscogsMidFollowsCondition(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	exec(t, pool, `INSERT INTO title (id, kind, name, authors) OVERRIDING SYSTEM VALUE
+		VALUES (9, 'music', 'Kind of Blue', '{"Miles Davis"}')`)
+	exec(t, pool, `INSERT INTO edition (id, title_id, format, discogs_release_id) OVERRIDING SYSTEM VALUE
+		VALUES (90, 9, 'vinyl', 500), (91, 9, 'cd', 600)`)
+	exec(t, pool, `INSERT INTO copy (id, edition_id, status, condition) OVERRIDING SYSTEM VALUE VALUES
+		(1, 90, 'owned', 'mint'), (2, 90, 'owned', 'fair'), (3, 90, 'owned', NULL),
+		(4, 90, 'owned', 'poor'), (5, 90, 'owned', 'very_good'), (6, 90, 'owned', 'good'),
+		(7, 91, 'owned', 'fair')`)
+	eur := func(v float64) discogs.Money { return discogs.Money{Currency: "EUR", Value: v} }
+	every := discogs.Suggestions{
+		"Mint (M)":             eur(40),
+		"Near Mint (NM or M-)": eur(30),
+		"Very Good Plus (VG+)": eur(20),
+		"Very Good (VG)":       eur(15),
+		"Good Plus (G+)":       eur(10),
+		"Good (G)":             eur(8),
+		"Fair (F)":             eur(5),
+		"Poor (P)":             eur(3),
+	}
+	noGood := discogs.Suggestions{
+		"Mint (M)":             eur(50),
+		"Very Good Plus (VG+)": eur(25),
+		"Fair (F)":             eur(6),
+	}
+	market := &gradedMarket{
+		suggestions: map[int64]discogs.Suggestions{500: every, 600: noGood},
+		stats:       map[int64]int{},
+		suggested:   map[int64]int{},
+	}
+	pricer := Discogs{Market: market, Rates: fixedRates{"EUR": 4}, Suggestions: true}
+	r := NewRunner(NewStore(pool), nil, nil, pricer, Config{Window: 90 * 24 * time.Hour}, slog.New(slog.DiscardHandler))
+	r.sleep = func(ctx context.Context, _ time.Duration) error { return ctx.Err() }
+	ctx := context.Background()
+	if _, err := r.Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	for _, id := range []int64{500, 600} {
+		if market.suggested[id] != 1 || market.stats[id] != 1 {
+			t.Fatalf("release %d asked for suggestions %d times and stats %d times, want once each",
+				id, market.suggested[id], market.stats[id])
+		}
+	}
+	copies, _, err := r.store.Valued(ctx, r.Window())
+	if err != nil {
+		t.Fatalf("Valued: %v", err)
+	}
+	type value struct {
+		mid   int64
+		grade string
+		ceil  int64
+	}
+	want := map[int64]value{
+		1: {12000, GradeNearMint, 16000},
+		2: {3200, GradeGood, 16000},
+		3: {8000, GradeVGPlus, 16000},
+		4: {1200, GradePoor, 16000},
+		5: {8000, GradeVGPlus, 16000},
+		6: {6000, GradeVG, 16000},
+		7: {10000, GradeVGPlus, 20000},
+	}
+	if len(copies) != len(want) {
+		t.Fatalf("valued %d copies, want %d", len(copies), len(want))
+	}
+	for _, c := range copies {
+		w := want[c.CopyID]
+		if c.Mid == nil || c.Mid.Cents != w.mid || c.Mid.Source != SourceDiscogs || c.MidGrade != w.grade {
+			t.Fatalf("copy %d mid = %+v grade %q, want %d at %s", c.CopyID, c.Mid, c.MidGrade, w.mid, w.grade)
+		}
+		if c.Ceiling == nil || c.Ceiling.Cents != w.ceil || c.Floor == nil || c.Floor.Cents != 4000 {
+			t.Fatalf("copy %d floor %+v ceiling %+v, want the cheapest copy for sale and Mint %d",
+				c.CopyID, c.Floor, c.Ceiling, w.ceil)
+		}
+		if c.LowConfidence {
+			t.Fatalf("copy %d priced on Discogs is low confidence", c.CopyID)
+		}
+	}
+	titleCopies, err := r.store.TitleValued(ctx, r.Window(), 9)
+	if err != nil {
+		t.Fatalf("TitleValued: %v", err)
+	}
+	for _, c := range titleCopies {
+		if w := want[c.CopyID]; c.Mid == nil || c.Mid.Cents != w.mid || c.MidGrade != w.grade {
+			t.Fatalf("title page copy %d mid = %+v grade %q, want %d at %s", c.CopyID, c.Mid, c.MidGrade, w.mid, w.grade)
+		}
 	}
 }
 

@@ -178,7 +178,7 @@ func copies(ctx context.Context, q querier, titleID int64) ([]CopyValue, error) 
 		byTitle = ` AND t.id = $1`
 	}
 	rows, err := q.Query(ctx, `SELECT c.id, e.id, t.id, t.name, t.kind, e.format, e.barcode,
-			c.price_cents, `+collection.CoverURL+`, e.discogs_release_id
+			c.price_cents, `+collection.CoverURL+`, e.discogs_release_id, c.condition
 		FROM copy c JOIN edition e ON e.id = c.edition_id JOIN title t ON t.id = e.title_id
 		WHERE c.status = 'owned'`+byTitle+`
 		ORDER BY lower(t.name), c.id`, args...)
@@ -188,7 +188,7 @@ func copies(ctx context.Context, q querier, titleID int64) ([]CopyValue, error) 
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (CopyValue, error) {
 		var c CopyValue
 		err := row.Scan(&c.CopyID, &c.EditionID, &c.TitleID, &c.TitleName, &c.Kind, &c.Format,
-			&c.Barcode, &c.PriceCents, &c.CoverURL, &c.DiscogsReleaseID)
+			&c.Barcode, &c.PriceCents, &c.CoverURL, &c.DiscogsReleaseID, &c.Condition)
 		return c, err
 	})
 }

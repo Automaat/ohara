@@ -82,6 +82,15 @@ describe('estimates', () => {
 		expect(estimateSource('ceiling', e)).toBe('Discogs · sugestia Mint');
 	});
 
+	it('names the grade of the condition behind a Discogs used value', () => {
+		const e = { cents: 3200, source: 'discogs' as const, count: 1, trimmed: 0 };
+		expect(estimateSource('mid', e, 'NM')).toBe('Discogs · sugestia NM');
+		expect(estimateSource('mid', e, 'G')).toBe('Discogs · sugestia G');
+		expect(estimateSource('mid', e, undefined)).toBe('Discogs · sugestia VG+');
+		expect(estimateSource('ceiling', e, 'G')).toBe('Discogs · sugestia Mint');
+		expect(estimateSource('mid', { ...e, source: 'olx', count: 3 }, 'G')).toBe('OLX · 3 oferty');
+	});
+
 	it('says when the buy-back shop does not buy the book', () => {
 		expect(estimateSource('floor', { cents: 0, source: 'skupszop', count: 1, trimmed: 0 })).toBe(
 			'SkupSzop nie skupuje'
@@ -578,6 +587,8 @@ describe('copy rows', () => {
 		);
 		expect(copyNote(copy({ mid: est(7900, 2) }))).toBe('OLX · 2 oferty');
 		expect(copyNote(copy({}))).toBe('brak danych');
+		const discogs = { cents: 3200, source: 'discogs' as const, count: 1, trimmed: 0 };
+		expect(copyNote(copy({ mid: discogs, mid_grade: 'P' }))).toBe('Discogs · sugestia P');
 	});
 
 	it('marks a missing ceiling under every valued copy without one', () => {

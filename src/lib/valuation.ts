@@ -66,6 +66,9 @@ export type ValuationView = {
 	last_valuation: string | null;
 };
 
+/** The GET /api/valuation/copies?title_id= body: one title's owned copies, valued. */
+export type TitleValues = { copies: CopyValue[] };
+
 export const boundKeys: BoundKey[] = ['floor', 'mid', 'ceiling'];
 
 export const boundLabels: Record<BoundKey, string> = {

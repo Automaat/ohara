@@ -55,7 +55,7 @@
 		type Hero
 	} from '#lib/title-detail.js';
 	import { newRequestKey } from '#lib/scan.js';
-	import type { CopyValue, ValuationView } from '#lib/valuation.js';
+	import type { CopyValue, TitleValues } from '#lib/valuation.js';
 
 	/**
 	 * The copy sheet edits a copy or adds one to an edition. An add keeps one request key for every
@@ -170,8 +170,12 @@
 			return;
 		}
 		try {
-			const view = await request<ValuationView>(fetch, 'GET', '/api/valuation');
-			if (current === loads) values = view.copies.filter((v) => v.title_id === t.id);
+			const answer = await request<TitleValues>(
+				fetch,
+				'GET',
+				`/api/valuation/copies?title_id=${t.id}`
+			);
+			if (current === loads) values = answer.copies;
 		} catch {
 			if (current === loads) values = [];
 		}

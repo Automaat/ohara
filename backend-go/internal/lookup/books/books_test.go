@@ -536,6 +536,9 @@ func TestBNSeriesFromAuthorSeries(t *testing.T) {
 		{"plain volume", []string{`{"800":{"ind1":"1","ind2":" ","subfields":[{"a":"Sapkowski, Andrzej"},{"t":"Wiedźmin ;"},{"v":"1"}]}}`}, "Wiedźmin", new(1)},
 		{"volume with prefix", []string{`{"800":{"ind1":"1","ind2":" ","subfields":[{"t":"Wiedźmin"},{"v":"t. 2"}]}}`}, "Wiedźmin", new(2)},
 		{"volume with suffix", []string{`{"800":{"ind1":"1","ind2":" ","subfields":[{"t":"Wiedźmin"},{"v":"2a"}]}}`}, "Wiedźmin", new(2)},
+		{"volume in other digits", []string{`{"800":{"ind1":"1","ind2":" ","subfields":[{"t":"Wiedźmin"},{"v":"t. ٢ / 4"}]}}`}, "Wiedźmin", new(2)},
+		{"volume in merged digit blocks", []string{`{"800":{"ind1":"1","ind2":" ","subfields":[{"t":"Wiedźmin"},{"v":"tom 𝟙𝟚"}]}}`}, "Wiedźmin", new(12)},
+		{"volume past the collection's numbers", []string{`{"800":{"ind1":"1","ind2":" ","subfields":[{"t":"Wiedźmin"},{"v":"99999999999999999999999"}]}}`}, "Wiedźmin", nil},
 		{"volume without digits", []string{`{"800":{"ind1":"1","ind2":" ","subfields":[{"t":"Wiedźmin"},{"v":"t. pierwszy"}]}}`}, "Wiedźmin", nil},
 		{"first author series wins", []string{
 			`{"800":{"ind1":"1","ind2":" ","subfields":[{"a":"Sapkowski, Andrzej"}]}}`,

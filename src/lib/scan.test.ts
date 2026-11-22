@@ -970,6 +970,59 @@ describe('saveScan', () => {
 		expect(s.calls.at(-1)?.body).toMatchObject({ edition_id: 7 });
 	});
 
+	describe('a series number another title holds', () => {
+		const code = '9788375780635';
+		const volume: Candidate = {
+			...book,
+			title: { name: 'Ostatnie życzenie', series_name: 'Wiedźmin', series_number: 1 },
+			edition: { barcode: code }
+		};
+		const bookForm = () =>
+			form({ kind: 'book', name: 'Ostatnie życzenie', format: '', binding: '' });
+		const bookTitle = { id: 9, name: 'Ostatnie życzenie', kind: 'book' };
+		const taken: [number, unknown] = [409, { error: 'taken', field: 'series_number' }];
+
+		it('saves a reprint in the series without the number', async () => {
+			const s = server({
+				'POST /api/titles': [taken, [201, bookTitle]],
+				'POST /api/editions': [201, { ...edition, barcode: code }],
+				'POST /api/copies?cover=auto': [201, copy]
+			});
+			const got = await saveScan(
+				s.fetchFn,
+				{ kind: 'new', barcode: code, candidate: volume },
+				bookForm(),
+				'k1'
+			);
+			expect(got).toMatchObject({ titleID: 9, createdTitle: true, createdEdition: true });
+			const posts = s.calls.filter((c) => c.url === '/api/titles');
+			expect(posts.map((c) => c.body)).toMatchObject([
+				{ series_name: 'Wiedźmin', series_number: 1, request_key: 'k1' },
+				{ series_name: 'Wiedźmin', series_number: null, request_key: 'k1' }
+			]);
+		});
+
+		it('joins the edition another tab saved first', async () => {
+			const s = server({
+				'POST /api/titles': [taken, [201, bookTitle]],
+				'POST /api/editions': [409, { error: 'dup', field: 'barcode' }],
+				[`GET /api/editions?barcode=${code}`]: [200, [{ ...edition, id: 7, title_id: 4 }]],
+				'DELETE /api/titles/9': [204, null],
+				'GET /api/titles/4': [200, { id: 4, name: 'Ostatnie życzenie', kind: 'book' }],
+				'POST /api/copies?cover=auto': [201, copy]
+			});
+			const got = await saveScan(
+				s.fetchFn,
+				{ kind: 'new', barcode: code, candidate: volume },
+				bookForm(),
+				'k1'
+			);
+			expect(got).toMatchObject({ titleID: 4, editionID: 7, createdTitle: false });
+			expect(s.paths()).toContain('DELETE /api/titles/9');
+			expect(s.calls.at(-1)?.body).toMatchObject({ edition_id: 7 });
+		});
+	});
+
 	it('counts the edition an attempt whose answer was lost created', async () => {
 		const made = newMade();
 		const s = server({

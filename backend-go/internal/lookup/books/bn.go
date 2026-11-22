@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/Automaat/ohara/backend-go/internal/barcode"
 	"github.com/Automaat/ohara/backend-go/internal/lookup"
@@ -225,16 +225,44 @@ func bnCandidate(code, isbn10 string, bib bnBib) (lookup.Candidate, bool) {
 	}, true
 }
 
-var wholeNumberRe = regexp.MustCompile(`\d+`)
+// maxVolume bounds the digits volumeNumber reads; the collection takes
+// numbers up to 10000, so a longer run is no volume.
+const maxVolume = 1 << 20
 
 // volumeNumber reads the first whole number in an 800 $v ("1", "t. 2",
-// "2a"); one without digits gives none.
+// "2a"), in the decimal digits of any script; one without digits gives
+// none.
 func volumeNumber(v string) *int {
-	n, err := strconv.Atoi(wholeNumberRe.FindString(v))
-	if err != nil {
+	n, seen := 0, false
+	for _, r := range v {
+		d, ok := decimalDigit(r)
+		switch {
+		case ok && n > maxVolume:
+			return nil
+		case ok:
+			n, seen = n*10+d, true
+		case seen:
+			return &n
+		}
+	}
+	if !seen {
 		return nil
 	}
 	return &n
+}
+
+// decimalDigit is the value of a decimal digit (Unicode Nd). Every script
+// has its digits as runs of whole zero-to-nine blocks, so the offset from
+// the start of the run gives the value.
+func decimalDigit(r rune) (int, bool) {
+	if !unicode.Is(unicode.Nd, r) {
+		return 0, false
+	}
+	start := r
+	for unicode.Is(unicode.Nd, start-1) {
+		start--
+	}
+	return int(r-start) % 10, true
 }
 
 // matchISBN finds the 020 field whose $a is this book's ISBN. A $z is a

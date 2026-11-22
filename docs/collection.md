@@ -82,7 +82,10 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   in one snapshot. Lookup candidates' `title` carries the same optional
   `series_name` and `series_number` (BN fills them, see
   [lookup](lookup.md)), which the scanner's add forwards when the API would
-  take them, so a scanned book joins or creates its series; a lookup only
+  take them, so a scanned book joins or creates its series. When another
+  title of the series holds the number (a reprint under a new ISBN, or the
+  same book saved at once from two tabs), the add saves the title in the
+  series without one instead of failing on 409; a lookup only
   creates titles and never changes an existing title's series; the title form sends
   the two fields only when the reader changed them, so a form opened
   before another save gave the title its series keeps it. Kolekcja's

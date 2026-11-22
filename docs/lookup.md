@@ -77,7 +77,8 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   shelf, the edition summary and Kolekcja's "Nośnik" filter name it.
 - BN fills a book's `series_name` from the first MARC 800 `$t` (an
   author's series) and `series_number` from the first whole number in its
-  `$v` ("t. 2" and "2a" give 2; no digits give none). 490 and 830, where
+  `$v` ("t. 2" and "2a" give 2, in any script's decimal digits; no digits
+  give none). 490 and 830, where
   BN puts publishers' lines, are ignored. A merged candidate takes the
   name and number together from the first provider that names a series,
   so BN's wins. `Parse` reads the series from cached answers too, so

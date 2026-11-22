@@ -23,6 +23,7 @@ import (
 	"github.com/Automaat/ohara/backend-go/internal/db"
 	"github.com/Automaat/ohara/backend-go/internal/deals"
 	"github.com/Automaat/ohara/backend-go/internal/discogs"
+	"github.com/Automaat/ohara/backend-go/internal/export"
 	"github.com/Automaat/ohara/backend-go/internal/lookup"
 	"github.com/Automaat/ohara/backend-go/internal/lookup/books"
 	"github.com/Automaat/ohara/backend-go/internal/lookup/movie"
@@ -126,13 +127,15 @@ func run() int {
 	queue := scanqueue.NewStore(pool)
 	metrics.RegisterScanQueueCollector(queue.Count)
 	searchers := titleSearchers()
+	collectionStore := collection.NewStore(pool)
 	deps.API = []server.Mounter{
-		collection.NewHandler(collection.NewStore(pool), logger).WithCatalogCovers(searchers, lookupService),
+		collection.NewHandler(collectionStore, logger).WithCatalogCovers(searchers, lookupService),
 		lookup.NewHandler(lookupService, logger),
 		&lookup.SearchHandler{Searchers: searchers, Logger: logger},
 		scanqueue.NewHandler(queue, logger),
 		deals.NewHandler(dealStore, hunter, logger),
 		valuation.NewHandler(valueStore, valuer, logger),
+		export.NewHandler(collectionStore, valueStore, valuer.Window(), logger),
 	}
 	if dir := os.Getenv("OHARA_WEB_DIR"); dir != "" {
 		webFS := os.DirFS(dir)

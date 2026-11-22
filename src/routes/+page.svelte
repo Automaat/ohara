@@ -20,6 +20,7 @@
 	import { page } from '$app/state';
 	import { CollectionLoad } from '#lib/collection-load.svelte.js';
 	import SettingsSheet from '#lib/components/SettingsSheet.svelte';
+	import ExportMenu from '#lib/components/ExportMenu.svelte';
 	import {
 		collectionSearch,
 		collectionStatusLabels,
@@ -329,6 +330,7 @@
 			{#if !emptyShelf}
 				<Button tone="signal" href="/titles/new">Dodaj tytuł</Button>
 			{/if}
+			<ExportMenu toolbar />
 			<SettingsSheet />
 		{/snippet}
 	</PageHeader>
@@ -339,6 +341,7 @@
 			{#if !emptyShelf}
 				<Button href="/titles/new">Dodaj tytuł</Button>
 			{/if}
+			<ExportMenu />
 			<SettingsSheet />
 		</div>
 		<p class="summary">

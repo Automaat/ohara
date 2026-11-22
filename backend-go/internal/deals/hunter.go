@@ -62,6 +62,7 @@ type RunResult struct {
 	Sent     int      `json:"sent"`
 	Errors   []string `json:"errors"`
 	Failure  string   `json:"failure,omitempty"`
+	coverage *runCoverage
 }
 
 // Status is the hunter state the deals view shows.
@@ -283,6 +284,10 @@ type run struct {
 	// feeds sums the answers of the feed sources that share a name (one
 	// Discogs seller each), by name.
 	feeds map[string]feedTally
+
+	queryWants      map[string][]*Want
+	coverageRows    map[coverageKey]*wishCoverage
+	coverageMatches map[coverageMatch]struct{}
 }
 
 // feedTally is what the feed sources of one name answered in a run: how
@@ -327,6 +332,7 @@ func (h *Hunter) Run(ctx context.Context) (RunResult, error) {
 	r := &run{
 		h: h, wants: wants, rules: rules, titles: titles, asOf: asOf, first: true, tried: map[int64]bool{},
 		missed: map[string]Listing{}, feeds: map[string]feedTally{},
+		coverageRows: map[coverageKey]*wishCoverage{}, coverageMatches: map[coverageMatch]struct{}{},
 	}
 	for i := range wants {
 		wants[i].Prepare()
@@ -334,11 +340,10 @@ func (h *Hunter) Run(ctx context.Context) (RunResult, error) {
 	}
 	r.res.Wants = len(wants)
 	r.res.Errors = []string{}
-	var queries []string
-	if len(wants) > 0 {
-		queries = searchQueries(wants)
-		r.res.Queries = len(queries)
-	}
+	r.res.coverage = &runCoverage{Rows: []*wishCoverage{}}
+	queries, queryWants := planQueries(wants)
+	r.queryWants = queryWants
+	r.res.Queries = len(queries)
 	if len(wants) > 0 || h.cfg.CanaryQuery != "" {
 		for _, src := range h.sources {
 			if err := r.search(ctx, src, r.queriesFor(src, queries)); err != nil {
@@ -381,18 +386,27 @@ func (r *run) queriesFor(src Source, all []string) []string {
 
 // searchQueries are the distinct queries of every want, in want order.
 func searchQueries(wants []Want) []string {
+	queries, _ := planQueries(wants)
+	return queries
+}
+
+func planQueries(wants []Want) ([]string, map[string][]*Want) {
 	var out []string
-	seen := map[string]bool{}
+	owners := map[string][]*Want{}
 	for i := range wants {
-		for _, q := range wants[i].Queries() {
+		w := &wants[i]
+		for _, q := range w.Queries() {
 			key := spelledKey(q)
-			if !seen[key] {
-				seen[key] = true
+			previous := owners[key]
+			if len(previous) == 0 {
 				out = append(out, q)
+			}
+			if len(previous) == 0 || previous[len(previous)-1] != w {
+				owners[key] = append(previous, w)
 			}
 		}
 	}
-	return out
+	return out, owners
 }
 
 func (r *run) pause(ctx context.Context) error {
@@ -426,10 +440,12 @@ func (r *run) search(ctx context.Context, src Source, queries []string) error {
 func (r *run) searchAll(ctx context.Context, src Source, f *Refused, queries []string) error {
 	canary := canaryQuery(src, r.h.cfg.CanaryQuery)
 	if !src.PerQuery() {
-		listings, ok, err := r.ask(ctx, src, f, "")
+		listings, outcome, err := r.ask(ctx, src, f, "")
 		if err != nil {
 			return err
 		}
+		targets := r.queryCoverage(src.Name(), "", true, outcome, len(listings))
+		ok := outcome == querySucceeded
 		t := r.feeds[src.Name()]
 		t.listings += len(listings)
 		t.ok = t.ok || ok && len(listings) > 0
@@ -440,42 +456,43 @@ func (r *run) searchAll(ctx context.Context, src Source, f *Refused, queries []s
 		}
 		metrics.SetSourceResults(src.Name(), t.listings)
 		if ok && len(r.wants) > 0 {
-			return r.record(ctx, listings)
+			return r.record(ctx, src.Name(), listings, targets)
 		}
 		return nil
 	}
 	results := 0
 	var answered []Listing
-	answeredOK := false
+	var answeredOutcome queryOutcome
 	if canary != "" {
-		listings, ok, err := r.ask(ctx, src, f, canary)
+		listings, outcome, err := r.ask(ctx, src, f, canary)
 		if err != nil {
 			return err
 		}
-		r.canary(src, canary, ok, len(listings))
+		r.canary(src, canary, outcome == querySucceeded, len(listings))
 		results += len(listings)
-		answered, answeredOK = listings, ok
-		if ok && len(r.wants) > 0 && !slices.Contains(queries, canary) {
+		answered, answeredOutcome = listings, outcome
+		if outcome == querySucceeded && len(r.wants) > 0 && !slices.Contains(queries, canary) {
 			if err := r.contradict(ctx, r.unmatchedOf(listings), nil); err != nil {
 				return err
 			}
 		}
 	}
 	for _, q := range queries {
-		listings, ok := answered, answeredOK
+		listings, outcome := answered, answeredOutcome
 		if canary == "" || q != canary {
 			var err error
-			if listings, ok, err = r.ask(ctx, src, f, q); err != nil {
+			if listings, outcome, err = r.ask(ctx, src, f, q); err != nil {
 				return err
 			}
-			if ok {
+			if outcome == querySucceeded {
 				results += len(listings)
 			}
 		}
-		if !ok {
+		targets := r.queryCoverage(src.Name(), q, false, outcome, len(listings))
+		if outcome != querySucceeded {
 			continue
 		}
-		if err := r.record(ctx, listings); err != nil {
+		if err := r.record(ctx, src.Name(), listings, targets); err != nil {
 			return err
 		}
 	}
@@ -484,8 +501,8 @@ func (r *run) searchAll(ctx context.Context, src Source, f *Refused, queries []s
 }
 
 // ask sends one request to the source after the pause and counts its
-// outcome. A source failure is logged and kept in the result with ok
-// false; a refusal is kept once, when the source is done. A source that
+// outcome. A source failure is logged and kept in the result; a refusal
+// is kept once, when the source is done. A source that
 // refused is not asked again: the query is skipped without a pause. Every
 // offer a successful answer holds, priced or not, matching or not, is
 // recorded as offered (Store.MarkOffered) before ask returns; for an
@@ -494,36 +511,37 @@ func (r *run) searchAll(ctx context.Context, src Source, f *Refused, queries []s
 // contradicts the stored price of its listing, whose unsent alert leaves
 // its wish (Store.Unmatch). err is the run's cancellation or a database
 // failure.
-func (r *run) ask(ctx context.Context, src Source, f *Refused, query string) ([]Listing, bool, error) {
+func (r *run) ask(ctx context.Context, src Source, f *Refused, query string) ([]Listing, queryOutcome, error) {
 	if f.Skip() {
-		return nil, false, ctx.Err()
+		return nil, querySkipped, ctx.Err()
 	}
 	if err := r.pause(ctx); err != nil {
-		return nil, false, err
+		return nil, queryFailed, err
 	}
 	page, err := searchPage(ctx, src, query)
 	if err != nil && ctx.Err() != nil {
-		return nil, false, ctx.Err()
+		return nil, queryFailed, ctx.Err()
 	}
 	ObserveSearch(src, err)
 	if err != nil {
 		r.h.logger.Warn("deal source failed", "source", src.Name(), "query", query, "err", err)
-		if !f.Note(err) {
-			r.fail(err.Error())
+		if f.Note(err) {
+			return nil, queryRefused, nil
 		}
-		return nil, false, nil
+		r.fail(err.Error())
+		return nil, queryFailed, nil
 	}
 	if e, ok := src.(Expiring); ok {
 		if _, err := r.h.store.UpdateGone(ctx, src.Name(), []string{QueryKey(e.Scope())}, page.Seen, r.asOf); err != nil {
-			return nil, false, err
+			return nil, queryFailed, err
 		}
 	} else if err := r.h.store.MarkOffered(ctx, src.Name(), page.Seen); err != nil {
-		return nil, false, err
+		return nil, queryFailed, err
 	}
 	if err := r.contradict(ctx, map[string][]string{src.Name(): unpriced(page)}, nil); err != nil {
-		return nil, false, err
+		return nil, queryFailed, err
 	}
-	return page.Listings, true, nil
+	return page.Listings, querySucceeded, nil
 }
 
 // unpriced are the external IDs page.Seen names that none of its listings
@@ -588,13 +606,16 @@ func (r *run) fail(msg string) {
 // keeps its price, but its unsent alert leaves its wish (contradict): the
 // answer contradicts the listing the alert was queued for. So does an
 // answer that holds one listing both under a matching title and not.
-func (r *run) record(ctx context.Context, listings []Listing) error {
+func (r *run) record(ctx context.Context, source string, listings []Listing, targets []coverageTarget) error {
 	r.res.Listings += len(listings)
 	refreshed := map[string]bool{}
 	unmatched := map[string][]string{}
 	for i := range listings {
 		l := &listings[i]
-		w := pickOf(r.wants, r.kinds[l.Source], l, r.rules, r.titles)
+		text := NewListingText(l.Title, r.rules)
+		text.medium = l.Medium
+		w := pickListing(r.wants, r.kinds[l.Source], l, text, r.titles)
+		r.coverListing(source, targets, l, text, w)
 		if w == nil {
 			if l.ExternalID != "" {
 				unmatched[l.Source] = append(unmatched[l.Source], l.ExternalID)

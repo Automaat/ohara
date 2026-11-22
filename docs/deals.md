@@ -149,7 +149,8 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   itself, so a run on its own keeps its pacing.
   Every run also asks each query source the canary query, wishlist or not,
   and sets `ohara_source_canary_ok` (a feed's one request is its canary)
-  and `ohara_source_results`. A canary without listings is a broken source.
+  and `ohara_source_results`. A wishlist query that is exactly the canary
+  query takes the canary's answer, so the source is asked it once. A canary without listings is a broken source.
   The last run, scheduled, manual or cut short by shutdown, is kept in
   `deal_run`: after a restart the status shows it and the first scheduled
   run comes one interval after it started, at least 5 minutes on.
@@ -159,14 +160,18 @@ Moved from `CLAUDE.md`, whose conventions still apply.
 - `deals.Tezeusz` searches the Tezeusz used-book shop (`tezeusz.pl`) as a
   query source: one `GET /szukaj?szukaj=<query>&tylko_dostepne=1` per
   query, in stock only, in the site's relevance order (sorting by price
-  put unrelated books first), and no product page. Each product card of
+  put unrelated books first), and no product page. As a bookshop
+  (`deals.KindSource`, kinds `book`) it is asked only the queries of book
+  wishes, and its cards match only book wishes, so "Born to Run - Bruce
+  Springsteen" never alerts for the album. Each product card of
   the results page is one listing: `data-ga-product-id` as its ID, the
   card title with its author ("Ostatnie życzenie - Andrzej Sapkowski"),
   the card link made absolute, its cover and the card's lowest price
   ("od 27,12 zł do 89,65 zł" is 27,12 zł; a one-copy card's struck-out
   30-day lowest is not its price). A card is a book with any number of
-  copies, so a listing names no condition. A results page without cards
-  has no listings; a page without the results column (a Cloudflare
+  copies, so a listing names no condition. Only cards inside the results
+  column (`#search-products-results-list`) count, not recommendations
+  elsewhere on the page. A results page without cards has no listings; a page without the results column (a Cloudflare
   challenge, an error page) is a `parse_error`.
 - It shares the canary query (`dvd` finds books sold with a film) and the
   refusal rule of the other sources. `OHARA_TEZEUSZ=false` leaves it out

@@ -820,6 +820,31 @@ func TestCanaryRunsBesideWishlistQueries(t *testing.T) {
 	}
 }
 
+func TestCanaryAnswersTheSameWishlistQuery(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	book := wiedzmin()
+	wishlist(t, pool, &book)
+	book.Prepare()
+	queries := book.Queries()
+	if len(queries) == 0 {
+		t.Fatal("the book wish has no query")
+	}
+	query := queries[0]
+	src := &fakeSource{name: "olx", perQuery: true, listings: []Listing{
+		{Source: "olx", ExternalID: "w1", Title: "Ostatnie życzenie Sapkowski", URL: "https://www.olx.pl/d/oferta/w1", PriceCents: 2000},
+	}}
+	h := NewHunter(NewStore(pool), []Source{src}, nil, Config{CanaryQuery: query}, slog.New(slog.DiscardHandler))
+	h.sleep = func(ctx context.Context, _ time.Duration) error { return ctx.Err() }
+
+	res := mustRun(t, h)
+	if !slices.Equal(src.queries, []string{query}) {
+		t.Fatalf("asked %q, want %q once for the canary and the wish", src.queries, query)
+	}
+	if res.Matched != 1 || res.New != 1 {
+		t.Fatalf("run = %+v, want the canary's answer recorded for the wish", res)
+	}
+}
+
 func TestSourceStatusCountsBlocking(t *testing.T) {
 	pool := dbtest.Migrated(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

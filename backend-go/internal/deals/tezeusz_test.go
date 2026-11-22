@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -81,6 +82,14 @@ func TestParseTezeuszOtherPages(t *testing.T) {
 	listings, err := parseTezeusz([]byte(noResults), TezeuszURL)
 	if err != nil || len(listings) != 0 {
 		t.Fatalf("no results = %d listings, %v; want none and no error", len(listings), err)
+	}
+	recommended := noResults + `<section class="recommended"><div class="tezeusz-product-spacer">
+		<a class='tezeusz-product-card js-ga-select-item' data-ga-product-id="42" href='polecana-42'>
+			<h5 class='tezeusz-product-card-title'>Polecana książka</h5>
+			<div class='tezeusz-product-card-price'>12,00 zł</div>
+		</a></div></section>`
+	if listings, err := parseTezeusz([]byte(recommended), TezeuszURL); err != nil || len(listings) != 0 {
+		t.Fatalf("no results beside a recommended card = %+v, %v; want no listings", listings, err)
 	}
 	const unpriced = `<div id='search-products-results-list'>
 		<a class='tezeusz-product-card js-ga-select-item' data-ga-product-id="1" href='bez-ceny-1'>
@@ -183,5 +192,46 @@ func TestRunAlertsOnTezeuszListing(t *testing.T) {
 	}
 	if res := mustRun(t, h); res.New != 0 || res.Sent != 0 {
 		t.Fatalf("repeat run = %+v, want nothing new", res)
+	}
+}
+
+// TestTezeuszServesBookWishesOnly checks that Tezeusz, a bookshop, is asked
+// only the queries of book wishes and that a book named like a wished album
+// never matches that album.
+func TestTezeuszServesBookWishesOnly(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	book := Want{Kind: "book", Name: "Lalka", Authors: []string{"Bolesław Prus"}, MaxPriceCents: new(int64(5000))}
+	wishlist(t, pool, &book)
+	cd := album("Born to Run", "Bruce Springsteen", "cd")
+	cd.MaxPriceCents = new(int64(25000))
+	wishlist(t, pool, &cd)
+	const page = `<div id="search-products-results-list">
+		<a class='tezeusz-product-card js-ga-select-item' data-ga-product-id="7" href='born-to-run-7'>
+			<h5 class='tezeusz-product-card-title'>Born to Run <span> - Bruce Springsteen</span></h5>
+			<div class='tezeusz-product-card-price'>30,00 zł</div>
+		</a></div>`
+	var mu sync.Mutex
+	var asked []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		asked = append(asked, r.URL.Query().Get("szukaj"))
+		mu.Unlock()
+		_, _ = w.Write([]byte(page))
+	}))
+	t.Cleanup(srv.Close)
+	notifier := &fakeNotifier{}
+	h := newTestHunter(pool, notifier, Tezeusz{Client: srv.Client(), BaseURL: srv.URL})
+
+	res := mustRun(t, h)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(asked) != 1 || !strings.Contains(asked[0], "Lalka") {
+		t.Fatalf("tezeusz asked %q, want the book wish's query only", asked)
+	}
+	if res.Matched != 0 || len(notifier.messages()) != 0 {
+		t.Fatalf("run = %+v, messages %q; want the album wish left alone", res, notifier.messages())
+	}
+	if n := count(t, pool, `SELECT count(*) FROM price_observation WHERE source = 'tezeusz'`); n != 0 {
+		t.Fatalf("stored %d tezeusz observations, want none", n)
 	}
 }

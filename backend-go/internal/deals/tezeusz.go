@@ -29,6 +29,9 @@ func (Tezeusz) Name() string { return "tezeusz" }
 // PerQuery implements Source.
 func (Tezeusz) PerQuery() bool { return true }
 
+// Kinds implements KindSource: Tezeusz sells books.
+func (Tezeusz) Kinds() []string { return []string{"book"} }
+
 // Search implements Source.
 func (t Tezeusz) Search(ctx context.Context, query string) ([]Listing, error) {
 	base := strings.TrimSuffix(t.BaseURL, "/")
@@ -50,6 +53,9 @@ func (t Tezeusz) Search(ctx context.Context, query string) ([]Listing, error) {
 // tezeuszResults is the results column every search page has, with cards
 // or with its "no results" note; a bot check or an error page lacks it.
 var tezeuszResults = regexp.MustCompile(`\bid=["']search-products-results-list["']`)
+
+// divTag is one opening or closing div tag.
+var divTag = regexp.MustCompile(`<(/?)div\b[^>]*>`)
 
 // tezeuszCard opens a product card: an anchor whose first class is
 // tezeusz-product-card, not its "Szczegóły" button.
@@ -101,8 +107,8 @@ type tezeuszRaw struct {
 // a page that is not a results page is a parse error. Cards without an ID,
 // a title, a link or a price are left out.
 func parseTezeusz(page []byte, base string) ([]Listing, error) {
-	text := string(page)
-	if !tezeuszResults.MatchString(text) {
+	text, ok := tezeuszColumn(string(page))
+	if !ok {
 		return nil, parseError{errors.New("tezeusz: not a search results page")}
 	}
 	root, err := url.Parse(base + "/")
@@ -130,6 +136,33 @@ func parseTezeusz(page []byte, base string) ([]Listing, error) {
 		out = append(out, l)
 	}
 	return out, nil
+}
+
+// tezeuszColumn is the inside of the page's results column, up to the div
+// that closes it or the end of the page, so cards the page shows elsewhere,
+// such as recommendations, are not results.
+func tezeuszColumn(page string) (string, bool) {
+	loc := tezeuszResults.FindStringIndex(page)
+	if loc == nil {
+		return "", false
+	}
+	end := strings.IndexByte(page[loc[1]:], '>')
+	if end < 0 {
+		return "", true
+	}
+	body := page[loc[1]+end+1:]
+	depth := 1
+	for _, tag := range divTag.FindAllStringSubmatchIndex(body, -1) {
+		if tag[3] > tag[2] {
+			depth--
+		} else {
+			depth++
+		}
+		if depth == 0 {
+			return body[:tag[0]], true
+		}
+	}
+	return body, true
 }
 
 // tezeuszListing reads one card from its anchor's attributes and its body,

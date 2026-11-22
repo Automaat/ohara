@@ -56,6 +56,15 @@ type Source interface {
 	Search(ctx context.Context, query string) ([]Listing, error)
 }
 
+// KindSource is a source that offers titles of some kinds only, such as a
+// bookshop: a run asks it only the queries of wishes of those kinds and
+// matches its listings only to those wishes, so a book named like a wished
+// album never alerts as that album.
+type KindSource interface {
+	Source
+	Kinds() []string
+}
+
 // Page is a Pager's answer to one query. Seen holds the external ID of
 // every offer in the answer, also those Listings leave out (no price).
 // Complete reports that the answer holds every offer the site has for the

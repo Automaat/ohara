@@ -474,6 +474,20 @@ export type TitleValues = {
 	copies: CopyValue[];
 };
 
+export type MarketPrice = {
+	title_id: number;
+	format: Format | null;
+	cents: number;
+	source: ValueSource;
+	count: number;
+	trimmed: number;
+};
+
+export type MarketView = {
+	window_days: number;
+	markets: MarketPrice[];
+};
+
 export type Status = {
 	status: ServiceState;
 	version: string;

@@ -175,7 +175,7 @@ func (r Ranges) For(editionID, titleID int64, format *string) Range {
 // title whose editions name none, such as a book.
 type Market struct {
 	TitleID int64   `json:"title_id"`
-	Format  *string `json:"format"`
+	Format  *string `json:"format" ts:"Format"`
 	Estimate
 }
 

@@ -7,6 +7,8 @@ import type {
 	Keyword,
 	KeywordKind,
 	KeywordPayload,
+	Format,
+	MarketPrice,
 	Observation
 } from '#lib/api.gen.js';
 
@@ -19,6 +21,8 @@ export type {
 	Keyword,
 	KeywordKind,
 	KeywordPayload,
+	MarketPrice,
+	MarketView,
 	Observation
 } from '#lib/api.gen.js';
 
@@ -72,25 +76,6 @@ function offers(count: number): string {
 export function underLimitLabel(count: number): string {
 	return `${offers(count)} pod limitem`;
 }
-
-/**
- * The used price of a title in one format: the median of OLX prices not marked new, seen within
- * the valuation window, outliers dropped, as the valuation prices an owned copy. A null format is
- * a title whose editions name none, such as a book.
- */
-export type MarketPrice = {
-	title_id: number;
-	format: Format | null;
-	cents: number;
-	source: string;
-	/** The listings the price rests on, outliers left out. */
-	count: number;
-	/** The outliers left out. */
-	trimmed: number;
-};
-
-/** GET /api/valuation/market: the used prices and the days of listings they come from. */
-export type MarketView = { window_days: number; markets: MarketPrice[] };
 
 /** Every wished title and format, or with a title every format of it. */
 export function marketPath(titleId?: number): string {

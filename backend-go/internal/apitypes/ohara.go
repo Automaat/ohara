@@ -82,6 +82,8 @@ func Ohara() API {
 			Of[valuation.Status]("RunnerStatus"),
 			Of[valuation.View]("ValuationView"),
 			Of[valuation.TitleCopies]("TitleValues"),
+			Of[valuation.Market]("MarketPrice"),
+			Of[valuation.MarketView]("MarketView"),
 
 			Of[server.Status]("Status"),
 			Of[httpx.Error]("ErrorBody"),

@@ -1,7 +1,9 @@
 # Scanner
 
 The scanner and the scan queue. Read before changing `/scan`, the scan
-sheet, pending scans, the scanner's visit or the queue.
+sheet, pending scans, the scanner's visit or the queue. Quick confirm and
+undo also follow the add request keys in [collection.md](collection.md) and
+`needs_confirmation` in [lookup.md](lookup.md).
 
 Moved from `CLAUDE.md`, whose conventions still apply.
 

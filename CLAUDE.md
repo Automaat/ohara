@@ -56,7 +56,8 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
 Detailed behavior lives in `docs/`; read a file before changing its area:
 
 - [collection](docs/collection.md): ordered copies, request keys, ratings,
-  loans, finished titles, tags, export, cover photos, Kolekcja, Statystyki.
+  loans, finished titles, tags, box sets, export, cover photos, Kolekcja,
+  Statystyki.
 - [lookup](docs/lookup.md): lookup providers, outside-source metrics and
   `fetch.Do` (deals and valuation too), Discogs, Allegro, title search.
 - [deals](docs/deals.md): the deal hunter, its matching, alerts and Telegram.

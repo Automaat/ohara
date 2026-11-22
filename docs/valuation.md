@@ -3,7 +3,8 @@
 The daily value of owned copies. Read before changing price ranges,
 likely-sold prices, Discogs pricing, retention, value history, market
 prices, Wartość or the insurance report. Matching, the store and the OLX
-source come from [deals.md](deals.md).
+source come from [deals.md](deals.md). The `DiscogsCredit` wording and link
+rules are in [lookup.md](lookup.md).
 
 Moved from `CLAUDE.md`, whose conventions still apply.
 

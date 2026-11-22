@@ -1,8 +1,8 @@
 # Collection
 
 Copies, titles and the Kolekcja pages. Read before changing ordered copies,
-add request keys, ratings, loans, the finished mark, tags, the export, cover
-photos, Kolekcja, "Dodaj tytuł" or Statystyki.
+add request keys, ratings, loans, the finished mark, tags, box sets, the
+export, cover photos, Kolekcja, "Dodaj tytuł" or Statystyki.
 
 Moved from `CLAUDE.md`, whose conventions still apply.
 
@@ -98,6 +98,21 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   title counts. `GET /api/collection?tag=` and `GET /api/titles?tag=`
   list what carries a tag, case aside; collection items carry their
   title's tags for the browser's filter.
+- A box set stays one title, edition and copy; its edition lists the
+  titles it holds (`edition_content`), of any kind:
+  `POST`/`PUT /api/editions` take `contents`, title IDs in their order
+  (repeats collapsed, at most 100; one that names no title, or the
+  edition's own, answers 422 on `contents`), and a `PUT` without them keeps
+  the stored list, `[]` clears it. Edition answers name them in
+  `contents`. A listed title cannot be deleted (409); deleting the edition
+  drops its list. `GET /api/titles/{id}` lists the box sets holding it in
+  `box_sets` (`owned` when the box set has an owned copy) and titles carry
+  `in_owned_box_set`, which Kolekcja's "Bez egzemplarzy" leaves out.
+  Collection items carry `contents`, so a search for a contained title's
+  name finds the box set's copy. Price, deals and valuation stay with the
+  box set's copy. The edition form's "Zawartość zestawu" picks existing
+  titles by name; the title page shows "W zestawie: <box set>", marked "na
+  półce" when owned.
 - `GET /api/export?format=csv|json` (any other `format` 422) downloads the
   whole collection as `ohara-YYYY-MM-DD.<format>` (the day in Poland),
   each owned copy with the floor, mid and ceiling `GET /api/valuation`

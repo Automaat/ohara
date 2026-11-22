@@ -30,7 +30,6 @@
 	import {
 		collectionSearch,
 		collectionStatusLabels,
-		collectionURL,
 		displayName,
 		editionSummary,
 		formatLabels,
@@ -48,6 +47,7 @@
 		type CollectionView,
 		type Title
 	} from '#lib/collection.js';
+	import { filterCollection } from '#lib/collection-filter.js';
 	import {
 		collectionSortLabels,
 		sortCopies,
@@ -100,7 +100,8 @@
 	const emptyFilter: CollectionFilter = { q: '', kind: '', format: '', status: '' };
 	let filter = $state(untrack(() => readCollectionFilter(page.url.searchParams)));
 	let query = $state(untrack(() => filter.q));
-	let view = $state<CollectionView | null>(null);
+	/** The whole collection, loaded once per visit; the filter narrows it in the browser. */
+	let collection = $state<CollectionView | null>(null);
 	/** Every title without a copy, from the last load that listed them. */
 	let uncopied = $state<Title[] | null>(null);
 	let overview = $state<Overview | null>(null);
@@ -109,12 +110,10 @@
 	let loading = $state(true);
 	let sheetOpen = $state(false);
 	let seq = 0;
-	/** The listing on screen, kept under the filter the reader leaves the collection with. */
-	let shown: Listing | null = null;
-	/** Counts the overviews shown, so an answer asked for before a newer one never replaces it. */
+	/** Counts the collections shown, so an answer asked for before a newer one never replaces it. */
 	let overviews = 0;
 	let restoreScroll: [number, number] | undefined;
-	let pendingOverview: Promise<void> | undefined;
+	let pendingCollection: Promise<CollectionView> | undefined;
 	let pendingQueue: Promise<void> | undefined;
 	let pendingUncopied: Promise<void> | undefined;
 
@@ -134,33 +133,52 @@
 		return { totals: full.totals, kinds: kindCounts(full.items) };
 	}
 
-	function showOverview(next: Overview) {
-		overview = next;
+	/** Shows the whole collection and its counts. */
+	function showCollection(full: CollectionView) {
+		collection = full;
+		overview = overviewOf(full);
 		overviews += 1;
-		keepOverview(next);
+		keepOverview(overview);
 	}
 
-	/** Loads the whole collection's counts once, or again when `again` asks for fresh ones. */
+	/** Asks for the whole collection; an ask while one is on its way shares its answer. */
+	function askCollection(): Promise<CollectionView> {
+		pendingCollection ??= request<CollectionView>(fetch, 'GET', '/api/collection').finally(() => {
+			pendingCollection = undefined;
+		});
+		return pendingCollection;
+	}
+
+	/**
+	 * Loads the whole collection for the counts while titles are listed, once, or again when
+	 * `again` asks for fresh ones.
+	 */
 	function loadOverview(again = false) {
 		if (overview && !again) return;
 		const asked = overviews;
-		pendingOverview ??= request<CollectionView>(fetch, 'GET', '/api/collection')
-			.catch(() => null)
-			.then((full) => {
-				if (full && overviews === asked) showOverview(overviewOf(full));
-				pendingOverview = undefined;
-			});
-		return pendingOverview;
+		return askCollection().then(
+			(full) => {
+				if (overviews === asked) showCollection(full);
+			},
+			() => undefined
+		);
 	}
 
-	// Going back draws the collection as the reader left it, rows still waiting for a new
-	// filter's answer included. Loads it left pending never keep what they bring, which would
-	// replace what a newer visit kept.
+	/** What the filter lists from: the titles for "Bez egzemplarzy", else the whole collection. */
+	function sourceURL(f: CollectionFilter): Listing['url'] {
+		return f.status === 'none' ? '/api/titles' : '/api/collection';
+	}
+
+	// Going back draws the collection as the reader left it, the filter applied to what was
+	// loaded. Loads it left pending never keep what they bring, which would replace what a
+	// newer visit kept.
 	onDestroy(() => {
 		seq += 1;
 		overviews += 1;
-		if (shown && 'titles' in shown === listsTitles) {
-			keepListing({ ...shown, url: collectionURL(filter), pending: loading });
+		if (listsTitles) {
+			if (uncopied) keepListing({ url: '/api/titles', titles: uncopied, pending: loading });
+		} else if (collection) {
+			keepListing({ url: '/api/collection', view: collection, pending: loading });
 		}
 	});
 
@@ -207,15 +225,8 @@
 
 	/** Shows a listing and keeps it for the way back. */
 	function show(listing: Listing) {
-		if ('titles' in listing) {
-			uncopied = listing.titles;
-		} else {
-			view = listing.view;
-			if (listing.url === '/api/collection' && !listing.pending) {
-				showOverview(overviewOf(listing.view));
-			}
-		}
-		shown = listing;
+		if ('titles' in listing) uncopied = listing.titles;
+		else showCollection(listing.view);
 		keepListing(listing);
 	}
 
@@ -251,33 +262,32 @@
 		if (mine === seq) coversPlaced();
 	}
 
-	/** Loads the copies or titles the filter lists. */
+	/** Loads the whole collection, or the titles the filter lists. */
 	function load() {
 		return loadListing(null);
 	}
 
 	/**
-	 * Loads the copies or titles the filter lists, first drawing `kept` when given. The covers
-	 * count as placed only after the restored scroll moves them, so a cover carried back from a
-	 * title lands on its tile.
+	 * Loads the whole collection, or the titles the filter lists, first drawing `kept` when
+	 * given. The covers count as placed only after the restored scroll moves them, so a cover
+	 * carried back from a title lands on its tile.
 	 */
 	async function loadListing(kept: Listing | null) {
 		const mine = ++seq;
-		const url = collectionURL(filter);
 		const titles = filter.status === 'none';
 		if (kept) void redraw(mine, kept);
 		else loading = true;
-		const overviewReady = url === '/api/collection' ? undefined : loadOverview(kept !== null);
+		const overviewReady = titles ? loadOverview(kept !== null) : undefined;
 		void loadQueue();
 		try {
 			if (titles) {
-				const got = await request<Title[]>(fetch, 'GET', url);
+				const got = await request<Title[]>(fetch, 'GET', '/api/titles');
 				if (mine !== seq) return;
-				show({ url, titles: withoutCopies(got) });
+				show({ url: '/api/titles', titles: withoutCopies(got) });
 			} else {
-				const got = await request<CollectionView>(fetch, 'GET', url);
+				const got = await askCollection();
 				if (mine !== seq) return;
-				show({ url, view: got });
+				show({ url: '/api/collection', view: got });
 			}
 			failure = null;
 		} catch (err) {
@@ -295,14 +305,14 @@
 		filter = readCollectionFilter(new URLSearchParams(window.location.search));
 		query = filter.q;
 		const back = navigation.type === 'popstate';
-		void loadListing(back ? keptListing(collectionURL(filter)) : null);
+		void loadListing(back ? keptListing(sourceURL(filter)) : null);
 	});
 
-	// The search asks once the reader pauses typing, as the list toolbar did.
+	// The search filters once the reader pauses typing, so the shelf is not redrawn per key.
 	$effect(() => {
 		const typed = query;
 		if (typed === untrack(() => filter.q)) return;
-		const timer = setTimeout(() => set('q', typed), 600);
+		const timer = setTimeout(() => set('q', typed), 200);
 		return () => clearTimeout(timer);
 	});
 
@@ -317,13 +327,31 @@
 	}
 
 	function updateFilter(next: CollectionFilter) {
+		const from = sourceURL(filter);
 		filter = next;
 		const search = collectionSearch(next);
 		const { pathname, search: current, hash } = window.location;
 		if (current === search) return;
 		replaceState(`${pathname}${search}${hash}`, page.state);
 		restoreScroll = undefined;
-		void load();
+		const to = sourceURL(next);
+		if (needsLoad(from, to)) {
+			void load();
+		} else if (from !== to) {
+			// The collection is already here: drop the titles' load and show it.
+			seq += 1;
+			loading = false;
+			failure = null;
+		}
+	}
+
+	/**
+	 * Whether a new filter needs a request: the titles each time "Bez egzemplarzy" is chosen,
+	 * the collection until it has loaded, and either again after its load failed.
+	 */
+	function needsLoad(from: Listing['url'], to: Listing['url']): boolean {
+		if (to === '/api/titles') return from !== to || failure !== null;
+		return collection === null || (from === to && failure !== null);
 	}
 
 	const columns: DataTableColumn<Row>[] = [
@@ -358,11 +386,13 @@
 
 	// A no-break space keeps the line's height until the counts arrive, so nothing below moves.
 	const summary = $derived(overview ? shelfSummary(overview.totals) : '\u00a0');
-	const rows = $derived(sortCopies((view?.items ?? []) as Row[], sort));
+	const rows = $derived(
+		sortCopies(filterCollection(collection?.items ?? [], filter) as Row[], sort)
+	);
 	/** "Bez egzemplarzy": the view lists titles that have no copy instead of copies. */
 	const listsTitles = $derived(filter.status === 'none');
 	const titleRows = $derived(sortTitles(uncopiedTitles(uncopied ?? [], filter), sort));
-	const listed = $derived(listsTitles ? uncopied : view);
+	const listed = $derived(listsTitles ? uncopied : collection);
 	const emptyShelf = $derived(
 		!failure && !listsTitles && overview?.totals.copies === 0 && rows.length === 0
 	);
@@ -562,8 +592,8 @@
 					{rows}
 					rowHeader
 					rowKey={(r) => r.copy_id}
-					loading={loading && !view}
-					refreshing={loading && !!view}
+					loading={loading && !collection}
+					refreshing={loading && !!collection}
 					error={failure}
 					onretry={load}
 					retryLabel="Spróbuj ponownie"

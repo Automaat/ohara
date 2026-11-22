@@ -288,7 +288,12 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   adds stay out of the scanner's recent scans. Okazje's "Dodaj pozycję"
   opens it as `/titles/new?from=deals`: the item starts as a wish and the
   page leads back to `/deals`.
-- Kolekcja (`/`) lists copies. Its filter sheet's "Bez egzemplarzy"
+- Kolekcja (`/`) lists copies. It loads all of `GET /api/collection` once
+  per visit and filters, searches and counts it in the browser
+  (`src/lib/collection-filter.ts`, the server's `Store.Collection` filter
+  with the search normalized by barcode.Normalize's rules), so a chip, the
+  sheet or a search sends no request; Back draws the kept collection and
+  refreshes it once. Its filter sheet's "Bez egzemplarzy"
   (`?status=none`) lists titles without one instead, filtered in the client
   from `GET /api/titles`; `/titles` redirects to `/`. `?add=copy` on a title
   or edition page opens the form for its next copy.
@@ -311,7 +316,8 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   or an inline script's hash.
 - The smoke suite (`e2e/`, `npm run test:e2e`) drives the production image
   in Chromium at 390 × 844 with touch: a wedge scan, quick confirm and
-  "Cofnij", and "Dodaj tytuł" by hand. `scripts/e2e.sh` builds the image
+  "Cofnij", "Dodaj tytuł" by hand, and Kolekcja's filters, which also run
+  at 1440 × 900. `scripts/e2e.sh` builds the image
   (or takes one as its first argument), starts it from `e2e/compose.yaml`
   with Postgres, `OHARA_LOOKUP_STUB=true`, `OHARA_MUSICBRAINZ=false` and no
   provider keys, and removes it afterwards. App and Postgres sit on an

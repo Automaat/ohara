@@ -73,16 +73,29 @@ func isASCII(s string) bool {
 	return true
 }
 
-// words lowercases s, folds diacritics and splits it into runs of letters
-// and digits.
+// words lowercases s, folds diacritics and splits it into runs of letters,
+// digits and marks.
 func words(s string) []string {
-	return strings.FieldsFunc(fold(s), notWordRune)
+	return split(fold(s))
 }
 
 // spelledWords lowercases s and splits it as words does, keeping its
 // diacritics.
 func spelledWords(s string) []string {
-	return strings.FieldsFunc(norm.NFC.String(strings.ToLower(s)), notWordRune)
+	return split(norm.NFC.String(strings.ToLower(s)))
+}
+
+// split cuts s into words, dropping marks that start one: a mark with no
+// letter before it belongs to no word.
+func split(s string) []string {
+	fields := strings.FieldsFunc(s, notWordRune)
+	out := make([]string, 0, len(fields))
+	for _, f := range fields {
+		if f = strings.TrimLeftFunc(f, unicode.IsMark); f != "" {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 // spelledKey is s's words in its own spelling, to tell names and queries
@@ -92,6 +105,9 @@ func spelledKey(s string) string {
 	return strings.Join(spelledWords(s), " ")
 }
 
+// notWordRune splits words: anything but a letter, a digit or a mark. A
+// mark no precomposed letter takes stays with its letter, so "Adébáyọ̀"
+// keeps its final grave in its own spelling.
 func notWordRune(r rune) bool {
-	return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	return !unicode.IsLetter(r) && !unicode.IsDigit(r) && !unicode.IsMark(r)
 }

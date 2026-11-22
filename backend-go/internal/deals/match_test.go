@@ -180,6 +180,7 @@ func TestWantQueries(t *testing.T) {
 		{"self-titled album", album("Metallica", "Metallica", "cd"), []string{"Metallica"}},
 		{"album without artist", Want{Kind: "music", Name: "Kind of Blue", Format: new("cd")}, []string{"Kind of Blue"}},
 		{"surname in its own spelling", book("Sto lat samotności", "Gabriel García Márquez"), []string{"Sto lat samotności márquez"}},
+		{"surname keeps a mark no letter takes", book("Zostań ze mną", "Ayọ̀bámi Adébáyọ̀"), []string{"Zostań ze mną adébáyọ̀"}},
 		{"accent-only variants of a name", Want{Kind: "movie", Name: "Amélie", OriginalTitle: new("Amelie"), Format: new("dvd")}, []string{"Amelie dvd", "Amélie dvd"}},
 		{"name has the surname unaccented", book("Sto lat samotności Marquez", "Gabriel García Márquez"), []string{"Sto lat samotności Marquez"}},
 	}
@@ -509,11 +510,14 @@ func TestRulesFoldDiacritics(t *testing.T) {
 
 func TestWordsFoldOnlyLatinLetters(t *testing.T) {
 	tests := map[string][]string{
-		"Łódź Żółć":       {"lodz", "zolc"},
-		"Øresund Đorđe":   {"oresund", "dorde"},
-		"Ñandú Çà":        {"nandu", "ca"},
-		"Чайковский Ёлка": {"чайковский", "ёлка"},
-		"Björk – CD":     {"bjork", "cd"},
+		"Łódź Żółć":            {"lodz", "zolc"},
+		"Øresund Đorđe":        {"oresund", "dorde"},
+		"Ñandú Çà":             {"nandu", "ca"},
+		"Чайковский Ёлка":      {"чайковский", "ёлка"},
+		"Adébáyọ̀":             {"adebayo"},
+		"\u0301 Ojciec \u0301": {"ojciec"},
+		"हिन्दी फ़िल्म":        {"हिन्दी", "फ़िल्म"},
+		"Björk – CD":          {"bjork", "cd"},
 	}
 	for in, want := range tests {
 		if got := words(in); !slices.Equal(got, want) {

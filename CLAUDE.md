@@ -264,7 +264,9 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   other updates), and one sent again is applied once:
   `Store.DismissPress` records its callback id in `telegram_press` in the
   dismissal's transaction, so a replay never undoes a later "Cofnij"; it
-  is only answered and its button taken off again. A dismissal that fails
+  is only answered and its button taken off again. A keyboard edit the
+  Bot API fails for now (no answer, 5xx, 429) is tried 3 times; a button
+  still left works, since a new press answers and edits again. A dismissal that fails
   for now (a database error, or the listing's row held past the step's
   10 s) leaves the press unanswered and unconfirmed, and the poller asks
   for it again after 30 s. A failed poll (a webhook set on the bot

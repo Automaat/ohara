@@ -30,6 +30,18 @@ const (
 // errReplyTooLarge reports a Bot API answer over its cap.
 var errReplyTooLarge = errors.New("telegram: reply too large")
 
+// errTelegramUnavailable marks a failure worth trying again: no answer, a
+// 5xx or a 429.
+var errTelegramUnavailable = errors.New("telegram: unavailable")
+
+// transientError is a Bot API failure that also matches
+// errTelegramUnavailable, keeping its own text.
+type transientError struct{ err error }
+
+func (e *transientError) Error() string { return e.err.Error() }
+
+func (e *transientError) Unwrap() []error { return []error{e.err, errTelegramUnavailable} }
+
 // Notifier delivers one alert message.
 type Notifier interface {
 	Send(ctx context.Context, text string) error
@@ -93,15 +105,17 @@ func (t *Telegram) call(ctx context.Context, method string, form url.Values, res
 		return err
 	}
 	redacted := &redactedError{msg: strings.ReplaceAll(err.Error(), t.Token, "<token>")}
-	if errors.Is(err, errReplyTooLarge) {
-		redacted.kind = errReplyTooLarge
+	for _, kind := range []error{errReplyTooLarge, errTelegramUnavailable} {
+		if errors.Is(err, kind) {
+			redacted.kind = kind
+		}
 	}
 	return redacted
 }
 
 // redactedError is an error with the bot token cut out of its text. It
-// unwraps only to a sentinel such as errReplyTooLarge, never to the
-// original error, whose text holds the token.
+// unwraps only to a sentinel, errReplyTooLarge or errTelegramUnavailable,
+// never to the original error, whose text holds the token.
 type redactedError struct {
 	msg  string
 	kind error
@@ -123,7 +137,7 @@ func (t *Telegram) post(ctx context.Context, method string, form url.Values, res
 		if uerr, ok := errors.AsType[*url.Error](err); ok {
 			err = uerr.Err
 		}
-		return fmt.Errorf("telegram: %w", err)
+		return &transientError{fmt.Errorf("telegram: %w", err)}
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
@@ -135,7 +149,11 @@ func (t *Telegram) post(ctx context.Context, method string, form url.Values, res
 	}
 	var reply telegramReply
 	if json.Unmarshal(body, &reply) != nil || !reply.OK || resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("telegram: status %d: %s", resp.StatusCode, reply.Description)
+		err := fmt.Errorf("telegram: status %d: %s", resp.StatusCode, reply.Description)
+		if resp.StatusCode >= http.StatusInternalServerError || resp.StatusCode == http.StatusTooManyRequests {
+			return &transientError{err}
+		}
+		return err
 	}
 	if result != nil {
 		if err := json.Unmarshal(reply.Result, result); err != nil {

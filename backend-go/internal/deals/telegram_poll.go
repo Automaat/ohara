@@ -23,6 +23,15 @@ const telegramPollPause = 30 * time.Second
 // context, so a press begun before shutdown is still answered.
 const telegramPressTimeout = 10 * time.Second
 
+// telegramEditAttempts bounds the tries to take a button off a message
+// when the Bot API fails for now; they are telegramEditRetryWait times the
+// attempt apart.
+const telegramEditAttempts = 3
+
+// telegramEditRetryWait is the base wait between two tries of a keyboard
+// edit.
+const telegramEditRetryWait = time.Second
+
 // telegramBatch is how many updates one getUpdates asks for. Each carries
 // its whole alert message, up to 4096 characters, so a batch of 20 stays
 // well under telegramUpdatesCap; a reply over it halves the batch.
@@ -41,12 +50,13 @@ type PressStore interface {
 // (NewTelegramPollClient). Timeout is how long one getUpdates waits for an
 // update, Pause the wait after a failed one; zero takes the defaults.
 type TelegramPoller struct {
-	Bot          *Telegram
-	Store        PressStore
-	Logger       *slog.Logger
-	Timeout      time.Duration
-	Pause        time.Duration
-	pressTimeout time.Duration
+	Bot           *Telegram
+	Store         PressStore
+	Logger        *slog.Logger
+	Timeout       time.Duration
+	Pause         time.Duration
+	pressTimeout  time.Duration
+	editRetryWait time.Duration
 }
 
 // NewTelegramPollClient is an HTTP client for TelegramPoller's Bot: its
@@ -197,15 +207,33 @@ func (p *TelegramPoller) press(ctx context.Context, q *callbackQuery) bool {
 	if err != nil {
 		logger.Warn("telegram: answer press", "err", err)
 	}
-	if out.edit == nil {
-		return true
-	}
-	editCtx, cancel := p.stepContext(ctx)
-	defer cancel()
-	if err := p.Bot.removeKeyboard(editCtx, out.edit); err != nil {
-		logger.Warn("telegram: remove button", "err", err)
+	if out.edit != nil {
+		p.removeKeyboard(ctx, out.edit)
 	}
 	return true
+}
+
+// removeKeyboard takes the button off m, trying again after a failure
+// worth retrying (telegramEditAttempts in all) unless ctx ends. A button
+// left behind still works: a press answers again and retries the edit.
+func (p *TelegramPoller) removeKeyboard(ctx context.Context, m *telegramMessage) {
+	wait := p.editRetryWait
+	if wait <= 0 {
+		wait = telegramEditRetryWait
+	}
+	for attempt := 1; ; attempt++ {
+		editCtx, cancel := p.stepContext(ctx)
+		err := p.Bot.removeKeyboard(editCtx, m)
+		cancel()
+		if err == nil {
+			return
+		}
+		if !errors.Is(err, errTelegramUnavailable) || attempt == telegramEditAttempts ||
+			sleepCtx(ctx, time.Duration(attempt)*wait) != nil {
+			p.logger().Warn("telegram: remove button", "attempts", attempt, "err", err)
+			return
+		}
+	}
 }
 
 // apply dismisses the listing a press in the bot's chat names.

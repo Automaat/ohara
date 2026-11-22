@@ -30,7 +30,8 @@ type formValues = map[string]string
 // an empty answer waits a moment, like a short long poll. With forget set
 // it confirms nothing, as when every confirmation is lost; oversizeAbove
 // answers a getUpdates asking for more updates than it with a reply over
-// telegramUpdatesCap; editDelay holds each keyboard edit.
+// telegramUpdatesCap; editDelay holds each keyboard edit and the first
+// editFailures edits answer 503.
 type botDouble struct {
 	mu            sync.Mutex
 	queue         []map[string]any
@@ -42,6 +43,7 @@ type botDouble struct {
 	forget        bool
 	oversizeAbove int
 	editDelay     time.Duration
+	editFailures  int
 	failPoll      func(n int, w http.ResponseWriter) bool
 	onAnswer      func(form formValues)
 }
@@ -109,6 +111,13 @@ func (d *botDouble) serve(w http.ResponseWriter, r *http.Request) {
 		}
 	case "editMessageReplyMarkup":
 		d.edits = append(d.edits, form)
+		if d.editFailures > 0 {
+			d.editFailures--
+			d.mu.Unlock()
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = io.WriteString(w, `{"ok":false,"error_code":503,"description":"Service Unavailable"}`)
+			return
+		}
 		delay := d.editDelay
 		d.mu.Unlock()
 		time.Sleep(delay)
@@ -634,5 +643,44 @@ func TestTelegramShutdownLeavesRestOfBatch(t *testing.T) {
 		if !isDismissed(t, pool, ids[ext]) {
 			t.Fatalf("listing %s not dismissed after the restart", ext)
 		}
+	}
+}
+
+func TestTelegramRetriesFailedEdit(t *testing.T) {
+	pool, store, ids := pressListings(t, "a", "b")
+	double, srv := newBotDouble(t)
+	double.editFailures = telegramEditAttempts
+	double.press(10, 42, pressData(ids["a"]))
+	double.press(11, 42, pressData(ids["b"]))
+	stop := runPoller(&TelegramPoller{Bot: bot(srv), Store: store, Logger: slog.New(slog.DiscardHandler), editRetryWait: 5 * time.Millisecond})
+	waitUntil(t, "both presses answered", func() bool { return len(double.snapshot().answers) == 2 })
+	waitUntil(t, "the second button removed", func() bool { return len(double.snapshot().edits) == telegramEditAttempts+1 })
+	stop()
+	edits := double.snapshot().edits
+	for i, e := range edits[:telegramEditAttempts] {
+		if e["message_id"] != "110" {
+			t.Fatalf("edit %d = %v, want the first press's message tried %d times", i, e, telegramEditAttempts)
+		}
+	}
+	if edits[telegramEditAttempts]["message_id"] != "111" {
+		t.Fatalf("last edit = %v, want the second press's message", edits[telegramEditAttempts])
+	}
+
+	double.mu.Lock()
+	double.editFailures = 1
+	double.mu.Unlock()
+	double.press(12, 42, pressData(ids["a"]))
+	stop = runPoller(&TelegramPoller{Bot: bot(srv), Store: store, Logger: slog.New(slog.DiscardHandler), editRetryWait: 5 * time.Millisecond})
+	waitUntil(t, "a press of the button left behind removing it", func() bool {
+		calls := double.snapshot()
+		return len(calls.edits) == telegramEditAttempts+3 && len(calls.answers) == 3
+	})
+	stop()
+	calls := double.snapshot()
+	if last := calls.edits[len(calls.edits)-1]; last["message_id"] != "112" || calls.answers[2]["text"] != "Zignorowano" {
+		t.Fatalf("edits %v, answers %v, want a second press of a failed button answered and its edit retried", calls.edits, calls.answers)
+	}
+	if !isDismissed(t, pool, ids["a"]) || !isDismissed(t, pool, ids["b"]) {
+		t.Fatal("presses did not dismiss both listings")
 	}
 }

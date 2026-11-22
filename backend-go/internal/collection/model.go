@@ -42,6 +42,23 @@ var (
 	conditions   = []string{"mint", "very_good", "good", "fair", "poor"}
 )
 
+// Enums lists the values each enum field of this package's JSON accepts, by
+// the name its `ts` struct tag gives, for the SPA's generated types.
+func Enums() map[string][]string {
+	return map[string][]string{
+		"Kind":        slices.Clone(kinds),
+		"MovieFormat": slices.Clone(movieFormats),
+		"MusicFormat": slices.Clone(musicFormats),
+		"Format":      slices.Clone(formats),
+		"Binding":     slices.Clone(bindings),
+		"TriState":    slices.Clone(triStates),
+		"Packaging":   slices.Clone(packagings),
+		"CopyStatus":  slices.Clone(statuses),
+		"AcquiredAs":  slices.Clone(acquiredAs),
+		"Condition":   slices.Clone(conditions),
+	}
+}
+
 // Sentinel errors the handlers map to HTTP status codes.
 var (
 	ErrNotFound         = errors.New("not found")
@@ -81,7 +98,7 @@ func (d *Date) UnmarshalJSON(b []byte) error {
 // tmdb_id. Book-only fields: bn_id, openlibrary_id. Authors are a book's
 // authors or an album's artists; movies have none.
 type TitleInput struct {
-	Kind          string   `json:"kind"`
+	Kind          string   `json:"kind" ts:"Kind"`
 	Name          string   `json:"name"`
 	OriginalTitle *string  `json:"original_title"`
 	PolishTitle   *string  `json:"polish_title"`
@@ -117,11 +134,11 @@ type EditionInput struct {
 	Label       string   `json:"label"`
 	Publisher   string   `json:"publisher"`
 	Year        *int     `json:"year"`
-	Format      *string  `json:"format"`
-	PLSubtitles string   `json:"pl_subtitles"`
-	PLVoiceover string   `json:"pl_voiceover"`
-	Packaging   []string `json:"packaging"`
-	Binding     *string  `json:"binding"`
+	Format      *string  `json:"format" ts:"Format"`
+	PLSubtitles string   `json:"pl_subtitles" ts:"TriState"`
+	PLVoiceover string   `json:"pl_voiceover" ts:"TriState"`
+	Packaging   []string `json:"packaging" ts:"Packaging"`
+	Binding     *string  `json:"binding" ts:"Binding"`
 	// DiscogsReleaseID is the Discogs release an album edition is; the
 	// valuation prices it on the Discogs marketplace.
 	DiscogsReleaseID *int64  `json:"discogs_release_id"`
@@ -148,12 +165,12 @@ type Edition struct {
 // at or below it.
 type CopyInput struct {
 	EditionID     int64   `json:"edition_id"`
-	Status        string  `json:"status"`
+	Status        string  `json:"status" ts:"CopyStatus"`
 	PriceCents    *int64  `json:"price_cents"`
 	PurchasedOn   *Date   `json:"purchased_on"`
 	Shop          string  `json:"shop"`
-	AcquiredAs    *string `json:"acquired_as"`
-	Condition     *string `json:"condition"`
+	AcquiredAs    *string `json:"acquired_as" ts:"AcquiredAs"`
+	Condition     *string `json:"condition" ts:"Condition"`
 	Notes         string  `json:"notes"`
 	MaxPriceCents *int64  `json:"max_price_cents"`
 	// RequestKey makes a create safe to retry: a second create with the

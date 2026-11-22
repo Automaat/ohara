@@ -120,6 +120,7 @@ const result = (patch: Partial<RunResult>): RunResult => ({
 	matched: 9,
 	new: 2,
 	quotes: 1,
+	releases: 0,
 	errors: [],
 	...patch
 });

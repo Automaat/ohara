@@ -26,7 +26,7 @@ const (
 
 // KeywordInput is the body of POST /api/deals/keywords.
 type KeywordInput struct {
-	Kind   string `json:"kind"`
+	Kind   string `json:"kind" ts:"KeywordKind"`
 	Phrase string `json:"phrase"`
 }
 

@@ -16,6 +16,7 @@
 		"test:coverage": "vitest run --coverage",
 		"test:e2e": "scripts/e2e.sh",
 		"lint": "oxlint && prettier --check .",
+		"generate:api": "cd backend-go && go run ./cmd/apitypes ../src/lib/api.gen.ts",
 		"format": "prettier --write ."
 	},
 	"devDependencies": {

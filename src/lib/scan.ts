@@ -29,44 +29,25 @@ import {
 	type Packaging,
 	type Parsed,
 	type Title,
-	type TitlePayload,
-	type TriState
+	type TitlePayload
 } from './collection';
+import type {
+	Candidate,
+	LookupResult,
+	QueueEntry,
+	QueuePayload,
+	QueueReason,
+	SearchResult
+} from './api.gen';
 
-/** A candidate's title fields, as GET /api/lookup/{barcode} sends them; absent means unknown. */
-export type CandidateTitle = {
-	name: string;
-	original_title?: string | null;
-	polish_title?: string | null;
-	year?: number | null;
-	tmdb_id?: number | null;
-	authors?: string[];
-	bn_id?: string | null;
-	openlibrary_id?: string | null;
-};
-
-/** A candidate's edition fields, as GET /api/lookup/{barcode} sends them. */
-export type CandidateEdition = {
-	barcode: string;
-	label?: string;
-	publisher?: string;
-	year?: number | null;
-	format?: Format | null;
-	pl_subtitles?: TriState;
-	pl_voiceover?: TriState;
-	packaging?: Packaging[];
-	binding?: Binding | null;
-	discogs_release_id?: number | null;
-};
-
-export type Candidate = {
-	type: Kind;
-	title: CandidateTitle;
-	edition: CandidateEdition;
-	cover_url?: string;
-	provider: string;
-	confidence: number;
-};
+export type {
+	Candidate,
+	CandidateEdition,
+	CandidateTitle,
+	LookupResult,
+	QueueEntry,
+	QueueReason
+} from './api.gen';
 
 /**
  * A candidate's name, for a book or an album after its authors or artists, and the details that
@@ -136,25 +117,13 @@ export async function searchTitles(
 	if (barcode) params.set('barcode', barcode);
 	if (format) params.set('format', format);
 	try {
-		const res = await request<{ candidates: Candidate[] }>(
-			fetchFn,
-			'GET',
-			`/api/search?${params.toString()}`
-		);
+		const res = await request<SearchResult>(fetchFn, 'GET', `/api/search?${params.toString()}`);
 		return res.candidates;
 	} catch (err) {
 		const message = err instanceof ApiError ? searchFailures[err.status] : undefined;
 		throw message ? new ApiError(message, (err as ApiError).status) : err;
 	}
 }
-
-export type LookupResult = {
-	barcode: string;
-	candidates: Candidate[];
-	/** False only when exactly one candidate is confident enough to take without asking. */
-	needs_confirmation?: boolean;
-	errors: { provider: string; error: string }[];
-};
 
 /** The source a candidate came from, as the quick confirm names it. */
 export function providerLabel(c: Candidate): string {
@@ -178,18 +147,6 @@ export function providerLabel(c: Candidate): string {
 			return c.provider;
 	}
 }
-
-export type QueueReason = 'not_found' | 'lookup_failed';
-
-export type QueueEntry = {
-	id: number;
-	barcode: string;
-	reason: QueueReason;
-	detail: string;
-	scans: number;
-	created_at: string;
-	last_scanned_at: string;
-};
 
 export const reasonLabels: Record<QueueReason, string> = {
 	not_found: 'Nieznany kod',
@@ -393,11 +350,12 @@ export async function resolveScan(
 	const barcode = lookup?.barcode ?? code;
 	const failed = !lookup || lookup.errors.length > 0;
 	await queueDeletesSettled();
-	const entry = await request<QueueEntry>(fetchFn, 'POST', '/api/scan-queue', {
+	const queued: QueuePayload = {
 		barcode,
 		reason: failed ? 'lookup_failed' : 'not_found',
 		detail: lookup ? providerDetail(lookup.errors) : failure
-	});
+	};
+	const entry = await request<QueueEntry>(fetchFn, 'POST', '/api/scan-queue', queued);
 	queueTally.queued(entry.barcode);
 	return { kind: 'queued', barcode, entry };
 }

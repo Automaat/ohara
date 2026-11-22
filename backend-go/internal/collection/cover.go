@@ -26,10 +26,13 @@ const (
 // concurrent uploads could push the container past its memory limit.
 var coverDecodeSlot = make(chan struct{}, 1)
 
+// decodeImage is image.Decode; tests replace it to hold a decode open.
+var decodeImage = image.Decode
+
 // validCover reports whether photo is a JPEG or PNG of at most
 // maxCoverPixels that decodes in full. The header check runs at once; the
 // full decode waits for coverDecodeSlot and gives up with ctx's error when
-// ctx ends first.
+// ctx has ended, also when the slot frees at the same moment.
 func validCover(ctx context.Context, photo []byte) (bool, error) {
 	config, format, err := image.DecodeConfig(bytes.NewReader(photo))
 	if err != nil || (format != "jpeg" && format != "png") || config.Width <= 0 ||
@@ -42,7 +45,10 @@ func validCover(ctx context.Context, photo []byte) (bool, error) {
 		return false, ctx.Err()
 	}
 	defer func() { <-coverDecodeSlot }()
-	_, _, err = image.Decode(bytes.NewReader(photo))
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	_, _, err = decodeImage(bytes.NewReader(photo))
 	return err == nil, nil
 }
 

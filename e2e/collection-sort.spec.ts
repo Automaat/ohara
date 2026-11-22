@@ -1,11 +1,17 @@
 import type { APIRequestContext } from '@playwright/test';
 import { expect, expectNoSourceRequests, test } from './fixtures.js';
 
-type Seed = { name: string; year: number | null; format: 'dvd' | 'bluray'; bought?: string };
+type Seed = {
+	name: string;
+	year: number | null;
+	format: 'dvd' | 'bluray';
+	bought?: string;
+	rating?: number;
+};
 
 async function add(request: APIRequestContext, seed: Seed) {
 	const title = await request.post('/api/titles', {
-		data: { kind: 'movie', name: seed.name, year: seed.year }
+		data: { kind: 'movie', name: seed.name, year: seed.year, rating: seed.rating ?? null }
 	});
 	expect(title.ok()).toBe(true);
 	const edition = await request.post('/api/editions', {
@@ -22,18 +28,42 @@ async function add(request: APIRequestContext, seed: Seed) {
 	expect(copy.ok()).toBe(true);
 }
 
-test('the sheet sorts copies by purchase date and year and keeps the filters', async ({
+test('the sheet sorts copies by purchase date, year and rating and keeps the filters', async ({
 	page,
 	request
 }) => {
 	const run = `Sort ${Date.now()}`;
 	// Entered in this order, so "Ostatnio dodane" would list them the other way round. The Blu-ray
 	// would lead every order if the format filter were dropped.
-	await add(request, { name: `${run} Alfa`, year: 1999, format: 'dvd', bought: '2024-05-01' });
-	await add(request, { name: `${run} Beta`, year: 2015, format: 'dvd', bought: '2021-02-01' });
+	await add(request, {
+		name: `${run} Alfa`,
+		year: 1999,
+		format: 'dvd',
+		bought: '2024-05-01',
+		rating: 7
+	});
+	await add(request, {
+		name: `${run} Beta`,
+		year: 2015,
+		format: 'dvd',
+		bought: '2021-02-01',
+		rating: 9
+	});
 	await add(request, { name: `${run} Gamma`, year: null, format: 'dvd' });
-	await add(request, { name: `${run} Delta`, year: 2005, format: 'dvd', bought: '2023-01-01' });
-	await add(request, { name: `${run} Blu`, year: 2030, format: 'bluray', bought: '2025-01-01' });
+	await add(request, {
+		name: `${run} Delta`,
+		year: 2005,
+		format: 'dvd',
+		bought: '2023-01-01',
+		rating: 7
+	});
+	await add(request, {
+		name: `${run} Blu`,
+		year: 2030,
+		format: 'bluray',
+		bought: '2025-01-01',
+		rating: 10
+	});
 
 	await page.goto('/');
 	const search = page.getByRole('searchbox', { name: 'Szukaj w kolekcji' });
@@ -64,6 +94,7 @@ test('the sheet sorts copies by purchase date and year and keeps the filters', a
 	await sortBy('Ostatnio kupione', 'Sortuj: ostatnio kupione', ['Alfa', 'Delta', 'Beta', 'Gamma']);
 	await sortBy('Rok malejąco', 'Sortuj: rok malejąco', ['Beta', 'Delta', 'Alfa', 'Gamma']);
 	await sortBy('Rok rosnąco', 'Sortuj: rok rosnąco', ['Alfa', 'Delta', 'Beta', 'Gamma']);
+	await sortBy('Ocena malejąco', 'Sortuj: ocena malejąco', ['Beta', 'Alfa', 'Delta', 'Gamma']);
 
 	await expectNoSourceRequests(request);
 });

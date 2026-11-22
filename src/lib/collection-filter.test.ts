@@ -332,6 +332,35 @@ describe('sold copies', () => {
 	});
 });
 
+describe('ordered copies', () => {
+	const shelf: CollectionItem[] = [
+		item({ copy_id: 1, kind: 'movie', format: 'uhd', name: 'Diuna', price_cents: 4999 }),
+		item({
+			copy_id: 2,
+			kind: 'movie',
+			format: 'uhd',
+			name: 'Diuna: Część druga',
+			status: 'ordered',
+			price_cents: 12999,
+			expected_on: '2026-12-15'
+		}),
+		item({ copy_id: 3, kind: 'book', name: 'Lód', status: 'ordered' }),
+		item({ copy_id: 4, kind: 'book', name: 'Solaris', status: 'sold', sold_on: '2026-05-10' })
+	];
+
+	it.each([
+		['the default list keeps them', {}, [1, 2, 3]],
+		['"Zamówione" lists them alone', { status: 'ordered' }, [2, 3]],
+		['"Zamówione" with a kind', { status: 'ordered', kind: 'book' }, [3]],
+		['"Zamówione" with a search', { status: 'ordered', q: 'diuna' }, [2]],
+		['owned copies leave them out', { status: 'owned' }, [1]],
+		['copies without a price leave them out', { status: 'unpriced' }, []]
+	] as [string, Partial<CollectionFilter>, number[]][])('%s', (_name, filter, copies) => {
+		const listed = filterCollection(shelf, { ...none, ...filter });
+		expect(listed.map((i) => i.copy_id)).toEqual(copies);
+	});
+});
+
 describe('the tag filter', () => {
 	/** Copies of tagged titles, as `GET /api/collection` gives each the title's tags. */
 	const tagged: CollectionItem[] = [

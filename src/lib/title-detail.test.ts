@@ -13,6 +13,8 @@ import {
 	openedFromCollection,
 	plainClick,
 	previewHero,
+	noRating,
+	ratingOptions,
 	soleCopy,
 	titleArtwork,
 	titleHero,
@@ -346,6 +348,27 @@ describe('copyFacts of a sold copy', () => {
 	});
 });
 
+describe('copyFacts of an ordered copy', () => {
+	it('names the order and the expected delivery', () => {
+		const facts = copyFacts(copy({ status: 'ordered', expected_on: '2026-12-15' }));
+		expect(facts.map((f) => [f.label, nbsp(f.value)])).toEqual([
+			['Cena', '89,99 zł'],
+			['Zamówiono', '24 gru 2023'],
+			['Sklep', 'Empik'],
+			['Spodziewana dostawa', '15 gru 2026'],
+			['Stan', 'Nowy']
+		]);
+		expect(copyFacts(copy({ status: 'ordered' }))[3]).toEqual({
+			label: 'Spodziewana dostawa',
+			value: '—'
+		});
+	});
+
+	it('lists what it cost in its row', () => {
+		expect(nbsp(copyLine(copy({ status: 'ordered' })))).toBe('Zamówiony · 89,99 zł · Empik');
+	});
+});
+
 describe('copyLine', () => {
 	it('lists the status, the price and the shop that are known', () => {
 		expect(nbsp(copyLine(copy()))).toBe('Na półce · 89,99 zł · Empik');
@@ -558,5 +581,13 @@ describe('the way back to the collection', () => {
 		{ defaultPrevented: true }
 	])('leaves %o to the browser', (change) => {
 		expect(plainClick({ ...click, ...change })).toBe(false);
+	});
+});
+
+describe('rating', () => {
+	it('offers no rating, then 1 to 10 out of 10', () => {
+		expect(ratingOptions[0]).toEqual({ value: noRating, label: 'Brak oceny' });
+		expect(ratingOptions.slice(1).map((o) => o.value)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+		expect(ratingOptions.at(-1)?.label).toBe('10 / 10');
 	});
 });

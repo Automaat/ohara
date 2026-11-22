@@ -7,7 +7,8 @@ export const collectionSortLabels = {
 	yearDesc: 'Rok malejąco',
 	yearAsc: 'Rok rosnąco',
 	priceAsc: 'Cena zakupu rosnąco',
-	priceDesc: 'Cena zakupu malejąco'
+	priceDesc: 'Cena zakupu malejąco',
+	ratingDesc: 'Ocena malejąco'
 };
 
 export type CollectionSort = keyof typeof collectionSortLabels;
@@ -17,7 +18,7 @@ type SortableCopy = Pick<
 	CollectionItem,
 	'copy_id' | 'created_at_us' | 'name' | 'price_cents' | 'title_id' | 'edition_id'
 > &
-	Partial<Pick<CollectionItem, 'status' | 'purchased_on' | 'year'>>;
+	Partial<Pick<CollectionItem, 'status' | 'purchased_on' | 'year' | 'rating'>>;
 
 const titleOrder = new Intl.Collator('pl-PL', { sensitivity: 'base' });
 
@@ -63,24 +64,30 @@ export function sortCopies<T extends SortableCopy>(items: readonly T[], sort: Co
 			case 'priceAsc':
 			case 'priceDesc':
 				return compareMissingLast(a.price_cents, b.price_cents, sort === 'priceDesc') || tie;
+			case 'ratingDesc':
+				return (
+					compareMissingLast(a.rating ?? null, b.rating ?? null, true) || compareTitles(a, b) || tie
+				);
 		}
 	});
 }
 
 /**
- * Titles in a collection order: newest first by id, by year with titles without one last, else
- * A–Z. A title without copies has no price or purchase date, so those orders fall back to A–Z.
+ * Titles in a collection order: newest first by id, by year or by rating with titles without one
+ * last, else A–Z. A title without copies has no price or purchase date, so those orders fall back
+ * to A–Z.
  */
-export function sortTitles<T extends Pick<Title, 'id' | 'name'> & Partial<Pick<Title, 'year'>>>(
-	items: readonly T[],
-	sort: CollectionSort
-): T[] {
+export function sortTitles<
+	T extends Pick<Title, 'id' | 'name'> & Partial<Pick<Title, 'year' | 'rating'>>
+>(items: readonly T[], sort: CollectionSort): T[] {
 	return [...items].sort((a, b) => {
 		if (sort === 'newest') return b.id - a.id;
-		const year =
-			sort === 'yearDesc' || sort === 'yearAsc'
-				? compareMissingLast(a.year, b.year, sort === 'yearDesc')
-				: 0;
-		return year || titleOrder.compare(a.name, b.name) || a.id - b.id;
+		let first = 0;
+		if (sort === 'yearDesc' || sort === 'yearAsc') {
+			first = compareMissingLast(a.year, b.year, sort === 'yearDesc');
+		} else if (sort === 'ratingDesc') {
+			first = compareMissingLast(a.rating ?? null, b.rating ?? null, true);
+		}
+		return first || titleOrder.compare(a.name, b.name) || a.id - b.id;
 	});
 }

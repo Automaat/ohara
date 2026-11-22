@@ -587,6 +587,147 @@ func TestDuplicateTMDBAndBadBodies(t *testing.T) {
 	a.fails(http.MethodPost, "/api/titles", obj{"kind": "movie", "name": strings.Repeat("x", 70000)}, http.StatusUnprocessableEntity, "body")
 }
 
+// ratingOf reads a title's rating from GET /api/titles/{id}.
+func (a *api) ratingOf(id int64) *int {
+	a.t.Helper()
+	var got collection.TitleDetail
+	a.mustDo(http.MethodGet, fmt.Sprintf("/api/titles/%d", id), nil, &got, http.StatusOK)
+	return got.Rating
+}
+
+// wantRating asserts a title's stored rating; 0 means unrated.
+func (a *api) wantRating(id int64, want int) {
+	a.t.Helper()
+	got := 0
+	if r := a.ratingOf(id); r != nil {
+		got = *r
+	}
+	if got != want {
+		a.t.Fatalf("title %d rating = %d, want %d", id, got, want)
+	}
+}
+
+func TestTitleRatingIsSetKeptAndCleared(t *testing.T) {
+	a := newAPI(t)
+	var created collection.Title
+	a.mustDo(http.MethodPost, "/api/titles", obj{"kind": "book", "name": "Lalka", "rating": 8}, &created, http.StatusCreated)
+	if created.Rating == nil || *created.Rating != 8 {
+		t.Fatalf("created rating = %v", created.Rating)
+	}
+	a.wantRating(created.ID, 8)
+	a.wantRating(a.title("movie", "Rejs"), 0)
+
+	path := fmt.Sprintf("/api/titles/%d", created.ID)
+	a.mustDo(http.MethodPut, path, obj{"kind": "book", "name": "Lalka", "notes": "Prus"}, nil, http.StatusOK)
+	a.wantRating(created.ID, 8)
+
+	for _, edge := range []int{1, 10} {
+		a.mustDo(http.MethodPut, path, obj{"kind": "book", "name": "Lalka", "rating": edge}, nil, http.StatusOK)
+		a.wantRating(created.ID, edge)
+	}
+	a.mustDo(http.MethodPut, path, obj{"kind": "book", "name": "Lalka", "rating": nil}, nil, http.StatusOK)
+	a.wantRating(created.ID, 0)
+}
+
+func TestTitleRatingRefusesValuesOffTheScale(t *testing.T) {
+	a := newAPI(t)
+	id := a.title("book", "Lalka")
+	path := fmt.Sprintf("/api/titles/%d", id)
+	a.mustDo(http.MethodPut, path, obj{"kind": "book", "name": "Lalka", "rating": 7}, nil, http.StatusOK)
+
+	for _, bad := range []any{0, 11, -1, 7.5, "8", true, []int{8}, obj{}, 1e10} {
+		a.fails(http.MethodPost, "/api/titles", obj{"kind": "movie", "name": "Miś", "rating": bad}, http.StatusUnprocessableEntity, "rating")
+		a.fails(http.MethodPut, path, obj{"kind": "book", "name": "Lalka", "rating": bad}, http.StatusUnprocessableEntity, "rating")
+	}
+	a.fails(http.MethodPut, path, []byte(`{"kind": "book", "name": "Lalka", "rating": 8.0}`), http.StatusUnprocessableEntity, "rating")
+	a.wantRating(id, 7)
+
+	var titles []collection.Title
+	a.mustDo(http.MethodGet, "/api/titles", nil, &titles, http.StatusOK)
+	if len(titles) != 1 {
+		t.Fatalf("a refused POST stored a title: %+v", titles)
+	}
+}
+
+func TestRateTitleChangesOnlyTheRating(t *testing.T) {
+	a := newAPI(t)
+	cover := "https://example.com/lalka.jpg"
+	var created collection.Title
+	a.mustDo(http.MethodPost, "/api/titles", obj{"kind": "book", "name": "Lalka", "notes": "Original", "cover_url": cover, "rating": 4}, &created, http.StatusCreated)
+	path := fmt.Sprintf("/api/titles/%d", created.ID)
+	a.mustDo(http.MethodPut, path, obj{"kind": "book", "name": "Lalka", "notes": "Corrected"}, nil, http.StatusOK)
+
+	var rated collection.Title
+	a.mustDo(http.MethodPut, path+"/rating", obj{"rating": 8}, &rated, http.StatusOK)
+	if rated.Rating == nil || *rated.Rating != 8 || rated.Notes != "Corrected" {
+		t.Fatalf("rated title = %+v", rated)
+	}
+	var detail collection.TitleDetail
+	a.mustDo(http.MethodGet, path, nil, &detail, http.StatusOK)
+	if detail.Notes != "Corrected" || detail.Name != "Lalka" || detail.CoverURL == nil || *detail.CoverURL != cover {
+		t.Fatalf("title after rating = %+v", detail.Title)
+	}
+	a.wantRating(created.ID, 8)
+
+	var cleared collection.Title
+	a.mustDo(http.MethodPut, path+"/rating", obj{"rating": nil}, &cleared, http.StatusOK)
+	if cleared.Rating != nil || cleared.Notes != "Corrected" {
+		t.Fatalf("cleared title = %+v", cleared)
+	}
+	a.wantRating(created.ID, 0)
+	a.mustDo(http.MethodPut, path+"/rating", obj{"rating": 10}, nil, http.StatusOK)
+
+	for _, bad := range []any{0, 11, 7.5, "8", true, obj{}} {
+		a.fails(http.MethodPut, path+"/rating", obj{"rating": bad}, http.StatusUnprocessableEntity, "rating")
+	}
+	a.fails(http.MethodPut, path+"/rating", obj{}, http.StatusUnprocessableEntity, "rating")
+	a.fails(http.MethodPut, path+"/rating", []byte(`{"rating": 8.0}`), http.StatusUnprocessableEntity, "rating")
+	a.fails(http.MethodPut, path+"/rating", "not an object", http.StatusUnprocessableEntity, "body")
+	a.wantRating(created.ID, 10)
+
+	a.fails(http.MethodPut, fmt.Sprintf("/api/titles/%d/rating", created.ID+1000), obj{"rating": 5}, http.StatusNotFound, "")
+}
+
+func TestTitleRatingAppliesToAWishedTitle(t *testing.T) {
+	a := newAPI(t)
+	wished := a.title("movie", "Miś")
+	a.copyOf(obj{"edition_id": a.edition(obj{"title_id": wished, "format": "dvd"}), "status": "wishlist"})
+	a.mustDo(http.MethodPut, fmt.Sprintf("/api/titles/%d", wished), obj{"kind": "movie", "name": "Miś", "rating": 10}, nil, http.StatusOK)
+	a.wantRating(wished, 10)
+
+	var titles []collection.Title
+	a.mustDo(http.MethodGet, "/api/titles", nil, &titles, http.StatusOK)
+	if len(titles) != 1 || titles[0].Rating == nil || *titles[0].Rating != 10 {
+		t.Fatalf("listed titles = %+v", titles)
+	}
+}
+
+func TestCollectionViewCarriesTitleRating(t *testing.T) {
+	a := newAPI(t)
+	rated := a.title("movie", "Seksmisja")
+	a.mustDo(http.MethodPut, fmt.Sprintf("/api/titles/%d", rated), obj{"kind": "movie", "name": "Seksmisja", "rating": 9}, nil, http.StatusOK)
+	a.copyOf(obj{"edition_id": a.edition(obj{"title_id": rated, "format": "dvd"}), "status": "owned"})
+	a.copyOf(obj{"edition_id": a.edition(obj{"title_id": rated, "format": "bluray"}), "status": "wishlist"})
+	a.copyOf(obj{"edition_id": a.edition(obj{"title_id": a.title("movie", "Rejs"), "format": "dvd"}), "status": "owned"})
+
+	var raw struct {
+		Items []map[string]any `json:"items"`
+	}
+	a.mustDo(http.MethodGet, "/api/collection", nil, &raw, http.StatusOK)
+	if len(raw.Items) != 3 {
+		t.Fatalf("items = %+v", raw.Items)
+	}
+	for _, it := range raw.Items {
+		got, has := it["rating"]
+		if it["name"] == "Seksmisja" && got != float64(9) {
+			t.Fatalf("rated copy %v rating = %v", it["copy_id"], got)
+		}
+		if it["name"] == "Rejs" && has {
+			t.Fatalf("unrated copy carries rating %v", got)
+		}
+	}
+}
+
 func TestCollectionViewFiltersAndTotals(t *testing.T) {
 	a := newAPI(t)
 	movie := a.title("movie", "Seksmisja")
@@ -901,6 +1042,176 @@ func TestCollectionViewKeepsSoldCopiesApart(t *testing.T) {
 	if it.CopyID != sold || it.SoldOn == nil || it.SoldOn.Format("2006-01-02") != "2026-05-10" ||
 		it.SalePriceCents == nil || *it.SalePriceCents != 3500 || *it.PriceCents != 2000 {
 		t.Fatalf("sold item = %+v", it)
+	}
+}
+
+func TestOrderedCopy(t *testing.T) {
+	a := newAPI(t)
+	movie := a.title("movie", "Diuna")
+	edition := a.edition(obj{"title_id": movie, "format": "uhd"})
+	with := func(base obj, fields obj) obj {
+		out := maps.Clone(base)
+		maps.Copy(out, fields)
+		return out
+	}
+	ordered := obj{
+		"edition_id": edition, "status": "ordered", "price_cents": 12999, "purchased_on": "2026-11-02",
+		"shop": "Allegro", "acquired_as": "new", "expected_on": "2026-12-15",
+	}
+	var created collection.Copy
+	a.mustDo(http.MethodPost, "/api/copies", ordered, &created, http.StatusCreated)
+	if created.Status != "ordered" || created.ExpectedOn == nil || created.ExpectedOn.Format("2006-01-02") != "2026-12-15" ||
+		created.PriceCents == nil || *created.PriceCents != 12999 || created.PurchasedOn == nil ||
+		created.PurchasedOn.Format("2006-01-02") != "2026-11-02" || created.Shop != "Allegro" {
+		t.Fatalf("created ordered copy = %+v", created)
+	}
+	path := fmt.Sprintf("/api/copies/%d", created.ID)
+
+	var undated collection.Copy
+	a.mustDo(http.MethodPut, path, with(ordered, obj{"expected_on": nil}), &undated, http.StatusOK)
+	if undated.Status != "ordered" || undated.ExpectedOn != nil || *undated.PriceCents != 12999 {
+		t.Fatalf("ordered copy without a delivery day = %+v", undated)
+	}
+	a.mustDo(http.MethodPut, path, ordered, nil, http.StatusOK)
+
+	owned := obj{"edition_id": edition, "status": "owned", "price_cents": 12999}
+	refused := []struct {
+		name   string
+		method string
+		path   string
+		body   obj
+		field  string
+	}{
+		{"owned with a delivery day", http.MethodPut, path, with(owned, obj{"expected_on": "2026-12-15"}), "expected_on"},
+		{"wish with a delivery day", http.MethodPut, path, obj{"edition_id": edition, "status": "wishlist", "expected_on": "2026-12-15"}, "expected_on"},
+		{"sold with a delivery day", http.MethodPut, path, with(owned, obj{"status": "sold", "sold_on": "2026-12-20", "expected_on": "2026-12-15"}), "expected_on"},
+		{"created owned with a delivery day", http.MethodPost, "/api/copies", with(owned, obj{"expected_on": "2026-12-15"}), "expected_on"},
+		{"ordered with a wish limit", http.MethodPut, path, with(ordered, obj{"max_price_cents": 10000}), "max_price_cents"},
+		{"created ordered with a wish limit", http.MethodPost, "/api/copies", with(ordered, obj{"max_price_cents": 10000}), "max_price_cents"},
+		{"ordered with a market percent", http.MethodPut, path, with(ordered, obj{"max_market_percent": 70}), "max_market_percent"},
+		{"ordered with a location", http.MethodPut, path, with(ordered, obj{"location": "Regał 2"}), "location"},
+		{"ordered with a sale day", http.MethodPut, path, with(ordered, obj{"sold_on": "2026-12-20"}), "sold_on"},
+		{"delivery day not a date", http.MethodPut, path, with(ordered, obj{"expected_on": "15.12.2026"}), "body"},
+	}
+	for _, tt := range refused {
+		t.Run(tt.name, func(t *testing.T) {
+			a.fails(tt.method, tt.path, tt.body, http.StatusUnprocessableEntity, tt.field)
+		})
+	}
+	var kept collection.Copy
+	a.mustDo(http.MethodGet, path, nil, &kept, http.StatusOK)
+	if kept.Status != "ordered" || kept.ExpectedOn == nil || kept.ExpectedOn.Format("2006-01-02") != "2026-12-15" {
+		t.Fatalf("refused updates changed the copy to %+v", kept)
+	}
+
+	// Receiving: the form sends the copy back as owned, without its delivery day.
+	received := maps.Clone(ordered)
+	delete(received, "expected_on")
+	received["status"] = "owned"
+	var got collection.Copy
+	a.mustDo(http.MethodPut, path, received, &got, http.StatusOK)
+	if got.Status != "owned" || got.ExpectedOn != nil || got.PriceCents == nil || *got.PriceCents != 12999 ||
+		got.PurchasedOn == nil || got.PurchasedOn.Format("2006-01-02") != "2026-11-02" || got.Shop != "Allegro" ||
+		got.AcquiredAs == nil || *got.AcquiredAs != "new" {
+		t.Fatalf("received copy = %+v", got)
+	}
+	var raw map[string]any
+	a.mustDo(http.MethodGet, path, nil, &raw, http.StatusOK)
+	if _, ok := raw["expected_on"]; ok {
+		t.Fatalf("owned copy answers a delivery day: %v", raw)
+	}
+}
+
+// TestReceiveOrderedCopy receives a copy whose price and shop changed after
+// the receiving page read it: the receipt keeps the stored values, so a stale
+// page cannot put the old ones back.
+func TestReceiveOrderedCopy(t *testing.T) {
+	a := newAPI(t)
+	movie := a.title("movie", "Diuna")
+	edition := a.edition(obj{"title_id": movie, "format": "uhd"})
+	ordered := obj{
+		"edition_id": edition, "status": "ordered", "price_cents": 12999, "purchased_on": "2026-11-02",
+		"shop": "Allegro", "condition": "mint", "expected_on": "2026-12-15",
+	}
+	id := a.copyOf(ordered)
+	path := fmt.Sprintf("/api/copies/%d", id)
+	edited := maps.Clone(ordered)
+	edited["price_cents"] = 9999
+	edited["shop"] = "Empik"
+	a.mustDo(http.MethodPut, path, edited, nil, http.StatusOK)
+
+	var got collection.Copy
+	a.mustDo(http.MethodPost, path+"/receipt", nil, &got, http.StatusOK)
+	if got.Status != "owned" || got.ExpectedOn != nil || got.PriceCents == nil || *got.PriceCents != 9999 ||
+		got.Shop != "Empik" || got.PurchasedOn == nil || got.PurchasedOn.Format("2006-01-02") != "2026-11-02" ||
+		got.Condition == nil || *got.Condition != "mint" {
+		t.Fatalf("received copy = %+v", got)
+	}
+	var stored collection.Copy
+	a.mustDo(http.MethodGet, path, nil, &stored, http.StatusOK)
+	if stored.Status != "owned" || stored.ExpectedOn != nil || *stored.PriceCents != 9999 || stored.Shop != "Empik" {
+		t.Fatalf("stored copy = %+v", stored)
+	}
+
+	a.fails(http.MethodPost, path+"/receipt", nil, http.StatusConflict, "status")
+	wish := a.copyOf(obj{"edition_id": edition, "status": "wishlist"})
+	a.fails(http.MethodPost, fmt.Sprintf("/api/copies/%d/receipt", wish), nil, http.StatusConflict, "status")
+	a.fails(http.MethodPost, "/api/copies/999999/receipt", nil, http.StatusNotFound, "")
+}
+
+func TestCollectionViewCountsOrderedCopiesApart(t *testing.T) {
+	a := newAPI(t)
+	movie := a.title("movie", "Diuna")
+	uhd := a.edition(obj{"title_id": movie, "format": "uhd"})
+	a.copyOf(obj{"edition_id": uhd, "status": "owned", "price_cents": 4999})
+	a.copyOf(obj{"edition_id": uhd, "status": "owned"})
+	a.copyOf(obj{"edition_id": uhd, "status": "wishlist"})
+	a.copyOf(obj{"edition_id": uhd, "status": "sold", "price_cents": 2000, "sold_on": "2026-05-10"})
+	ordered := a.copyOf(obj{
+		"edition_id": uhd, "status": "ordered", "price_cents": 12999, "purchased_on": "2026-11-02",
+		"expected_on": "2026-12-15",
+	})
+	a.copyOf(obj{"edition_id": uhd, "status": "ordered"})
+
+	tests := []struct {
+		query string
+		want  collection.Totals
+	}{
+		{"", collection.Totals{Copies: 6, Owned: 2, Ordered: 2, Wishlist: 1, Priced: 1, SpentCents: 17998}},
+		{"?status=ordered", collection.Totals{Copies: 2, Ordered: 2, SpentCents: 12999}},
+		{"?status=owned", collection.Totals{Copies: 2, Owned: 2, Priced: 1, SpentCents: 4999}},
+		{"?status=wishlist", collection.Totals{Copies: 1, Wishlist: 1}},
+		{"?status=sold", collection.Totals{Copies: 1}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			var view collection.CollectionView
+			a.mustDo(http.MethodGet, "/api/collection"+tt.query, nil, &view, http.StatusOK)
+			if view.Totals != tt.want || len(view.Items) != tt.want.Copies {
+				t.Fatalf("totals = %+v (%d items), want %+v", view.Totals, len(view.Items), tt.want)
+			}
+			for _, it := range view.Items {
+				if tt.query == "?status=ordered" && it.Status != "ordered" {
+					t.Fatalf("ordered view lists %+v", it)
+				}
+			}
+		})
+	}
+
+	var view collection.CollectionView
+	a.mustDo(http.MethodGet, "/api/collection?status=ordered", nil, &view, http.StatusOK)
+	var found bool
+	for _, it := range view.Items {
+		if it.CopyID != ordered {
+			continue
+		}
+		found = true
+		if it.ExpectedOn == nil || it.ExpectedOn.Format("2006-01-02") != "2026-12-15" || *it.PriceCents != 12999 {
+			t.Fatalf("ordered item = %+v", it)
+		}
+	}
+	if !found {
+		t.Fatalf("ordered view misses copy %d: %+v", ordered, view.Items)
 	}
 }
 

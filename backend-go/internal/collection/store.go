@@ -81,7 +81,7 @@ func hasTag(param string) string {
 }
 
 const titleColumns = `t.id, t.kind, t.name, t.original_title, t.polish_title, t.year,
-	t.tmdb_id, t.authors, t.bn_id, t.openlibrary_id, t.notes, t.cover_url, ` + titleTags + `,
+	t.tmdb_id, t.authors, t.bn_id, t.openlibrary_id, t.notes, t.cover_url, t.rating, ` + titleTags + `,
 	t.created_at, t.updated_at,
 	(SELECT count(*) FROM edition e WHERE e.title_id = t.id),
 	(SELECT count(*) FROM copy c JOIN edition e ON e.id = c.edition_id WHERE e.title_id = t.id)`
@@ -89,7 +89,7 @@ const titleColumns = `t.id, t.kind, t.name, t.original_title, t.polish_title, t.
 func scanTitle(row pgx.Row) (Title, error) {
 	var t Title
 	err := row.Scan(&t.ID, &t.Kind, &t.Name, &t.OriginalTitle, &t.PolishTitle, &t.Year,
-		&t.TMDBID, &t.Authors, &t.BNID, &t.OpenLibraryID, &t.Notes, &t.CoverURL, &t.Tags,
+		&t.TMDBID, &t.Authors, &t.BNID, &t.OpenLibraryID, &t.Notes, &t.CoverURL, &t.Rating, &t.Tags,
 		&t.CreatedAt, &t.UpdatedAt, &t.EditionCount, &t.CopyCount)
 	if t.Tags == nil {
 		t.Tags = []string{}
@@ -118,16 +118,17 @@ func scanEdition(row pgx.Row) (Edition, error) {
 
 const copyColumns = `c.id, c.edition_id, c.status, c.price_cents, c.purchased_on, c.shop,
 	c.acquired_as, c.condition, c.notes, c.max_price_cents, c.max_market_percent, c.sold_on,
-	c.sale_price_cents, c.location, c.created_at, c.updated_at`
+	c.sale_price_cents, c.location, c.expected_on, c.created_at, c.updated_at`
 
 func scanCopy(row pgx.Row) (Copy, error) {
 	var c Copy
-	var purchased, sold *time.Time
+	var purchased, sold, expected *time.Time
 	err := row.Scan(&c.ID, &c.EditionID, &c.Status, &c.PriceCents, &purchased, &c.Shop,
 		&c.AcquiredAs, &c.Condition, &c.Notes, &c.MaxPriceCents, &c.MaxMarketPercent, &sold,
-		&c.SalePriceCents, &c.Location, &c.CreatedAt, &c.UpdatedAt)
+		&c.SalePriceCents, &c.Location, &expected, &c.CreatedAt, &c.UpdatedAt)
 	c.PurchasedOn = dateOf(purchased)
 	c.SoldOn = dateOf(sold)
+	c.ExpectedOn = dateOf(expected)
 	return c, err
 }
 
@@ -200,11 +201,11 @@ func (s *Store) CreateTitle(ctx context.Context, in *TitleInput) (Title, bool, e
 		var id int64
 		err := tx.QueryRow(ctx, `INSERT INTO title
 			(kind, name, original_title, polish_title, year, tmdb_id, authors, bn_id, openlibrary_id, notes,
-			cover_url, request_key)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, ''), $12)
+			cover_url, request_key, rating)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, ''), $12, $13)
 			ON CONFLICT (request_key) DO NOTHING RETURNING id`,
 			in.Kind, in.Name, in.OriginalTitle, in.PolishTitle, in.Year, in.TMDBID, in.Authors,
-			in.BNID, in.OpenLibraryID, in.Notes, in.CoverURL, in.RequestKey).Scan(&id)
+			in.BNID, in.OpenLibraryID, in.Notes, in.CoverURL, in.RequestKey, in.Rating).Scan(&id)
 		if errors.Is(err, pgx.ErrNoRows) && in.RequestKey != nil {
 			created = false
 			err = tx.QueryRow(ctx, `SELECT id FROM title WHERE request_key = $1`, *in.RequestKey).Scan(&id)
@@ -226,7 +227,8 @@ func (s *Store) CreateTitle(ctx context.Context, in *TitleInput) (Title, bool, e
 }
 
 // UpdateTitle replaces a title. The kind cannot change while editions exist,
-// since their kind-specific fields would no longer apply.
+// since their kind-specific fields would no longer apply. A nil cover URL
+// and in.KeepRating keep the stored cover and rating.
 func (s *Store) UpdateTitle(ctx context.Context, id int64, in *TitleInput) (Title, error) {
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
 		var kind string
@@ -242,9 +244,10 @@ func (s *Store) UpdateTitle(ctx context.Context, id int64, in *TitleInput) (Titl
 		_, err = tx.Exec(ctx, `UPDATE title SET kind = $2, name = $3, original_title = $4,
 			polish_title = $5, year = $6, tmdb_id = $7, authors = $8, bn_id = $9,
 			openlibrary_id = $10, notes = $11, cover_url = NULLIF(COALESCE($12, cover_url), ''),
+			rating = CASE WHEN $13 THEN rating ELSE $14 END,
 			updated_at = now(), edited_at = now() WHERE id = $1`,
 			id, in.Kind, in.Name, in.OriginalTitle, in.PolishTitle, in.Year, in.TMDBID, in.Authors,
-			in.BNID, in.OpenLibraryID, in.Notes, in.CoverURL)
+			in.BNID, in.OpenLibraryID, in.Notes, in.CoverURL, in.KeepRating, in.Rating)
 		if err != nil {
 			return mapErr(err, ErrTitleNotFound, "update title")
 		}
@@ -258,6 +261,20 @@ func (s *Store) UpdateTitle(ctx context.Context, id int64, in *TitleInput) (Titl
 	})
 	if err != nil {
 		return Title{}, err
+	}
+	return s.GetTitle(ctx, id)
+}
+
+// RateTitle sets a title's rating and nothing else, so an edit saved since
+// the caller read the title stays.
+func (s *Store) RateTitle(ctx context.Context, id int64, rating *int) (Title, error) {
+	tag, err := s.pool.Exec(ctx, `UPDATE title SET rating = $2, updated_at = now(), edited_at = now()
+		WHERE id = $1`, id, rating)
+	if err != nil {
+		return Title{}, mapErr(err, ErrTitleNotFound, "rate title")
+	}
+	if tag.RowsAffected() == 0 {
+		return Title{}, ErrTitleNotFound
 	}
 	return s.GetTitle(ctx, id)
 }
@@ -611,12 +628,12 @@ func (s *Store) CreateCopy(ctx context.Context, in *CopyInput) (Copy, bool, erro
 		var id int64
 		err := tx.QueryRow(ctx, `INSERT INTO copy (edition_id, status, price_cents, purchased_on,
 			shop, acquired_as, condition, notes, max_price_cents, max_market_percent, sold_on,
-			sale_price_cents, location, request_key)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+			sale_price_cents, location, expected_on, request_key)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 			ON CONFLICT (request_key) DO NOTHING RETURNING id`,
 			in.EditionID, in.Status, in.PriceCents, timeOf(in.PurchasedOn), in.Shop, in.AcquiredAs,
 			in.Condition, in.Notes, in.MaxPriceCents, in.MaxMarketPercent, timeOf(in.SoldOn),
-			in.SalePriceCents, in.Location, in.RequestKey).Scan(&id)
+			in.SalePriceCents, in.Location, timeOf(in.ExpectedOn), in.RequestKey).Scan(&id)
 		switch {
 		case errors.Is(err, pgx.ErrNoRows) && in.RequestKey != nil:
 			created = false
@@ -653,15 +670,41 @@ func (s *Store) UpdateCopy(ctx context.Context, id int64, in *CopyInput) (Copy, 
 		c, err = scanCopy(tx.QueryRow(ctx, `UPDATE copy c SET edition_id = $2, status = $3, price_cents = $4,
 			purchased_on = $5, shop = $6, acquired_as = $7, condition = $8, notes = $9,
 			max_price_cents = $10, max_market_percent = $11, sold_on = $12, sale_price_cents = $13,
-			location = $14, updated_at = now() WHERE c.id = $1 RETURNING `+copyColumns,
+			location = $14, expected_on = $15, updated_at = now() WHERE c.id = $1 RETURNING `+copyColumns,
 			id, in.EditionID, in.Status, in.PriceCents, timeOf(in.PurchasedOn), in.Shop, in.AcquiredAs,
 			in.Condition, in.Notes, in.MaxPriceCents, in.MaxMarketPercent, timeOf(in.SoldOn),
-			in.SalePriceCents, in.Location))
+			in.SalePriceCents, in.Location, timeOf(in.ExpectedOn)))
 		if isFKViolation(err, "copy_edition_id_fkey") {
 			return ErrEditionNotFound
 		}
 		if err != nil {
 			return mapErr(err, ErrNotFound, "update copy")
+		}
+		return nil
+	})
+	if err != nil {
+		return Copy{}, err
+	}
+	return c, nil
+}
+
+// ReceiveCopy puts ordered copy id on the shelf: it becomes owned and drops
+// its expected delivery, and keeps every other field as stored, whatever an
+// edit saved since the caller read it. Errors: ErrNotFound, ErrNotOrdered.
+func (s *Store) ReceiveCopy(ctx context.Context, id int64) (Copy, error) {
+	var c Copy
+	err := s.inTx(ctx, func(tx pgx.Tx) error {
+		status, err := lockCopy(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if status != StatusOrdered {
+			return ErrNotOrdered
+		}
+		c, err = scanCopy(tx.QueryRow(ctx, `UPDATE copy c SET status = 'owned', expected_on = NULL,
+			updated_at = now() WHERE c.id = $1 RETURNING `+copyColumns, id))
+		if err != nil {
+			return fmt.Errorf("receive copy: %w", err)
 		}
 		return nil
 	})
@@ -973,9 +1016,11 @@ type Item struct {
 	Shop          string  `json:"shop"`
 	AcquiredAs    *string `json:"acquired_as" ts:"AcquiredAs"`
 	Condition     *string `json:"condition" ts:"Condition"`
-	// SoldOn and SalePriceCents are a sold copy's sale.
+	// SoldOn and SalePriceCents are a sold copy's sale, ExpectedOn the day an
+	// ordered copy should arrive.
 	SoldOn         *Date    `json:"sold_on,omitempty" ts:",null"`
 	SalePriceCents *int64   `json:"sale_price_cents,omitempty" ts:",null"`
+	ExpectedOn     *Date    `json:"expected_on,omitempty" ts:",null"`
 	Location       *string  `json:"location,omitempty" ts:",null"`
 	EditionID      int64    `json:"edition_id"`
 	Barcode        *string  `json:"barcode"`
@@ -990,6 +1035,8 @@ type Item struct {
 	Year           *int     `json:"year"`
 	CoverURL       *string  `json:"cover_url,omitempty"`
 	Authors        []string `json:"authors,omitempty"`
+	// Rating is the title's rating, absent while it has none.
+	Rating *int `json:"rating,omitempty"`
 	// LoanBorrower and LoanDueOn come from the copy's open loan, if any.
 	LoanBorrower *string `json:"loan_borrower,omitempty"`
 	LoanDueOn    *Date   `json:"loan_due_on,omitempty"`
@@ -1000,16 +1047,17 @@ type Item struct {
 func scanItem(row pgx.Row) (Item, error) {
 	var it Item
 	var createdAt time.Time
-	var purchased, sold, due *time.Time
+	var purchased, sold, due, expected *time.Time
 	err := row.Scan(&it.CopyID, &createdAt, &it.Status, &it.PriceCents, &it.MaxPriceCents, &purchased, &it.Shop,
-		&it.AcquiredAs, &it.Condition, &sold, &it.SalePriceCents, &it.Location, &it.EditionID, &it.Barcode, &it.Label, &it.Format, &it.Binding,
+		&it.AcquiredAs, &it.Condition, &sold, &it.SalePriceCents, &expected, &it.Location, &it.EditionID, &it.Barcode, &it.Label, &it.Format, &it.Binding,
 		&it.TitleID, &it.Kind, &it.Name, &it.OriginalTitle, &it.PolishTitle, &it.Year, &it.CoverURL, &it.Authors,
-		&it.LoanBorrower, &due,
+		&it.Rating, &it.LoanBorrower, &due,
 		&it.Tags)
 	it.CreatedAtUS = createdAt.UnixMicro()
 	it.PurchasedOn = dateOf(purchased)
 	it.SoldOn = dateOf(sold)
 	it.LoanDueOn = dateOf(due)
+	it.ExpectedOn = dateOf(expected)
 	return it, err
 }
 
@@ -1018,10 +1066,10 @@ func scanItem(row pgx.Row) (Item, error) {
 // filter them itself.
 func (s *Store) Collection(ctx context.Context, f Filter) ([]Item, error) {
 	rows, err := s.pool.Query(ctx, `SELECT c.id, c.created_at, c.status, c.price_cents, c.max_price_cents,
-			c.purchased_on, c.shop, c.acquired_as, c.condition, c.sold_on, c.sale_price_cents, c.location,
-			e.id, e.barcode, e.label, e.format, e.binding,
+			c.purchased_on, c.shop, c.acquired_as, c.condition, c.sold_on, c.sale_price_cents, c.expected_on,
+			c.location, e.id, e.barcode, e.label, e.format, e.binding,
 			t.id, t.kind, t.name, t.original_title, t.polish_title, t.year,
-			`+CoverURL+`, t.authors, l.borrower, l.due_on, `+titleTags+`
+			`+CoverURL+`, t.authors, t.rating, l.borrower, l.due_on, `+titleTags+`
 		FROM copy c JOIN edition e ON e.id = c.edition_id JOIN title t ON t.id = e.title_id
 		LEFT JOIN loan l ON l.copy_id = c.id AND l.returned_on IS NULL
 		WHERE ($1 = '' OR t.kind = $1) AND ($2 = '' OR e.format = $2) AND ($3 = '' OR c.status = $3)

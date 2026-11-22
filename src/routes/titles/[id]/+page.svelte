@@ -6,11 +6,13 @@
 		ConfirmDialog,
 		ErrorState,
 		FactList,
+		Field,
 		FormError,
 		Icon,
 		Link,
 		Modal,
 		Section,
+		Select,
 		Skeleton
 	} from '@smykla-skalski/sui';
 	import { onDestroy } from 'svelte';
@@ -31,6 +33,7 @@
 		type CopyStatus,
 		type Edition,
 		type FormIssue,
+		type RatingPayload,
 		type TagCount,
 		type Title,
 		type TitleDetail
@@ -49,9 +52,11 @@
 		copyRequest,
 		editionArtwork,
 		editionName,
+		noRating,
 		openedFromCollection,
 		plainClick,
 		previewHero,
+		ratingOptions,
 		soleCopy,
 		titleHero,
 		trendHeight,
@@ -60,6 +65,7 @@
 		type Hero
 	} from '#lib/title-detail.js';
 	import { newRequestKey } from '#lib/scan.js';
+	import { RatingSaver } from '#lib/title-rating.js';
 	import { TitleMarkets } from '#lib/title-market.svelte.js';
 	import type { CopyValue, CopyValueDay, CopyValueHistory, TitleValues } from '#lib/valuation.js';
 
@@ -74,6 +80,7 @@
 	/** The heading of the card of a title's one copy. */
 	const soleCopyHeading: Record<CopyStatus, string> = {
 		owned: 'Twój egzemplarz',
+		ordered: 'Zamówiony egzemplarz',
 		wishlist: 'Na liście życzeń',
 		sold: 'Sprzedany egzemplarz'
 	};
@@ -92,6 +99,10 @@
 	let loads = 0;
 	/** The title the page was last asked for; moving to another one closes this one's forms. */
 	let requested: number | undefined;
+
+	/** Stores the open title's rating picks; replaced when another title opens. */
+	let ratings: RatingSaver | null = null;
+	let ratingError = $state<string | null>(null);
 
 	let titleSheet = $state(false);
 	let titleForm = $state(titleToForm(null));
@@ -150,6 +161,8 @@
 			valueDays = [];
 			failure = null;
 			refreshError = null;
+			ratings = null;
+			ratingError = null;
 			titleSheet = false;
 			copySheet = false;
 			adding = false;
@@ -161,9 +174,11 @@
 		}
 		const current = ++loads;
 		busy = true;
+		const mark = ratings?.mark() ?? 0;
 		try {
 			const next = await request<TitleDetail>(fetch, 'GET', `/api/titles/${titleID}`);
 			if (current !== loads) return;
+			next.rating = ratingFrom(titleID, next.rating ?? null, mark);
 			detail = next;
 			failure = null;
 			refreshError = null;
@@ -265,9 +280,13 @@
 			return;
 		}
 		savingTitle = true;
+		const mark = ratings?.mark() ?? 0;
 		try {
 			const saved = await request<Title>(fetch, 'PUT', `/api/titles/${id}`, parsed.value);
-			if (detail?.id === saved.id) Object.assign(detail, saved);
+			if (detail?.id === saved.id) {
+				Object.assign(detail, saved);
+				detail.rating = ratingFrom(saved.id, saved.rating ?? null, mark);
+			}
 			titleSheet = false;
 			await load(id);
 		} catch (err) {
@@ -275,6 +294,40 @@
 		} finally {
 			savingTitle = false;
 		}
+	}
+
+	/**
+	 * The rating a read of title `titleID` begun at `mark` shows: the one it read, unless a pick
+	 * made since then, or still on its way, says otherwise.
+	 */
+	function ratingFrom(titleID: number, read: number | null, mark: number): number | null {
+		if (ratings?.titleID !== titleID) {
+			const saver = new RatingSaver(
+				titleID,
+				read,
+				async (ratedID, rating) => {
+					const body: RatingPayload = { rating };
+					const saved = await request<Title>(fetch, 'PUT', `/api/titles/${ratedID}/rating`, body);
+					return saved.rating ?? null;
+				},
+				(view) => {
+					if (ratings !== saver || detail?.id !== titleID) return;
+					detail.rating = view.rating;
+					ratingError =
+						view.failed === null
+							? null
+							: `Nie udało się zapisać oceny: ${errorMessage(view.failed)}`;
+				}
+			);
+			ratings = saver;
+			return read;
+		}
+		return ratings.loaded(read, mark);
+	}
+
+	/** Stores a picked rating without the edit form; the select shows it at once. */
+	function rate(picked: number | null) {
+		void ratings?.pick(picked === null || picked === noRating ? null : picked);
 	}
 
 	/** Shows a saved copy at once, so it stays in view even when the refresh after it fails. */
@@ -564,6 +617,18 @@
 			</ul>
 		{/if}
 
+		<div class="rating">
+			<Field label="Ocena" error={ratingError ?? undefined}>
+				{#snippet control(c)}
+					<Select
+						{...c}
+						options={ratingOptions}
+						bind:value={() => t.rating ?? noRating, (v) => rate(v)}
+					/>
+				{/snippet}
+			</Field>
+		</div>
+
 		{#if t.notes}
 			<p class="notes">{t.notes}</p>
 		{/if}
@@ -670,6 +735,10 @@
 		display: grid;
 		gap: 1rem;
 		padding: var(--sui-pane-gutter, 1.5rem);
+	}
+	.rating {
+		justify-self: start;
+		min-inline-size: 10rem;
 	}
 	.cards {
 		display: grid;

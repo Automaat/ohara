@@ -18,7 +18,14 @@ async function seed(
 	request: APIRequestContext,
 	title: { kind: string; name: string; authors?: string[] },
 	edition: { format?: string; barcode?: string } = {},
-	copy: { status?: string; shop?: string; price_cents?: number; location?: string } = {}
+	copy: {
+		status?: string;
+		shop?: string;
+		price_cents?: number;
+		purchased_on?: string;
+		expected_on?: string;
+		location?: string;
+	} = {}
 ): Promise<Seeded> {
 	const cover = new URL('/pwa-192x192.png', test.info().project.use.baseURL).href;
 	const titleID = await created(
@@ -706,6 +713,76 @@ test('a copy marked sold leaves the shelf and shows under Sprzedane', async ({ p
 		await expectNoSourceRequests(request);
 	} finally {
 		await request.delete(`/api/copies/${copyID}`);
+	}
+});
+
+/**
+ * An ordered copy stays on the default shelf with its late delivery, shows alone under
+ * "Zamówione", and "Odebrano" on its page puts it on the shelf with its order kept. The copy is
+ * deleted at the end, since later tests count every copy the collection lists without a status.
+ */
+test('an ordered copy waits on the shelf until Odebrano', async ({ page, request }) => {
+	const name = `Zamówiony ${tag()}`;
+	const shelved = `Na półce ${tag()}`;
+	const owned = await seed(request, { kind: 'movie', name: shelved }, { format: 'dvd' });
+	const { copyID } = await seed(
+		request,
+		{ kind: 'movie', name },
+		{ format: 'uhd' },
+		{
+			status: 'ordered',
+			price_cents: 12999,
+			purchased_on: '2026-01-02',
+			shop: 'Allegro',
+			expected_on: '2026-01-10'
+		}
+	);
+	try {
+		await page.goto('/');
+		await expect(tile(page, name)).toBeVisible();
+		await expect(tile(page, name)).toContainText('Dostawa 10 sty 2026 · po terminie');
+		await expect(tile(page, shelved)).toBeVisible();
+
+		await page.getByRole('button', { name: /^Sortowanie i filtry/ }).tap();
+		const sheet = page.getByRole('dialog', { name: 'Sortowanie i filtry' });
+		await sheet.getByText('Zamówione', { exact: true }).tap();
+		await expect(sheet.getByRole('switch', { name: 'Zamówione' })).toBeChecked();
+		await expect(page).toHaveURL(/\/\?status=ordered$/);
+		await sheet.getByRole('button', { name: 'Gotowe' }).tap();
+		await expect(tile(page, name)).toBeVisible();
+		await expect(tile(page, shelved)).toHaveCount(0);
+
+		await page.goto(`/copies/${copyID}`);
+		await expect(page.getByRole('heading', { name: `Zamówiony: ${name}` })).toBeVisible();
+		await expect(page.getByRole('radio', { name: 'Na półce' })).toBeChecked();
+		await expect(page.getByRole('switch', { name: 'Zamówiony' })).toBeChecked();
+		await expect(page.getByRole('textbox', { name: 'Spodziewana dostawa' })).toHaveValue(
+			'2026-01-10'
+		);
+		await expect(page.getByRole('textbox', { name: 'Data zamówienia' })).toHaveValue('2026-01-02');
+
+		await page.getByRole('button', { name: 'Odebrano' }).tap();
+		await expect(page.getByText('Zapisano.')).toBeVisible();
+		await expect(page.getByRole('heading', { name: `Na półce: ${name}` })).toBeVisible();
+		await expect(page.getByRole('button', { name: 'Odebrano' })).toHaveCount(0);
+		await expect(page.getByRole('textbox', { name: 'Spodziewana dostawa' })).toHaveCount(0);
+		await expect(page.getByRole('switch', { name: 'Zamówiony' })).not.toBeChecked();
+
+		const copy = (await (await request.get(`/api/copies/${copyID}`)).json()) as Record<
+			string,
+			unknown
+		>;
+		expect(copy).toMatchObject({
+			status: 'owned',
+			price_cents: 12999,
+			purchased_on: '2026-01-02',
+			shop: 'Allegro'
+		});
+		expect(copy).not.toHaveProperty('expected_on');
+		await expectNoSourceRequests(request);
+	} finally {
+		await request.delete(`/api/copies/${copyID}`);
+		await request.delete(`/api/copies/${owned.copyID}`);
 	}
 });
 

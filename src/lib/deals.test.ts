@@ -1,5 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+	ageClock,
+	confirmedListings,
 	wishFacts,
 	wishesPath,
 	dealPrice,
@@ -25,6 +27,7 @@ import {
 	wishComparison,
 	wishLimit,
 	withoutDismissed,
+	withoutUnconfirmed,
 	type HunterStatus,
 	type Keyword,
 	type MarketPrice,
@@ -356,6 +359,92 @@ describe('dismissal', () => {
 	it('hands back the same list when nothing is dismissed', () => {
 		const listings = [{ id: 1 }];
 		expect(withoutDismissed(listings, new Set())).toBe(listings);
+	});
+});
+
+describe('withoutUnconfirmed', () => {
+	it('leaves out the Discogs listings and keeps the order of the rest', () => {
+		const listings = [
+			{ id: 1, source: 'olx' as const },
+			{ id: 2, source: 'discogs_inventory' as const },
+			{ id: 3, source: 'pepper' as const }
+		];
+		expect(withoutUnconfirmed(listings).map((o) => o.id)).toEqual([1, 3]);
+	});
+
+	it('hands back the same list when it holds no Discogs listing', () => {
+		const listings = [{ id: 1, source: 'olx' as const }];
+		expect(withoutUnconfirmed(listings)).toBe(listings);
+	});
+});
+
+describe('confirmedListings', () => {
+	const listings = [
+		{ id: 1, source: 'olx' as const },
+		{ id: 2, source: 'discogs_inventory' as const }
+	];
+	const limit = 14 * 60_000;
+
+	it('keeps every listing within 14 minutes of the request', () => {
+		expect(confirmedListings(listings, 1_000, 1_000 + limit - 1)).toBe(listings);
+	});
+
+	it('leaves out the Discogs listings from 14 minutes on', () => {
+		expect(confirmedListings(listings, 1_000, 1_000 + limit).map((o) => o.id)).toEqual([1]);
+	});
+});
+
+describe('ageClock', () => {
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	const fake = () =>
+		vi.useFakeTimers({
+			now: new Date('2026-11-22T10:00:00Z'),
+			toFake: ['Date', 'performance', 'setTimeout', 'setInterval']
+		});
+
+	it('moves with the clocks', () => {
+		fake();
+		const start = ageClock();
+		vi.advanceTimersByTime(60_000);
+		expect(ageClock() - start).toBe(60_000);
+	});
+
+	it('expires every earlier answer when the system clock is set back', () => {
+		fake();
+		const start = ageClock();
+		vi.advanceTimersByTime(30_000);
+		vi.setSystemTime(Date.now() - 3_600_000);
+		expect(ageClock() - start).toBeGreaterThanOrEqual(14 * 60_000);
+	});
+
+	it('expires every earlier answer after a sleep that only the wall clock saw', () => {
+		fake();
+		const start = ageClock();
+		vi.setSystemTime(Date.now() + 12 * 60_000);
+		expect(ageClock() - start).toBeGreaterThanOrEqual(14 * 60_000);
+	});
+
+	it('expires every earlier answer when a set-back clock and a sleep fall between two readings', () => {
+		fake();
+		const start = ageClock();
+		vi.advanceTimersByTime(6 * 60_000);
+		ageClock();
+		vi.setSystemTime(Date.now() - 10 * 60_000);
+		vi.setSystemTime(Date.now() + 12 * 60_000);
+		expect(ageClock() - start).toBeGreaterThanOrEqual(6 * 60_000 + 14 * 60_000);
+	});
+
+	it('lets the clocks part by up to 2 seconds and never goes back', () => {
+		fake();
+		const start = ageClock();
+		vi.advanceTimersByTime(30_000);
+		vi.setSystemTime(Date.now() + 2_000);
+		expect(ageClock() - start).toBe(32_000);
+		vi.setSystemTime(Date.now() - 1_000);
+		expect(ageClock() - start).toBe(32_000);
 	});
 });
 

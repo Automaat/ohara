@@ -24,10 +24,13 @@ import (
 // Listing is one offer a source found. AcquiredAs is "new", "used" or nil
 // when the source does not say. Raw is the source's own record of the
 // listing, kept for later valuation work. Query is the search a Pager
-// found it with, empty for other sources. Kinds are the title kinds the
-// listing can be when its source's catalog says ("book", or "movie" and
-// "tv" for a film disc), nil when it does not; a listing with Kinds
-// belongs to no want of another kind.
+// found it with, empty for other sources; an Expiring source's listings
+// carry its Scope. Kinds are the title kinds the listing can be when its
+// source's catalog says ("book", or "movie" and "tv" for a film disc), nil
+// when it does not; a listing with Kinds belongs to no want of another
+// kind. Medium is the album medium a source names apart from the title
+// ("vinyl", "cd", "cassette" or "other"), which makes the listing an
+// album's; empty leaves the medium to the title.
 type Listing struct {
 	Source     string
 	ExternalID string
@@ -38,6 +41,7 @@ type Listing struct {
 	AcquiredAs *string
 	Raw        json.RawMessage
 	Query      string
+	Medium     string
 	Kinds      []string
 }
 
@@ -58,6 +62,15 @@ type Source interface {
 	Name() string
 	PerQuery() bool
 	Search(ctx context.Context, query string) ([]Listing, error)
+}
+
+// Expiring is a feed source whose answer is all of its Scope that may be
+// shown: a stored listing of the scope that a successful answer no longer
+// holds is gone, and gone or stale listings leave the deals view and send
+// no alert (freshListing).
+type Expiring interface {
+	Source
+	Scope() string
 }
 
 // KindSource is a source that offers titles of some kinds only, such as a

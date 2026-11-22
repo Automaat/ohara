@@ -1,5 +1,7 @@
 import { IDBFactory } from 'fake-indexeddb';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { requestDeadlineMs } from './api';
+import { deleteQueueEntry } from './queue-deletes';
 import { logScan, recentScans } from './recent.svelte';
 import {
 	PendingScans,
@@ -307,6 +309,29 @@ describe('PendingScans.send', () => {
 		await pending.send();
 		expect(device.kept.size).toBe(0);
 		vi.useRealTimers();
+	});
+
+	it('waits for a queue removal on its way, and only until it fails unanswered', async () => {
+		vi.useFakeTimers();
+		try {
+			vi.stubGlobal('fetch', () => new Promise<Response>(() => {}));
+			const removal = deleteQueueEntry(9, undefined).catch(() => undefined);
+			vi.unstubAllGlobals();
+			const device = memory([a]);
+			const s = api();
+			const pending = new PendingScans(s.fetchFn, device.open);
+			const run = pending.send();
+			await vi.advanceTimersByTimeAsync(requestDeadlineMs - 1);
+			expect(s.codes()).toEqual([]);
+			await vi.advanceTimersByTimeAsync(1);
+			await removal;
+			await run;
+			expect(s.codes()).toEqual([a]);
+			expect(device.kept.size).toBe(0);
+		} finally {
+			vi.unstubAllGlobals();
+			vi.useRealTimers();
+		}
 	});
 
 	it('sends each code once when two tabs come back online together', async () => {

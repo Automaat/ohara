@@ -224,6 +224,7 @@ export function searchedFor(wishes: number, status: HunterStatus, now: Date): st
 export const sourceLabels: Record<DealSource, string> = {
 	olx: 'OLX',
 	bluedvd: 'BlueDVD',
+	winylownia: 'Winylownia',
 	swiatksiazki: 'Świat Książki',
 	pepper: 'Pepper',
 	tezeusz: 'Tezeusz',
@@ -366,6 +367,18 @@ export function lastRunSummary(result: DealsRunResult | null): string | null {
  * lists none, as a wish is not had yet.
  */
 export const wishesPath = '/api/collection?status=wishlist';
+
+export function allegroSearchURL(
+	wish: Pick<CollectionItem, 'name' | 'kind' | 'season' | 'format' | 'authors'>
+): string | null {
+	const title = wish.name.trim();
+	if (!title) return null;
+	const season = wish.kind === 'tv' && wish.season != null ? `sezon ${wish.season}` : null;
+	const artist = wish.kind === 'music' ? wish.authors?.join(' ') : null;
+	const format = wish.format ? formatLabels[wish.format] : null;
+	const phrase = [title, season, artist, format].filter(Boolean).join(' ');
+	return `https://allegro.pl/listing?${new URLSearchParams({ string: phrase })}`;
+}
 
 /**
  * A wish's line on Okazje, such as "Film · Blu-ray · limit 80 zł" or "Książka · Stanisław Lem": its

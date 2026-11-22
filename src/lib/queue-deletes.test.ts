@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { noAnswerMessage, requestDeadlineMs } from './api';
 import { deleteQueueEntry, queueDeletesSettled, type DeleteStore } from './queue-deletes';
 
 /** A tab's session storage. */
@@ -67,6 +68,31 @@ describe('queue deletes in flight', () => {
 		await expect(removal).rejects.toThrow();
 		expect(await isSettled(read)).toBe(true);
 		expect(JSON.parse(tab.items.get('ohara.queue.deleting') ?? '')).toEqual([]);
+	});
+
+	it('fails a DELETE that gets no answer by the deadline, so later reads go on', async () => {
+		vi.useFakeTimers();
+		try {
+			const signals: AbortSignal[] = [];
+			vi.stubGlobal('fetch', (_: RequestInfo | URL, init?: RequestInit) => {
+				if (init?.signal) signals.push(init.signal);
+				return new Promise<Response>(() => {});
+			});
+			const tab = store();
+			const removal = deleteQueueEntry(7, tab);
+			const failed = removal.catch((err: unknown) => err);
+			let read = false;
+			void queueDeletesSettled(tab).then(() => (read = true));
+			await vi.advanceTimersByTimeAsync(requestDeadlineMs - 1);
+			expect(read).toBe(false);
+			await vi.advanceTimersByTimeAsync(1);
+			expect(await failed).toMatchObject({ status: 0, message: noAnswerMessage });
+			expect(read).toBe(true);
+			expect(signals[0]?.aborted).toBe(true);
+			expect(JSON.parse(tab.items.get('ohara.queue.deleting') ?? '')).toEqual([]);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it('sends again, once, the DELETEs a reload cut short before reading the queue', async () => {

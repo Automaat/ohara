@@ -334,36 +334,40 @@ func containsAll(text, want []string) bool {
 // "4K + Blu-ray" is uhd only, and a Blu-ray title that also names DVD is a
 // Blu-ray.
 func listingFormat(text []string) string {
-	joined := " " + strings.Join(text, " ") + " "
-	has := func(subs ...string) bool {
-		for _, s := range subs {
-			if strings.Contains(joined, s) {
-				return true
-			}
+	return listingFormatSkipping(text, nil)
+}
+
+// listingFormatSkipping is listingFormat of text without the words skip
+// reports, which a nil skip keeps. The words hold no spaces, so a
+// "4k", "bd" or "ultra hd" counts as whole words in a row and a "uhd",
+// "bluray" or "dvd" anywhere in a word.
+func listingFormatSkipping(text []string, skip func(string) bool) string {
+	var uhd, bluray, dvd bool
+	prev := ""
+	for _, t := range text {
+		if skip != nil && skip(t) {
+			continue
 		}
-		return false
+		if t == "4k" || strings.Contains(t, "uhd") || (prev == "ultra" && t == "hd") {
+			uhd = true
+		}
+		if strings.Contains(t, "bluray") || (prev == "blu" && t == "ray") || t == "bd" {
+			bluray = true
+		}
+		if strings.Contains(t, "dvd") {
+			dvd = true
+		}
+		prev = t
 	}
 	switch {
-	case has(" 4k ", "uhd", " ultra hd "):
+	case uhd:
 		return "uhd"
-	case has("bluray", " blu ray ", " bd "):
+	case bluray:
 		return "bluray"
-	case has("dvd"):
+	case dvd:
 		return "dvd"
 	}
 	return ""
-}
-
-// withoutOwnWords drops from text the words of the want's names and
-// artists, so "MC Hammer" or an album called "Vinyl" names no medium.
-func (p *wantText) withoutOwnWords(text []string) []string {
-	out := make([]string, 0, len(text))
-	for _, t := range text {
-		if !p.owns(t) {
-			out = append(out, t)
-		}
-	}
-	return out
 }
 
 // owns reports whether word is a word of one of the want's names or
@@ -379,8 +383,11 @@ func (p *wantText) owns(word string) bool {
 
 // albumFormat is the medium an album listing names: vinyl ("winyl", "LP"),
 // cassette ("kaseta", "MC") or CD, else "".
-func albumFormat(text []string) string {
+func albumFormat(text []string, skip func(string) bool) string {
 	for _, t := range text {
+		if skip(t) {
+			continue
+		}
 		switch t {
 		case "winyl", "winyle", "winylowa", "winylowy", "vinyl", "vinyls", "lp", "2lp", "3lp", "gramofonowa":
 			return "vinyl"
@@ -389,6 +396,9 @@ func albumFormat(text []string) string {
 		}
 	}
 	for _, t := range text {
+		if skip(t) {
+			continue
+		}
 		if t == "cd" || t == "2cd" || t == "3cd" || t == "cdr" || t == "sacd" {
 			return "cd"
 		}
@@ -399,11 +409,13 @@ func albumFormat(text []string) string {
 // albumFormatMatches reports whether a listing can be the wanted album
 // format: a vinyl or cassette listing names its medium, a CD listing often
 // does not, so a listing naming no medium counts as a CD unless it names a
-// film disc (a concert DVD or the film of the album).
-func albumFormatMatches(want string, text []string) bool {
-	got := albumFormat(text)
+// film disc (a concert DVD or the film of the album). The words of the
+// want's names and artists name no medium, so "MC Hammer" or an album
+// called "Vinyl" does not.
+func (p *wantText) albumFormatMatches(want string, text []string) bool {
+	got := albumFormat(text, p.owns)
 	if want == "cd" && got == "" {
-		return listingFormat(text) == ""
+		return listingFormatSkipping(text, p.owns) == ""
 	}
 	return got == want
 }
@@ -452,7 +464,7 @@ func sequelAfter(text, nameWords []string) bool {
 		if romanParts[next] || (part && ordinalParts[next]) {
 			return true
 		}
-		if n, err := strconv.Atoi(next); err == nil && (!part || n != 1) && (n < 1900 || n > time.Now().Year()+1) {
+		if n, ok := number(next); ok && (!part || n != 1) && (n < 1900 || n > time.Now().Year()+1) {
 			return true
 		}
 	}
@@ -489,7 +501,7 @@ func qualifies(w *Want, p *wantText, l *ListingText) bool {
 		if !containsAll(text, p.artist) {
 			return false
 		}
-		if w.Format != nil && !albumFormatMatches(*w.Format, p.withoutOwnWords(text)) {
+		if w.Format != nil && !p.albumFormatMatches(*w.Format, text) {
 			return false
 		}
 	}
@@ -513,10 +525,29 @@ func (p *wantText) carries(kind string, text []string) bool {
 	return false
 }
 
-// carried returns the required words of each of the want's names that
-// listing text carries.
-func (p *wantText) carried(kind string, text []string) [][]string {
-	var out [][]string
+// number parses a word of ASCII digits. It checks the digits before
+// strconv.Atoi, whose error for any other word allocates; words never
+// carry a sign.
+func number(word string) (int, bool) {
+	if word == "" {
+		return 0, false
+	}
+	for i := range len(word) {
+		if word[i] < '0' || word[i] > '9' {
+			return 0, false
+		}
+	}
+	n, err := strconv.Atoi(word)
+	return n, err == nil
+}
+
+// maxNames is how many names a want has at most: Polish, original and
+// the name it was entered with.
+const maxNames = 3
+
+// carried appends to out the required words of each of the want's names
+// that listing text carries.
+func (p *wantText) carried(kind string, text []string, out [][]string) [][]string {
 	for i := range p.names {
 		if n := &p.names[i]; n.carriedBy(kind, text) {
 			out = append(out, n.req)
@@ -574,7 +605,8 @@ func (t Titles) outranks(w *Want, p *wantText, l *ListingText) bool {
 	if len(known) == 0 {
 		return false
 	}
-	mine := p.carried(w.Kind, l.words)
+	var buf [maxNames][]string
+	mine := p.carried(w.Kind, l.words, buf[:0])
 	if len(mine) == 0 {
 		return false
 	}
@@ -652,7 +684,7 @@ func withoutDiscCounts(text []string) []string {
 	out := make([]string, 0, len(text))
 	for i := 0; i < len(text); i++ {
 		if i+1 < len(text) && discWords[text[i+1]] {
-			if _, err := strconv.Atoi(text[i]); err == nil {
+			if _, ok := number(text[i]); ok {
 				i++
 				continue
 			}

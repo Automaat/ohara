@@ -47,3 +47,34 @@ func BenchmarkPick1000(b *testing.B) {
 		_ = pick(wants, l, benchRules, titles)
 	}
 }
+
+// BenchmarkPick1000Matching picks among 1,000 wishes that all match the
+// listing and none of whose limits it meets, so pick checks every one.
+func BenchmarkPick1000Matching(b *testing.B) {
+	wants := make([]Want, 1000)
+	for i := range wants {
+		wants[i] = Want{CopyID: int64(i + 1), TitleID: 7, Kind: "movie", Name: "Alien", Format: new("dvd")}
+		wants[i].Prepare()
+	}
+	titles := NewTitles([]Want{{TitleID: 7, Kind: "movie", Name: "Alien"}, {TitleID: 8, Kind: "movie", Name: "Alien: Covenant"}})
+	l := &Listing{Title: "Alien DVD", PriceCents: 1000}
+	b.ReportAllocs()
+	for b.Loop() {
+		_ = pick(wants, l, benchRules, titles)
+	}
+}
+
+// BenchmarkPick1000WrongMedium matches a CD listing against 1,000 vinyl
+// wishes of the same album, each turned away by its medium.
+func BenchmarkPick1000WrongMedium(b *testing.B) {
+	wants := make([]Want, 1000)
+	for i := range wants {
+		wants[i] = Want{CopyID: int64(i + 1), TitleID: int64(i + 1), Kind: "music", Name: "Greatest Hits", Format: new("vinyl")}
+		wants[i].Prepare()
+	}
+	l := &Listing{Title: "Greatest Hits CD", PriceCents: 1000}
+	b.ReportAllocs()
+	for b.Loop() {
+		_ = pick(wants, l, benchRules, Titles{})
+	}
+}

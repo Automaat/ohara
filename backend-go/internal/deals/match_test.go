@@ -488,6 +488,82 @@ func TestSpellingVariantsMatch(t *testing.T) {
 	}
 }
 
+func TestShortTitles(t *testing.T) {
+	m := Want{Kind: "movie", Name: "M", Format: new("bluray")}
+	up := Want{Kind: "movie", Name: "Odlot", OriginalTitle: new("Up"), Format: new("dvd")}
+	it := Want{Kind: "movie", Name: "To", OriginalTitle: new("It"), Format: new("bluray")}
+	x := Want{Kind: "movie", Name: "X", Format: new("dvd")}
+	et := Want{Kind: "movie", Name: "E.T.", Format: new("dvd")}
+	mAlias := Want{Kind: "movie", Name: "M le maudit", OriginalTitle: new("M"), Format: new("bluray")}
+	tests := []struct {
+		name  string
+		want  Want
+		title string
+		match bool
+	}{
+		{"one letter leading the listing", m, "M Fritz Lang Blu-ray", true},
+		{"one letter inside another title", m, "Mission: Impossible 2 (M:I-2) Blu-ray", false},
+		{"one letter after a separator", m, "Fritz Lang - M (1931) Blu-ray", true},
+		{"one letter as an initial", m, "M. Night Shyamalan Znaki Blu-ray", false},
+		{"one letter joined to a word", x, "X-Men DVD", false},
+		{"original short title", up, "Up DVD Pixar", true},
+		{"polish long title", up, "Odlot DVD Pixar", true},
+		{"short title as a later word", up, "Step Up DVD taniec", false},
+		{"short title starting a longer one", up, "Up in the Air DVD", false},
+		{"short title after media words", up, "DVD Up Pixar", false},
+		{"short title past a leading medium", up, "DVD: Up", true},
+		{"short title before a year", it, "To (2017) Blu-ray lektor PL", true},
+		{"short title before the medium", it, "It Blu-ray Stephen King", true},
+		{"short title starting another film", it, "It Follows Blu-ray", false},
+		{"short word starting a sentence", it, "To nie jest kraj dla starych ludzi Blu-ray", false},
+		{"short title after a separator", it, "Stephen King - To (2017) Blu-ray", true},
+		{"short title with an apostrophe", it, "It's a Wonderful Life Blu-ray", false},
+		{"sequel of a short title", it, "To: Rozdział 2 Blu-ray", false},
+		{"letters with dots", et, "E.T. DVD Spielberg", true},
+		{"letters with dots before more words", et, "E.T. Spielberg DVD", false},
+		{"album after its artist", album("21", "Adele", "cd"), "Adele 21 Deluxe Edition CD", true},
+		{"album after a separator", album("21", "Adele", "cd"), "Adele - 21 (2011) CD", true},
+		{"album number in another album", album("21", "Adele", "cd"), "Adele Live at Royal Albert Hall 21 utworów CD", false},
+		{"book before its author", book("To", "Stephen King"), "To Stephen King wydanie kieszonkowe", true},
+		{"book after its author", book("To", "Stephen King"), "Stephen King To", true},
+		{"book starting another title", book("To", "Stephen King"), "To co zostało Stephen King", false},
+		{"book before its declined author", book("To", "Stephen King"), "To Stephena Kinga, wydanie kieszonkowe", true},
+		{"short title before a numbered medium", up, "Up DVD9 Pixar", true},
+		{"short alias after a lot word", mAlias, "M:I Blu-ray - pakiet: M le maudit / Metropolis Blu-ray", false},
+		{"lot word after a leading short alias", mAlias, "M Blu-ray - pakiet: M le maudit / Metropolis Blu-ray", false},
+		{"letters split by a separator", et, "„E” / „T” DVD – dwa różne filmy", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.want.Matches(tt.title); got != tt.match {
+				t.Fatalf("Matches(%q) = %v, want %v", tt.title, got, tt.match)
+			}
+		})
+	}
+}
+
+func TestShortTitleOutranked(t *testing.T) {
+	x := Want{CopyID: 18, TitleID: 1800, Kind: "movie", Name: "X", Format: new("dvd")}
+	xMen := Want{TitleID: 1801, Kind: "movie", Name: "X-Men"}
+	titles := NewTitles([]Want{x, xMen})
+	for title, want := range map[string]bool{"X Men DVD": false, "X DVD Ti West": true, "X (2022) DVD": true} {
+		if got := NewListingText(title, Rules{}).Belongs(&x, titles); got != want {
+			t.Errorf("Belongs(%q) = %v, want %v", title, got, want)
+		}
+	}
+}
+
+func TestShortTitleOutranks(t *testing.T) {
+	seven := Want{CopyID: 19, TitleID: 1900, Kind: "book", Name: "The 7", Authors: []string{"Bolesław Prus"}}
+	sevenEight := Want{TitleID: 1901, Kind: "book", Name: "7 i 8", Authors: []string{"Bolesław Prus"}}
+	titles := NewTitles([]Want{seven, sevenEight})
+	for title, want := range map[string]bool{"7 i 8 Prusa – wydanie ilustrowane": false, "The 7 Prusa – wydanie ilustrowane": true} {
+		if got := NewListingText(title, Rules{}).Belongs(&seven, titles); got != want {
+			t.Errorf("Belongs(%q) = %v, want %v", title, got, want)
+		}
+	}
+}
+
 func TestRulesFoldDiacritics(t *testing.T) {
 	rules := Rules{Reject: []string{"café", "pudelko"}, Accept: []string{"pudełko gratis"}}
 	tests := []struct {

@@ -134,7 +134,9 @@ test('the title form joins a series it suggests and the title page links to it',
 	await page.getByRole('menuitem', { name: 'Edytuj tytuł' }).tap();
 	await form.getByRole('textbox', { name: 'Tom' }).fill('1');
 	await form.getByRole('button', { name: 'Zapisz zmiany' }).tap();
-	await expect(form.getByText('Inny tytuł tej serii ma już ten numer tomu.')).toBeVisible();
+	await expect(form.getByRole('textbox', { name: 'Tom' })).toHaveAccessibleDescription(
+		/Inny tytuł tej serii ma już ten numer tomu\./
+	);
 	await form.getByRole('button', { name: 'Anuluj' }).tap();
 	await expect(form).toBeHidden();
 

@@ -243,10 +243,15 @@ export type CollectionFilter = {
 	kind: Kind | '';
 	format: Format | '';
 	status: CollectionStatus | '';
+	/** Where the copies are stored, the whole location, case aside; absent for any place. */
+	location?: string;
 	q: string;
 };
 
-/** The filter a collection address names. A title has no format, so `none` drops it. */
+/**
+ * The filter a collection address names. A title has no format or location, so `none` drops
+ * them.
+ */
 export function readCollectionFilter(params: Pick<URLSearchParams, 'get'>): CollectionFilter {
 	function read<K extends string>(key: string, labels: Record<K, string>): K | '' {
 		const value = params.get(key);
@@ -254,10 +259,12 @@ export function readCollectionFilter(params: Pick<URLSearchParams, 'get'>): Coll
 	}
 
 	const status = read('status', collectionStatusLabels);
+	const location = status === 'none' ? '' : (params.get('location')?.trim() ?? '');
 	return {
 		kind: read('kind', kindLabels),
 		format: status === 'none' ? '' : read('format', formatLabels),
 		status,
+		...(location ? { location } : {}),
 		q: params.get('q') ?? ''
 	};
 }
@@ -267,6 +274,7 @@ export function collectionSearch(f: CollectionFilter): string {
 	if (f.kind) params.set('kind', f.kind);
 	if (f.format) params.set('format', f.format);
 	if (f.status) params.set('status', f.status);
+	if (f.location?.trim()) params.set('location', f.location.trim());
 	if (f.q.trim()) params.set('q', f.q.trim());
 	const qs = params.toString();
 	return qs ? `?${qs}` : '';
@@ -465,6 +473,7 @@ export type CopyForm = {
 	notes: string;
 	max_price: string;
 	market_percent: string;
+	location: string;
 };
 
 /** The editable form of a copy, or an empty owned one. */
@@ -478,7 +487,8 @@ export function copyToForm(c: CopyPayload | null): CopyForm {
 		condition: c?.condition ?? '',
 		notes: c?.notes ?? '',
 		max_price: centsToInput(c?.max_price_cents ?? null),
-		market_percent: c?.max_market_percent == null ? '' : String(c.max_market_percent)
+		market_percent: c?.max_market_percent == null ? '' : String(c.max_market_percent),
+		location: c?.location ?? ''
 	};
 }
 
@@ -492,9 +502,9 @@ export function parsePercent(input: string): number | null | undefined {
 }
 
 /**
- * The request body for a copy. A wishlist copy carries no price or purchase date, and an owned
- * copy no maximum price or market percent. A copy without a market percent leaves the field out,
- * which the server reads as none.
+ * The request body for a copy. A wishlist copy carries no price, purchase date or location, and an
+ * owned copy no maximum price or market percent. A copy without a market percent or a location
+ * leaves the field out, which the server reads as none.
  */
 export function copyPayload(f: CopyForm, editionID: number): Parsed<CopyPayload> {
 	const owned = f.status === 'owned';
@@ -525,6 +535,7 @@ export function copyPayload(f: CopyForm, editionID: number): Parsed<CopyPayload>
 			}
 		};
 	}
+	const location = owned ? f.location.trim() : '';
 	const date = owned ? f.purchased_on.trim() : '';
 	if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
 		return { ok: false, issue: { field: 'purchased_on', message: 'Data w formacie RRRR-MM-DD.' } };
@@ -541,7 +552,8 @@ export function copyPayload(f: CopyForm, editionID: number): Parsed<CopyPayload>
 			condition: f.condition || null,
 			notes: f.notes.trim(),
 			max_price_cents: maxPrice,
-			...(marketPercent == null ? {} : { max_market_percent: marketPercent })
+			...(marketPercent == null ? {} : { max_market_percent: marketPercent }),
+			...(location ? { location } : {})
 		}
 	};
 }

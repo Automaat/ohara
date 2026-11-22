@@ -176,7 +176,7 @@ export function previewHero(p: TitlePreview): Hero {
 
 export type CopyFact = { label: string; value: string };
 
-/** A copy's facts for its card: what was paid, when and where, and its state. */
+/** A copy's facts for its card: what was paid, when and where, its state and where it is kept. */
 export function copyFacts(c: Copy): CopyFact[] {
 	const state =
 		[
@@ -201,7 +201,8 @@ export function copyFacts(c: Copy): CopyFact[] {
 		{ label: 'Cena', value: formatPLN(c.price_cents) || '—' },
 		{ label: 'Kupiono', value: purchaseDate(c.purchased_on) || '—' },
 		{ label: 'Sklep', value: c.shop || '—' },
-		{ label: 'Stan', value: state }
+		{ label: 'Stan', value: state },
+		...(c.location ? [{ label: 'Miejsce', value: c.location }] : [])
 	];
 }
 

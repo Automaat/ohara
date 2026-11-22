@@ -145,6 +145,77 @@ describe('collection search links', () => {
 	});
 });
 
+describe('the location in collection links', () => {
+	it('round-trips a location with the other filters', () => {
+		const filter = {
+			kind: 'movie',
+			format: 'dvd',
+			status: 'owned',
+			location: 'Regał 2 & pudło',
+			q: 'Alien'
+		} as const;
+		expect(collectionSearch(filter)).toBe(
+			'?kind=movie&format=dvd&status=owned&location=Rega%C5%82+2+%26+pud%C5%82o&q=Alien'
+		);
+		expect(readCollectionFilter(new URLSearchParams(collectionSearch(filter)))).toEqual(filter);
+	});
+
+	it('leaves out a blank location and trims one with spaces', () => {
+		const blank = { kind: '', format: '', status: '', location: '  ', q: '' } as const;
+		expect(collectionSearch(blank)).toBe('');
+		expect(readCollectionFilter(new URLSearchParams('location=%20Rega%C5%82%202%20'))).toEqual({
+			kind: '',
+			format: '',
+			status: '',
+			location: 'Regał 2',
+			q: ''
+		});
+		expect(readCollectionFilter(new URLSearchParams('location=%20'))).not.toHaveProperty(
+			'location'
+		);
+	});
+
+	it('drops the location while titles without copies are listed', () => {
+		expect(
+			readCollectionFilter(new URLSearchParams('status=none&location=Rega%C5%82%202'))
+		).not.toHaveProperty('location');
+	});
+});
+
+describe('the location of a copy', () => {
+	const owned = { ...copyToForm(null), location: '  Regał 2 ' };
+
+	it('round-trips through the copy form', () => {
+		const form = copyToForm({
+			edition_id: 3,
+			status: 'owned',
+			price_cents: null,
+			purchased_on: null,
+			shop: '',
+			acquired_as: null,
+			condition: null,
+			notes: '',
+			max_price_cents: null,
+			location: 'Regał 2'
+		});
+		expect(form.location).toBe('Regał 2');
+		const parsed = copyPayload(form, 3);
+		expect(parsed.ok && parsed.value.location).toBe('Regał 2');
+	});
+
+	it('is sent trimmed for an owned copy', () => {
+		const parsed = copyPayload(owned, 3);
+		expect(parsed.ok && parsed.value.location).toBe('Regał 2');
+	});
+
+	it('is left out when blank or on a wish', () => {
+		const blank = copyPayload({ ...owned, location: ' ' }, 3);
+		expect(blank.ok && 'location' in blank.value).toBe(false);
+		const wish = copyPayload({ ...owned, status: 'wishlist' }, 3);
+		expect(wish.ok && 'location' in wish.value).toBe(false);
+	});
+});
+
 const title: Title = {
 	id: 1,
 	kind: 'book',

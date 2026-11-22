@@ -314,6 +314,13 @@ describe('copyFacts', () => {
 	});
 });
 
+describe('copyFacts with a location', () => {
+	it('shows where an owned copy is kept, last', () => {
+		const facts = copyFacts(copy({ location: 'Regał 2' }));
+		expect(facts.at(-1)).toEqual({ label: 'Miejsce', value: 'Regał 2' });
+	});
+});
+
 describe('copyLine', () => {
 	it('lists the status, the price and the shop that are known', () => {
 		expect(nbsp(copyLine(copy()))).toBe('Na półce · 89,99 zł · Empik');

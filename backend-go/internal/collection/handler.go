@@ -51,6 +51,7 @@ func (h *Handler) Mount(r chi.Router) {
 	r.Delete("/editions/{id}/cover", h.deleteEditionCover)
 
 	r.Post("/copies", h.createCopy)
+	r.Get("/copies/locations", h.locations)
 	r.Get("/copies/{id}", h.getCopy)
 	r.Put("/copies/{id}", h.updateCopy)
 	r.Delete("/copies/{id}", h.deleteCopy)
@@ -157,6 +158,7 @@ func (h *Handler) collection(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteFieldError(w, h.logger, fe)
 		return
 	}
+	f.Location = r.URL.Query().Get("location")
 	f.Query = r.URL.Query().Get("q")
 	if code, err := barcode.Normalize(f.Query); err == nil {
 		f.Query = code
@@ -490,6 +492,17 @@ func (h *Handler) updateCopy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, h.logger, http.StatusOK, c)
+}
+
+// locations serves GET /api/copies/locations: the places copies are stored
+// at, the most used first, for the copy form's suggestions.
+func (h *Handler) locations(w http.ResponseWriter, r *http.Request) {
+	locations, err := h.store.Locations(r.Context())
+	if err != nil {
+		h.writeErr(w, r, "locations", err)
+		return
+	}
+	httpx.WriteJSON(w, h.logger, http.StatusOK, locations)
 }
 
 func (h *Handler) deleteCopy(w http.ResponseWriter, r *http.Request) {

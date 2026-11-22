@@ -472,7 +472,12 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   from `GET /api/titles`; `/titles` redirects to `/`. Its "Bez ceny"
   (`?status=unpriced`, client only) lists owned copies without a purchase
   price; a phone's header shows their count as its toggle, hidden at 0.
-  `?add=copy` on a title
+  Its "Miejsce" (`?location=`) lists the copies stored at one location,
+  the whole value, case aside, picked from the loaded copies' locations,
+  the most used first. An owned copy's `location` is one free-text place
+  (at most 500 bytes; a wish has none, 422); the copy form suggests the
+  places in use from `GET /api/copies/locations`, and `q` also searches
+  it. `?add=copy` on a title
   or edition page opens the form for its next copy. The shelf draws its
   tiles in parts (`src/lib/shelf-drawing.ts`): 60 with the page, then 150
   a task, each tile carrying `aria-setsize`. Until the last part lands the

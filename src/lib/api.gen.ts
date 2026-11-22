@@ -122,6 +122,7 @@ export type CopyPayload = {
 	notes: string;
 	max_price_cents: number | null;
 	max_market_percent?: number | null;
+	location?: string | null;
 	request_key?: string;
 };
 
@@ -137,6 +138,7 @@ export type Copy = {
 	notes: string;
 	max_price_cents: number | null;
 	max_market_percent?: number | null;
+	location?: string | null;
 	request_key?: string;
 	created_at: string;
 	updated_at: string;
@@ -222,6 +224,7 @@ export type CopyDetail = {
 	notes: string;
 	max_price_cents: number | null;
 	max_market_percent?: number | null;
+	location?: string | null;
 	request_key?: string;
 	created_at: string;
 	updated_at: string;
@@ -239,6 +242,7 @@ export type CollectionItem = {
 	shop: string;
 	acquired_as: AcquiredAs | null;
 	condition: Condition | null;
+	location?: string | null;
 	edition_id: number;
 	barcode: string | null;
 	label: string;

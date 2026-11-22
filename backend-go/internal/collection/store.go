@@ -98,13 +98,15 @@ func scanEdition(row pgx.Row) (Edition, error) {
 }
 
 const copyColumns = `c.id, c.edition_id, c.status, c.price_cents, c.purchased_on, c.shop,
-	c.acquired_as, c.condition, c.notes, c.max_price_cents, c.max_market_percent, c.created_at, c.updated_at`
+	c.acquired_as, c.condition, c.notes, c.max_price_cents, c.max_market_percent, c.location,
+	c.created_at, c.updated_at`
 
 func scanCopy(row pgx.Row) (Copy, error) {
 	var c Copy
 	var purchased *time.Time
 	err := row.Scan(&c.ID, &c.EditionID, &c.Status, &c.PriceCents, &purchased, &c.Shop,
-		&c.AcquiredAs, &c.Condition, &c.Notes, &c.MaxPriceCents, &c.MaxMarketPercent, &c.CreatedAt, &c.UpdatedAt)
+		&c.AcquiredAs, &c.Condition, &c.Notes, &c.MaxPriceCents, &c.MaxMarketPercent, &c.Location,
+		&c.CreatedAt, &c.UpdatedAt)
 	if purchased != nil {
 		c.PurchasedOn = &Date{*purchased}
 	}
@@ -517,11 +519,11 @@ func (s *Store) CreateCopy(ctx context.Context, in *CopyInput) (Copy, bool, erro
 		}
 		var id int64
 		err := tx.QueryRow(ctx, `INSERT INTO copy (edition_id, status, price_cents, purchased_on,
-			shop, acquired_as, condition, notes, max_price_cents, max_market_percent, request_key)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			shop, acquired_as, condition, notes, max_price_cents, max_market_percent, location, request_key)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 			ON CONFLICT (request_key) DO NOTHING RETURNING id`,
 			in.EditionID, in.Status, in.PriceCents, purchasedOn(in), in.Shop, in.AcquiredAs,
-			in.Condition, in.Notes, in.MaxPriceCents, in.MaxMarketPercent, in.RequestKey).Scan(&id)
+			in.Condition, in.Notes, in.MaxPriceCents, in.MaxMarketPercent, in.Location, in.RequestKey).Scan(&id)
 		switch {
 		case errors.Is(err, pgx.ErrNoRows) && in.RequestKey != nil:
 			created = false
@@ -547,9 +549,9 @@ func (s *Store) CreateCopy(ctx context.Context, in *CopyInput) (Copy, bool, erro
 func (s *Store) UpdateCopy(ctx context.Context, id int64, in *CopyInput) (Copy, error) {
 	tag, err := s.pool.Exec(ctx, `UPDATE copy SET edition_id = $2, status = $3, price_cents = $4,
 		purchased_on = $5, shop = $6, acquired_as = $7, condition = $8, notes = $9,
-		max_price_cents = $10, max_market_percent = $11, updated_at = now() WHERE id = $1`,
+		max_price_cents = $10, max_market_percent = $11, location = $12, updated_at = now() WHERE id = $1`,
 		id, in.EditionID, in.Status, in.PriceCents, purchasedOn(in), in.Shop, in.AcquiredAs,
-		in.Condition, in.Notes, in.MaxPriceCents, in.MaxMarketPercent)
+		in.Condition, in.Notes, in.MaxPriceCents, in.MaxMarketPercent, in.Location)
 	if err != nil {
 		if isFKViolation(err, "copy_edition_id_fkey") {
 			return Copy{}, ErrEditionNotFound
@@ -674,11 +676,13 @@ func discardUnused(ctx context.Context, tx pgx.Tx, key, lock, used, remove strin
 }
 
 // Filter narrows the collection view; empty fields match everything.
+// Location matches a copy's whole location, case aside.
 type Filter struct {
-	Kind   string
-	Format string
-	Status string
-	Query  string
+	Kind     string
+	Format   string
+	Status   string
+	Location string
+	Query    string
 }
 
 // Item is one copy in the collection view with its edition and title.
@@ -692,6 +696,7 @@ type Item struct {
 	Shop          string   `json:"shop"`
 	AcquiredAs    *string  `json:"acquired_as" ts:"AcquiredAs"`
 	Condition     *string  `json:"condition" ts:"Condition"`
+	Location      *string  `json:"location,omitempty" ts:",null"`
 	EditionID     int64    `json:"edition_id"`
 	Barcode       *string  `json:"barcode"`
 	Label         string   `json:"label"`
@@ -712,7 +717,7 @@ func scanItem(row pgx.Row) (Item, error) {
 	var createdAt time.Time
 	var purchased *time.Time
 	err := row.Scan(&it.CopyID, &createdAt, &it.Status, &it.PriceCents, &it.MaxPriceCents, &purchased, &it.Shop,
-		&it.AcquiredAs, &it.Condition, &it.EditionID, &it.Barcode, &it.Label, &it.Format, &it.Binding,
+		&it.AcquiredAs, &it.Condition, &it.Location, &it.EditionID, &it.Barcode, &it.Label, &it.Format, &it.Binding,
 		&it.TitleID, &it.Kind, &it.Name, &it.OriginalTitle, &it.PolishTitle, &it.Year, &it.CoverURL, &it.Authors)
 	it.CreatedAtUS = createdAt.UnixMicro()
 	if purchased != nil {
@@ -724,19 +729,40 @@ func scanItem(row pgx.Row) (Item, error) {
 // Collection returns every copy matching f, by title name.
 func (s *Store) Collection(ctx context.Context, f Filter) ([]Item, error) {
 	rows, err := s.pool.Query(ctx, `SELECT c.id, c.created_at, c.status, c.price_cents, c.max_price_cents,
-			c.purchased_on, c.shop, c.acquired_as, c.condition, e.id, e.barcode, e.label, e.format, e.binding,
+			c.purchased_on, c.shop, c.acquired_as, c.condition, c.location, e.id, e.barcode, e.label, e.format, e.binding,
 			t.id, t.kind, t.name, t.original_title, t.polish_title, t.year,
 			`+CoverURL+`, t.authors
 		FROM copy c JOIN edition e ON e.id = c.edition_id JOIN title t ON t.id = e.title_id
 		WHERE ($1 = '' OR t.kind = $1) AND ($2 = '' OR e.format = $2) AND ($3 = '' OR c.status = $3)
 		  AND ($4 = '' OR e.barcode = $4 OR strpos(lower(concat_ws(' ', t.name, t.original_title,
-		       t.polish_title, array_to_string(t.authors, ' '), e.label, c.shop)), lower($4)) > 0)
+		       t.polish_title, array_to_string(t.authors, ' '), e.label, c.shop, c.location)), lower($4)) > 0)
+		  AND ($5 = '' OR lower(c.location) = lower($5))
 		ORDER BY lower(t.name), t.id, e.id, c.id`,
-		f.Kind, f.Format, f.Status, strings.TrimSpace(f.Query))
+		f.Kind, f.Format, f.Status, strings.TrimSpace(f.Query), strings.TrimSpace(f.Location))
 	if err != nil {
 		return nil, fmt.Errorf("collection: %w", err)
 	}
 	return collect(rows, scanItem, "collection")
+}
+
+// Locations returns the locations copies are stored at, each once whatever
+// its letter case, the most used first. A place spelled several ways goes
+// by its most used spelling.
+func (s *Store) Locations(ctx context.Context) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `WITH spelled AS (
+			SELECT location, count(*) AS copies FROM copy WHERE location IS NOT NULL GROUP BY location
+		)
+		SELECT (array_agg(location ORDER BY copies DESC, location))[1] FROM spelled
+		GROUP BY lower(location)
+		ORDER BY sum(copies) DESC, lower(location)`)
+	if err != nil {
+		return nil, fmt.Errorf("locations: %w", err)
+	}
+	return collect(rows, func(row pgx.Row) (string, error) {
+		var location string
+		err := row.Scan(&location)
+		return location, err
+	}, "locations")
 }
 
 func (s *Store) inTx(ctx context.Context, fn func(pgx.Tx) error) error {

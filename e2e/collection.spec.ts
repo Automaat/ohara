@@ -18,7 +18,7 @@ async function seed(
 	request: APIRequestContext,
 	title: { kind: string; name: string; authors?: string[] },
 	edition: { format?: string; barcode?: string } = {},
-	copy: { status?: string; shop?: string; price_cents?: number } = {}
+	copy: { status?: string; shop?: string; price_cents?: number; location?: string } = {}
 ): Promise<Seeded> {
 	const cover = new URL('/pwa-192x192.png', test.info().project.use.baseURL).href;
 	const titleID = await created(
@@ -603,4 +603,54 @@ test('turning a phone sideways and back keeps the place on the shelf', async ({
 	await expect
 		.poll(() => tiles.nth(1500).evaluate((el) => el.getBoundingClientRect().top))
 		.toBeCloseTo(before, 0);
+});
+
+test('a copy takes a suggested place and Kolekcja lists the copies kept there', async ({
+	page,
+	request
+}) => {
+	const t = tag();
+	const shelved = `Na regale ${t}`;
+	const moved = `Do przeniesienia ${t}`;
+	const boxed = `W pudle ${t}`;
+	await seed(request, { kind: 'movie', name: shelved }, { format: 'dvd' }, { location: 'Regał 2' });
+	const { titleID, copyID } = await seed(
+		request,
+		{ kind: 'movie', name: moved },
+		{ format: 'dvd' }
+	);
+	await seed(
+		request,
+		{ kind: 'movie', name: boxed },
+		{ format: 'dvd' },
+		{ location: `Pudło ${t}` }
+	);
+
+	await page.goto(`/copies/${copyID}`);
+	const place = page.getByRole('combobox', { name: 'Miejsce' });
+	await place.tap();
+	await place.pressSequentially('Re');
+	await page.getByRole('option', { name: 'Regał 2', exact: true }).tap();
+	await expect(place).toHaveValue('Regał 2');
+	await page.getByRole('button', { name: 'Zapisz zmiany' }).tap();
+	await expect(page.getByText('Zapisano.')).toBeVisible();
+
+	await page.goto(`/titles/${titleID}`);
+	await expect(page.getByText('Regał 2', { exact: true })).toBeVisible();
+
+	await page.goto('/');
+	await expect(tile(page, boxed)).toBeVisible();
+	await page.getByRole('button', { name: /^Sortowanie i filtry/ }).tap();
+	const sheet = page.getByRole('dialog', { name: 'Sortowanie i filtry' });
+	await sheet.getByLabel('Miejsce').selectOption('Regał 2');
+	await sheet.getByRole('button', { name: 'Gotowe' }).tap();
+	await expect(page).toHaveURL(/\/\?location=Rega%C5%82\+2$/);
+	await expect(tile(page, shelved)).toHaveCount(1);
+	await expect(tile(page, moved)).toHaveCount(1);
+	await expect(tile(page, boxed)).toHaveCount(0);
+
+	await page.getByRole('button', { name: 'Usuń: Miejsce: Regał 2' }).tap();
+	await expect(page).toHaveURL(/\/$/);
+	await expect(tile(page, boxed)).toHaveCount(1);
+	await expectNoSourceRequests(request);
 });

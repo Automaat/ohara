@@ -177,6 +177,9 @@ type CopyInput struct {
 	// MaxMarketPercent is 1 to 100: a listing at or under that percent of
 	// the used market price of the wished title and format alerts.
 	MaxMarketPercent *int `json:"max_market_percent,omitempty" ts:",null"`
+	// Location is where an owned copy is stored, such as "Regał 2"; a
+	// wishlist copy has none.
+	Location *string `json:"location,omitempty" ts:",null"`
 	// RequestKey makes a create safe to retry: a second create with the
 	// same key returns the first copy. Updates ignore it.
 	RequestKey *string `json:"request_key,omitempty"`
@@ -446,6 +449,7 @@ func (in *CopyInput) Normalize() *httpx.FieldError {
 	in.Notes = strings.TrimSpace(in.Notes)
 	in.AcquiredAs = trimOpt(in.AcquiredAs)
 	in.Condition = trimOpt(in.Condition)
+	in.Location = trimOpt(in.Location)
 	key, fe := normalizeRequestKey(in.RequestKey)
 	if fe != nil {
 		return fe
@@ -481,9 +485,13 @@ func (in *CopyInput) Normalize() *httpx.FieldError {
 		if in.PurchasedOn != nil {
 			return fieldErr("purchased_on", "applies only to owned copies")
 		}
+		if in.Location != nil {
+			return fieldErr("location", "applies only to owned copies")
+		}
 	}
 	return firstErr(
 		checkLen("shop", in.Shop, maxText),
+		checkLen("location", deref(in.Location), maxText),
 		checkLen("notes", in.Notes, maxNotes),
 		checkEnum("acquired_as", in.AcquiredAs, acquiredAs),
 		checkEnum("condition", in.Condition, conditions),

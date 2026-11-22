@@ -105,6 +105,14 @@ function valuedWith(v: View, copyID: number): View {
 
 const reportTable = (page: Page) => page.getByRole('table', { name: 'Egzemplarze w raporcie' });
 
+/**
+ * A test that ends on a page change still has the new page's `GET /api/valuation` in its route
+ * handler; closing the context then disposes the response the handler reads (#494).
+ */
+test.afterEach(async ({ page }) => {
+	await page.unrouteAll({ behavior: 'wait' });
+});
+
 test('Raport dla ubezpieczyciela lists every owned copy with totals of the valuation', async ({
 	page,
 	request

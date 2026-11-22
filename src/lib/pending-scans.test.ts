@@ -9,6 +9,7 @@ import {
 	offlineDetail,
 	openPendingStore,
 	postTimeout,
+	storageCursor,
 	type PendingStore
 } from './pending-scans.svelte';
 
@@ -208,6 +209,160 @@ describe('PendingScans.send', () => {
 		expect(s.codes()).toEqual([a]);
 		expect(pending.count).toBe(2);
 		expect(pending.expired).toBe(false);
+	});
+
+	it('starts the next run after a code that got no answer, so it cannot hold back the rest', async () => {
+		const device = memory([a, b, c]);
+		const s = api({ [a]: 'none' });
+		const pending = new PendingScans(s.fetchFn, device.open);
+		await pending.send();
+		expect(s.codes()).toEqual([a]);
+		await pending.send();
+		expect(s.codes()).toEqual([a, b, c, a]);
+		expect([...device.kept]).toEqual([a]);
+		await pending.send();
+		expect(s.codes()).toEqual([a, b, c, a, a]);
+		expect(pending.count).toBe(1);
+	});
+
+	it('moves past each code that gets no answer in turn, posting none twice in a run', async () => {
+		const device = memory([a, b, c]);
+		const s = api({ [a]: 'none', [b]: ['none', 201] });
+		const pending = new PendingScans(s.fetchFn, device.open);
+		await pending.send();
+		await pending.send();
+		expect(s.codes()).toEqual([a, b]);
+		await pending.send();
+		expect(s.codes()).toEqual([a, b, c, a]);
+		await pending.send();
+		expect(s.codes()).toEqual([a, b, c, a, b, a]);
+		expect([...device.kept]).toEqual([a]);
+	});
+
+	it('starts the next run after a code whose POST hung', async () => {
+		vi.useFakeTimers();
+		try {
+			const device = memory([a, b]);
+			const posted: string[] = [];
+			const pending = new PendingScans(async (_, init) => {
+				const { barcode } = JSON.parse(String(init?.body)) as { barcode: string };
+				posted.push(barcode);
+				if (barcode === a) return new Promise<Response>(() => {});
+				return new Response('{}', { status: 201 });
+			}, device.open);
+			const first = pending.send();
+			await vi.advanceTimersByTimeAsync(postTimeout);
+			await first;
+			expect(posted).toEqual([a]);
+			const second = pending.send();
+			await vi.advanceTimersByTimeAsync(postTimeout);
+			await second;
+			expect(posted).toEqual([a, b, a]);
+			expect([...device.kept]).toEqual([a]);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('starts after a code that got no answer after a reload or in another tab', async () => {
+		const saved = new Map<string, string>();
+		const storage = {
+			getItem: (key: string) => saved.get(key) ?? null,
+			setItem: (key: string, value: string) => void saved.set(key, value),
+			removeItem: (key: string) => void saved.delete(key)
+		};
+		const device = memory([a, b]);
+		const s = api({ [a]: 'none' });
+		const page = () =>
+			new PendingScans(
+				s.fetchFn,
+				device.open,
+				undefined,
+				storageCursor(() => storage)
+			);
+		await page().send();
+		expect(s.codes()).toEqual([a]);
+		await page().send();
+		expect(s.codes()).toEqual([a, b, a]);
+		expect([...device.kept]).toEqual([a]);
+	});
+
+	it('keeps the start in memory where storage refuses it', async () => {
+		const refusing = {
+			getItem: (): string | null => {
+				throw new DOMException('denied', 'SecurityError');
+			},
+			setItem: () => {
+				throw new DOMException('full', 'QuotaExceededError');
+			},
+			removeItem: () => {
+				throw new DOMException('denied', 'SecurityError');
+			}
+		};
+		const device = memory([a, b]);
+		const s = api({ [a]: 'none' });
+		const pending = new PendingScans(
+			s.fetchFn,
+			device.open,
+			undefined,
+			storageCursor(() => refusing)
+		);
+		await pending.send();
+		await pending.send();
+		expect(s.codes()).toEqual([a, b, a]);
+		const missing = new PendingScans(
+			s.fetchFn,
+			memory([a, b]).open,
+			undefined,
+			storageCursor(() => undefined)
+		);
+		await missing.send();
+		await missing.send();
+		expect(s.codes()).toEqual([a, b, a, a, b, a]);
+	});
+
+	it('follows a start another tab stored after this tab could not store its own', async () => {
+		const saved = new Map<string, string>([['ohara-pending-scans-unanswered', c]]);
+		const state = { full: true };
+		const storage = {
+			getItem: (key: string) => saved.get(key) ?? null,
+			setItem: (key: string, value: string) => {
+				if (state.full) throw new DOMException('full', 'QuotaExceededError');
+				saved.set(key, value);
+			},
+			removeItem: (key: string) => void saved.delete(key)
+		};
+		const device = memory([a, b, c]);
+		const tab = (answers: Record<string, Answer>) => {
+			const s = api(answers);
+			const pending = new PendingScans(
+				s.fetchFn,
+				device.open,
+				undefined,
+				storageCursor(() => storage)
+			);
+			return { s, pending };
+		};
+		const first = tab({ [a]: 'none', [b]: 503, [c]: 503 });
+		await first.pending.send();
+		expect(first.s.codes()).toEqual([a]);
+		expect(saved.size).toBe(0);
+		state.full = false;
+		const second = tab({ [a]: 503, [b]: 'none', [c]: 503 });
+		await second.pending.send();
+		expect(second.s.codes()).toEqual([a, b]);
+		await first.pending.send();
+		expect(first.s.codes()).toEqual([a, c, a]);
+		expect(device.kept.size).toBe(3);
+	});
+
+	it('starts again from the first code after the sign-in turned one away', async () => {
+		const device = memory([a, b]);
+		const s = api({ [a]: [401, 201] });
+		const pending = new PendingScans(s.fetchFn, device.open);
+		await pending.send();
+		await pending.send();
+		expect(s.codes()).toEqual([a, a, b]);
 	});
 
 	it('stops and asks to sign in again when the sign-in turns a code away', async () => {

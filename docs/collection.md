@@ -95,6 +95,18 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   "Liczba tomów" field; the title form has "Seria" (suggesting the series
   of the title's kind) and "Tom"; the title page shows "<series> · tom <n>"
   linking to its series.
+- `POST /api/titles` for a film with a `tmdb_id` and neither
+  `series_name` nor `series_number` in the body (an explicit null keeps
+  none) puts it in the series named after its TMDB collection (see
+  [lookup](lookup.md)), numbered by release order among the collection's
+  released films, and sets the series' `total_volumes` to that count. A
+  number another title of the series holds is dropped and the film joins
+  without one. The same lookup gives a title without `cover_url` the
+  film's TMDB poster, in place of the title search, so a save makes at
+  most two TMDB requests. The lookup waits at most 3 s; a TMDB error,
+  timeout or name the API would refuse saves the title without a series
+  (and without a cover when the first request failed). Updates, TV
+  seasons and other kinds never look a series up.
 - A loan (`loan`) records who has an owned copy: `POST /api/copies/{id}/loans`
   (`borrower` trimmed, at most 500 bytes; `lent_on` today in Poland when
   null; optional `due_on`, not before it) answers 201, 409 for a wish or a

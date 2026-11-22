@@ -9,7 +9,8 @@ import type {
 	KeywordPayload,
 	Format,
 	MarketPrice,
-	Observation
+	Observation,
+	WantlistSyncResult
 } from '#lib/api.gen.js';
 
 export type {
@@ -24,7 +25,9 @@ export type {
 	MarketPrice,
 	MarketView,
 	Observation,
-	ShareLink
+	ShareLink,
+	WantlistStatus,
+	WantlistSyncResult
 } from '#lib/api.gen.js';
 
 const wholePLN = new Intl.NumberFormat('pl-PL', {
@@ -268,6 +271,21 @@ export function lastRunSummary(result: DealsRunResult | null): string | null {
 	];
 	if (result.errors.length > 0) parts.push(`błędów źródeł: ${result.errors.length}`);
 	return parts.join(', ');
+}
+
+/** GET reads the Discogs wantlist sync's state; POST to its /sync starts a sync. */
+export const wantlistPath = '/api/discogs/wantlist';
+
+/** One line about the last Discogs wantlist sync, or null before the first one. */
+export function wantlistSummary(result: WantlistSyncResult | null): string | null {
+	if (!result) return null;
+	const parts = [`dodano: ${result.added}`, `już na liście: ${result.already}`];
+	if (result.removed > 0) parts.push(`usunięto: ${result.removed}`);
+	if (result.skipped > 0) parts.push(`bez wydania Discogs: ${result.skipped}`);
+	const counts = parts.join(', ');
+	return result.failure
+		? `Synchronizacja przerwana: ${result.failure}. Przed przerwaniem ${counts}.`
+		: `Ostatnia synchronizacja: ${counts}.`;
 }
 
 /** The owner's share link of the wishlist: GET shows it, POST makes a new one, DELETE turns it off. */

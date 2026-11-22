@@ -62,7 +62,7 @@ func (c *Client) ReleaseInstances(ctx context.Context, username string, id int64
 				return errors.New("no releases field")
 			}
 			return nil
-		})
+		}, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +84,7 @@ func (c *Client) AddToFolder(ctx context.Context, username string, folder, id in
 				return errors.New("no instance_id")
 			}
 			return nil
-		})
+		}, nil)
 	if err != nil {
 		return 0, fmt.Errorf("add release %d: %w", id, err)
 	}
@@ -97,7 +97,7 @@ func (c *Client) SetInstanceField(ctx context.Context, username string, folder, 
 	q := url.Values{"value": {value}}
 	path := folderReleasePath(username, folder, id) + "/instances/" + strconv.FormatInt(instance, 10) +
 		"/fields/" + strconv.FormatInt(field, 10) + "?" + q.Encode()
-	err := c.send(ctx, http.MethodPost, path, []int{http.StatusOK, http.StatusNoContent}, nil, nil)
+	err := c.send(ctx, http.MethodPost, path, []int{http.StatusOK, http.StatusNoContent}, nil, nil, nil)
 	if err != nil {
 		return fmt.Errorf("set field %d of instance %d: %w", field, instance, err)
 	}

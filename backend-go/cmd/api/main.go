@@ -35,6 +35,7 @@ import (
 	"github.com/Automaat/ohara/backend-go/internal/seed"
 	"github.com/Automaat/ohara/backend-go/internal/server"
 	"github.com/Automaat/ohara/backend-go/internal/valuation"
+	"github.com/Automaat/ohara/backend-go/internal/wantlist"
 	"github.com/Automaat/ohara/backend-go/internal/web"
 	"github.com/Automaat/ohara/backend-go/internal/wishshare"
 )
@@ -126,6 +127,9 @@ func run() int {
 	defer valuer.Wait()
 	defer hunter.Wait()
 	defer stopHunt()
+	syncer := newWantlistSyncer(pool, logger)
+	syncer.Start(huntCtx)
+	defer syncer.Wait()
 	discogsShelf, err := newDiscogsCollection(pool, logger)
 	if err != nil {
 		logger.Error("discogs collection", "err", err)
@@ -137,12 +141,13 @@ func run() int {
 	shares := wishshare.NewHandler(wishshare.NewStore(pool), logger)
 	deps.Share = shares.Public()
 	deps.API = []server.Mounter{
-		collection.NewHandler(collection.NewStore(pool), logger).WithCatalogCovers(searchers, lookupService),
+		newCollectionHandler(pool, searchers, lookupService, logger),
 		lookup.NewHandler(lookupService, logger),
 		&lookup.SearchHandler{Searchers: searchers, Logger: logger},
 		scanqueue.NewHandler(queue, logger),
 		deals.NewHandler(dealStore, hunter, logger),
 		valuation.NewHandler(valueStore, valuer, logger),
+		wantlist.NewHandler(syncer, logger),
 		export.NewHandler(pool, valuer.Window(), logger),
 		shares,
 		discogsShelf,
@@ -312,6 +317,19 @@ func newMovieProvider(allegro *movie.Allegro, logger *slog.Logger) *movie.Provid
 	return p
 }
 
+// newCollectionHandler serves the collection API, filling a new title's
+// cover from the title searchers and, with a TMDB key, a new film's series
+// from its TMDB collection.
+func newCollectionHandler(pool *pgxpool.Pool, searchers map[string]lookup.TextSearcher,
+	service *lookup.Service, logger *slog.Logger,
+) *collection.Handler {
+	h := collection.NewHandler(collection.NewStore(pool), logger).WithCatalogCovers(searchers, service)
+	if key := os.Getenv("OHARA_TMDB_API_KEY"); key != "" {
+		h.WithFilmSeries(movie.TMDB{Client: sourceClient, Key: key})
+	}
+	return h
+}
+
 // titleSearchers back the search by title for a barcode no source knows:
 // TMDB for films and TV series and Discogs for albums when their keys are
 // set, Google Books for books with a key and Open Library without one.
@@ -349,6 +367,20 @@ func newDiscogs() *discogs.Client {
 	return &discogs.Client{
 		HTTP: discogsHTTP, BaseURL: envOr("OHARA_DISCOGS_URL", discogs.BaseURL), Token: token, Limiter: discogsBudget,
 	}
+}
+
+// newWantlistSyncer mirrors the album wishes to the Discogs wantlist of
+// the OHARA_DISCOGS_TOKEN owner, behind the lookup's requests in the
+// token's budget; disabled without the token.
+func newWantlistSyncer(pool *pgxpool.Pool, logger *slog.Logger) *wantlist.Syncer {
+	store := wantlist.NewStore(pool)
+	d := newDiscogs()
+	if d == nil {
+		logger.Info("discogs wantlist sync disabled: OHARA_DISCOGS_TOKEN not set")
+		return wantlist.NewSyncer(store, nil, logger)
+	}
+	d.Priority = discogs.Background
+	return wantlist.NewSyncer(store, d, logger)
 }
 
 // newDiscogsCollection adds owned album copies to the Discogs collection

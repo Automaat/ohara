@@ -202,6 +202,9 @@ type TitleInput struct {
 	// KeepSeries makes an update leave the stored series and number as they
 	// are, for a PUT body without either. Creates ignore it.
 	KeepSeries bool `json:"-"`
+	// SeriesTotal is how many volumes a catalog says the series has: a
+	// create sets the series' total to it. The API never takes it.
+	SeriesTotal *int `json:"-"`
 	// RequestKey makes a create safe to retry: a second create with the
 	// same key returns the first title. Updates ignore it.
 	RequestKey *string `json:"request_key,omitempty"`

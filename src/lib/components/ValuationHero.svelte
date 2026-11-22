@@ -4,6 +4,7 @@
 		boundLine,
 		heroFigures,
 		rangeMarks,
+		realizedLine,
 		sparkline,
 		type HistoryPoint,
 		type Summary
@@ -13,6 +14,7 @@
 
 	const figures = $derived(heroFigures(summary));
 	const marks = $derived(rangeMarks(summary));
+	const realized = $derived(realizedLine(summary));
 	const spark = $derived(sparkline(history, 92, 36));
 </script>
 
@@ -39,6 +41,9 @@
 	</p>
 	{#if figures.coverage}
 		<p class="coverage">{figures.coverage}</p>
+	{/if}
+	{#if realized}
+		<p class="realized">{realized}</p>
 	{/if}
 	{#if marks}
 		<div class="range" aria-hidden="true">
@@ -140,6 +145,13 @@
 		margin: 0;
 		font-size: 0.75rem;
 		color: rgb(248 233 230 / 75%);
+		font-variant-numeric: tabular-nums;
+	}
+
+	.realized {
+		margin: 0;
+		font-size: 0.875rem;
+		font-weight: 600;
 		font-variant-numeric: tabular-nums;
 	}
 

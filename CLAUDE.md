@@ -443,10 +443,30 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   a title's copy days of the last 90 days, and the title page's "Wartość
   dziś" draws the copy's used value as a trend once two days have one, a
   day without one or without a stored row leaving a gap; the card stays
-  with its trend when the copy's prices left the window. The summary's `gain` sums the used value
+  with its trend when the copy's prices left the window. `GET /api/valuation`'s
+  `moves` pair each copy's stored used value on the last valuation day with
+  its value on `moves_from`, the newest valuation day 30 to 37 days before
+  (one day for every copy, so a skipped run still gives a start; null and no
+  moves without one), and Wartość's "Największe zmiany" lists the 5 owned
+  copies that rose and the 5 that fell most in grosze
+  (`movers` in `src/lib/valuation.ts`), as "+20 zł · +50%" (grosze under
+  half a złoty); a copy without a used value on either day, or with the same
+  value, is in neither, and without any the section is hidden. The summary's `gain` sums the used value
   and the price paid over the copies that have both; the Wartość hero's
   difference reads only that, and names its coverage when it counts
   fewer copies than the collection. History keeps no gain.
+  The summary's `realized` is what sold copies made: sale price less
+  purchase price (no fees), summed over the copies sold on or before
+  today that have both, a gift sold for 0 zł losing its price; a sold
+  copy missing either counts in `unpriced`, never as 0 zł. Each run
+  stores it in the day's `valuation_history` row; the row, its copies'
+  values and the gain take the day of the snapshot the run read its
+  owned copies and sales from, so a sale committed or midnight passed
+  before the save counts each copy once (days stored before migration
+  0030 read 0). The
+  Wartość hero shows it as "Zysk ze sprzedaży", signed, with its copies,
+  and nothing without a sold copy; before the first valuation the line
+  stands under the empty state.
   `GET /api/valuation/market` gives each
   wished title and format that used middle from stored listings, owned
   or not (`?title_id=`: every format of one title), and sends no request

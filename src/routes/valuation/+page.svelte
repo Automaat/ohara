@@ -19,6 +19,7 @@
 	import DiscogsCredit from '#lib/components/DiscogsCredit.svelte';
 	import ValuationHero from '#lib/components/ValuationHero.svelte';
 	import ValuationHistory from '#lib/components/ValuationHistory.svelte';
+	import ValuationMovers from '#lib/components/ValuationMovers.svelte';
 	import ValuationRows from '#lib/components/ValuationRows.svelte';
 	import {
 		boundHints,
@@ -33,8 +34,10 @@
 		lastRunSummary,
 		likelySold,
 		likelySoldLabel,
+		movers,
 		offers,
 		pageSummary,
+		realizedLine,
 		recentHistory,
 		type CopyValue,
 		type RunnerStatus,
@@ -98,6 +101,7 @@
 		{ key: 'low_confidence', label: 'Pewność' }
 	];
 	const copies = $derived(byValue(view?.copies ?? []));
+	const moved = $derived(movers(view?.copies ?? [], view?.moves ?? []));
 	const rows = $derived(copies as Row[]);
 	const status = $derived(view?.status);
 	const valued = $derived(!!view?.last_valuation);
@@ -106,6 +110,9 @@
 	const runSummary = $derived(lastRunSummary(status?.last_result ?? null));
 	const sourceErrors = $derived(status?.last_result?.errors ?? []);
 	const busy = $derived(starting || !!status?.running);
+	// A sale's gain needs no market prices, so it shows before the first valuation too; after
+	// one, the hero shows it.
+	const realized = $derived(view ? realizedLine(view.summary) : null);
 	const minObservations = $derived(view?.min_observations ?? 0);
 	const fewOffers = $derived(offers(minObservations));
 </script>
@@ -185,12 +192,18 @@
 			description="Wycena sprawdza ceny posiadanych egzemplarzy w skupie, w ogłoszeniach z OLX oraz na Discogs."
 			action={runButton}
 		/>
+		{#if realized}
+			<p class="status">{realized}</p>
+		{/if}
 		{#if status?.last_result}
 			{@render runStatus()}
 		{/if}
 	{:else if view}
 		<ValuationHero summary={view.summary} history={recent} />
 		<ValuationHistory history={recent} lastValuation={view.last_valuation} />
+		{#if view.moves_from && (moved.rising.length > 0 || moved.falling.length > 0)}
+			<ValuationMovers rising={moved.rising} falling={moved.falling} from={view.moves_from} />
+		{/if}
 
 		{#if copies.length === 0}
 			<p class="status">Brak posiadanych egzemplarzy.</p>

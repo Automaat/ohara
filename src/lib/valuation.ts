@@ -3,10 +3,12 @@ import type {
 	Bound,
 	CopyValue,
 	CopyValueDay,
+	CopyValueMove,
 	DiscogsGrade,
 	Estimate,
 	Gain,
 	HistoryPoint,
+	Realized,
 	RunnerStatus,
 	Summary,
 	ValuationRunResult,
@@ -19,10 +21,12 @@ export type {
 	CopyValue,
 	CopyValueDay,
 	CopyValueHistory,
+	CopyValueMove,
 	DiscogsGrade,
 	Estimate,
 	Gain,
 	HistoryPoint,
+	Realized,
 	RunnerStatus,
 	Summary,
 	TitleValues,
@@ -216,6 +220,24 @@ export function heroFigures(summary: Summary) {
 		delta,
 		coverage
 	};
+}
+
+export const realizedLabel = 'Zysk ze sprzedaży';
+
+/**
+ * What sold copies made over what they cost, as "Zysk ze sprzedaży: −30,00 zł · 2 egzemplarze":
+ * the amount signed unless it is 0, the copies it counts and the sold copies missing a sale or
+ * purchase price, "1 bez ceny", which it leaves out. Null without a sold copy, also when an older
+ * server sent no gain.
+ */
+export function realizedLine(summary: Summary): string | null {
+	// A response from a server older than the realized gain has none.
+	const r: Realized | undefined = summary.realized;
+	if (!r || r.copies + r.unpriced === 0) return null;
+	if (r.copies === 0) return `${realizedLabel}: ${copiesLabel(r.unpriced)} bez ceny`;
+	const parts = [signed(r.gain_cents, formatPLN(Math.abs(r.gain_cents))), copiesLabel(r.copies)];
+	if (r.unpriced > 0) parts.push(`${zl.format(r.unpriced)} bez ceny`);
+	return `${realizedLabel}: ${parts.join(' · ')}`;
 }
 
 function percentOf(value: number, low: number, high: number): number {
@@ -535,4 +557,56 @@ export function copyGain(c: CopyValue): string {
 export function copyMeta(c: CopyValue): string {
 	const medium = c.format ? formatLabels[c.format] : kindLabels[c.kind];
 	return c.price_cents == null ? medium : `${medium} · kupiono za ${formatPLN(c.price_cents)}`;
+}
+
+/** A copy whose used value moved since the movers' start day, with the change as "+20 zł · +50%". */
+export type Mover = { copy: CopyValue; cents: number; change: string };
+
+/**
+ * A change of used value from fromCents to toCents, as "+20 zł · +50%" in whole złoty and
+ * percent rounded from grosze, or with grosze, "+0,49 zł · +1%", when it is under half a złoty;
+ * from 0 zł it has no percent.
+ */
+export function moveChange(fromCents: number, toCents: number): string {
+	const cents = toCents - fromCents;
+	const amount =
+		Math.round(Math.abs(cents) / 100) === 0
+			? signed(cents, formatPLN(Math.abs(cents)))
+			: signedWhole(cents / 100, formatZl);
+	if (fromCents <= 0) return amount;
+	return `${amount} · ${signedWhole((cents * 100) / fromCents, (n) => `${n}%`)}`;
+}
+
+/**
+ * The owned copies whose used value rose most and fell most between the movers' start day and
+ * the last valuation, up to limit of each, the largest change in grosze first. A copy without a
+ * used value on both days, or with the same value, is in neither list, and so is a copy no
+ * longer owned.
+ */
+export function movers(
+	copies: readonly CopyValue[],
+	moves: readonly CopyValueMove[],
+	limit = 5
+): { rising: Mover[]; falling: Mover[] } {
+	const owned = new Map(copies.map((c) => [c.copy_id, c]));
+	const moved: Mover[] = [];
+	for (const m of moves) {
+		const copy = owned.get(m.copy_id);
+		if (!copy || m.from_cents === null || m.to_cents === null) continue;
+		const cents = m.to_cents - m.from_cents;
+		if (cents === 0) continue;
+		moved.push({ copy, cents, change: moveChange(m.from_cents, m.to_cents) });
+	}
+	const order = (a: Mover, b: Mover) =>
+		Math.abs(b.cents) - Math.abs(a.cents) || a.copy.copy_id - b.copy.copy_id;
+	return {
+		rising: moved
+			.filter((m) => m.cents > 0)
+			.sort(order)
+			.slice(0, limit),
+		falling: moved
+			.filter((m) => m.cents < 0)
+			.sort(order)
+			.slice(0, limit)
+	};
 }

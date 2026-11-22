@@ -470,6 +470,12 @@ export type Gain = {
 	spent_cents: number;
 };
 
+export type Realized = {
+	copies: number;
+	gain_cents: number;
+	unpriced: number;
+};
+
 export type Summary = {
 	copies: number;
 	spent_cents: number;
@@ -477,6 +483,7 @@ export type Summary = {
 	mid: Bound;
 	ceiling: Bound;
 	low_confidence: number;
+	realized: Realized;
 	gain: Gain;
 };
 
@@ -489,6 +496,7 @@ export type HistoryPoint = {
 	mid: Bound;
 	ceiling: Bound;
 	low_confidence: number;
+	realized: Realized;
 };
 
 export type ValuationRunResult = {
@@ -512,6 +520,12 @@ export type RunnerStatus = {
 	last_result: ValuationRunResult | null;
 };
 
+export type CopyValueMove = {
+	copy_id: number;
+	from_cents: number | null;
+	to_cents: number | null;
+};
+
 export type ValuationView = {
 	status: RunnerStatus;
 	window_days: number;
@@ -521,6 +535,8 @@ export type ValuationView = {
 	copies: CopyValue[];
 	history: HistoryPoint[];
 	last_valuation: string | null;
+	moves_from: string | null;
+	moves: CopyValueMove[];
 };
 
 export type CopyValueDay = {

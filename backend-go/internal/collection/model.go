@@ -361,7 +361,7 @@ func normalizeTags(raw []string) ([]string, *httpx.FieldError) {
 		if strings.ContainsRune(tag, 0) || !utf8.ValidString(tag) {
 			return nil, fieldErr("tags", "is not valid")
 		}
-		key := tagKey(tag)
+		key := foldCase(tag)
 		if seen[key] {
 			continue
 		}
@@ -372,12 +372,6 @@ func normalizeTags(raw []string) ([]string, *httpx.FieldError) {
 		return nil, fieldErr("tags", "too many tags")
 	}
 	return tags, nil
-}
-
-// tagKey is what tags that differ only in case share: each character in
-// lower case, as Postgres's lower maps them.
-func tagKey(tag string) string {
-	return strings.Map(unicode.ToLower, tag)
 }
 
 func (in *TitleInput) checkKindFields() *httpx.FieldError {

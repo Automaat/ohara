@@ -20,6 +20,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/Automaat/ohara/backend-go/internal/collection"
 	"github.com/Automaat/ohara/backend-go/internal/dbtest"
 	"github.com/Automaat/ohara/backend-go/internal/server"
@@ -32,12 +34,20 @@ type api struct {
 
 func newAPI(t *testing.T) *api {
 	t.Helper()
+	a, _ := newAPIWithPool(t)
+	return a
+}
+
+// newAPIWithPool is newAPI that also hands out its database, for tests that
+// hold a transaction open while a request runs.
+func newAPIWithPool(t *testing.T) (*api, *pgxpool.Pool) {
+	t.Helper()
 	pool := dbtest.Migrated(t)
 	logger := slog.New(slog.DiscardHandler)
 	h := collection.NewHandler(collection.NewStore(pool), logger)
 	srv := httptest.NewServer(server.New(server.Config{}, logger, server.Deps{DB: pool, API: []server.Mounter{h}}))
 	t.Cleanup(srv.Close)
-	return &api{t: t, url: srv.URL}
+	return &api{t: t, url: srv.URL}, pool
 }
 
 // do sends body as JSON and decodes the response into out when out is not nil.
@@ -1043,6 +1053,114 @@ func TestListTagsCountsTitles(t *testing.T) {
 	tag(alien, "movie", "Obcy")
 	if got := list(); got != "" {
 		t.Fatalf("tags with no tagged title = %q, want none", got)
+	}
+}
+
+func TestTagsMatchByGoCaseFold(t *testing.T) {
+	a := newAPI(t)
+	cases := []struct{ saved, filter string }{
+		{"ΟΣ", "ος"},
+		{"Ᲊ", "ᲊ"},
+		{"İSTANBUL", "istanbul"},
+	}
+	for _, tc := range cases {
+		name := "Tytuł " + tc.saved
+		var created collection.Title
+		a.mustDo(http.MethodPost, "/api/titles", obj{"kind": "movie", "name": name, "tags": []string{tc.saved, tc.filter}}, &created, http.StatusCreated)
+		if got := strings.Join(created.Tags, ","); got != tc.saved {
+			t.Errorf("tags %q and %q saved as %q, want one tag %q", tc.saved, tc.filter, got, tc.saved)
+		}
+		a.copyOf(obj{"edition_id": a.edition(obj{"title_id": created.ID, "format": "dvd"}), "status": "owned"})
+		var titles []collection.Title
+		a.mustDo(http.MethodGet, "/api/titles?tag="+url.QueryEscape(tc.filter), nil, &titles, http.StatusOK)
+		var view collection.CollectionView
+		a.mustDo(http.MethodGet, "/api/collection?tag="+url.QueryEscape(tc.filter), nil, &view, http.StatusOK)
+		if len(titles) != 1 || len(view.Items) != 1 {
+			t.Errorf("?tag=%s found %d titles and %d copies, want the one tagged %s", tc.filter, len(titles), len(view.Items), tc.saved)
+		}
+	}
+}
+
+func TestTagKeepsFirstSpellingWhileAnotherSaveWaits(t *testing.T) {
+	a, pool := newAPIWithPool(t)
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var titleID, tagID int64
+	if err := tx.QueryRow(ctx, `INSERT INTO title (kind, name) VALUES ('movie', 'Pierwszy') RETURNING id`).Scan(&titleID); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.QueryRow(ctx, `INSERT INTO tag (name, key) VALUES ('First-Use', 'first-use') RETURNING id`).Scan(&tagID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO title_tag (title_id, tag_id, position) VALUES ($1, $2, 0)`, titleID, tagID); err != nil {
+		t.Fatal(err)
+	}
+
+	type answer struct {
+		status int
+		title  collection.Title
+	}
+	done := make(chan answer, 1)
+	go func() {
+		var second collection.Title
+		status := a.do(http.MethodPost, "/api/titles", obj{"kind": "movie", "name": "Drugi", "tags": []string{"first-use"}}, &second)
+		done <- answer{status, second}
+	}()
+	waitForLockWait(t, pool)
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got := <-done
+	if got.status != http.StatusCreated || strings.Join(got.title.Tags, ",") != "First-Use" {
+		t.Fatalf("second save = %d %q, want 201 with the first spelling First-Use", got.status, got.title.Tags)
+	}
+	if tags := titleTags(a, titleID); strings.Join(tags, ",") != "First-Use" {
+		t.Fatalf("first title's tags = %q, want First-Use", tags)
+	}
+}
+
+// waitForLockWait returns once a session of the test's database waits for
+// a lock, the request the test started.
+func waitForLockWait(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		var waiting bool
+		err := pool.QueryRow(context.Background(), `SELECT EXISTS (SELECT 1 FROM pg_stat_activity
+			WHERE datname = current_database() AND wait_event_type = 'Lock')`).Scan(&waiting)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if waiting {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("no request waited for the held tag")
+}
+
+func TestConcurrentSavesOfTagsInAnotherOrderAllSucceed(t *testing.T) {
+	a := newAPI(t)
+	for round := range 30 {
+		first, second := fmt.Sprintf("Horror %d", round), fmt.Sprintf("Kult %d", round)
+		statuses := make(chan int, 2)
+		for i, tags := range [][]string{{first, second}, {second, first}} {
+			go func() {
+				var created collection.Title
+				statuses <- a.do(http.MethodPost, "/api/titles", obj{
+					"kind": "movie", "name": fmt.Sprintf("Film %d-%d", round, i), "tags": tags,
+				}, &created)
+			}()
+		}
+		for range 2 {
+			if status := <-statuses; status != http.StatusCreated {
+				t.Fatalf("round %d: a save of the same tags in another order answered %d, want 201", round, status)
+			}
+		}
 	}
 }
 

@@ -72,11 +72,12 @@ func mapErr(err, notFound error, op string) error {
 const titleTags = `ARRAY(SELECT g.name FROM title_tag tt JOIN tag g ON g.id = tt.tag_id
 	WHERE tt.title_id = t.id ORDER BY tt.position)`
 
-// hasTag matches title t when it carries the tag given as the parameter
-// placeholder, case aside; an empty tag matches every title.
+// hasTag matches title t when it carries the tag whose key (foldCase of the
+// trimmed tag) is the parameter placeholder; an empty key matches every
+// title.
 func hasTag(param string) string {
 	return `(` + param + ` = '' OR EXISTS (SELECT 1 FROM title_tag tt JOIN tag g ON g.id = tt.tag_id
-		WHERE tt.title_id = t.id AND lower(g.name) = lower(` + param + `)))`
+		WHERE tt.title_id = t.id AND g.key = ` + param + `))`
 }
 
 const titleColumns = `t.id, t.kind, t.name, t.original_title, t.polish_title, t.year,
@@ -171,7 +172,7 @@ func (s *Store) ListTitles(ctx context.Context, f TitleFilter) ([]Title, error) 
 		       array_to_string(t.authors, ' '))), lower($2)) > 0)
 		  AND ($3 = 0 OR t.tmdb_id = $3)
 		  AND `+hasTag("$4")+`
-		ORDER BY lower(t.name), t.id`, f.Kind, strings.TrimSpace(f.Query), f.TMDBID, strings.TrimSpace(f.Tag))
+		ORDER BY lower(t.name), t.id`, f.Kind, strings.TrimSpace(f.Query), f.TMDBID, foldCase(strings.TrimSpace(f.Tag)))
 	if err != nil {
 		return nil, fmt.Errorf("list titles: %w", err)
 	}
@@ -268,23 +269,39 @@ func (s *Store) UpdateTitle(ctx context.Context, id int64, in *TitleInput) (Titl
 }
 
 // setTags gives title titleID the normalized tags, in their order, on top of
-// none. A tag stored before, in any case, is reused with its spelling; one no
-// title carries any more takes the spelling saved now. The upsert locks the
-// tag's row until the transaction ends.
+// none. A tag stored before under the same key (foldCase) is reused with its
+// spelling; one no title carries any more takes the spelling saved now.
+//
+// Each tag's row stays locked until the transaction ends, so the tags are
+// locked in key order: two saves of the same tags in another order would
+// otherwise each hold one and wait for the other. The use check runs after
+// the lock as its own statement, as checkNoEditions does: every transaction
+// that linked the tag before held the same lock, so it has committed and the
+// check sees its link.
 func setTags(ctx context.Context, tx pgx.Tx, titleID int64, tags []string) error {
-	for i, name := range tags {
+	order := make([]int, len(tags))
+	for i := range order {
+		order[i] = i
+	}
+	slices.SortFunc(order, func(a, b int) int {
+		return strings.Compare(foldCase(tags[a]), foldCase(tags[b]))
+	})
+	for _, i := range order {
+		name := tags[i]
 		var tagID int64
-		err := tx.QueryRow(ctx, `INSERT INTO tag (name) VALUES ($1)
-			ON CONFLICT ((lower(name))) DO UPDATE SET name = CASE
-				WHEN EXISTS (SELECT 1 FROM title_tag tt WHERE tt.tag_id = tag.id) THEN tag.name
-				ELSE excluded.name END
-			RETURNING id`, name).Scan(&tagID)
+		err := tx.QueryRow(ctx, `INSERT INTO tag (name, key) VALUES ($1, $2)
+			ON CONFLICT (key) DO UPDATE SET name = tag.name RETURNING id`,
+			name, foldCase(name)).Scan(&tagID)
 		if err != nil {
 			return fmt.Errorf("save tag: %w", err)
 		}
-		// Two spellings Go folds apart but Postgres's lower joins land on one tag.
-		_, err = tx.Exec(ctx, `INSERT INTO title_tag (title_id, tag_id, position) VALUES ($1, $2, $3)
-			ON CONFLICT DO NOTHING`, titleID, tagID, i)
+		_, err = tx.Exec(ctx, `UPDATE tag SET name = $2 WHERE id = $1 AND name <> $2
+			AND NOT EXISTS (SELECT 1 FROM title_tag WHERE tag_id = $1)`, tagID, name)
+		if err != nil {
+			return fmt.Errorf("respell tag: %w", err)
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO title_tag (title_id, tag_id, position) VALUES ($1, $2, $3)`,
+			titleID, tagID, i)
 		if err != nil {
 			return fmt.Errorf("tag title: %w", err)
 		}
@@ -303,7 +320,7 @@ type TagCount struct {
 func (s *Store) ListTags(ctx context.Context) ([]TagCount, error) {
 	rows, err := s.pool.Query(ctx, `SELECT g.name, count(*) FROM tag g
 		JOIN title_tag tt ON tt.tag_id = g.id
-		GROUP BY g.id ORDER BY lower(g.name), g.id`)
+		GROUP BY g.id ORDER BY g.key, g.id`)
 	if err != nil {
 		return nil, fmt.Errorf("list tags: %w", err)
 	}
@@ -777,11 +794,11 @@ type Filter struct {
 	Tag      string
 }
 
-// foldCase lower-cases text one character at a time, the key locations
-// match and merge by, with a final sigma as σ, since ΟΣ and ος name one
-// place. The browser's foldLocation folds the same way, so the filter it
-// applies to the loaded collection lists what this one does; Postgres's
-// lower follows the database's older Unicode tables.
+// foldCase lower-cases text one character at a time, the key locations and
+// tags match and merge by, with a final sigma as σ, since ΟΣ and ος name one
+// place. The browser's foldLocation and tagKey fold the same way, so the
+// filter it applies to the loaded collection lists what this one does;
+// Postgres's lower follows the database's older Unicode tables.
 func foldCase(text string) string {
 	return strings.Map(func(r rune) rune {
 		if r = unicode.ToLower(r); r == 'ς' {
@@ -854,7 +871,7 @@ func (s *Store) Collection(ctx context.Context, f Filter) ([]Item, error) {
 		  AND `+hasTag("$6")+`
 		ORDER BY lower(t.name), t.id, e.id, c.id`,
 		f.Kind, f.Format, f.Status, strings.TrimSpace(f.Query), strings.TrimSpace(f.Typed),
-		strings.TrimSpace(f.Tag))
+		foldCase(strings.TrimSpace(f.Tag)))
 	if err != nil {
 		return nil, fmt.Errorf("collection: %w", err)
 	}

@@ -441,9 +441,13 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   `POST` and `PUT /api/titles` take `tags`, each trimmed, blank ones
   dropped and those differing only in case collapsed, at most 500 bytes
   each and 20 per title (else 422 on `tags`). A `PUT` without `tags` (or with null) keeps
-  them, `[]` clears them. A tag matches case-insensitively and shows with
-  the spelling it was first saved with; one no title carries any more takes
-  the next spelling saved. `GET /api/tags` lists the tags in use with their
+  them, `[]` clears them. A tag matches by `tag.key`, the Go case fold
+  `foldCase` locations use (final sigma as σ; the browser's `tagKey`
+  mirrors it, not Postgres's `lower`), and shows with the spelling it was
+  first saved with; one no title carries any more takes the next spelling
+  saved. A save locks its tags in key order, then checks their use in a
+  statement of its own, so concurrent saves neither deadlock nor respell a
+  tag another title carries. `GET /api/tags` lists the tags in use with their
   title counts. `GET /api/collection?tag=` and `GET /api/titles?tag=`
   list what carries a tag, case aside; collection items carry their
   title's tags for the browser's filter.

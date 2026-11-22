@@ -1,5 +1,5 @@
-import { lowerCase, trimSpace } from './go-text';
-import { tagMatches, tagTerm } from './tags';
+import { trimSpace } from './go-text';
+import { tagKey, tagMatches, tagTerm } from './tags';
 import { editionCount, purchaseDate } from './polish';
 import type {
 	AcquiredAs,
@@ -357,7 +357,7 @@ export function tagsInUse(...lists: readonly (readonly { tags?: string[] }[])[])
 	for (const list of lists) {
 		for (const { tags } of list) {
 			for (const tag of tags ?? []) {
-				const key = lowerCase(tag);
+				const key = tagKey(tag);
 				if (!byKey.has(key)) byKey.set(key, tag);
 			}
 		}
@@ -368,7 +368,7 @@ export function tagsInUse(...lists: readonly (readonly { tags?: string[] }[])[])
 /** Adds a typed tag to a title's tags unless blank or already there, case aside. */
 export function addTag(tags: readonly string[], typed: string): string[] {
 	const tag = trimSpace(typed);
-	if (!tag || tags.some((t) => lowerCase(t) === lowerCase(tag))) return [...tags];
+	if (!tag || tags.some((t) => tagKey(t) === tagKey(tag))) return [...tags];
 	return [...tags, tag];
 }
 

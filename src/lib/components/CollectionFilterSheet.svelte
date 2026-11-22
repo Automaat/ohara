@@ -8,8 +8,7 @@
 	} from '#lib/collection.js';
 	import { foldLocation } from '#lib/collection-filter.js';
 	import { collectionSortOptions, type CollectionSort } from '#lib/collection-sort.js';
-	import { lowerCase } from '#lib/go-text.js';
-	import { tagTerm } from '#lib/tags.js';
+	import { tagKey, tagTerm } from '#lib/tags.js';
 
 	let {
 		open = $bindable(false),
@@ -72,12 +71,12 @@
 	/** The tags in use, and the chosen one even when nothing loaded carries it. */
 	const tagOptions = $derived([
 		{ value: anyTag, label: 'Każdy' },
-		...(chosenTag && !tags.some((t) => lowerCase(t) === lowerCase(chosenTag)) ? [chosenTag] : [])
+		...(chosenTag && !tags.some((t) => tagKey(t) === tagKey(chosenTag)) ? [chosenTag] : [])
 			.concat(tags)
 			.map((t) => ({ value: t, label: t }))
 	]);
 	const selectedTag = $derived(
-		chosenTag ? (tags.find((t) => lowerCase(t) === lowerCase(chosenTag)) ?? chosenTag) : anyTag
+		chosenTag ? (tags.find((t) => tagKey(t) === tagKey(chosenTag)) ?? chosenTag) : anyTag
 	);
 </script>
 

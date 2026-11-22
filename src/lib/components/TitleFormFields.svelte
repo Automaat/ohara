@@ -17,7 +17,7 @@
 		type FormIssue,
 		type TitleForm
 	} from '#lib/collection.js';
-	import { lowerCase } from '#lib/go-text.js';
+	import { tagKey } from '#lib/tags.js';
 
 	let {
 		form = $bindable(),
@@ -60,7 +60,7 @@
 	/** The tags in use the title does not carry yet, case aside. */
 	const tagChoices = $derived(
 		tagSuggestions
-			.filter((tag) => !form.tags.some((t) => lowerCase(t) === lowerCase(tag)))
+			.filter((tag) => !form.tags.some((t) => tagKey(t) === tagKey(tag)))
 			.map((tag) => ({ value: tag, label: tag }))
 	);
 

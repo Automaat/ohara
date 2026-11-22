@@ -443,6 +443,7 @@ describe('title form', () => {
 		expect(addTag(['Horror'], ' kult ')).toEqual(['Horror', 'kult']);
 		expect(addTag(['Horror'], 'HORROR')).toEqual(['Horror']);
 		expect(addTag(['Horror'], ' ')).toEqual(['Horror']);
+		expect(addTag(['ΟΣ'], 'ος')).toEqual(['ΟΣ']);
 	});
 
 	it('offers each tag in use once, with the first spelling, by name', () => {

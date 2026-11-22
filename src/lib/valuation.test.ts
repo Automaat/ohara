@@ -157,7 +157,10 @@ const point = (day: string, base: number): HistoryPoint => ({
 	low_confidence: 1
 });
 
-/** A summary whose gain, unless patched, covers every valued copy as if each had a price. */
+/**
+ * A summary whose gain, unless patched, covers every valued copy as if each had a price, or no
+ * copy when nothing was spent.
+ */
 const summary = (patch: Partial<Summary> = {}): Summary => {
 	const s = {
 		copies: 20,
@@ -169,7 +172,10 @@ const summary = (patch: Partial<Summary> = {}): Summary => {
 		...patch
 	};
 	return {
-		gain: { copies: s.mid.copies, mid_cents: s.mid.cents, spent_cents: s.spent_cents },
+		gain:
+			s.spent_cents > 0
+				? { copies: s.mid.copies, mid_cents: s.mid.cents, spent_cents: s.spent_cents }
+				: { copies: 0, mid_cents: 0, spent_cents: 0 },
 		...s
 	};
 };
@@ -253,9 +259,28 @@ describe('value hero', () => {
 		expect(f.coverage).toBeNull();
 	});
 
-	it('shows no difference when the compared copies cost nothing', () => {
-		const f = heroFigures(summary({ gain: { copies: 2, mid_cents: 3000, spent_cents: 0 } }));
+	it('shows the difference without a percent when the compared copies cost nothing', () => {
+		// One copy bought for 0 zł worth 30 zł and one bought for 200 zł without a used value.
+		const f = heroFigures(
+			summary({
+				copies: 2,
+				spent_cents: 20000,
+				mid: { cents: 3000, copies: 1 },
+				gain: { copies: 1, mid_cents: 3000, spent_cents: 0 }
+			})
+		);
 
+		expect(nbsp(f.delta ?? '')).toBe('+30 zł');
+		expect(f.coverage).toBe('Różnica dla 1 z 2 egzemplarzy');
+	});
+
+	it('keeps the totals and shows no difference for a response without a gain', () => {
+		// An open app reading a server rolled back to before the gain existed.
+		const { gain: _, ...older } = summary();
+		const f = heroFigures(older as Summary);
+
+		expect(f.value).toBe('848');
+		expect(nbsp(f.spent)).toBe('1173 zł');
 		expect(f.delta).toBeNull();
 		expect(f.coverage).toBeNull();
 	});

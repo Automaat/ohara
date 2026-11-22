@@ -165,13 +165,19 @@ function signed(value: number, text: string): string {
 	return text;
 }
 
-/** How far the used value of the copies with a price lies from what they cost, "+10 zł · +20%". */
-function gainDelta(gain: Gain): string | null {
-	if (gain.copies === 0 || gain.spent_cents <= 0) return null;
+/**
+ * How far the used value of the copies with a price lies from what they cost, "+10 zł · +20%";
+ * copies that cost nothing have no percent, "+30 zł". Null without such copies, also when an
+ * older server sent no gain.
+ */
+function gainDelta(gain: Gain | undefined): string | null {
+	if (!gain || gain.copies === 0) return null;
 	const diffCents = gain.mid_cents - gain.spent_cents;
 	const diff = Math.round(diffCents / 100) || 0;
+	const amount = signed(diff, formatZl(Math.abs(diff)));
+	if (gain.spent_cents <= 0) return amount;
 	const percent = Math.round((diffCents / gain.spent_cents) * 100) || 0;
-	return `${signed(diff, formatZl(Math.abs(diff)))} · ${signed(percent, `${Math.abs(percent)}%`)}`;
+	return `${amount} · ${signed(percent, `${Math.abs(percent)}%`)}`;
 }
 
 /**
@@ -182,10 +188,12 @@ function gainDelta(gain: Gain): string | null {
  */
 export function heroFigures(summary: Summary) {
 	const value = summary.mid.copies > 0 ? summary.mid.cents : null;
-	const delta = gainDelta(summary.gain);
+	// A response from a server older than the gain has none.
+	const gain: Gain | undefined = summary.gain;
+	const delta = gainDelta(gain);
 	const coverage =
-		delta !== null && summary.gain.copies < summary.copies
-			? `Różnica dla ${zl.format(summary.gain.copies)} z ${zl.format(summary.copies)} egzemplarzy`
+		gain && delta !== null && gain.copies < summary.copies
+			? `Różnica dla ${zl.format(gain.copies)} z ${zl.format(summary.copies)} egzemplarzy`
 			: null;
 	return {
 		value: value === null ? null : zl.format(value / 100),

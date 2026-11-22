@@ -23,6 +23,7 @@ import {
 	wishComparison,
 	wishLimit,
 	withoutDismissed,
+	withoutUnconfirmed,
 	type HunterStatus,
 	type Keyword,
 	type MarketPrice,
@@ -319,6 +320,22 @@ describe('dismissal', () => {
 	it('hands back the same list when nothing is dismissed', () => {
 		const listings = [{ id: 1 }];
 		expect(withoutDismissed(listings, new Set())).toBe(listings);
+	});
+});
+
+describe('withoutUnconfirmed', () => {
+	it('leaves out the Discogs listings and keeps the order of the rest', () => {
+		const listings = [
+			{ id: 1, source: 'olx' as const },
+			{ id: 2, source: 'discogs_inventory' as const },
+			{ id: 3, source: 'pepper' as const }
+		];
+		expect(withoutUnconfirmed(listings).map((o) => o.id)).toEqual([1, 3]);
+	});
+
+	it('hands back the same list when it holds no Discogs listing', () => {
+		const listings = [{ id: 1, source: 'olx' as const }];
+		expect(withoutUnconfirmed(listings)).toBe(listings);
 	});
 });
 

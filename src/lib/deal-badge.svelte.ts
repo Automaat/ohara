@@ -1,5 +1,10 @@
 import { request } from '#lib/api.js';
-import { underLimitCount, type DealsView, type Observation } from '#lib/deals.js';
+import {
+	underLimitCount,
+	withoutUnconfirmed,
+	type DealsView,
+	type Observation
+} from '#lib/deals.js';
 
 /**
  * The listings at or under their wish's price limit from the newest answer, null before the
@@ -48,6 +53,17 @@ export function refreshDealBadge(fetchFn: typeof fetch): Promise<void> {
 		() => undefined,
 		() => undefined
 	);
+}
+
+/**
+ * Takes the listings of expiring sources out of the badge and "Pod limitem" when a request for
+ * them failed, since no answer confirms they are still offered (withoutUnconfirmed). A later
+ * answer brings them back.
+ */
+export function forgetUnconfirmedListings(): void {
+	if (!dealBadge.listings) return;
+	dealBadge.listings = withoutUnconfirmed(dealBadge.listings);
+	dealBadge.count = underLimitCount(dealBadge.listings);
 }
 
 /**

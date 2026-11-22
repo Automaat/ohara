@@ -136,6 +136,30 @@ describe('loadUnderLimit', () => {
 	});
 });
 
+describe('forgetUnconfirmedListings', () => {
+	it('takes the Discogs listings out of the badge and its listings', async () => {
+		const discogs = { ...listing(3900, 4000), source: 'discogs_inventory' as const };
+		await badge.loadUnderLimit(deals([listing(3500, 4000), discogs]));
+		badge.forgetUnconfirmedListings();
+		expect(badge.dealBadge.count).toBe(1);
+		expect(badge.dealBadge.listings?.map((l) => l.id)).toEqual([3500]);
+	});
+
+	it('lets the next answer bring them back', async () => {
+		const discogs = { ...listing(3900, 4000), source: 'discogs_inventory' as const };
+		await badge.loadUnderLimit(deals([discogs]));
+		badge.forgetUnconfirmedListings();
+		expect(badge.dealBadge.count).toBe(0);
+		await badge.loadUnderLimit(deals([discogs]));
+		expect(badge.dealBadge.count).toBe(1);
+	});
+
+	it('does nothing before the first answer', () => {
+		badge.forgetUnconfirmedListings();
+		expect(badge.dealBadge.listings).toBeNull();
+	});
+});
+
 describe('forgetDealListing', () => {
 	it('takes the listing out of the badge and its listings at once', async () => {
 		await badge.loadUnderLimit(deals([listing(3500, 4000), listing(3900, 4000)]));

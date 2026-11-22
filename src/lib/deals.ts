@@ -220,6 +220,23 @@ export const sourceLabels: Record<DealSource, string> = {
 	discogs_inventory: 'Discogs'
 };
 
+/**
+ * The sources whose listings may be shown only while a recent answer still offers them: the
+ * Discogs API terms let no view show seller inventory more than six hours old.
+ */
+export const expiringSources: ReadonlySet<DealSource> = new Set<DealSource>(['discogs_inventory']);
+
+/**
+ * The listings a page may keep drawing when it cannot ask the server again: those of an expiring
+ * source are left out, since no answer confirms they are still offered and fresh. The next answer
+ * brings them back. Hands back the same list when it holds none.
+ */
+export function withoutUnconfirmed<T extends Pick<Observation, 'source'>>(listings: T[]): T[] {
+	return listings.some((o) => expiringSources.has(o.source))
+		? listings.filter((o) => !expiringSources.has(o.source))
+		: listings;
+}
+
 /** The attribution a source's terms require next to its listing, linked to the listing. */
 export const sourceNotices: Partial<Record<DealSource, string>> = {
 	discogs_inventory: 'Data provided by Discogs.'

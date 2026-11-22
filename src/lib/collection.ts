@@ -1,4 +1,5 @@
 import { trimSpace } from './go-text';
+import { tagKey, tagMatches, tagTerm } from './tags';
 import { editionCount, purchaseDate } from './polish';
 import type {
 	AcquiredAs,
@@ -42,6 +43,7 @@ export type {
 	MusicFormat,
 	Packaging,
 	ReturnPayload,
+	TagCount,
 	Title,
 	TitleDetail,
 	TitlePayload,
@@ -317,6 +319,8 @@ export type CollectionFilter = {
 	q: string;
 	/** Only copies with an open loan; left out when off. */
 	loaned?: boolean;
+	/** A tag of the title, the whole tag, case aside; absent for any title. */
+	tag?: string;
 };
 
 /**
@@ -331,13 +335,15 @@ export function readCollectionFilter(params: Pick<URLSearchParams, 'get'>): Coll
 
 	const status = read('status', collectionStatusLabels);
 	const location = status === 'none' ? '' : trimSpace(params.get('location') ?? '');
+	const tag = tagTerm(params.get('tag') ?? '');
 	return {
 		kind: read('kind', kindLabels),
 		format: status === 'none' ? '' : read('format', formatLabels),
 		status,
 		...(location ? { location } : {}),
 		q: params.get('q') ?? '',
-		...(status !== 'none' && params.get('loaned') === '1' ? { loaned: true } : {})
+		...(status !== 'none' && params.get('loaned') === '1' ? { loaned: true } : {}),
+		...(tag ? { tag } : {})
 	};
 }
 
@@ -350,8 +356,15 @@ export function collectionSearch(f: CollectionFilter): string {
 	const location = trimSpace(f.location ?? '');
 	if (location) params.set('location', location);
 	if (f.q.trim()) params.set('q', f.q.trim());
+	const tag = tagTerm(f.tag ?? '');
+	if (tag) params.set('tag', tag);
 	const qs = params.toString();
 	return qs ? `?${qs}` : '';
+}
+
+/** Kolekcja listing what carries a tag. */
+export function tagHref(tag: string): string {
+	return `/${collectionSearch({ kind: '', format: '', status: '', q: '', tag })}`;
 }
 
 /** The titles that have no copy yet. */
@@ -360,17 +373,18 @@ export function withoutCopies(titles: readonly Title[]): Title[] {
 }
 
 /**
- * The titles without a copy of the filter's kind whose names or authors contain its words, as the
- * server searches titles.
+ * The titles without a copy of the filter's kind and tag whose names or authors contain its
+ * words, as the server searches titles.
  */
 export function uncopiedTitles(
 	titles: readonly Title[],
-	f: Pick<CollectionFilter, 'kind' | 'q'>
+	f: Pick<CollectionFilter, 'kind' | 'q' | 'tag'>
 ): Title[] {
 	const words = f.q.trim().toLocaleLowerCase('pl-PL');
 	return withoutCopies(titles).filter(
 		(t) =>
 			(!f.kind || t.kind === f.kind) &&
+			tagMatches(t.tags, f.tag) &&
 			(!words ||
 				[t.name, t.original_title, t.polish_title, ...t.authors]
 					.filter(Boolean)
@@ -378,6 +392,30 @@ export function uncopiedTitles(
 					.toLocaleLowerCase('pl-PL')
 					.includes(words))
 	);
+}
+
+/**
+ * The tags the lists carry, each once with the first spelling met, in name order, so the filter
+ * offers only tags that list something.
+ */
+export function tagsInUse(...lists: readonly (readonly { tags?: string[] }[])[]): string[] {
+	const byKey = new Map<string, string>();
+	for (const list of lists) {
+		for (const { tags } of list) {
+			for (const tag of tags ?? []) {
+				const key = tagKey(tag);
+				if (!byKey.has(key)) byKey.set(key, tag);
+			}
+		}
+	}
+	return [...byKey.values()].sort((a, b) => a.localeCompare(b, 'pl-PL'));
+}
+
+/** Adds a typed tag to a title's tags unless blank or already there, case aside. */
+export function addTag(tags: readonly string[], typed: string): string[] {
+	const tag = trimSpace(typed);
+	if (!tag || tags.some((t) => tagKey(t) === tagKey(tag))) return [...tags];
+	return [...tags, tag];
 }
 
 /** A title tile's line under the name, such as "Stanisław Lem · Brak wydań" or "Film · 2 wydania". */
@@ -414,6 +452,9 @@ export type TitleForm = {
 	openlibrary_id: string;
 	cover_url: string;
 	notes: string;
+	tags: string[];
+	/** A tag typed but not added yet; saving adds it. */
+	tag: string;
 };
 
 /** The editable form of a title, or an empty one of kind. */
@@ -429,7 +470,9 @@ export function titleToForm(t: TitlePayload | null, kind: Kind = 'movie'): Title
 		bn_id: t?.bn_id ?? '',
 		openlibrary_id: t?.openlibrary_id ?? '',
 		cover_url: t?.cover_url ?? '',
-		notes: t?.notes ?? ''
+		notes: t?.notes ?? '',
+		tags: [...(t?.tags ?? [])],
+		tag: ''
 	};
 }
 
@@ -462,7 +505,8 @@ export function titlePayload(f: TitleForm): Parsed<TitlePayload> {
 			bn_id: book ? optText(f.bn_id) : null,
 			openlibrary_id: book ? optText(f.openlibrary_id) : null,
 			cover_url: f.cover_url.trim(),
-			notes: f.notes.trim()
+			notes: f.notes.trim(),
+			tags: addTag(f.tags, f.tag)
 		}
 	};
 }

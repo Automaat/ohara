@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { purchaseDate } from './polish';
 import {
+	addTag,
 	centsToInput,
 	collectionSearch,
 	copyPayload,
@@ -24,6 +25,8 @@ import {
 	saleLine,
 	shelfLine,
 	shelfSummary,
+	tagHref,
+	tagsInUse,
 	titlePayload,
 	titleToForm,
 	type Edition,
@@ -124,6 +127,48 @@ describe('collection search links', () => {
 			q: 'Łódź + jazz & blues'
 		} as const;
 		expect(readCollectionFilter(new URLSearchParams(collectionSearch(filter)))).toEqual(filter);
+	});
+
+	it('round-trips a tag with the other filters', () => {
+		const filter = {
+			kind: 'music',
+			format: 'vinyl',
+			status: 'owned',
+			q: 'jazz',
+			tag: 'Do sprzedania & czytania'
+		} as const;
+		expect(collectionSearch(filter)).toBe(
+			'?kind=music&format=vinyl&status=owned&q=jazz&tag=Do+sprzedania+%26+czytania'
+		);
+		expect(readCollectionFilter(new URLSearchParams(collectionSearch(filter)))).toEqual(filter);
+	});
+
+	it('trims a tag as the server reads it and leaves out a blank one', () => {
+		const filter = { kind: '', format: '', status: '', q: '', tag: ' Dla dzieci ' } as const;
+		expect(collectionSearch(filter)).toBe('?tag=Dla+dzieci');
+		expect(readCollectionFilter(new URLSearchParams('tag=%20Dla%20dzieci%20'))).toEqual({
+			...filter,
+			tag: 'Dla dzieci'
+		});
+		expect(collectionSearch({ ...filter, tag: '  ' })).toBe('');
+		expect(readCollectionFilter(new URLSearchParams('tag=%20%20'))).not.toHaveProperty('tag');
+	});
+
+	it('keeps a tag for titles without copies', () => {
+		expect(readCollectionFilter(new URLSearchParams('tag=horror&status=none'))).toEqual({
+			kind: '',
+			format: '',
+			status: 'none',
+			q: '',
+			tag: 'horror'
+		});
+	});
+
+	it('links a tag to Kolekcja filtered by it', () => {
+		expect(tagHref('Dla dzieci & młodzieży')).toBe('/?tag=Dla+dzieci+%26+m%C5%82odzie%C5%BCy');
+		expect(readCollectionFilter(new URL(tagHref('horror'), 'https://o.test').searchParams)).toEqual(
+			{ kind: '', format: '', status: '', q: '', tag: 'horror' }
+		);
 	});
 
 	it('ignores unsupported options without dropping the query', () => {
@@ -290,11 +335,34 @@ const title: Title = {
 	bn_id: 'b1',
 	openlibrary_id: null,
 	notes: '',
+	tags: [],
 	edition_count: 0,
 	copy_count: 0,
 	created_at: '',
 	updated_at: ''
 };
+
+describe('titles without copies by tag', () => {
+	const catalog: Title[] = [
+		{ ...title, id: 1, tags: ['Horror', 'Kult'] },
+		{ ...title, id: 2, tags: ['horror'], copy_count: 1 },
+		{ ...title, id: 3, kind: 'music', name: 'Kind of Blue', tags: ['Jazz', 'Do sprzedania'] },
+		{ ...title, id: 4, name: 'Lód', authors: ['Jacek Dukaj'], tags: ['do SPRZEDANIA'] },
+		{ ...title, id: 5, name: 'Rejs' }
+	];
+
+	it.each([
+		[{ kind: '', q: '', tag: '' }, [1, 3, 4, 5]],
+		[{ kind: '', q: '' }, [1, 3, 4, 5]],
+		[{ kind: '', q: '', tag: 'HORROR' }, [1]],
+		[{ kind: '', q: '', tag: ' do sprzedania ' }, [3, 4]],
+		[{ kind: 'book', q: '', tag: 'Do Sprzedania' }, [4]],
+		[{ kind: '', q: 'dukaj', tag: 'do sprzedania' }, [4]],
+		[{ kind: '', q: '', tag: 'sprzedania' }, []]
+	] as const)('narrows to %j', (filter, want) => {
+		expect(uncopiedTitles(catalog, filter).map((t) => t.id)).toEqual(want);
+	});
+});
 
 describe('titles without copies', () => {
 	const catalog: Title[] = [
@@ -379,6 +447,39 @@ describe('title form', () => {
 
 	it('starts empty with a kind', () => {
 		expect(titleToForm(null, 'book')).toMatchObject({ kind: 'book', name: '', authors: '' });
+	});
+
+	it('starts with no tags', () => {
+		expect(titleToForm(null)).toMatchObject({ tags: [], tag: '' });
+	});
+
+	it('round-trips tags and adds the one still typed', () => {
+		const form = titleToForm({ ...title, tags: ['Horror', 'Kult'] });
+		expect(form.tags).toEqual(['Horror', 'Kult']);
+		const kept = titlePayload(form);
+		expect(kept.ok && kept.value.tags).toEqual(['Horror', 'Kult']);
+		const typed = titlePayload({ ...form, tag: '  Dla dzieci ' });
+		expect(typed.ok && typed.value.tags).toEqual(['Horror', 'Kult', 'Dla dzieci']);
+		const repeated = titlePayload({ ...form, tag: 'KULT' });
+		expect(repeated.ok && repeated.value.tags).toEqual(['Horror', 'Kult']);
+		const cleared = titlePayload({ ...form, tags: [] });
+		expect(cleared.ok && cleared.value.tags).toEqual([]);
+	});
+
+	it('adds a tag once, case aside, and never a blank one', () => {
+		expect(addTag(['Horror'], ' kult ')).toEqual(['Horror', 'kult']);
+		expect(addTag(['Horror'], 'HORROR')).toEqual(['Horror']);
+		expect(addTag(['Horror'], ' ')).toEqual(['Horror']);
+		expect(addTag(['ΟΣ'], 'ος')).toEqual(['ΟΣ']);
+	});
+
+	it('offers each tag in use once, with the first spelling, by name', () => {
+		expect(
+			tagsInUse(
+				[{ tags: ['Żywe', 'horror'] }, {}, { tags: ['Horror', 'akcja'] }],
+				[{ tags: ['Akcja', 'Dla dzieci'] }]
+			)
+		).toEqual(['akcja', 'Dla dzieci', 'horror', 'Żywe']);
 	});
 
 	it.each([

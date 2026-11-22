@@ -321,6 +321,58 @@ for (const viewport of viewports) {
 			expect(sent.length, 'one refresh of the collection').toBeLessThanOrEqual(1);
 		});
 
+		test('Back to a tile drawn in a later part restores the scroll and the cover', async ({
+			page,
+			request
+		}) => {
+			const t = tag();
+			const total = 100;
+			const seeded = await Promise.all(
+				Array.from({ length: total }, (_, i) =>
+					seed(request, { kind: 'book', name: `Tom ${String(i).padStart(3, '0')} ${t}` })
+				)
+			);
+			const address = `/?q=${t}`;
+			await page.goto(address);
+			const tiles = shelf(page).getByRole('listitem');
+			await expect(tiles).toHaveCount(total);
+			await expect(tiles.first()).toHaveAttribute('aria-setsize', String(total));
+			await expect(tiles.last()).toHaveAttribute('aria-posinset', String(total));
+
+			const far = 95;
+			const opened = tile(page, `Tom 0${far} ${t}`);
+			await opened.scrollIntoViewIfNeeded();
+			await page.evaluate(() => window.scrollBy(0, 40));
+			const scrolled = await page.evaluate(() => window.scrollY);
+
+			await press(opened.getByRole('link'));
+			await expect(page).toHaveURL(new RegExp(`/titles/${seeded[far].titleID}$`));
+			await expect(page.getByRole('heading', { name: `Tom 0${far} ${t}` })).toBeVisible();
+
+			await watchLanding(page);
+			await page.goBack();
+
+			await expect(page).toHaveURL(address);
+			await expect.poll(() => landedKeys(page)).toContain(String(seeded[far].copyID));
+			expect(Math.abs((await page.evaluate(() => window.scrollY)) - scrolled)).toBeLessThan(2);
+			await expect(tiles).toHaveCount(total);
+		});
+
+		test('the table layout mounts only what the screen shows', async ({ page, request }) => {
+			const t = tag();
+			const name = `Tabela ${t}`;
+			await seed(request, { kind: 'book', name });
+			await page.addInitScript(() => localStorage.setItem('ohara.collection.layout', 'table'));
+			await page.goto(`/?q=${t}`);
+			if (viewport.touch) {
+				await expect(tile(page, name)).toBeVisible();
+				await expect(page.locator('table')).toHaveCount(0);
+			} else {
+				await expect(page.getByRole('table').getByRole('link', { name })).toBeVisible();
+				await expect(page.locator('ul[aria-label="Egzemplarze w kolekcji"]')).toHaveCount(0);
+			}
+		});
+
 		test('a refresh outlives a switch to Bez egzemplarzy and back', async ({ page, request }) => {
 			const t = tag();
 			const first = `Pierwszy ${t}`;

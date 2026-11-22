@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { ErrorState, Link } from '@smykla-skalski/sui';
-	import type { Snippet } from 'svelte';
+	import { tick, type Snippet } from 'svelte';
 	import { displayName, shelfLine, type CollectionItem } from '#lib/collection.js';
+	import { drawnCount, firstTiles, tilesPerStep } from '#lib/shelf-drawing.js';
 	import CollectionCover from './CollectionCover.svelte';
 	import ShelfSkeleton from './ShelfSkeleton.svelte';
 
@@ -18,6 +19,52 @@
 		onretry: () => void;
 		empty: Snippet;
 	} = $props();
+
+	/** The copies whose tiles the last draw left in the page. */
+	let drawnKeys: ReadonlySet<number> = new Set();
+	/** How many leading rows are drawn: set anew when the rows change, then grown a part a task. */
+	let count = $derived(
+		drawnCount(
+			rows.map((row) => row.copy_id),
+			drawnKeys,
+			firstTiles
+		)
+	);
+	const drawn = $derived(count >= rows.length ? rows : rows.slice(0, count));
+	let list = $state<HTMLElement>();
+
+	$effect(() => {
+		drawnKeys = new Set(drawn.map((row) => row.copy_id));
+	});
+
+	function drawMore() {
+		count = Math.min(rows.length, count + tilesPerStep);
+	}
+
+	$effect(() => {
+		if (count >= rows.length) return;
+		const timer = setTimeout(drawMore);
+		return () => clearTimeout(timer);
+	});
+
+	/**
+	 * Draws the list down to `y`, a position in the document, and a screen below it, so a scroll
+	 * position kept further down can be restored. It draws what the tiles drawn so far say it
+	 * needs, and a part more, at once: a cover carried back lands only if its tile is drawn
+	 * within the transition's wait, and the reader waits on that transition anyway. It yields
+	 * before measuring again, so the browser lays the new tiles out in a task of its own.
+	 */
+	export async function drawTo(y: number): Promise<void> {
+		if (!list || count >= rows.length) return;
+		const box = list.getBoundingClientRect();
+		const reach = y + window.innerHeight - (box.top + window.scrollY);
+		if (box.height >= reach) return;
+		const needed = Math.ceil((reach / Math.max(box.height, 1)) * count) + tilesPerStep;
+		count = Math.min(rows.length, Math.max(needed, count + tilesPerStep));
+		await tick();
+		await new Promise((resolve) => setTimeout(resolve));
+		return drawTo(y);
+	}
 </script>
 
 {#if failure}
@@ -39,11 +86,24 @@
 	{/if}
 {/if}
 {#if rows.length}
-	<ul class="shelf" role="list" aria-label="Egzemplarze w kolekcji" aria-busy={loading}>
-		{#each rows as row (row.copy_id)}
+	<!-- Each tile carries its place among all rows, so the list counts every copy while the
+	     last parts are still being drawn. -->
+	<ul
+		class="shelf"
+		role="list"
+		aria-label="Egzemplarze w kolekcji"
+		aria-busy={loading}
+		bind:this={list}
+	>
+		{#each drawn as row, i (row.copy_id)}
 			{@const name = displayName(row)}
 			{@const wish = row.status === 'wishlist'}
-			<li data-cover-title={row.title_id} data-cover-key={row.copy_id}>
+			<li
+				data-cover-title={row.title_id}
+				data-cover-key={row.copy_id}
+				aria-setsize={rows.length}
+				aria-posinset={i + 1}
+			>
 				<div class="artwork">
 					<CollectionCover kind={row.kind} url={row.cover_url} large {name} {wish} />
 				</div>

@@ -333,7 +333,11 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   refreshes it once. Its filter sheet's "Bez egzemplarzy"
   (`?status=none`) lists titles without one instead, filtered in the client
   from `GET /api/titles`; `/titles` redirects to `/`. `?add=copy` on a title
-  or edition page opens the form for its next copy.
+  or edition page opens the form for its next copy. The shelf draws its
+  tiles in parts (`src/lib/shelf-drawing.ts`): 60 with the page, then 150
+  a task, each tile carrying `aria-setsize`; a restored scroll first draws
+  down to its place. Only the layout on screen is mounted: a phone always
+  gets the shelf, never the hidden table.
 - Discogs data carries `DiscogsCredit`: "Data provided by Discogs." linked
   to its release page, never `nofollow`, under a quick confirm candidate
   with a `discogs_release_id` and a copy priced from Discogs on Wartość.

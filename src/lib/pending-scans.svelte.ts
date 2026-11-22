@@ -37,6 +37,131 @@ export const browserLock: SendLock = async (run) => {
 	});
 };
 
+/**
+ * Where the code whose POST last got no answer is kept, so the next run starts after it even
+ * after a reload or in another tab.
+ */
+export type SendCursor = {
+	get(): string | null;
+	set(barcode: string): void;
+};
+
+type CursorStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
+
+const cursorKey = 'ohara-pending-scans-unanswered';
+
+function browserStorage(): CursorStorage | undefined {
+	return globalThis.localStorage;
+}
+
+/** Takes an older cursor out of storage, so it cannot win over the one this tab keeps. */
+function dropCursor(target: CursorStorage | undefined): boolean {
+	try {
+		target?.removeItem(cursorKey);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/** Stores the cursor; false when storage is missing or refused it, with any older one dropped. */
+function writeCursor(storage: () => CursorStorage | undefined, barcode: string): boolean {
+	let target: CursorStorage | undefined;
+	try {
+		target = storage();
+		if (!target) return false;
+		target.setItem(cursorKey, barcode);
+		return true;
+	} catch {
+		dropCursor(target);
+		return false;
+	}
+}
+
+/**
+ * The cursor in localStorage, shared by the app's tabs and kept across reloads; where storage is
+ * missing or refuses, this tab keeps it in memory until storage holds a cursor again, as one
+ * another tab stored later.
+ */
+export function storageCursor(
+	storage: () => CursorStorage | undefined = browserStorage
+): SendCursor {
+	let memory: string | null = null;
+	return {
+		get: () => {
+			try {
+				return storage()?.getItem(cursorKey) ?? memory;
+			} catch {
+				return memory;
+			}
+		},
+		set: (barcode) => {
+			memory = writeCursor(storage, barcode) ? null : barcode;
+		}
+	};
+}
+
+/**
+ * How the app's tabs tell each other that a run took codes off the device, so a tab that never
+ * counted those codes still sees them leave.
+ */
+export type DepartureNews = {
+	/** Tells the other tabs; this tab's own listeners do not hear it. */
+	post(): void;
+	/** Calls heard each time another tab posts, until the returned function stops it. */
+	listen(heard: () => void): () => void;
+};
+
+const channelName = 'ohara-pending-scans';
+
+function openChannel(): BroadcastChannel | null {
+	try {
+		return globalThis.BroadcastChannel ? new BroadcastChannel(channelName) : null;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * The news over a BroadcastChannel, opened while this tab listens. A channel never hears its own
+ * messages, so a post goes out on that channel, or on one opened for the post alone. Without
+ * BroadcastChannel no tab hears the others, and each finds departures by its own reads.
+ */
+export function broadcastDepartures(
+	open: () => BroadcastChannel | null = openChannel
+): DepartureNews {
+	let channel: BroadcastChannel | null = null;
+	const listeners = new Set<() => void>();
+	const heard = () => {
+		for (const listener of [...listeners]) listener();
+	};
+	return {
+		post: () => {
+			if (channel) {
+				channel.postMessage('departed');
+				return;
+			}
+			const once = open();
+			once?.postMessage('departed');
+			once?.close();
+		},
+		listen: (listener) => {
+			const own = () => listener();
+			listeners.add(own);
+			if (!channel) {
+				channel = open();
+				channel?.addEventListener('message', heard);
+			}
+			return () => {
+				if (!listeners.delete(own) || listeners.size > 0) return;
+				channel?.removeEventListener('message', heard);
+				channel?.close();
+				channel = null;
+			};
+		}
+	};
+}
+
 /** Runs work with a signal that aborts it after ms, and rejects once ms passed either way. */
 function withDeadline<T>(ms: number, work: (signal: AbortSignal) => Promise<T>): Promise<T> {
 	const controller = new AbortController();
@@ -146,9 +271,18 @@ export function openPendingStore(
 
 /**
  * How one waiting code's POST ended: in the queue, off the device for another reason, kept for the
- * next try, or the run stops.
+ * next try, no answer in time, or the sign-in turned it away. The last two end the run.
  */
-type Outcome = 'queued' | 'settled' | 'kept' | 'stop';
+type Outcome = 'queued' | 'settled' | 'kept' | 'unanswered' | 'stop';
+
+/**
+ * The codes in the order a run sends them: after the code whose POST last got no answer, which
+ * then goes last, so one code that never gets an answer cannot hold back the rest.
+ */
+function sendOrder(codes: readonly string[], unanswered: string | null): string[] {
+	const at = unanswered === null ? -1 : codes.indexOf(unanswered);
+	return [...codes.slice(at + 1), ...codes.slice(0, at + 1)];
+}
 
 /**
  * Barcodes scanned while the check got no answer, kept on the device until the scan queue takes
@@ -158,9 +292,9 @@ export class PendingScans {
 	/** Codes waiting on this device, as last read from its store. */
 	count = $state(0);
 	/**
-	 * Goes up each time codes leave the device as this tab sees it: its run took some off, or a
-	 * read found fewer than it counted, as when another tab sent them. A code kept meanwhile
-	 * cannot hide a departure, as it can in the count.
+	 * Goes up each time codes leave the device as this tab sees it: its run took some off, another
+	 * tab's run did (heard while started), or a read found fewer than it counted. A code kept
+	 * meanwhile cannot hide a departure, as it can in the count.
 	 */
 	departures = $state(0);
 	/** Whether this device keeps such codes; null until its store was opened. */
@@ -172,15 +306,21 @@ export class PendingScans {
 	readonly #lock: SendLock;
 	#store: Promise<PendingStore | null> | null = null;
 	#sending: Promise<void> | null = null;
+	readonly #cursor: SendCursor;
+	readonly #news: DepartureNews;
 
 	constructor(
 		fetchFn: typeof fetch,
 		open: () => Promise<PendingStore | null>,
-		lock: SendLock = browserLock
+		lock: SendLock = browserLock,
+		cursor: SendCursor = storageCursor(),
+		news: DepartureNews = broadcastDepartures()
 	) {
 		this.#fetch = fetchFn;
 		this.#open = open;
 		this.#lock = lock;
+		this.#cursor = cursor;
+		this.#news = news;
 	}
 
 	/** The store, opened once; a store that failed an operation is opened again next time. */
@@ -218,6 +358,13 @@ export class PendingScans {
 		}
 	}
 
+	/** Another tab's run took codes off the device: one departure, and the count read again. */
+	async #departedElsewhere() {
+		const store = await this.#opened();
+		if (store) await this.#recount(store, true);
+		else this.departures++;
+	}
+
 	/**
 	 * Keeps a code whose check got no answer, in the form the server stores it, so two spellings of
 	 * one barcode wait once. False when the device cannot keep it; until a later write succeeds,
@@ -248,7 +395,9 @@ export class PendingScans {
 	 * leaves the device once the queue took it (200 or 201, even if the body is lost), an edition
 	 * carries it (409 on barcode) or the queue refuses it (422); any other answer keeps it for the
 	 * next run. No answer within postTimeout, or the sign-in turning the request away, ends the
-	 * run. While another tab sends, this one only reads the count.
+	 * run; after no answer, the next run, after a reload or in another tab too, starts with the
+	 * code after that one and sends it last. While another tab sends, this one only reads the count.
+	 * Each code the server took off the device is news for the app's other tabs.
 	 */
 	send(): Promise<void> {
 		this.#sending ??= this.#lock(() => this.#sendAll())
@@ -281,7 +430,7 @@ export class PendingScans {
 		await queueDeletesSettled();
 		const run = { left: false };
 		try {
-			await this.#sendEach(store, codes, run);
+			await this.#sendEach(store, sendOrder(codes, this.#cursor.get()), run);
 		} catch {
 			this.#lost();
 			if (run.left) this.departures++;
@@ -291,8 +440,10 @@ export class PendingScans {
 	}
 
 	/**
-	 * Sends codes one after another, so a run that gets no answer stops before the rest; run.left
-	 * notes that a code left the device.
+	 * Sends codes one after another, so a run that gets no answer stops before the rest and the
+	 * next run starts after that code; run.left notes that the server took a code off the device.
+	 * The other tabs hear of each such code once its removal settled, whether or not it failed, so
+	 * a tab closed later in the run or a removal that fails cannot keep the news from them.
 	 */
 	async #sendEach(
 		store: PendingStore,
@@ -302,10 +453,15 @@ export class PendingScans {
 		const [barcode, ...rest] = codes;
 		if (barcode === undefined) return;
 		const outcome = await this.#post(barcode);
-		if (outcome === 'stop') return;
+		if (outcome === 'unanswered') this.#cursor.set(barcode);
+		if (outcome === 'unanswered' || outcome === 'stop') return;
 		if (outcome !== 'kept') {
-			await store.remove(barcode);
 			run.left = true;
+			try {
+				await store.remove(barcode);
+			} finally {
+				this.#news.post();
+			}
 		}
 		if (outcome === 'queued') queueWaiting(barcode);
 		await this.#sendEach(store, rest, run);
@@ -321,7 +477,7 @@ export class PendingScans {
 				signal
 			});
 			return this.#outcome(res);
-		}).catch((): Outcome => 'stop');
+		}).catch((): Outcome => 'unanswered');
 	}
 
 	/**
@@ -344,7 +500,8 @@ export class PendingScans {
 
 	/**
 	 * Sends now, whenever the browser comes online or the app is shown again, and every interval,
-	 * as another tab may have kept codes this one has not counted. Returns what stops it.
+	 * as another tab may have kept codes this one has not counted. Meanwhile it hears each run of
+	 * another tab that took codes off the device. Returns what stops both.
 	 */
 	start(
 		win: Pick<EventTarget, 'addEventListener' | 'removeEventListener'>,
@@ -355,11 +512,13 @@ export class PendingScans {
 		const shown = () => {
 			if (doc.visibilityState === 'visible') send();
 		};
+		const unlisten = this.#news.listen(() => void this.#departedElsewhere());
 		send();
 		win.addEventListener('online', send);
 		doc.addEventListener('visibilitychange', shown);
 		const timer = setInterval(send, every);
 		return () => {
+			unlisten();
 			win.removeEventListener('online', send);
 			doc.removeEventListener('visibilitychange', shown);
 			clearInterval(timer);

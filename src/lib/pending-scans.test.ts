@@ -5,10 +5,13 @@ import { deleteQueueEntry } from './queue-deletes';
 import { logScan, recentScans } from './recent.svelte';
 import {
 	PendingScans,
+	broadcastDepartures,
 	browserLock,
 	offlineDetail,
 	openPendingStore,
 	postTimeout,
+	storageCursor,
+	type DepartureNews,
 	type PendingStore
 } from './pending-scans.svelte';
 
@@ -33,6 +36,31 @@ function memory(codes: string[] = []) {
 		return store;
 	};
 	return { kept, state, open };
+}
+
+/**
+ * Tabs of one browser in memory: each tab's news reaches the listeners of every other tab, as
+ * BroadcastChannel does.
+ */
+function browserTabs() {
+	const tabs: Set<() => void>[] = [];
+	return () => {
+		const listeners = new Set<() => void>();
+		tabs.push(listeners);
+		const news: DepartureNews & { posts: number } = {
+			posts: 0,
+			post() {
+				news.posts++;
+				for (const other of tabs) if (other !== listeners) for (const heard of other) heard();
+			},
+			listen(heard) {
+				const own = () => heard();
+				listeners.add(own);
+				return () => void listeners.delete(own);
+			}
+		};
+		return news;
+	};
 }
 
 type Answer = number | 'none';
@@ -208,6 +236,160 @@ describe('PendingScans.send', () => {
 		expect(s.codes()).toEqual([a]);
 		expect(pending.count).toBe(2);
 		expect(pending.expired).toBe(false);
+	});
+
+	it('starts the next run after a code that got no answer, so it cannot hold back the rest', async () => {
+		const device = memory([a, b, c]);
+		const s = api({ [a]: 'none' });
+		const pending = new PendingScans(s.fetchFn, device.open);
+		await pending.send();
+		expect(s.codes()).toEqual([a]);
+		await pending.send();
+		expect(s.codes()).toEqual([a, b, c, a]);
+		expect([...device.kept]).toEqual([a]);
+		await pending.send();
+		expect(s.codes()).toEqual([a, b, c, a, a]);
+		expect(pending.count).toBe(1);
+	});
+
+	it('moves past each code that gets no answer in turn, posting none twice in a run', async () => {
+		const device = memory([a, b, c]);
+		const s = api({ [a]: 'none', [b]: ['none', 201] });
+		const pending = new PendingScans(s.fetchFn, device.open);
+		await pending.send();
+		await pending.send();
+		expect(s.codes()).toEqual([a, b]);
+		await pending.send();
+		expect(s.codes()).toEqual([a, b, c, a]);
+		await pending.send();
+		expect(s.codes()).toEqual([a, b, c, a, b, a]);
+		expect([...device.kept]).toEqual([a]);
+	});
+
+	it('starts the next run after a code whose POST hung', async () => {
+		vi.useFakeTimers();
+		try {
+			const device = memory([a, b]);
+			const posted: string[] = [];
+			const pending = new PendingScans(async (_, init) => {
+				const { barcode } = JSON.parse(String(init?.body)) as { barcode: string };
+				posted.push(barcode);
+				if (barcode === a) return new Promise<Response>(() => {});
+				return new Response('{}', { status: 201 });
+			}, device.open);
+			const first = pending.send();
+			await vi.advanceTimersByTimeAsync(postTimeout);
+			await first;
+			expect(posted).toEqual([a]);
+			const second = pending.send();
+			await vi.advanceTimersByTimeAsync(postTimeout);
+			await second;
+			expect(posted).toEqual([a, b, a]);
+			expect([...device.kept]).toEqual([a]);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('starts after a code that got no answer after a reload or in another tab', async () => {
+		const saved = new Map<string, string>();
+		const storage = {
+			getItem: (key: string) => saved.get(key) ?? null,
+			setItem: (key: string, value: string) => void saved.set(key, value),
+			removeItem: (key: string) => void saved.delete(key)
+		};
+		const device = memory([a, b]);
+		const s = api({ [a]: 'none' });
+		const page = () =>
+			new PendingScans(
+				s.fetchFn,
+				device.open,
+				undefined,
+				storageCursor(() => storage)
+			);
+		await page().send();
+		expect(s.codes()).toEqual([a]);
+		await page().send();
+		expect(s.codes()).toEqual([a, b, a]);
+		expect([...device.kept]).toEqual([a]);
+	});
+
+	it('keeps the start in memory where storage refuses it', async () => {
+		const refusing = {
+			getItem: (): string | null => {
+				throw new DOMException('denied', 'SecurityError');
+			},
+			setItem: () => {
+				throw new DOMException('full', 'QuotaExceededError');
+			},
+			removeItem: () => {
+				throw new DOMException('denied', 'SecurityError');
+			}
+		};
+		const device = memory([a, b]);
+		const s = api({ [a]: 'none' });
+		const pending = new PendingScans(
+			s.fetchFn,
+			device.open,
+			undefined,
+			storageCursor(() => refusing)
+		);
+		await pending.send();
+		await pending.send();
+		expect(s.codes()).toEqual([a, b, a]);
+		const missing = new PendingScans(
+			s.fetchFn,
+			memory([a, b]).open,
+			undefined,
+			storageCursor(() => undefined)
+		);
+		await missing.send();
+		await missing.send();
+		expect(s.codes()).toEqual([a, b, a, a, b, a]);
+	});
+
+	it('follows a start another tab stored after this tab could not store its own', async () => {
+		const saved = new Map<string, string>([['ohara-pending-scans-unanswered', c]]);
+		const state = { full: true };
+		const storage = {
+			getItem: (key: string) => saved.get(key) ?? null,
+			setItem: (key: string, value: string) => {
+				if (state.full) throw new DOMException('full', 'QuotaExceededError');
+				saved.set(key, value);
+			},
+			removeItem: (key: string) => void saved.delete(key)
+		};
+		const device = memory([a, b, c]);
+		const tab = (answers: Record<string, Answer>) => {
+			const s = api(answers);
+			const pending = new PendingScans(
+				s.fetchFn,
+				device.open,
+				undefined,
+				storageCursor(() => storage)
+			);
+			return { s, pending };
+		};
+		const first = tab({ [a]: 'none', [b]: 503, [c]: 503 });
+		await first.pending.send();
+		expect(first.s.codes()).toEqual([a]);
+		expect(saved.size).toBe(0);
+		state.full = false;
+		const second = tab({ [a]: 503, [b]: 'none', [c]: 503 });
+		await second.pending.send();
+		expect(second.s.codes()).toEqual([a, b]);
+		await first.pending.send();
+		expect(first.s.codes()).toEqual([a, c, a]);
+		expect(device.kept.size).toBe(3);
+	});
+
+	it('starts again from the first code after the sign-in turned one away', async () => {
+		const device = memory([a, b]);
+		const s = api({ [a]: [401, 201] });
+		const pending = new PendingScans(s.fetchFn, device.open);
+		await pending.send();
+		await pending.send();
+		expect(s.codes()).toEqual([a, a, b]);
 	});
 
 	it('stops and asks to sign in again when the sign-in turns a code away', async () => {
@@ -432,6 +614,247 @@ describe('PendingScans.departures', () => {
 		await here.send();
 		expect(here.count).toBe(0);
 		expect(here.departures).toBe(1);
+	});
+});
+
+describe('broadcastDepartures', () => {
+	/** Resolves once heard was called n times, or rejects after a second. */
+	function hearing(n: number) {
+		let calls = 0;
+		let done: () => void = () => {};
+		const reached = new Promise<void>((resolve, reject) => {
+			done = resolve;
+			setTimeout(() => reject(new Error(`heard ${calls} of ${n}`)), 1000);
+		});
+		const heard = () => {
+			calls++;
+			if (calls === n) done();
+		};
+		return { heard, reached, calls: () => calls };
+	}
+
+	it("carries one tab's news to the others, not to its own listeners", async () => {
+		const one = broadcastDepartures();
+		const two = broadcastDepartures();
+		const atOne = hearing(1);
+		const atTwo = hearing(2);
+		const stopOne = one.listen(atOne.heard);
+		const stopTwo = two.listen(atTwo.heard);
+		one.post();
+		one.post();
+		await atTwo.reached;
+		two.post();
+		await atOne.reached;
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect([atOne.calls(), atTwo.calls()]).toEqual([1, 2]);
+		stopOne();
+		stopTwo();
+	});
+
+	it('reaches listening tabs from a tab that does not listen', async () => {
+		const listening = broadcastDepartures();
+		const at = hearing(1);
+		const stop = listening.listen(at.heard);
+		broadcastDepartures().post();
+		await at.reached;
+		stop();
+	});
+
+	it('keeps one channel while any listener is left, and opens one for a post alone', () => {
+		const channels: { posted: unknown[]; closed: boolean }[] = [];
+		const open = () => {
+			const target = new EventTarget();
+			const channel = { posted: [] as unknown[], closed: false };
+			channels.push(channel);
+			return Object.assign(target, {
+				postMessage: (message: unknown) => void channel.posted.push(message),
+				close: () => void (channel.closed = true)
+			}) as unknown as BroadcastChannel;
+		};
+		const news = broadcastDepartures(open);
+		news.post();
+		expect(channels).toEqual([{ posted: ['departed'], closed: true }]);
+		const heard: string[] = [];
+		const stopA = news.listen(() => heard.push('a'));
+		const stopB = news.listen(() => heard.push('b'));
+		expect(channels).toHaveLength(2);
+		news.post();
+		expect(channels[1]).toEqual({ posted: ['departed'], closed: false });
+		stopA();
+		stopA();
+		expect(channels[1]?.closed).toBe(false);
+		stopB();
+		expect(channels[1]?.closed).toBe(true);
+		expect(heard).toEqual([]);
+	});
+
+	it('does nothing where the browser has no BroadcastChannel', () => {
+		const news = broadcastDepartures(() => null);
+		const stop = news.listen(() => {
+			throw new Error('heard');
+		});
+		expect(() => news.post()).not.toThrow();
+		stop();
+		vi.stubGlobal('BroadcastChannel', undefined);
+		const missing = broadcastDepartures();
+		expect(() => missing.post()).not.toThrow();
+		missing.listen(() => {})();
+		vi.unstubAllGlobals();
+	});
+
+	it('does nothing where opening a channel fails', () => {
+		function refused(): never {
+			throw new DOMException('denied', 'SecurityError');
+		}
+		vi.stubGlobal('BroadcastChannel', refused);
+		const news = broadcastDepartures();
+		expect(() => news.post()).not.toThrow();
+		news.listen(() => {})();
+		vi.unstubAllGlobals();
+	});
+});
+
+describe('PendingScans news to other tabs', () => {
+	it('tells the other tabs of each code the server took off the device', async () => {
+		const tab = browserTabs();
+		const news = tab();
+		const device = memory([a, b]);
+		const pending = new PendingScans(
+			api({ [b]: 503 }).fetchFn,
+			device.open,
+			undefined,
+			undefined,
+			news
+		);
+		await pending.send();
+		expect(news.posts).toBe(1);
+		await pending.send();
+		expect(news.posts).toBe(1);
+	});
+
+	it('tells the other tabs of a code the server took though its removal failed', async () => {
+		const tab = browserTabs();
+		const news = tab();
+		const device = memory([a, b]);
+		let posts = 0;
+		const pending = new PendingScans(
+			async () => {
+				if (++posts === 2) device.state.fail = true;
+				return new Response('{}', { status: 201 });
+			},
+			device.open,
+			undefined,
+			undefined,
+			news
+		);
+		await pending.send();
+		expect(news.posts).toBe(2);
+		expect(pending.departures).toBe(1);
+	});
+
+	it('tells no tab when no code left', async () => {
+		const tab = browserTabs();
+		const news = tab();
+		const pending = new PendingScans(
+			api({ [a]: 503 }).fetchFn,
+			memory([a]).open,
+			undefined,
+			undefined,
+			news
+		);
+		await pending.send();
+		await new PendingScans(api().fetchFn, memory().open, undefined, undefined, news).send();
+		expect(news.posts).toBe(0);
+	});
+
+	function page() {
+		const win = new EventTarget();
+		const doc = Object.assign(new EventTarget(), {
+			visibilityState: 'visible' as DocumentVisibilityState
+		});
+		return { win, doc };
+	}
+
+	it("counts another tab's departure of a code this tab never counted, while started", async () => {
+		vi.useFakeTimers();
+		const tab = browserTabs();
+		const device = memory();
+		const s = api();
+		const here = new PendingScans(s.fetchFn, device.open, undefined, undefined, tab());
+		const there = new PendingScans(s.fetchFn, device.open, undefined, undefined, tab());
+		const { win, doc } = page();
+		const stop = here.start(win, doc, 60_000);
+		await vi.advanceTimersByTimeAsync(0);
+		await there.keep(a);
+		await there.keep(b);
+		await there.send();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(s.codes()).toEqual([a, b]);
+		expect(here.count).toBe(0);
+		expect(here.departures).toBe(2);
+
+		await there.keep(c);
+		await here.keep(a);
+		await there.send();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(here.count).toBe(0);
+		expect(here.departures).toBe(4);
+
+		stop();
+		await there.keep(b);
+		await there.send();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(here.departures).toBe(4);
+		vi.useRealTimers();
+	});
+
+	it('has told the other tabs of a code before the run stops on a later one', async () => {
+		vi.useFakeTimers();
+		const tab = browserTabs();
+		const device = memory([a, b]);
+		const fromStart = { get: () => null, set: () => {} };
+		const otherTabSends = async () => false;
+		let release: () => void = () => {};
+		const hung = new Promise<Response>((resolve) => {
+			release = () => resolve(new Response('{}', { status: 201 }));
+		});
+		const there = new PendingScans(
+			async (_input, init) =>
+				String(init?.body).includes(b) ? hung : new Response('{}', { status: 201 }),
+			device.open,
+			undefined,
+			fromStart,
+			tab()
+		);
+		const here = new PendingScans(api().fetchFn, device.open, otherTabSends, fromStart, tab());
+		const { win, doc } = page();
+		const stop = here.start(win, doc, 60_000);
+		await vi.advanceTimersByTimeAsync(0);
+		void there.send();
+		await vi.advanceTimersByTimeAsync(0);
+		expect([...device.kept]).toEqual([b]);
+		expect(here.departures).toBe(1);
+		expect(here.count).toBe(1);
+		release();
+		stop();
+		vi.useRealTimers();
+	});
+
+	it("counts another tab's departure where this tab has no store", async () => {
+		vi.useFakeTimers();
+		const tab = browserTabs();
+		const device = memory();
+		const here = new PendingScans(api().fetchFn, async () => null, undefined, undefined, tab());
+		const there = new PendingScans(api().fetchFn, device.open, undefined, undefined, tab());
+		const { win, doc } = page();
+		const stop = here.start(win, doc, 60_000);
+		await vi.advanceTimersByTimeAsync(0);
+		await there.keep(a);
+		await there.send();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(here.departures).toBe(1);
+		stop();
+		vi.useRealTimers();
 	});
 });
 

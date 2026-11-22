@@ -192,7 +192,7 @@ func (s *Store) Wants(ctx context.Context) ([]Want, error) {
 	rows, err := s.pool.Query(ctx, `SELECT c.id, e.id, t.id, t.kind, t.name, t.original_title,
 			t.polish_title, t.authors, e.format, e.barcode, c.max_price_cents, c.max_market_percent,
 			CASE WHEN c.max_market_percent IS NOT NULL THEN m.cents END, c.exact_edition,
-			e.packaging, e.pl_voiceover, e.pl_subtitles, e.binding
+			e.packaging, e.pl_voiceover, e.pl_subtitles, e.binding, e.discogs_release_id
 		FROM copy c JOIN edition e ON e.id = c.edition_id JOIN title t ON t.id = e.title_id
 		`+marketJoin("e", 1)+`
 		WHERE c.status = 'wishlist' AND t.kind <> 'tv' ORDER BY c.id`, markets.titles, markets.formats, markets.cents)
@@ -203,7 +203,7 @@ func (s *Store) Wants(ctx context.Context) ([]Want, error) {
 		var w Want
 		err := row.Scan(&w.CopyID, &w.EditionID, &w.TitleID, &w.Kind, &w.Name, &w.OriginalTitle,
 			&w.PolishTitle, &w.Authors, &w.Format, &w.Barcode, &w.MaxPriceCents, &w.MaxMarketPercent,
-			&w.MarketCents, &w.ExactEdition, &w.Packaging, &w.PLVoiceover, &w.PLSubtitles, &w.Binding)
+			&w.MarketCents, &w.ExactEdition, &w.Packaging, &w.PLVoiceover, &w.PLSubtitles, &w.Binding, &w.DiscogsReleaseID)
 		return w, err
 	})
 }
@@ -518,6 +518,34 @@ func (s *Store) MarkOffered(ctx context.Context, source string, externalIDs []st
 	return nil
 }
 
+// Unmatch takes the unsent alerts of source's stored listings with
+// externalIDs, which an answer held under a title that matches no want,
+// off their wishes. Like the alert of a listing moved to a title no one
+// wishes for, each goes to none, so the price it was queued at, which
+// the answer contradicts, is never sent. Its attempts, age and prices
+// stay: a later answer that matches the listing within a wish's limit
+// queues it for that wish again (queueAlert). Sent alerts and IDs of
+// listings never stored are left alone. It takes the listings' rows as
+// SendAlert does, so a message already on its way goes out first and its
+// sent alert stays.
+func (s *Store) Unmatch(ctx context.Context, source string, externalIDs []string) error {
+	if len(externalIDs) == 0 {
+		return nil
+	}
+	if _, err := s.pool.Exec(ctx, `WITH locked AS (
+			SELECT o.id FROM price_observation o
+			WHERE o.source = $1 AND o.external_id = ANY ($2) AND EXISTS (SELECT FROM deal_alert d
+				WHERE d.observation_id = o.id AND d.sent_at IS NULL AND d.copy_id IS NOT NULL)
+			ORDER BY o.id FOR UPDATE OF o)
+		UPDATE deal_alert a SET copy_id = NULL
+		FROM locked
+		WHERE a.observation_id = locked.id AND a.sent_at IS NULL AND a.copy_id IS NOT NULL`,
+		source, externalIDs); err != nil {
+		return fmt.Errorf("unmatch alerts: %w", err)
+	}
+	return nil
+}
+
 // ForgetStale deletes the listings of expiring sources that no answer has
 // offered for discogsKeep, with their alerts and purchases, dismissed or
 // not: the source's terms let them be kept only while they serve. It
@@ -783,7 +811,7 @@ type querier interface {
 func pendingAlerts(ctx context.Context, q querier, markets marketTable, only *int64) ([]Alert, error) {
 	rows, err := q.Query(ctx, `SELECT o.id, c.id, o.source, coalesce(o.external_id, ''), o.url, coalesce(o.raw->>'title', ''),
 			o.price_cents, o.acquired_as, t.name, e.format, c.max_price_cents, c.max_market_percent,
-			CASE WHEN c.max_market_percent IS NOT NULL THEN m.cents END, a.alerted_price_cents
+			CASE WHEN c.max_market_percent IS NOT NULL THEN m.cents END, a.alerted_price_cents, `+storedAlbumFields+`
 		FROM deal_alert a
 		JOIN price_observation o ON o.id = a.observation_id
 		JOIN copy c ON c.id = a.copy_id AND c.status = 'wishlist'
@@ -800,13 +828,24 @@ func pendingAlerts(ctx context.Context, q querier, markets marketTable, only *in
 	if err != nil {
 		return nil, fmt.Errorf("pending alerts: %w", err)
 	}
-	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Alert, error) {
+	defer rows.Close()
+	var alerts []Alert
+	for rows.Next() {
 		var a Alert
-		err := row.Scan(&a.ObservationID, &a.CopyID, &a.Source, &a.ExternalID, &a.URL, &a.ListingTitle, &a.PriceCents,
+		var album storedAlbum
+		fields := []any{
+			&a.ObservationID, &a.CopyID, &a.Source, &a.ExternalID, &a.URL, &a.ListingTitle, &a.PriceCents,
 			&a.AcquiredAs, &a.TitleName, &a.Format, &a.MaxPriceCents, &a.MaxMarketPercent, &a.MarketCents,
-			&a.AlertedPriceCents)
-		return a, err
-	})
+			&a.AlertedPriceCents,
+		}
+		if err := rows.Scan(append(fields, album.destinations()...)...); err != nil {
+			return nil, fmt.Errorf("pending alerts: %w", err)
+		}
+		if album.want.VerifiesAlbum(&album.listing) {
+			alerts = append(alerts, a)
+		}
+	}
+	return alerts, rows.Err()
 }
 
 // MarkSent records a delivered alert and the price its message named.
@@ -900,56 +939,170 @@ var allListings = `SELECT o.id, w.id AS wish_id
 		LEFT JOIN deal_alert a ON a.observation_id = o.id
 		LEFT JOIN copy w ON w.status = 'wishlist' AND w.id = coalesce(o.wishlist_copy_id, a.copy_id)
 			AND (o.wishlist_copy_id IS NOT NULL OR ` + wishOfListingTitle + `) AND ` + wishNamedBy("w") + `
-			AND ` + huntedWish("w") + ` AND ` + mediumFits("w") + `
+			AND ` + huntedWish("w") + ` AND ` + mediumFits("w") + ` AND o.id <> ALL ($7)
 		WHERE o.dismissed_at IS NULL AND o.source = ANY ($6) AND ` + freshListing + `
 		ORDER BY o.observed_at DESC, o.id DESC LIMIT $5`
+
+// albumListings are the listings with a copy among the album wishes $2 that matches them, as
+// Recent's filters match them: those the hunter recorded for the copy, found through
+// price_observation_wish_idx, and those an alert alone names the copy for. unverifiedAlbums
+// rechecks them.
+var albumListings = `SELECT o.id, w.edition_id AS wish_edition_id
+		FROM copy w
+		JOIN price_observation o ON o.wishlist_copy_id = w.id AND o.dismissed_at IS NULL AND ` + freshListing + `
+		WHERE w.id = ANY ($2) AND ` + wishNamedBy("w") + ` AND ` + mediumFits("w") + `
+		UNION ALL
+		SELECT o.id, w.edition_id
+		FROM copy w
+		JOIN deal_alert a ON a.copy_id = w.id
+		JOIN price_observation o ON o.id = a.observation_id AND o.wishlist_copy_id IS NULL
+			AND o.dismissed_at IS NULL AND ` + freshListing + `
+		WHERE w.id = ANY ($2) AND ` + wishOfListingTitle + ` AND ` + wishNamedBy("w") + ` AND ` + mediumFits("w")
+
+// Compare the stored Discogs release as JSON, since old observations
+// need not have a numeric release_id.
+const storedAlbumFields = `t.name, t.original_title, t.polish_title, t.authors, t.kind, e.format, e.discogs_release_id,
+	coalesce(o.raw->>'title', ''), o.source, coalesce(o.raw->'data'->>'medium', ''),
+	CASE WHEN o.raw->'data'->'release_id' = to_jsonb(e.discogs_release_id) THEN e.discogs_release_id ELSE 0 END`
+
+type storedAlbum struct {
+	want    Want
+	listing Listing
+}
+
+func (a *storedAlbum) destinations() []any {
+	w, l := &a.want, &a.listing
+	return []any{
+		&w.Name, &w.OriginalTitle, &w.PolishTitle, &w.Authors, &w.Kind, &w.Format, &w.DiscogsReleaseID,
+		&l.Title, &l.Source, &l.Medium, &l.DiscogsReleaseID,
+	}
+}
+
+// unverifiedAlbums returns the listings matched to an album wish that the wish no longer
+// verifies (Want.VerifiesAlbum). It reads the album wishes first and, with none, no listing.
+func unverifiedAlbums(ctx context.Context, q pgx.Tx) ([]int64, error) {
+	var albums []int64
+	if err := q.QueryRow(ctx, `SELECT coalesce(array_agg(w.id), '{}') FROM copy w
+		WHERE w.status = 'wishlist' AND `+huntedWish("w")+` AND EXISTS (SELECT FROM edition ae
+			JOIN title at ON at.id = ae.title_id WHERE ae.id = w.edition_id AND at.kind = 'music')`).Scan(&albums); err != nil {
+		return nil, err
+	}
+	if len(albums) == 0 {
+		return []int64{}, nil
+	}
+	rows, err := q.Query(ctx, `SELECT o.id, `+storedAlbumFields+`
+		FROM (`+albumListings+`) l
+		JOIN price_observation o ON o.id = l.id
+		JOIN edition e ON e.id = l.wish_edition_id
+		JOIN title t ON t.id = e.title_id
+		WHERE o.source = ANY ($1)`, sources, albums)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	unverified := []int64{}
+	for rows.Next() {
+		var id int64
+		var album storedAlbum
+		if err := rows.Scan(append([]any{&id}, album.destinations()...)...); err != nil {
+			return nil, err
+		}
+		if !album.want.VerifiesAlbum(&album.listing) {
+			unverified = append(unverified, id)
+		}
+	}
+	return unverified, rows.Err()
+}
 
 // pageListings is SQL for the listings of a page Recent picked before: $5 holds their IDs and
 // $6 the ID of the wishlist copy each matches.
 const pageListings = `SELECT * FROM unnest($5::bigint[], $6::bigint[]) AS page(id, wish_id)`
 
-// Recent returns the newest deal observations that pass f. It picks the page of listings first
-// and reads raw and the joined edition and title only for that page.
+// Recent returns the newest deal observations that pass f. It rechecks album
+// associations before paging so an ambiguous match cannot displace a valid one.
 func (s *Store) Recent(ctx context.Context, f RecentFilter) ([]Observation, error) {
-	markets, err := s.marketTable(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("recent observations: %w", err)
-	}
-	var obs []Observation
-	if !f.Matched && !f.UnderLimit && !f.Sent {
-		obs, err = recentPage(ctx, s.pool, markets, allListings, f.Limit, sources)
-	} else {
-		obs, err = s.recentWished(ctx, f, markets)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("recent observations: %w", err)
-	}
-	return obs, nil
+	observations, _, err := s.recent(ctx, f, false)
+	return observations, err
 }
 
-// recentWished is Recent for a filtered page, read in one snapshot.
-func (s *Store) recentWished(ctx context.Context, f RecentFilter, markets marketTable) ([]Observation, error) {
-	var obs []Observation
-	err := pgx.BeginTxFunc(ctx, s.pool, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly},
-		func(tx pgx.Tx) error {
-			page, err := wishedPage(ctx, tx, f, markets)
-			if err != nil {
-				return err
-			}
-			ids, wishes := make([]int64, len(page)), make([]int64, len(page))
-			for i, l := range page {
-				ids[i], wishes[i] = l.id, l.wishID
-			}
-			obs, err = recentPage(ctx, tx, markets, pageListings, ids, wishes)
-			return err
-		})
-	return obs, err
+// recent is Recent, with the automatic deals of the page when automatic is set, read in one
+// snapshot. It picks the page of listings first and reads raw and the joined edition and title
+// only for that page.
+func (s *Store) recent(ctx context.Context, f RecentFilter, automatic bool) ([]Observation, []AutomaticDeal, error) {
+	markets, err := s.marketTable(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("recent observations: %w", err)
+	}
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return nil, nil, fmt.Errorf("recent observations: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	filtered := f.Matched || f.UnderLimit || f.Sent
+	var wishes wishedCopies
+	if filtered {
+		if wishes, err = readWishedCopies(ctx, tx); err != nil {
+			return nil, nil, fmt.Errorf("recent observations: %w", err)
+		}
+	}
+	unverified, err := unverifiedAlbums(ctx, tx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("verify stored album matches: %w", err)
+	}
+	var observations []Observation
+	if filtered {
+		observations, err = recentWished(ctx, tx, f, markets, wishes, unverified)
+	} else {
+		observations, err = recentPage(ctx, tx, markets, allListings, f.Limit, sources, unverified)
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("recent observations: %w", err)
+	}
+	if !automatic {
+		return observations, nil, nil
+	}
+	deals, err := automaticDeals(ctx, tx, observations)
+	return observations, deals, err
+}
+
+// recentWished reads the observations of a filtered page.
+func recentWished(ctx context.Context, tx pgx.Tx, f RecentFilter, markets marketTable, wishes wishedCopies,
+	unverified []int64,
+) ([]Observation, error) {
+	page, err := wishedPage(ctx, tx, f, markets, wishes, unverified)
+	if err != nil {
+		return nil, err
+	}
+	ids, wishIDs := make([]int64, len(page)), make([]int64, len(page))
+	for i, l := range page {
+		ids[i], wishIDs[i] = l.id, l.wishID
+	}
+	return recentPage(ctx, tx, markets, pageListings, ids, wishIDs)
+}
+
+// wishedCopies are the wishlist copies the hunter hunts and the instant a filtered page judges
+// listings fresh at.
+type wishedCopies struct {
+	ids    []int64
+	cutoff time.Time
+}
+
+// readWishedCopies reads the wishlist copies the hunter hunts. It is the first query of a page's
+// snapshot, and listings are fresh as of its clock, so a listing that expired before a change
+// the snapshot holds, such as its alert's send, is never shown as fresh.
+func readWishedCopies(ctx context.Context, tx pgx.Tx) (wishedCopies, error) {
+	var w wishedCopies
+	if err := tx.QueryRow(ctx, `SELECT clock_timestamp(), coalesce(array_agg(w.id), '{}')
+		FROM copy w WHERE w.status = 'wishlist' AND `+huntedWish("w")).Scan(&w.cutoff, &w.ids); err != nil {
+		return w, fmt.Errorf("wished copies: %w", err)
+	}
+	return w, nil
 }
 
 // recentPage reads, newest first, the observations of the page that listings picks: SQL that
-// takes its parameters as $5 and $6 and returns each listing's ID and the ID of the wishlist
-// copy that matches it.
-func recentPage(ctx context.Context, q querier, markets marketTable, listings string, p5, p6 any) ([]Observation, error) {
+// takes args as its parameters from $5 on and returns each listing's ID and the ID of the
+// wishlist copy that matches it.
+func recentPage(ctx context.Context, q querier, markets marketTable, listings string, args ...any) ([]Observation, error) {
 	rows, err := q.Query(ctx, `SELECT o.id, o.source, coalesce(o.external_id, ''), o.observed_at,
 			o.price_cents, o.acquired_as, o.url, coalesce(o.raw->>'title', ''), coalesce(e.title_id, o.title_id), t.name,
 			e.id, e.format, nullif(o.raw->>'photo_url', ''),
@@ -970,7 +1123,7 @@ func recentPage(ctx context.Context, q querier, markets marketTable, listings st
 		LEFT JOIN title t ON t.id = coalesce(e.title_id, o.title_id)
 		`+marketJoin("e", 2)+`
 		ORDER BY o.observed_at DESC, o.id DESC`,
-		MaxAttempts, markets.titles, markets.formats, markets.cents, p5, p6)
+		append([]any{MaxAttempts, markets.titles, markets.formats, markets.cents}, args...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -993,7 +1146,9 @@ const minWalk = 100
 // listings, nearly all of them when a long hunt with alerts has run, it reads newest first
 // through price_observation_wish_recent_idx, in steps of twice as many as the last one, and
 // stops once the page is full, so it never sorts or filters all of them.
-func wishedPage(ctx context.Context, tx pgx.Tx, f RecentFilter, markets marketTable) ([]pageRow, error) {
+func wishedPage(ctx context.Context, tx pgx.Tx, f RecentFilter, markets marketTable, wishes wishedCopies,
+	unverified []int64,
+) ([]pageRow, error) {
 	cond := "true"
 	if f.UnderLimit {
 		cond += ` AND (o.price_cents <= w.max_price_cents OR o.price_cents * 100 <= m.cents * w.max_market_percent)`
@@ -1001,15 +1156,7 @@ func wishedPage(ctx context.Context, tx pgx.Tx, f RecentFilter, markets marketTa
 	if f.Sent {
 		cond += ` AND a.sent_at IS NOT NULL AND (w.max_price_cents IS NOT NULL OR w.max_market_percent IS NOT NULL)`
 	}
-	// The snapshot starts with this first query, and listings are fresh as of its clock, so a
-	// listing that expired before a change the snapshot holds is never shown as fresh.
-	var cutoff time.Time
-	var wished []int64
-	if err := tx.QueryRow(ctx, `SELECT clock_timestamp(), coalesce(array_agg(w.id), '{}')
-		FROM copy w WHERE w.status = 'wishlist' AND `+huntedWish("w")).Scan(&cutoff, &wished); err != nil {
-		return nil, fmt.Errorf("wished copies: %w", err)
-	}
-	if len(wished) == 0 {
+	if len(wishes.ids) == 0 {
 		return nil, nil
 	}
 	fresh := freshAt("$6::timestamptz")
@@ -1025,18 +1172,18 @@ func wishedPage(ctx context.Context, tx pgx.Tx, f RecentFilter, markets marketTa
 		JOIN price_observation o ON o.id = a.observation_id
 		LEFT JOIN edition ed ON ed.id = w.edition_id
 		`+marketJoin("ed", 3)+`
-		WHERE o.wishlist_copy_id IS NULL AND o.dismissed_at IS NULL AND o.source = ANY ($2)
+		WHERE o.wishlist_copy_id IS NULL AND o.dismissed_at IS NULL AND o.source = ANY ($2) AND o.id <> ALL ($7)
 			AND `+fresh+` AND `+wishOfListingTitle+` AND `+wishNamedBy("w")+`
 			AND `+mediumFits("w")+` AND `+cond+`
 		ORDER BY o.observed_at DESC, o.id DESC LIMIT $1`,
-		f.Limit, sources, markets.titles, markets.formats, markets.cents, cutoff))
+		f.Limit, sources, markets.titles, markets.formats, markets.cents, wishes.cutoff, unverified))
 	if err != nil {
 		return nil, fmt.Errorf("alerted listings: %w", err)
 	}
 	hunted := 0
 	var last *pageRow
 	for step := max(f.Limit, minWalk); hunted < f.Limit; step *= 2 {
-		walked, err := walkHunted(ctx, tx, wished, last, step)
+		walked, err := walkHunted(ctx, tx, wishes.ids, last, step)
 		if err != nil {
 			return nil, err
 		}
@@ -1056,14 +1203,15 @@ func wishedPage(ctx context.Context, tx pgx.Tx, f RecentFilter, markets marketTa
 				LEFT JOIN deal_alert a ON a.observation_id = o.id
 				LEFT JOIN edition ed ON ed.id = w.edition_id
 				`+marketJoin("ed", 3)+`
-				WHERE o.id = ANY ($1) AND o.dismissed_at IS NULL AND o.source = ANY ($2) AND `+fresh+`
+				WHERE o.id = ANY ($1) AND o.id <> ALL ($7) AND o.dismissed_at IS NULL AND o.source = ANY ($2)
+					AND `+fresh+`
 					AND w.status = 'wishlist' AND `+huntedWish("w")+` AND `+wishNamedBy("w")+` AND `+cond+`)
 			SELECT o.id, o.observed_at, w.id
 			FROM kept
 			JOIN price_observation o ON o.id = kept.id
 			JOIN copy w ON w.id = kept.wish_id
 			WHERE `+mediumFits("w"),
-			ids, sources, markets.titles, markets.formats, markets.cents, cutoff))
+			ids, sources, markets.titles, markets.formats, markets.cents, wishes.cutoff, unverified))
 		if err != nil {
 			return nil, fmt.Errorf("hunted listings: %w", err)
 		}
@@ -1328,6 +1476,11 @@ type LastRun struct {
 	Result     *RunResult
 }
 
+type storedRunResult struct {
+	RunResult
+	Coverage *runCoverage `json:"coverage,omitempty"`
+}
+
 // LastRun returns the stored last run; false before the first.
 func (s *Store) LastRun(ctx context.Context) (LastRun, bool, error) {
 	var (
@@ -1343,11 +1496,12 @@ func (s *Store) LastRun(ctx context.Context) (LastRun, bool, error) {
 		return LastRun{}, false, fmt.Errorf("last run: %w", err)
 	}
 	if result != nil {
-		var res RunResult
+		var res storedRunResult
 		if err := json.Unmarshal(result, &res); err != nil {
 			return LastRun{}, false, fmt.Errorf("last run result: %w", err)
 		}
-		run.Result = &res
+		res.coverage = res.Coverage
+		run.Result = &res.RunResult
 	}
 	return run, true, nil
 }
@@ -1365,7 +1519,7 @@ func (s *Store) RunStarted(ctx context.Context, at time.Time) error {
 // RunFinished stores a whole run: its start too, in case storing that
 // failed.
 func (s *Store) RunFinished(ctx context.Context, started, finished time.Time, res *RunResult) error {
-	result, err := json.Marshal(res)
+	result, err := json.Marshal(storedRunResult{RunResult: *res, Coverage: res.coverage})
 	if err != nil {
 		return fmt.Errorf("run finished: %w", err)
 	}

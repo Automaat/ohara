@@ -601,6 +601,22 @@ export type DealsView = {
 	observations: Observation[];
 };
 
+export type AutomaticDeal = {
+	observation_id: number;
+	sample_count: number;
+	typical_cents: number | null;
+	discount_percent: number | null;
+	qualifies: boolean;
+};
+
+export type MatchedDealsView = {
+	status: HunterStatus;
+	wishes: number;
+	searched_wishes: number;
+	observations: Observation[];
+	automatic: AutomaticDeal[];
+};
+
 export type Keyword = {
 	id: number;
 	kind: KeywordKind;

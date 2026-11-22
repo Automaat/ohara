@@ -39,7 +39,14 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   (`src/lib/pending-scans.svelte.ts`, barcode only, once in the server's
   normalized form) and posted to `/api/scan-queue` as `lookup_failed` on app
   start, on `online`, when the app is shown and every 20 s, by one tab at a
-  time (Web Locks), each POST within 15 s. A run first waits until the
+  time (Web Locks), each POST within 15 s. A POST without an answer (15 s
+  passed or the request failed) ends the run, and the next run starts
+  with the code after it and sends it last, so one code the server never
+  answers cannot hold back the rest; no code is posted twice in a run.
+  That code is kept in `localStorage`, so the next run after a reload or
+  in another tab starts there too. Where storage refuses, the tab keeps it
+  in memory and drops the older stored one, until a tab stores one again.
+  A 401 ends the run without moving it. A run first waits until the
   browser has settled the scan queue DELETEs this tab has on their way
   (`src/lib/queue-deletes.ts`). `request`'s 20 s deadline fails a DELETE
   that gets no answer (the queue page shows its error and keeps the
@@ -52,12 +59,21 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   reads the queue when it opens and again each time codes kept on the
   device leave it, so a code sent in the background after the first read
   still shows up. It watches `PendingScans.departures`, which goes up when
-  a run of this tab took codes off the device or a read found fewer than it
-  counted, so a code another tab kept meanwhile cannot hide a departure as
-  it does in the count. An answer older than the last one shown is dropped,
-  and so is an entry a removal took out after that read went out. A failed
-  first read shows the error state; a later failed read keeps the list with
-  a warning and "Spróbuj ponownie" until a read asked after it answers.
+  a run of this tab took codes off the device, another tab's run did, or a
+  read found fewer than it counted, so a code another tab kept meanwhile
+  cannot hide a departure as it does in the count. Each code the server
+  took off the device (once its removal from IndexedDB settled, failed or
+  not) is posted on the `ohara-pending-scans` `BroadcastChannel`, so a tab
+  closed later in the run cannot keep the news back; every other started
+  tab then counts one departure and reads its count again, even for codes
+  it never counted (#508). Without `BroadcastChannel` a tab finds only
+  what its own reads show. The scanner's "Do uzupełnienia" count reads the
+  queue again on the same departures; after a failed read it reads again
+  on `online`, when the app is shown and every 20 s until one answers.
+  An answer older than the last one shown is dropped, and so is an entry
+  a removal took out after that read went out. A failed first read shows
+  the error state; a later failed read keeps the list with a warning and
+  "Spróbuj ponownie" until a read asked after it answers.
 - The scanner's visit ("Ta sesja" adds, "Ostatnie skany" and the purchase
   date carried to the next add) is kept in `localStorage`
   (`ohara.scan.visit`, `src/lib/visit.ts`) and restored on load until 12

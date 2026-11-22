@@ -461,6 +461,80 @@ func TestAllegroSaveRetryKeepsAPairALoginStored(t *testing.T) {
 	}
 }
 
+type storeWithLoadCheck struct {
+	swapStore
+	beforeLoad func(context.Context) error
+}
+
+func (s storeWithLoadCheck) Load(ctx context.Context, provider string) (Token, bool, error) {
+	if err := s.beforeLoad(ctx); err != nil {
+		return Token{}, false, err
+	}
+	return s.swapStore.Load(ctx, provider)
+}
+
+func TestAllegroUsesStoredLoginAfterATransientReadFailure(t *testing.T) {
+	now := time.Now()
+	store := &memStore{token: &Token{Access: accessFor(0), Refresh: refreshFor(0), Expiry: now}, failSaves: 1}
+	srv := &allegroServer{}
+	a := newAllegro(t, srv, store, now)
+	var failLoad atomic.Bool
+	a.Store = storeWithLoadCheck{swapStore{store}, func(context.Context) error {
+		if failLoad.Swap(false) {
+			return errors.New("read oauth token: connection reset")
+		}
+		return nil
+	}}
+	var elapsed atomic.Int64
+	a.Now = func() time.Time { return now.Add(time.Duration(elapsed.Load())) }
+	ctx := context.Background()
+	if _, err := a.Products(ctx, "5906190326195"); err != nil {
+		t.Fatal(err)
+	}
+	elapsed.Store(int64(12 * time.Hour))
+	if err := otherProcess(a).Login(ctx, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	calls := srv.tokenCallCount()
+	failLoad.Store(true)
+
+	if _, err := a.Products(ctx, "5906190326195"); err != nil {
+		t.Fatalf("first lookup after login: %v", err)
+	}
+	if got := srv.tokenCallCount(); got != calls {
+		t.Fatalf("token requests = %d, want %d", got, calls)
+	}
+}
+
+func TestAllegroRefreshesAnUnsavedPairWhenTheStoreReadStalls(t *testing.T) {
+	now := time.Now()
+	store := &memStore{token: &Token{Access: accessFor(0), Refresh: refreshFor(0), Expiry: now}, failSaves: 1}
+	srv := &allegroServer{}
+	a := newAllegro(t, srv, store, now)
+	var elapsed atomic.Int64
+	a.Now = func() time.Time { return now.Add(time.Duration(elapsed.Load())) }
+	a.Store = storeWithLoadCheck{swapStore{store}, func(ctx context.Context) error {
+		if elapsed.Load() == 0 {
+			return nil
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	}}
+	if _, err := a.Products(context.Background(), "5906190326195"); err != nil {
+		t.Fatal(err)
+	}
+	elapsed.Store(int64(12 * time.Hour))
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	if _, err := a.Products(ctx, "5906190326195"); err != nil {
+		t.Fatalf("refresh with a stalled store read: %v", err)
+	}
+	if got := store.refresh(); got != refreshFor(2) {
+		t.Fatalf("stored refresh token %q, want the refreshed pair", got)
+	}
+}
+
 func TestAllegroKeepsRotatingAfterASaveThatCommittedButFailed(t *testing.T) {
 	now := time.Now()
 	store := &memStore{token: &Token{Access: accessFor(0), Refresh: refreshFor(0), Expiry: now.Add(30 * time.Second)}, lostReplies: 1}

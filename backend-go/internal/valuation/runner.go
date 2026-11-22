@@ -24,13 +24,20 @@ const maxRunErrors = 20
 // firstRunDelay keeps a restart loop from hammering the sources.
 const firstRunDelay = 5 * time.Minute
 
+// pruneInterval is how often stored listings past the retention are
+// deleted.
+const pruneInterval = 24 * time.Hour
+
 // Config tunes the runner. Interval 0 disables the schedule; a run can
 // still be started by hand. Delay separates two source requests, jittered.
-// Window is how far back a price still counts.
+// Window is how far back a price still counts. Retention, when above 0,
+// deletes stored listings last seen longer ago than that once a day, on a
+// timer of its own; 0 keeps them all.
 type Config struct {
-	Interval time.Duration
-	Delay    time.Duration
-	Window   time.Duration
+	Interval  time.Duration
+	Delay     time.Duration
+	Window    time.Duration
+	Retention time.Duration
 }
 
 // RunResult counts what one run did. Errors holds source failures, which
@@ -97,6 +104,10 @@ func NewRunner(store *Store, sources []deals.Source, buybacks []BuyBack, pricer 
 // Window is how far back a price still counts.
 func (r *Runner) Window() time.Duration { return r.cfg.Window }
 
+// Retention is how long a stored listing is kept after it was last seen;
+// 0 keeps every listing.
+func (r *Runner) Retention() time.Duration { return r.cfg.Retention }
+
 // Pricer prices the owned album releases; nil without one.
 func (r *Runner) Pricer() ReleasePricer { return r.pricer }
 
@@ -123,9 +134,19 @@ func jitter(d time.Duration, spread float64) time.Duration {
 // ends; manual runs also stop with ctx. The first scheduled run comes one
 // interval after the last stored one, and no sooner than five minutes
 // after start, so a restart neither reruns a fresh valuation nor skips a
-// due one.
+// due one. With a retention, pruning runs five minutes after start and
+// then daily, whether or not the valuation is scheduled.
 func (r *Runner) Start(ctx context.Context) {
 	r.base = ctx
+	if r.cfg.Retention > 0 {
+		r.wg.Go(func() {
+			wait := jitter(firstRunDelay, 0.1)
+			for r.sleep(ctx, wait) == nil {
+				r.prune(ctx)
+				wait = jitter(pruneInterval, 0.1)
+			}
+		})
+	}
 	latest, ok, err := r.store.Latest(ctx)
 	if err != nil {
 		r.logger.Warn("valuation: read last value", "err", err)
@@ -199,6 +220,25 @@ func (r *Runner) execute(ctx context.Context) {
 	r.status.LastFinishedAt = &finished
 	r.status.LastResult = &res
 	r.mu.Unlock()
+}
+
+// prune deletes the stored listings past the retention, logs how many and
+// counts them in ohara_price_observations_pruned_total. A failure or a
+// panic is logged and the next prune tries again.
+func (r *Runner) prune(ctx context.Context) {
+	n, err := recovery.Call(r.logger, "pruning listings panicked", func() (int64, error) {
+		return r.store.Prune(ctx, r.cfg.Retention)
+	})
+	metrics.AddPrunedListings(n)
+	if err != nil && ctx.Err() != nil {
+		r.logger.Info("prune listings stopped by shutdown", "pruned", n)
+		return
+	}
+	if err != nil {
+		r.logger.Error("prune listings", "err", err, "pruned", n)
+		return
+	}
+	r.logger.Info("pruned listings", "pruned", n, "retention_days", int(r.cfg.Retention.Hours()/24))
 }
 
 // run is one valuation: its counters and pacing between requests.

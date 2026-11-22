@@ -90,6 +90,12 @@ func (s *Store) UpdateGone(ctx context.Context, source string, complete, seen []
 	return s.deals.UpdateGone(ctx, source, complete, seen, since)
 }
 
+// Prune deletes the stored listings last seen more than olderThan ago,
+// through the deal hunter's store (deals.Store.Prune).
+func (s *Store) Prune(ctx context.Context, olderThan time.Duration) (int64, error) {
+	return s.deals.Prune(ctx, olderThan)
+}
+
 // Now returns the database's current time, when a run reads its holdings.
 func (s *Store) Now(ctx context.Context) (time.Time, error) {
 	return s.deals.Now(ctx)

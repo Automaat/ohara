@@ -544,6 +544,10 @@ func newValuation(pool *pgxpool.Pool, lane *deals.Lane, logger *slog.Logger) (*v
 	if err != nil || days < 1 || days > 3650 {
 		return nil, nil, fmt.Errorf("OHARA_VALUATION_WINDOW_DAYS: want a number of days from 1 to 3650, got %q", os.Getenv("OHARA_VALUATION_WINDOW_DAYS"))
 	}
+	retention, err := retentionDays(days)
+	if err != nil {
+		return nil, nil, err
+	}
 	delay, err := sourceDelay()
 	if err != nil {
 		return nil, nil, err
@@ -558,10 +562,37 @@ func newValuation(pool *pgxpool.Pool, lane *deals.Lane, logger *slog.Logger) (*v
 	}
 	window := time.Duration(days) * 24 * time.Hour
 	pricer := newReleasePricer(client)
-	logger.Info("valuation", "interval", interval, "window_days", days, "discogs", pricer != nil)
+	logger.Info("valuation", "interval", interval, "window_days", days, "retention_days", retention,
+		"discogs", pricer != nil)
 	store := valuation.NewStore(pool)
-	cfg := valuation.Config{Interval: interval, Delay: delay, Window: window}
+	cfg := valuation.Config{
+		Interval: interval, Delay: delay, Window: window,
+		Retention: time.Duration(retention) * 24 * time.Hour,
+	}
 	return valuation.NewRunner(store, sources, buybacks, pricer, cfg, logger), store, nil
+}
+
+// maxRetentionDays bounds OHARA_PRICE_RETENTION_DAYS at about a century.
+const maxRetentionDays = 36500
+
+// retentionDays reads OHARA_PRICE_RETENTION_DAYS: 0, keeping every stored
+// listing, when unset, else whole days from windowDays, the valuation
+// window, so pruning never drops a price the valuation still reads.
+func retentionDays(windowDays int) (int, error) {
+	v := os.Getenv("OHARA_PRICE_RETENTION_DAYS")
+	if v == "" {
+		return 0, nil
+	}
+	days, err := strconv.Atoi(v)
+	if err != nil || days < 1 || days > maxRetentionDays {
+		return 0, fmt.Errorf("OHARA_PRICE_RETENTION_DAYS: want a number of days from OHARA_VALUATION_WINDOW_DAYS (%d) to %d, got %q",
+			windowDays, maxRetentionDays, v)
+	}
+	if days < windowDays {
+		return 0, fmt.Errorf("OHARA_PRICE_RETENTION_DAYS (%d) is below OHARA_VALUATION_WINDOW_DAYS (%d): pruning would delete prices the valuation still reads",
+			days, windowDays)
+	}
+	return days, nil
 }
 
 // newReleasePricer prices album releases on the Discogs marketplace, or is

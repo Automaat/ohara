@@ -147,6 +147,11 @@ var (
 		Name: "ohara_deal_alerts_total",
 		Help: "Deal alerts sent to Telegram, by outcome (sent, failed).",
 	}, []string{"outcome"})
+
+	prunedListings = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "ohara_price_observations_pruned_total",
+		Help: "Stored listings deleted for being last seen before OHARA_PRICE_RETENTION_DAYS.",
+	})
 )
 
 func init() {
@@ -168,6 +173,7 @@ func init() {
 		backgroundRunDuration,
 		backgroundLastSuccess,
 		dealAlerts,
+		prunedListings,
 		sourceRequests,
 		sourceErrors,
 		sourceParseErrors,
@@ -383,6 +389,11 @@ func ObserveDealAlert(err error) {
 		return
 	}
 	dealAlerts.WithLabelValues(outcomeSent).Inc()
+}
+
+// AddPrunedListings counts n stored listings deleted by a prune.
+func AddPrunedListings(n int64) {
+	prunedListings.Add(float64(n))
 }
 
 // Source request outcomes for ObserveSource.

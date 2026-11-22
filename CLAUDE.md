@@ -324,7 +324,15 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   sighting. A first page, a failed or skipped query tells nothing, and a
   gone listing any answer holds again, matching or not, is no longer gone.
   Gone listings stay stored and price as before; no request is sent per
-  listing. An owned album edition
+  listing. Stored listings stay forever unless `OHARA_PRICE_RETENTION_DAYS`
+  is set (never below the valuation window): then the valuation runner,
+  scheduled or not, deletes in batches of 1000 those last seen longer ago,
+  5 minutes after start and then daily, logs the count and adds it to
+  `ohara_price_observations_pruned_total`. A listing whose alert is unsent
+  with attempts left and younger than a week stays, as does one a run or
+  an alert holds; its other alerts go through the cascade. A sighting
+  moves `last_seen_at`, so a listing the runs still see is never pruned.
+  An owned album edition
   with a `discogs_release_id` is
   priced on Discogs (marketplace stats in EUR, price suggestions in the
   seller-settings currency, converted to PLN at the NBP table A rate): its
@@ -517,6 +525,7 @@ browser's `Host` (`changeOrigin: false`) so dev writes pass this check.
 | `OHARA_DEALS_{OLX,PEPPER}_URL`, `OHARA_TELEGRAM_URL`     | public endpoints                                   | Point the sources and Telegram at test doubles                                                            |
 | `OHARA_VALUATION_INTERVAL`                               | `0s` (off)                                         | Valuation schedule, at least `1h` (e.g. `24h`), jittered ±10%; `POST /api/valuation/run` works either way |
 | `OHARA_VALUATION_WINDOW_DAYS`                            | `90`                                               | How many days back a price still counts                                                                   |
+| `OHARA_PRICE_RETENTION_DAYS`                             | unset (keep every listing)                         | Delete stored listings last seen more days ago, daily; at least `OHARA_VALUATION_WINDOW_DAYS`             |
 | `OHARA_VALUATION_SKUPSZOP_URL`                           | public site                                        | Point the SkupSzop quote at a test double                                                                 |
 | `OHARA_TMDB_API_KEY`                                     | unset                                              | TMDB v3 key or v4 read token; enables the movie lookup chain                                              |
 | `OHARA_ALLEGRO_CLIENT_ID`, `OHARA_ALLEGRO_CLIENT_SECRET` | unset                                              | Allegro device-flow app; adds the Allegro catalog to the movie chain after `api allegro-login`            |

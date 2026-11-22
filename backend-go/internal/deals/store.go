@@ -323,6 +323,37 @@ func (s *Store) UpdateGone(ctx context.Context, source string, complete, seen []
 	return tag.RowsAffected(), nil
 }
 
+// pruneBatch bounds the listings one delete of Prune removes, so no
+// statement holds many rows or runs long.
+const pruneBatch = 1000
+
+// Prune deletes the listings last seen more than olderThan ago, in batches
+// of pruneBatch, and reports how many it deleted. A listing whose alert is
+// still unsent with attempts left and younger than the alert window stays,
+// whatever its age, and a listing another transaction holds (a run
+// recording it, an alert on its way) is left for the next prune. Their
+// alerts go with them through deal_alert's cascade. A sighting moves
+// last_seen_at, so a listing the runs still see is never deleted.
+func (s *Store) Prune(ctx context.Context, olderThan time.Duration) (int64, error) {
+	var total int64
+	for {
+		tag, err := s.pool.Exec(ctx, `DELETE FROM price_observation WHERE id IN (
+			SELECT o.id FROM price_observation o
+			WHERE o.last_seen_at < now() - make_interval(secs => $1)
+				AND NOT EXISTS (SELECT FROM deal_alert a WHERE a.observation_id = o.id
+					AND a.sent_at IS NULL AND a.attempts < $2 AND a.created_at > now() - `+alertWindow+`)
+			ORDER BY o.id LIMIT $3 FOR UPDATE SKIP LOCKED)`,
+			olderThan.Seconds(), MaxAttempts, pruneBatch)
+		if err != nil {
+			return total, fmt.Errorf("prune listings: %w", err)
+		}
+		total += tag.RowsAffected()
+		if tag.RowsAffected() < pruneBatch {
+			return total, nil
+		}
+	}
+}
+
 // queueAlert queues the alert for observation id at priceCents for wishlist
 // copy copyID, as Record describes, and reports whether it did.
 func queueAlert(ctx context.Context, tx pgx.Tx, id, copyID, priceCents int64) (bool, error) {

@@ -2,7 +2,7 @@
 	import { ErrorState, Link } from '@smykla-skalski/sui';
 	import { tick, type Snippet } from 'svelte';
 	import { displayName, shelfLine, type CollectionItem } from '#lib/collection.js';
-	import { drawnCount, firstTiles, tilesPerStep } from '#lib/shelf-drawing.js';
+	import { drawnCount, firstTiles, tilesPerStep, type ShelfPlace } from '#lib/shelf-drawing.js';
 	import CollectionCover from './CollectionCover.svelte';
 	import ShelfSkeleton from './ShelfSkeleton.svelte';
 
@@ -32,9 +32,32 @@
 	);
 	const drawn = $derived(count >= rows.length ? rows : rows.slice(0, count));
 	let list = $state<HTMLElement>();
+	/**
+	 * The height every tile will take, from the tiles drawn so far. The list keeps it while the
+	 * rest are drawn, so the page scrolls as far as it will once they are all in it.
+	 */
+	let estimate = $state(0);
+	/** The reader went to the end of the page while tiles were still being drawn. */
+	let wentToEnd = false;
+
+	/** Where the drawn tiles end, as a position in the document. */
+	function drawnBottom(el: HTMLElement): number {
+		return (el.lastElementChild ?? el).getBoundingClientRect().bottom + window.scrollY;
+	}
+
+	function listTop(el: HTMLElement): number {
+		return el.getBoundingClientRect().top + window.scrollY;
+	}
 
 	$effect(() => {
 		drawnKeys = new Set(drawn.map((row) => row.copy_id));
+		if (!list || drawn.length >= rows.length) return;
+		estimate = Math.ceil(((drawnBottom(list) - listTop(list)) * rows.length) / drawn.length);
+	});
+
+	$effect.pre(() => {
+		void rows;
+		wentToEnd = false;
 	});
 
 	function drawMore() {
@@ -47,6 +70,45 @@
 		return () => clearTimeout(timer);
 	});
 
+	/** Once the last part is drawn, a reader who went to the end of the page is taken to it. */
+	$effect(() => {
+		if (count < rows.length || !wentToEnd) return;
+		wentToEnd = false;
+		window.scrollTo(window.scrollX, document.documentElement.scrollHeight);
+	});
+
+	/** A reader who scrolls past the drawn tiles gets them drawn at once. */
+	function onscroll() {
+		if (!list || count >= rows.length) return;
+		const page = document.documentElement;
+		wentToEnd = window.scrollY + window.innerHeight >= page.scrollHeight - 1;
+		void drawTo(window.scrollY);
+	}
+
+	/** The first tile at the top of the screen, or null when none is drawn there. */
+	export function topTile(): ShelfPlace | null {
+		for (const tile of list?.children ?? []) {
+			const box = tile.getBoundingClientRect();
+			const key = Number(tile.getAttribute('data-cover-key'));
+			if (box.bottom > 0 && Number.isInteger(key)) return { key, offset: box.top };
+		}
+		return null;
+	}
+
+	/** Draws the list down to the tile of `place` and scrolls it back to where it was on screen. */
+	export async function showTile(place: ShelfPlace): Promise<void> {
+		const index = rows.findIndex((row) => row.copy_id === place.key);
+		if (index < 0) return;
+		if (count <= index) count = Math.min(rows.length, index + 1 + tilesPerStep);
+		await tick();
+		const tile = list?.querySelector(`[data-cover-key="${place.key}"]`);
+		if (!tile) return;
+		window.scrollTo(
+			window.scrollX,
+			window.scrollY + tile.getBoundingClientRect().top - place.offset
+		);
+	}
+
 	/**
 	 * Draws the list down to `y`, a position in the document, and a screen below it, so a scroll
 	 * position kept further down can be restored. It draws what the tiles drawn so far say it
@@ -56,16 +118,19 @@
 	 */
 	export async function drawTo(y: number): Promise<void> {
 		if (!list || count >= rows.length) return;
-		const box = list.getBoundingClientRect();
-		const reach = y + window.innerHeight - (box.top + window.scrollY);
-		if (box.height >= reach) return;
-		const needed = Math.ceil((reach / Math.max(box.height, 1)) * count) + tilesPerStep;
+		const top = listTop(list);
+		const height = drawnBottom(list) - top;
+		const reach = y + window.innerHeight - top;
+		if (height >= reach) return;
+		const needed = Math.ceil((reach / Math.max(height, 1)) * count) + tilesPerStep;
 		count = Math.min(rows.length, Math.max(needed, count + tilesPerStep));
 		await tick();
 		await new Promise((resolve) => setTimeout(resolve));
 		return drawTo(y);
 	}
 </script>
+
+<svelte:window {onscroll} />
 
 {#if failure}
 	<ErrorState
@@ -93,6 +158,7 @@
 		role="list"
 		aria-label="Egzemplarze w kolekcji"
 		aria-busy={loading}
+		style:min-height={count < rows.length && estimate ? `${estimate}px` : undefined}
 		bind:this={list}
 	>
 		{#each drawn as row, i (row.copy_id)}
@@ -117,9 +183,11 @@
 {/if}
 
 <style>
+	/* Rows keep their own height while the list holds the space of tiles still to be drawn. */
 	.shelf {
 		display: grid;
 		grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
+		align-content: start;
 		gap: var(--sui-space-4);
 		margin: 0;
 		padding: 0;

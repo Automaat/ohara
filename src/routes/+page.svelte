@@ -61,6 +61,7 @@
 	import type { QueueEntry } from '#lib/scan.js';
 	import CollectionFilterSheet from '#lib/components/CollectionFilterSheet.svelte';
 	import CollectionShelf from '#lib/components/CollectionShelf.svelte';
+	import type { ShelfPlace } from '#lib/shelf-drawing.js';
 	import TitleShelf from '#lib/components/TitleShelf.svelte';
 	import type { Snapshot } from './$types';
 
@@ -408,6 +409,26 @@
 	);
 	/** "Bez egzemplarzy": the view lists titles that have no copy instead of copies. */
 	const listsTitles = $derived(filter.status === 'none');
+
+	/** Whether the copies showed as the shelf rather than the table. */
+	let shelfBefore: boolean | undefined;
+	/**
+	 * The tile at the top of the screen when the table took over from the shelf, as when a phone
+	 * turns sideways. The shelf that comes back starts with its first tiles only, so it draws down
+	 * to that tile and puts it back where it was.
+	 */
+	let shelfPlace: ShelfPlace | null = null;
+
+	$effect.pre(() => {
+		const shown = layout === 'shelf' || phone.current;
+		const was = shelfBefore;
+		shelfBefore = shown;
+		if (was === true && !shown) shelfPlace = shelf?.topTile() ?? null;
+		if (was !== false || !shown || !shelfPlace) return;
+		const place = shelfPlace;
+		shelfPlace = null;
+		void tick().then(() => shelf?.showTile(place));
+	});
 	const titleRows = $derived(sortTitles(uncopiedTitles(uncopied ?? [], filter), sort));
 	const listed = $derived(listsTitles ? uncopied : collection);
 	const emptyShelf = $derived(

@@ -427,3 +427,63 @@ for (const viewport of viewports) {
 		});
 	});
 }
+
+/**
+ * Answers `GET /api/collection` with `total` copies made from one seeded through the API, so a
+ * test meets a collection of thousands without adding them.
+ */
+async function routeCollection(page: Page, request: APIRequestContext, total: number) {
+	const t = tag();
+	await seed(request, { kind: 'book', name: `Wzór ${t}` });
+	const res = await request.get(`/api/collection?q=${t}`);
+	const [item] = ((await res.json()) as { items: Record<string, unknown>[] }).items;
+	const items = Array.from({ length: total }, (_, i) => ({
+		...item,
+		copy_id: 1_000_000 + i,
+		edition_id: 1_000_000 + i,
+		title_id: 1_000_000 + i,
+		name: `Tom ${String(i).padStart(4, '0')} ${t}`,
+		cover_url: null
+	}));
+	const totals = { copies: total, owned: total, wishlist: 0, priced: 0, spent_cents: 0 };
+	await page.route('**/api/collection', (route) => route.fulfill({ json: { items, totals } }));
+}
+
+test('the end of a shelf still being drawn is the end of the collection', async ({
+	page,
+	request
+}) => {
+	await routeCollection(page, request, 2000);
+	const cdp = await page.context().newCDPSession(page);
+	await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 });
+	await page.goto('/');
+	const tiles = shelf(page).getByRole('listitem');
+	await expect(tiles.first()).toBeVisible();
+	const drawnAtEnd = await page.evaluate(() => {
+		window.scrollTo(0, document.documentElement.scrollHeight);
+		return document.querySelectorAll('ul[aria-label="Egzemplarze w kolekcji"] > li').length;
+	});
+	expect(drawnAtEnd, 'tiles drawn when the reader went to the end').toBeLessThan(2000);
+	await expect(tiles).toHaveCount(2000, { timeout: 15_000 });
+	await expect(tiles.last()).toBeInViewport();
+});
+
+test('turning a phone sideways and back keeps the place on the shelf', async ({
+	page,
+	request
+}) => {
+	await routeCollection(page, request, 2000);
+	await page.addInitScript(() => localStorage.setItem('ohara.collection.layout', 'table'));
+	await page.goto('/');
+	const tiles = shelf(page).getByRole('listitem');
+	await expect(tiles).toHaveCount(2000);
+	await tiles.nth(1500).evaluate((el) => el.scrollIntoView({ block: 'start' }));
+
+	await page.setViewportSize({ width: 844, height: 390 });
+	await expect(page.getByRole('table')).toBeVisible();
+	await expect(shelf(page)).toHaveCount(0);
+	await page.setViewportSize({ width: 390, height: 844 });
+
+	await expect(shelf(page)).toBeVisible();
+	await expect(tiles.nth(1500)).toBeInViewport();
+});

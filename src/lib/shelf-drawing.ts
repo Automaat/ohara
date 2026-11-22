@@ -4,6 +4,9 @@
  * in the page, so the list, the search in the page and the cover transitions see all of it.
  */
 
+/** A tile on screen, by its copy, and how far below the top of the screen it starts. */
+export type ShelfPlace = { key: number; offset: number };
+
 /** Tiles drawn with the rest of the page: more than the first screen of the widest layout. */
 export const firstTiles = 60;
 

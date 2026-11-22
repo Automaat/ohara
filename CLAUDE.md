@@ -347,9 +347,13 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   from `GET /api/titles`; `/titles` redirects to `/`. `?add=copy` on a title
   or edition page opens the form for its next copy. The shelf draws its
   tiles in parts (`src/lib/shelf-drawing.ts`): 60 with the page, then 150
-  a task, each tile carrying `aria-setsize`; a restored scroll first draws
-  down to its place. Only the layout on screen is mounted: a phone always
-  gets the shelf, never the hidden table.
+  a task, each tile carrying `aria-setsize`. Until the last part lands the
+  list keeps the height all tiles will take, a scroll past the drawn tiles
+  draws them at once and a reader at the end is taken to the real end; a
+  restored scroll first draws down to its place. Only the layout on screen
+  is mounted: a phone always gets the shelf, never the hidden table, and a
+  shelf back from the table (a phone turned sideways and back) returns to
+  the tile that was at the top.
 - "Zmień okładkę" shrinks the chosen photo in the browser before upload
   (`shrinkPhoto` in `src/lib/edition-cover.ts`): `createImageBitmap` turns
   it upright from its EXIF orientation, a canvas at most 1600 px on the

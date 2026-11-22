@@ -84,7 +84,7 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   wish that now matches, keeping its attempts and age. Alerts sent before
   migration 0016 have no stored price and never repeat.
   Okazje's "Ignoruj" (`POST /api/deals/{id}/dismissal`, undone by `DELETE`,
-  both 204 when repeated, 404 for an id no OLX or Pepper listing has) sets
+  both 204 when repeated, 404 for an id no OLX, Świat Książki or Pepper listing has) sets
   the listing's `dismissed_at`, for every wish it matches: it leaves every
   deals list and the badge, its unsent alert is never sent and a run that
   sees it again keeps it dismissed and queues no alert. The hunter sends
@@ -153,6 +153,28 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   The last run, scheduled, manual or cut short by shutdown, is kept in
   `deal_run`: after a restart the status shows it and the first scheduled
   run comes one interval after it started, at least 5 minutes on.
+- Świat Książki (swiatksiazki.pl, a shop of new books, films and music) is
+  a query source, on unless `OHARA_SWIATKSIAZKI=false`. Each query is one
+  GET of the shop's GraphQL endpoint, `/graphql?query=<document>`, a
+  `products(search: …, pageSize: 50)` search in the shop's relevance
+  order with the search as a JSON string literal; no POST, no `/rest/`
+  path (robots.txt disallows `/rest/default/*`) and no product page. Each
+  product becomes a listing: `sku` as its ID,
+  `https://www.swiatksiazki.pl/<url_key>.html`, `small_image.url` and
+  `price_range.minimum_price.final_price` in PLN (the discounted price
+  when there is one), condition new. Product names leave out the author
+  and the artist, so the title is `dictionary`'s authors, performers and
+  composers, each once, then the name ("Pink Floyd - The Dark Side of the
+  Moon (50th Anniversary Remaster) (Vinyl)"); a film has none. A disc
+  count before the medium moves behind it ("Shogun (5 DVD)" becomes
+  "Shogun (DVD, 5 płyt)"), since the matcher reads a number right after a
+  film's name as a sequel. Products out of stock, e-books and audio
+  files (`url_key` ending `-e-book` or `-audiobook`) are left out. An
+  answer with GraphQL `errors`, without `data.products.items` or that is
+  no JSON counts as `parse_error`; an empty `items` list is an answer
+  without listings. The default canary `dvd` finds its films. The
+  valuation does not ask it. Its regulamin (in force from 10.10.2025)
+  sets the terms of sale and says nothing of automated access.
 
 ## Discogs wantlist
 

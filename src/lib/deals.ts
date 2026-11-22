@@ -216,6 +216,7 @@ export function searchedFor(wishes: number, status: HunterStatus, now: Date): st
 
 export const sourceLabels: Record<DealSource, string> = {
 	olx: 'OLX',
+	swiatksiazki: 'Świat Książki',
 	pepper: 'Pepper'
 };
 

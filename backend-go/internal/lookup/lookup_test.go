@@ -492,6 +492,88 @@ func TestLookupFallsBackForISBNsNoBookProviderKnows(t *testing.T) {
 	}
 }
 
+// hangingBooks is a book catalog that answers only when its fetch is cut
+// off.
+type hangingBooks struct{ fixedProvider }
+
+func (*hangingBooks) Accepts(code string) bool { return barcode.IsBook(code) }
+
+func (*hangingBooks) Fetch(ctx context.Context, _ string) (json.RawMessage, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// deadlineFallback is a fallback provider that records the deadline of its
+// fetch.
+type deadlineFallback struct {
+	isbnFallback
+	deadline time.Time
+}
+
+func (p *deadlineFallback) Fetch(ctx context.Context, code string) (json.RawMessage, error) {
+	p.deadline, _ = ctx.Deadline()
+	return p.isbnFallback.Fetch(ctx, code)
+}
+
+func TestLookupFallbackRoundEndsWithinTheBudget(t *testing.T) {
+	const isbn = "9788375780635"
+	books := &hangingBooks{fixedProvider{name: "bn"}}
+	music := &deadlineFallback{isbnFallback: isbnFallback{fixedProvider{name: "music", cands: []lookup.Candidate{{Type: "music", Title: lookup.TitleFields{Name: "Album"}, Edition: lookup.EditionFields{Barcode: isbn}, Confidence: 0.9}}}}}
+	r := &lookup.Registry{}
+	for _, p := range []lookup.Provider{books, music} {
+		if err := r.Register(p, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	svc := lookup.NewService(r, nil, discard())
+	// A book fetch may take a second and the whole lookup 1.5: the second
+	// round gets the half second left, not another second.
+	lookup.SetTimeouts(svc, time.Second, 1500*time.Millisecond)
+	start := time.Now()
+	res := svc.Lookup(context.Background(), isbn)
+	if len(res.Candidates) != 1 || res.Candidates[0].Type != "music" || len(res.Errors) != 1 {
+		t.Fatalf("result = %+v", res)
+	}
+	if got := music.deadline.Sub(start); got > 1600*time.Millisecond {
+		t.Fatalf("fallback fetch may run until %v after the start, past the 1.5 s budget", got)
+	}
+}
+
+func TestLookupStubWaitsWithTheFallbackProviders(t *testing.T) {
+	const isbn = "9788375780635"
+	tests := []struct {
+		name      string
+		books     []lookup.Candidate
+		wantTypes []string
+		wantAsked int
+	}{
+		{name: "books miss", wantTypes: []string{"music", "book"}, wantAsked: 1},
+		{name: "a book provider resolves it", books: []lookup.Candidate{book(isbn, "Pan Tadeusz", 0.9)}, wantTypes: []string{"book"}, wantAsked: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			music := &isbnFallback{fixedProvider{name: "music", cands: []lookup.Candidate{{Type: "music", Title: lookup.TitleFields{Name: "Album"}, Edition: lookup.EditionFields{Barcode: isbn}, Confidence: 0.9}}}}
+			r := &lookup.Registry{}
+			for _, p := range []lookup.Provider{&fixedProvider{name: "bn", cands: tt.books, scope: barcode.IsBook}, lookup.Stub{}, music} {
+				if err := r.Register(p, 0); err != nil {
+					t.Fatal(err)
+				}
+			}
+			res := lookup.NewService(r, nil, discard()).Lookup(context.Background(), isbn)
+			types := []string{}
+			for _, c := range res.Candidates {
+				types = append(types, c.Type)
+			}
+			if !slices.Equal(types, tt.wantTypes) {
+				t.Errorf("candidate types = %v, want %v", types, tt.wantTypes)
+			}
+			if music.fetches != tt.wantAsked {
+				t.Errorf("music fetched %d times, want %d", music.fetches, tt.wantAsked)
+			}
+		})
+	}
+}
+
 func TestLookupFitsCandidatesToCollectionLimits(t *testing.T) {
 	const code = "9788375780635"
 	long := strings.Repeat("ż", 300)

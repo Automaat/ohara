@@ -185,12 +185,19 @@ func needsConfirmation(cands []Candidate) bool {
 	return false
 }
 
+// lookupBudget is how long a lookup may ask providers, both rounds
+// together: under the client's 20-second deadline (requestDeadlineMs in
+// src/lib/api.ts), with room for the answer. A second round after a first
+// that ran into its timeout gets what is left.
+const lookupBudget = 17 * time.Second
+
 // Service runs a lookup across every registered provider.
 type Service struct {
 	registry *Registry
 	cache    Cache
 	logger   *slog.Logger
 	timeout  time.Duration
+	budget   time.Duration
 	now      func() time.Time
 	rechecks recheckLog
 }
@@ -200,7 +207,7 @@ func NewService(registry *Registry, cache Cache, logger *slog.Logger) *Service {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Service{registry: registry, cache: cache, logger: logger, timeout: 10 * time.Second, now: time.Now}
+	return &Service{registry: registry, cache: cache, logger: logger, timeout: 10 * time.Second, budget: lookupBudget, now: time.Now}
 }
 
 // recheckLog remembers when a recheck last asked a provider about a
@@ -266,10 +273,11 @@ func (s *Service) lookup(ctx context.Context, code string, recheck bool) Result 
 	if sel, ok := s.selection(ctx, code); ok {
 		return Result{Barcode: code, Candidates: []Candidate{sel}, Errors: []ProviderError{}}
 	}
+	deadline := time.Now().Add(s.budget)
 	outcomes := make([]outcome, len(s.registry.entries))
-	s.round(ctx, code, recheck, outcomes, false)
+	s.round(ctx, code, recheck, deadline, outcomes, false)
 	if !slices.ContainsFunc(outcomes, func(o outcome) bool { return len(o.candidates) > 0 }) {
-		s.round(ctx, code, recheck, outcomes, true)
+		s.round(ctx, code, recheck, deadline, outcomes, true)
 	}
 
 	res := Result{Barcode: code, Candidates: []Candidate{}, Errors: []ProviderError{}}
@@ -303,8 +311,8 @@ func (s *Service) lookup(ctx context.Context, code string, recheck bool) Result 
 
 // round queries, concurrently, every provider that accepts code and is a
 // fallback for it exactly when fallback is set, storing each answer at the
-// provider's registry index in outcomes.
-func (s *Service) round(ctx context.Context, code string, recheck bool, outcomes []outcome, fallback bool) {
+// provider's registry index in outcomes. No fetch runs past deadline.
+func (s *Service) round(ctx context.Context, code string, recheck bool, deadline time.Time, outcomes []outcome, fallback bool) {
 	var wg sync.WaitGroup
 	for i, e := range s.registry.entries {
 		if scoped, ok := e.provider.(Scoped); ok && !scoped.Accepts(code) {
@@ -314,7 +322,7 @@ func (s *Service) round(ctx context.Context, code string, recheck bool, outcomes
 			continue
 		}
 		wg.Go(func() {
-			cands, err := s.query(ctx, e, code, recheck)
+			cands, err := s.query(ctx, e, code, recheck, deadline)
 			outcomes[i] = outcome{candidates: cands, err: err}
 		})
 	}
@@ -362,7 +370,7 @@ func (s *Service) selection(ctx context.Context, code string) (Candidate, bool) 
 	return c, true
 }
 
-func (s *Service) query(ctx context.Context, e entry, code string, recheck bool) ([]Candidate, error) {
+func (s *Service) query(ctx context.Context, e entry, code string, recheck bool, deadline time.Time) ([]Candidate, error) {
 	p := e.provider
 	if s.cache != nil && e.ttl > 0 {
 		maxAge := e.ttl
@@ -377,7 +385,10 @@ func (s *Service) query(ctx context.Context, e entry, code string, recheck bool)
 			return cands, err
 		}
 	}
-	fetchCtx, cancel := context.WithTimeout(ctx, s.timeout)
+	if limit := time.Now().Add(s.timeout); limit.Before(deadline) {
+		deadline = limit
+	}
+	fetchCtx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
 	metrics.ObserveLookupRequest(p.Name())
 	raw, err := s.fetch(fetchCtx, p, code)

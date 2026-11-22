@@ -9,7 +9,8 @@ import (
 )
 
 // Stub answers every barcode with one low-confidence placeholder: a book for
-// ISBNs, a DVD otherwise. It lets the scanner flow run end to end before the
+// ISBNs, a DVD otherwise. For an ISBN it answers only in the fallback round,
+// when no book provider found the code. It lets the scanner flow run end to end before the
 // real providers exist; enable it with OHARA_LOOKUP_STUB=true.
 type Stub struct{}
 
@@ -19,6 +20,11 @@ type stubResponse struct {
 
 // Name is "stub".
 func (Stub) Name() string { return "stub" }
+
+// Fallback reports ISBN-range codes, so the placeholder book waits with the
+// movie and music providers and never keeps them from a code the book
+// providers missed.
+func (Stub) Fallback(code string) bool { return barcode.IsBook(code) }
 
 // Fetch echoes the barcode.
 func (Stub) Fetch(_ context.Context, code string) (json.RawMessage, error) {

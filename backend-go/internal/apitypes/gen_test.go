@@ -193,7 +193,7 @@ func TestOharaKeepsTheSPAsUnionsAndNullability(t *testing.T) {
 		t.Errorf("CandidateEdition lost its nullable format:\n%s", edition)
 	}
 	for _, want := range []string{
-		"export type CopyStatus = 'owned' | 'wishlist';\n",
+		"export type CopyStatus = 'owned' | 'wishlist' | 'sold';\n",
 		"export type Kind = 'movie' | 'book' | 'music';\n",
 	} {
 		if !strings.Contains(got, want) {

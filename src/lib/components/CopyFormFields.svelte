@@ -50,7 +50,9 @@
 		'condition',
 		'notes',
 		'max_price_cents',
-		'max_market_percent'
+		'max_market_percent',
+		'sold_on',
+		'sale_price_cents'
 	];
 	const general = $derived(issue && !fieldKeys.includes(issue.field) ? issue.message : null);
 </script>
@@ -65,7 +67,7 @@
 >
 	<FormError message={general} />
 	<SegmentedControl label="Status" options={options(statusLabels)} bind:value={form.status} />
-	{#if form.status === 'owned'}
+	{#if form.status !== 'wishlist'}
 		<Field
 			label="Cena zakupu (zł)"
 			hint={priceHint}
@@ -80,6 +82,22 @@
 			bind:value={form.purchased_on}
 			error={errorFor('purchased_on')}
 		/>
+		{#if form.status === 'sold'}
+			<Field
+				label="Data sprzedaży"
+				placeholder="RRRR-MM-DD"
+				bind:value={form.sold_on}
+				error={errorFor('sold_on')}
+			/>
+			<Field
+				label="Cena sprzedaży (zł)"
+				hint="Nie pamiętasz? Zostaw puste."
+				inputmode="decimal"
+				placeholder="35"
+				bind:value={form.sale_price}
+				error={errorFor('sale_price_cents')}
+			/>
+		{/if}
 	{:else}
 		<Field
 			label="Cena maksymalna (zł)"
@@ -103,7 +121,7 @@
 		/>
 	{/if}
 	<Field
-		label={form.status === 'owned' ? 'Sklep lub sprzedawca' : 'Gdzie szukać'}
+		label={form.status === 'wishlist' ? 'Gdzie szukać' : 'Sklep lub sprzedawca'}
 		bind:value={form.shop}
 		error={errorFor('shop')}
 	/>

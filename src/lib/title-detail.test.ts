@@ -20,7 +20,7 @@ import {
 	wantsCopy,
 	type TitleEdition
 } from './title-detail';
-import type { CopyValue, Estimate } from './valuation';
+import type { CopyValue, CopyValueDay, Estimate } from './valuation';
 
 const nbsp = (s: string | null | undefined) => s?.replace(/[\u00a0\u202f]/g, ' ');
 
@@ -314,6 +314,30 @@ describe('copyFacts', () => {
 	});
 });
 
+describe('copyFacts of a sold copy', () => {
+	it('keeps the purchase and adds the sale', () => {
+		const facts = copyFacts(
+			copy({ status: 'sold', sold_on: '2026-05-10', sale_price_cents: 3500 })
+		);
+		expect(facts.map((f) => [f.label, nbsp(f.value)])).toEqual([
+			['Cena', '89,99 zł'],
+			['Kupiono', '24 gru 2023'],
+			['Sklep', 'Empik'],
+			['Sprzedano', '10 maj 2026'],
+			['Cena sprzedaży', '35,00 zł'],
+			['Stan', 'Nowy']
+		]);
+		expect(copyFacts(copy({ status: 'sold', sold_on: '2026-05-10' }))[4]?.value).toBe('—');
+	});
+
+	it('lists what it sold for in its row', () => {
+		expect(
+			nbsp(copyLine(copy({ status: 'sold', sold_on: '2026-05-10', sale_price_cents: 3500 })))
+		).toBe('Sprzedany · 35,00 zł · Empik');
+		expect(copyLine(copy({ status: 'sold', sold_on: '2026-05-10', shop: '' }))).toBe('Sprzedany');
+	});
+});
+
 describe('copyLine', () => {
 	it('lists the status, the price and the shop that are known', () => {
 		expect(nbsp(copyLine(copy()))).toBe('Na półce · 89,99 zł · Empik');
@@ -387,6 +411,98 @@ describe('valueCard', () => {
 		expect(card?.usedAt).toBeNull();
 		expect(card?.delta).toBeNull();
 		expect(card?.paidAt).toBeCloseTo(((8999 - 1600) / (10300 - 1600)) * 100);
+	});
+
+	const day = (d: string, mid: number | null, copy_id = 7): CopyValueDay => ({
+		copy_id,
+		day: d,
+		floor_cents: 1600,
+		mid_cents: mid,
+		ceiling_cents: null
+	});
+
+	it("draws the trend of the copy's used value over its days", () => {
+		const card = valueCard(
+			copy(),
+			[valued()],
+			[
+				day('2026-11-18', 6000),
+				day('2026-11-18', 99999, 99),
+				day('2026-11-19', 6000),
+				day('2026-11-20', 7400),
+				day('2026-11-20', 1, 99)
+			]
+		);
+		expect(card?.trend).toEqual({ path: 'M4 32 L46 32 L88 4', dots: [] });
+	});
+
+	it('leaves a gap on a day without a used value and ends on the last one', () => {
+		const card = valueCard(
+			copy(),
+			[valued()],
+			[
+				day('2026-11-18', 6000),
+				day('2026-11-19', null),
+				day('2026-11-20', 7400),
+				day('2026-11-21', null)
+			]
+		);
+		expect(card?.trend).toEqual({
+			path: '',
+			dots: [
+				{ x: 4, y: 32 },
+				{ x: 88, y: 4 }
+			]
+		});
+	});
+
+	it('leaves a gap on a day with no stored value', () => {
+		const card = valueCard(
+			copy(),
+			[valued()],
+			[day('2026-11-18', 6000), day('2026-11-19', 6000), day('2026-11-21', 7400)]
+		);
+		expect(card?.trend).toEqual({ path: 'M4 32 L32 32', dots: [{ x: 88, y: 4 }] });
+	});
+
+	it('keeps a single missing day visible over 90 days', () => {
+		const days = Array.from({ length: 90 }, (_, i) =>
+			day(new Date(Date.UTC(2026, 7, 24 + i)).toISOString().slice(0, 10), 5000)
+		).filter((_, i) => i !== 45);
+		const trend = valueCard(copy(), [valued()], days)?.trend;
+		const runs = trend?.path.split(' M').map((run) => run.match(/-?[\d.]+/g)?.map(Number) ?? []);
+		expect(runs).toHaveLength(2);
+		const [before, after] = runs ?? [];
+		const gap = (after?.[0] ?? 0) - (before?.at(-2) ?? 0);
+		expect(gap).toBeGreaterThan(1.8);
+		expect(trend?.dots).toEqual([]);
+	});
+
+	it('keeps the trend of a copy whose prices left the window', () => {
+		const days = [day('2026-11-18', 6000), day('2026-11-19', 7400)];
+		const expired = valueCard(copy(), [valued({ floor: null, mid: null, ceiling: null })], days);
+		expect(expired).toEqual({
+			used: '—',
+			floor: '—',
+			ceiling: '—',
+			usedAt: null,
+			paidAt: null,
+			delta: null,
+			trend: { path: 'M4 32 L88 4', dots: [] }
+		});
+		expect(valueCard(copy(), [], days)?.trend).toEqual(expired?.trend);
+		expect(valueCard(copy({ status: 'wishlist' }), [], days)).toBeNull();
+	});
+
+	it('shows no trend under two days with a used value', () => {
+		expect(valueCard(copy(), [valued()])?.trend).toBeNull();
+		expect(valueCard(copy(), [valued()], [day('2026-11-20', 7400)])?.trend).toBeNull();
+		expect(
+			valueCard(copy(), [valued()], [day('2026-11-19', null), day('2026-11-20', 7400)])?.trend
+		).toBeNull();
+		expect(
+			valueCard(copy(), [valued()], [day('2026-11-19', 7000, 99), day('2026-11-20', 7400)])?.trend
+		).toBeNull();
 	});
 
 	it('is null for a copy without prices, without a valuation or not owned', () => {

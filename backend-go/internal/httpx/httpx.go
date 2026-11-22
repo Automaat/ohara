@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
@@ -63,6 +64,12 @@ func WriteInternal(w http.ResponseWriter, r *http.Request, logger *slog.Logger, 
 // DecodeJSON reads a size-limited JSON body into dst. On failure it writes a
 // 422 and returns false. Trailing data after the object is rejected.
 func DecodeJSON(w http.ResponseWriter, r *http.Request, logger *slog.Logger, dst any) bool {
+	return DecodeJSONFields(w, r, logger, dst)
+}
+
+// DecodeJSONFields is DecodeJSON that names the field, not the body, when a
+// value of one of fields does not fit its type, such as a number past int64.
+func DecodeJSONFields(w http.ResponseWriter, r *http.Request, logger *slog.Logger, dst any, fields ...string) bool {
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, MaxBodyBytes))
 	err := dec.Decode(dst)
 	if err == nil {
@@ -71,7 +78,11 @@ func DecodeJSON(w http.ResponseWriter, r *http.Request, logger *slog.Logger, dst
 		}
 	}
 	if err != nil {
-		WriteFieldError(w, logger, &FieldError{Field: "body", Msg: decodeMessage(err)})
+		field := "body"
+		if typeErr, ok := errors.AsType[*json.UnmarshalTypeError](err); ok && slices.Contains(fields, typeErr.Field) {
+			field = typeErr.Field
+		}
+		WriteFieldError(w, logger, &FieldError{Field: field, Msg: decodeMessage(err)})
 		return false
 	}
 	return true

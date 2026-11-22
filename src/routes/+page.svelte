@@ -30,6 +30,7 @@
 		kindLabels,
 		readCollectionFilter,
 		shelfSummary,
+		shelvedCount,
 		spentLabel,
 		statusLabels,
 		uncopiedTitles,
@@ -130,7 +131,9 @@
 	onDestroy(() => loader.leave());
 
 	$effect(() => {
-		if (overview?.totals.copies === 0 && untrack(() => uncopied) === null) loader.loadUncopied();
+		if (overview?.totals.copies === 0 && untrack(() => uncopied) === null) {
+			loader.loadUncopied();
+		}
 	});
 
 	afterNavigate((navigation) => {
@@ -193,7 +196,7 @@
 			return kind ? uncopied.filter((t) => t.kind === kind).length : uncopied.length;
 		}
 		if (!overview) return undefined;
-		return kind ? overview.kinds[kind] : overview.totals.copies;
+		return kind ? overview.kinds[kind] : shelvedCount(overview.totals);
 	}
 
 	function setStatus(status: CollectionFilter['status']) {
@@ -232,9 +235,12 @@
 	});
 	const titleRows = $derived(sortTitles(uncopiedTitles(uncopied ?? [], filter), sort));
 	const listed = $derived(listsTitles ? uncopied : collection);
+	/** Sold copies, which only "Sprzedane" lists. */
+	const soldCount = $derived(overview ? overview.totals.copies - shelvedCount(overview.totals) : 0);
 	/**
 	 * An empty collection greets the reader whatever the filter, except "Bez ceny", which keeps
-	 * "Nic nie pasuje" and its "Wyczyść filtry" like any filter that lists nothing.
+	 * "Nic nie pasuje" and its "Wyczyść filtry" like any filter that lists nothing. A collection
+	 * whose every copy was sold is not empty: it keeps its filters, so "Sprzedane" stays in reach.
 	 */
 	const emptyShelf = $derived(
 		!failure &&
@@ -474,13 +480,22 @@
 								</span>
 							</div>
 						{:else if column.key === 'status'}
-							<Link href={`/copies/${row.copy_id}`}>
-								<Pill tone={row.status === 'owned' ? 'success' : 'neutral'}>
-									{statusLabels[row.status]}
-								</Pill>
-							</Link>
+							<div class="status-details">
+								<Link href={`/copies/${row.copy_id}`}>
+									<Pill tone={row.status === 'owned' ? 'success' : 'neutral'}>
+										{statusLabels[row.status]}
+									</Pill>
+								</Link>
+								{#if row.status === 'sold'}
+									<span class="metadata price">
+										{[purchaseDate(row.sold_on ?? null), formatPLN(row.sale_price_cents)]
+											.filter(Boolean)
+											.join(' · ')}
+									</span>
+								{/if}
+							</div>
 						{:else if column.key === 'price_cents'}
-							{#if row.status === 'owned'}
+							{#if row.status !== 'wishlist'}
 								<span class="price">
 									{row.price_cents === null ? 'Nieznana' : formatPLN(row.price_cents)}
 								</span>
@@ -555,6 +570,17 @@
 		<EmptyState title="Nic nie pasuje" description="Żaden egzemplarz nie spełnia filtrów.">
 			{#snippet action()}
 				<Button onclick={clearFilters}>Wyczyść filtry</Button>
+			{/snippet}
+		</EmptyState>
+	{:else if soldCount > 0}
+		<EmptyState title="Półka jest pusta" description="Wszystkie egzemplarze są sprzedane.">
+			{#snippet action()}
+				<div class="empty-actions">
+					<Button tone="signal" onclick={() => setStatus('sold')}>
+						{`${collectionStatusLabels.sold} (${soldCount})`}
+					</Button>
+					<Button href="/titles/new">Dodaj tytuł</Button>
+				</div>
 			{/snippet}
 		</EmptyState>
 	{:else}
@@ -872,6 +898,12 @@
 
 	.price {
 		font-variant-numeric: tabular-nums;
+	}
+
+	.status-details {
+		display: grid;
+		justify-items: start;
+		gap: var(--sui-space-1);
 	}
 
 	.visually-hidden {

@@ -1,4 +1,4 @@
-import { editionCount } from './polish';
+import { editionCount, purchaseDate } from './polish';
 import type {
 	AcquiredAs,
 	Binding,
@@ -90,7 +90,8 @@ export const packagingLabels: Record<Packaging, string> = {
 };
 export const statusLabels: Record<CopyStatus, string> = {
 	owned: 'Na półce',
-	wishlist: 'Lista życzeń'
+	wishlist: 'Lista życzeń',
+	sold: 'Sprzedany'
 };
 export const acquiredLabels: Record<AcquiredAs, string> = { new: 'Nowy', used: 'Używany' };
 export const conditionLabels: Record<Condition, string> = {
@@ -119,6 +120,11 @@ export function kindCounts(items: readonly Pick<CollectionItem, 'kind'>[]): Reco
 	const counts: Record<Kind, number> = { movie: 0, book: 0, music: 0 };
 	for (const { kind } of items) counts[kind] += 1;
 	return counts;
+}
+
+/** How many copies are on the shelf or on the wishlist: every copy but the sold ones. */
+export function shelvedCount(t: Pick<Totals, 'owned' | 'wishlist'>): number {
+	return t.owned + t.wishlist;
 }
 
 /** The collection header's one line, such as "20 na półce · 4 na liście życzeń". */
@@ -213,16 +219,34 @@ export function wishLine(limitCents: number | null): string {
 }
 
 /**
- * A shelf tile's line under the name: the wish and its limit for a wishlist copy, otherwise the
- * creators and the edition, such as "Stanisław Lem · Twarda oprawa".
+ * A sold copy's line under its name, such as "Sprzedany 10 maj 2026 · 35 zł": the day and, when
+ * known, the price it went for.
+ */
+export function saleLine(soldOn: string | null | undefined, priceCents: number | null | undefined) {
+	const day = purchaseDate(soldOn ?? null);
+	const price = priceCents == null ? '' : formatPLN(priceCents);
+	return [[statusLabels.sold, day].filter(Boolean).join(' '), price].filter(Boolean).join(' · ');
+}
+
+/**
+ * A shelf tile's line under the name: the wish and its limit for a wishlist copy, the sale for
+ * a sold one, otherwise the creators and the edition, such as "Stanisław Lem · Twarda oprawa".
  */
 export function shelfLine(
 	item: Pick<
 		CollectionItem,
-		'status' | 'max_price_cents' | 'authors' | 'format' | 'binding' | 'label'
+		| 'status'
+		| 'max_price_cents'
+		| 'sold_on'
+		| 'sale_price_cents'
+		| 'authors'
+		| 'format'
+		| 'binding'
+		| 'label'
 	>
 ): string {
 	if (item.status === 'wishlist') return wishLine(item.max_price_cents);
+	if (item.status === 'sold') return saleLine(item.sold_on, item.sale_price_cents);
 	return [item.authors?.join(', '), editionSummary({ ...item, barcode: null })]
 		.filter(Boolean)
 		.join(' · ');
@@ -230,11 +254,13 @@ export function shelfLine(
 
 /**
  * What the collection lists: copies of a status, `unpriced`, the owned copies without a purchase
- * price, or `none`, the titles that have no copy yet.
+ * price, or `none`, the titles that have no copy yet. Without one it lists every copy but the
+ * sold ones.
  */
 export type CollectionStatus = CopyStatus | 'unpriced' | 'none';
 export const collectionStatusLabels: Record<CollectionStatus, string> = {
 	...statusLabels,
+	sold: 'Sprzedane',
 	unpriced: 'Bez ceny',
 	none: 'Bez egzemplarzy'
 };
@@ -465,6 +491,8 @@ export type CopyForm = {
 	notes: string;
 	max_price: string;
 	market_percent: string;
+	sold_on: string;
+	sale_price: string;
 };
 
 /** The editable form of a copy, or an empty owned one. */
@@ -478,7 +506,9 @@ export function copyToForm(c: CopyPayload | null): CopyForm {
 		condition: c?.condition ?? '',
 		notes: c?.notes ?? '',
 		max_price: centsToInput(c?.max_price_cents ?? null),
-		market_percent: c?.max_market_percent == null ? '' : String(c.max_market_percent)
+		market_percent: c?.max_market_percent == null ? '' : String(c.max_market_percent),
+		sold_on: c?.sold_on ?? '',
+		sale_price: centsToInput(c?.sale_price_cents ?? null)
 	};
 }
 
@@ -492,12 +522,14 @@ export function parsePercent(input: string): number | null | undefined {
 }
 
 /**
- * The request body for a copy. A wishlist copy carries no price or purchase date, and an owned
- * copy no maximum price or market percent. A copy without a market percent leaves the field out,
- * which the server reads as none.
+ * The request body for a copy. A wishlist copy carries no price or purchase date, an owned or
+ * sold copy no maximum price or market percent, and only a sold copy its sale's day, which it
+ * needs, and price. A field a copy does not carry is left out, which the server reads as none,
+ * so a sold copy put back on the shelf drops its sale.
  */
 export function copyPayload(f: CopyForm, editionID: number): Parsed<CopyPayload> {
-	const owned = f.status === 'owned';
+	const sold = f.status === 'sold';
+	const owned = f.status === 'owned' || sold;
 	const price = owned ? parsePLN(f.price) : null;
 	if (price === undefined) {
 		return {
@@ -526,9 +558,11 @@ export function copyPayload(f: CopyForm, editionID: number): Parsed<CopyPayload>
 		};
 	}
 	const date = owned ? f.purchased_on.trim() : '';
-	if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+	if (date && !isDate(date)) {
 		return { ok: false, issue: { field: 'purchased_on', message: 'Data w formacie RRRR-MM-DD.' } };
 	}
+	const sale = sold ? saleOf(f) : {};
+	if ('issue' in sale) return { ok: false, issue: sale.issue };
 	return {
 		ok: true,
 		value: {
@@ -541,7 +575,35 @@ export function copyPayload(f: CopyForm, editionID: number): Parsed<CopyPayload>
 			condition: f.condition || null,
 			notes: f.notes.trim(),
 			max_price_cents: maxPrice,
-			...(marketPercent == null ? {} : { max_market_percent: marketPercent })
+			...(marketPercent == null ? {} : { max_market_percent: marketPercent }),
+			...sale
 		}
 	};
+}
+
+/** Whether text is a day of the calendar as YYYY-MM-DD, so not 2026-02-30. */
+function isDate(text: string): boolean {
+	if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return false;
+	const [year, month, day] = text.split('-').map(Number) as [number, number, number];
+	const date = new Date(Date.UTC(year, month - 1, day));
+	return date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+}
+
+/** A sold copy's sale as the request carries it: the day it needs and the price, if given. */
+function saleOf(
+	f: CopyForm
+): Pick<CopyPayload, 'sold_on' | 'sale_price_cents'> | { issue: FormIssue } {
+	const day = f.sold_on.trim();
+	if (!day) return { issue: { field: 'sold_on', message: 'Podaj datę sprzedaży.' } };
+	if (!isDate(day)) return { issue: { field: 'sold_on', message: 'Data w formacie RRRR-MM-DD.' } };
+	const price = parsePLN(f.sale_price);
+	if (price === undefined) {
+		return {
+			issue: {
+				field: 'sale_price_cents',
+				message: 'Cena sprzedaży to kwota do 1 000 000 zł, np. 35.'
+			}
+		};
+	}
+	return { sold_on: day, ...(price == null ? {} : { sale_price_cents: price }) };
 }

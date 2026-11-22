@@ -101,6 +101,12 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
 - Money is integer grosze (`price_cents`). Barcodes are stored normalized
   (`barcode.Normalize`: EAN-8, EAN-13 or GTIN-14; a UPC-A becomes its
   EAN-13 with a leading 0, ISBN-10 becomes ISBN-13), one edition per barcode.
+- A copy is `owned`, `wishlist` or `sold`. A sold copy keeps its purchase
+  price, date and shop and needs `sold_on`; `sale_price_cents` is optional.
+  Only a sold copy carries either, so setting it back to `owned` clears
+  them. Sold copies count in no owned total or `spent_cents`, and the
+  valuation and deal hunter never read them. `GET /api/collection` lists
+  them without a status, for the page that filters in the browser.
 - `POST /api/titles`, `/api/editions` and `/api/copies` take an optional
   `request_key`: a repeat with the same key answers 200 with the row the
   first request created. The scanner sends one key per add, so a retry
@@ -409,7 +415,17 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   quote, so movie discs have no floor. A title page reads
   `GET /api/valuation/copies?title_id=`: that title's owned copies valued
   as `GET /api/valuation` values them, from that title's prices only,
-  with no summary or history. The summary's `gain` sums the used value
+  with no summary or history. Each run also stores every owned copy's
+  buy-back, used and new value of the day in `copy_value_history`, one
+  row per copy and day (null for a bound without prices), in one
+  transaction with the day's `valuation_history` row; a later run that
+  day replaces the rows of the copies it values, a copy keeps its rows,
+  today's too, once no longer owned and deleting it deletes them. No past
+  days are filled in. `GET /api/valuation/copies/history?title_id=` gives
+  a title's copy days of the last 90 days, and the title page's "Wartość
+  dziś" draws the copy's used value as a trend once two days have one, a
+  day without one or without a stored row leaving a gap; the card stays
+  with its trend when the copy's prices left the window. The summary's `gain` sums the used value
   and the price paid over the copies that have both; the Wartość hero's
   difference reads only that, and names its coverage when it counts
   fewer copies than the collection. History keeps no gain.
@@ -505,6 +521,8 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   from `GET /api/titles`; `/titles` redirects to `/`. Its "Bez ceny"
   (`?status=unpriced`, client only) lists owned copies without a purchase
   price; a phone's header shows their count as its toggle, hidden at 0.
+  Its "Sprzedane" switch (`?status=sold`) lists the sold copies, which
+  every other view, the counts and the default shelf leave out.
   `?add=copy` on a title
   or edition page opens the form for its next copy. The shelf draws its
   tiles in parts (`src/lib/shelf-drawing.ts`): 60 with the page, then 150

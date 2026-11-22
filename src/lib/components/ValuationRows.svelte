@@ -4,6 +4,7 @@
 		copyMeta,
 		copyNote,
 		discogsRelease,
+		likelySoldLine,
 		missingCeiling,
 		wholeZl,
 		type CopyValue
@@ -11,7 +12,8 @@
 	import CollectionCover from './CollectionCover.svelte';
 	import DiscogsCredit from './DiscogsCredit.svelte';
 
-	let { copies }: { copies: readonly CopyValue[] } = $props();
+	let { copies, minObservations }: { copies: readonly CopyValue[]; minObservations: number } =
+		$props();
 </script>
 
 <ul class="list" aria-label="Wartość egzemplarzy">
@@ -27,6 +29,9 @@
 						{/if}
 					</span>
 					<span class="meta">{copyMeta(c)}</span>
+					{#if likelySoldLine(c, minObservations)}
+						<span class="meta">{likelySoldLine(c, minObservations)}</span>
+					{/if}
 				</span>
 				<span class="value">
 					{c.mid ? wholeZl(c.mid.cents) : '—'}

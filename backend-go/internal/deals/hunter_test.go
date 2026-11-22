@@ -843,6 +843,18 @@ func TestCanaryAnswersTheSameWishlistQuery(t *testing.T) {
 	if res.Matched != 1 || res.New != 1 {
 		t.Fatalf("run = %+v, want the canary's answer recorded for the wish", res)
 	}
+	if v := mustMetric(t, `ohara_source_results{source="olx"}`); v != 1 {
+		t.Fatalf("olx results = %v, want the one listing of its one answer", v)
+	}
+
+	src.queries, src.err = nil, errors.New("olx: status 500")
+	res = mustRun(t, h)
+	if !slices.Equal(src.queries, []string{query}) {
+		t.Fatalf("failing source asked %q, want %q once for the canary and the wish", src.queries, query)
+	}
+	if len(res.Errors) != 1 {
+		t.Fatalf("errors = %q, want the one failed request", res.Errors)
+	}
 }
 
 func TestSourceStatusCountsBlocking(t *testing.T) {

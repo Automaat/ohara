@@ -107,7 +107,10 @@ func TestParseTezeuszOtherPages(t *testing.T) {
 		"cloudflare challenge": `<!DOCTYPE html><html><head><title>Just a moment...</title></head>` +
 			`<body><div id="challenge-running">Checking your browser</div></body></html>`,
 		"product page": `<html><body><h1>Ostatnie życzenie</h1></body></html>`,
-		"empty":        ``,
+		"results id in another attribute": `<div data-id="search-products-results-list">` +
+			`<a class='tezeusz-product-card' data-ga-product-id="42" href='p-42'>` +
+			`<h5 class='tezeusz-product-card-title'>Lalka</h5><div class='tezeusz-product-card-price'>12,00 zł</div></a></div>`,
+		"empty": ``,
 	} {
 		_, err := parseTezeusz([]byte(body), TezeuszURL)
 		if _, ok := errors.AsType[parseError](err); !ok {

@@ -391,7 +391,8 @@ func (r *run) pause(ctx context.Context) error {
 
 // search asks src for the canary query and every wishlist query, then
 // publishes the listing count and canary outcome. A wishlist query that is
-// the canary query takes the canary's answer instead of asking again. A
+// the canary query takes the canary's answer, or its failure, instead of
+// asking again, and its listings count once. A
 // feed source is asked once: that answer is both its canary and, with a
 // wishlist, its listings.
 func (r *run) search(ctx context.Context, src Source, queries []string) error {
@@ -432,17 +433,19 @@ func (r *run) searchAll(ctx context.Context, src Source, f *Refused, queries []s
 		answered, answeredOK = listings, ok
 	}
 	for _, q := range queries {
-		listings, ok := answered, true
-		if !answeredOK || q != canary {
+		listings, ok := answered, answeredOK
+		if canary == "" || q != canary {
 			var err error
 			if listings, ok, err = r.ask(ctx, src, f, q); err != nil {
 				return err
+			}
+			if ok {
+				results += len(listings)
 			}
 		}
 		if !ok {
 			continue
 		}
-		results += len(listings)
 		if err := r.record(ctx, listings); err != nil {
 			return err
 		}

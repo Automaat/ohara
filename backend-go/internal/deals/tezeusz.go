@@ -52,7 +52,7 @@ func (t Tezeusz) Search(ctx context.Context, query string) ([]Listing, error) {
 
 // tezeuszResults is the results column every search page has, with cards
 // or with its "no results" note; a bot check or an error page lacks it.
-var tezeuszResults = regexp.MustCompile(`\bid=["']search-products-results-list["']`)
+var tezeuszResults = regexp.MustCompile(`\sid=["']search-products-results-list["']`)
 
 // divTag is one opening or closing div tag.
 var divTag = regexp.MustCompile(`<(/?)div\b[^>]*>`)

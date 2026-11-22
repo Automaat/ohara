@@ -150,7 +150,8 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   Every run also asks each query source the canary query, wishlist or not,
   and sets `ohara_source_canary_ok` (a feed's one request is its canary)
   and `ohara_source_results`. A wishlist query that is exactly the canary
-  query takes the canary's answer, so the source is asked it once. A canary without listings is a broken source.
+  query takes the canary's answer, or its failure, so the source is asked
+  it once and its listings count once. A canary without listings is a broken source.
   The last run, scheduled, manual or cut short by shutdown, is kept in
   `deal_run`: after a restart the status shows it and the first scheduled
   run comes one interval after it started, at least 5 minutes on.

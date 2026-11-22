@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"maps"
@@ -221,7 +222,9 @@ func TestSharedWishesCarryOnlyGiftFields(t *testing.T) {
 	if page.code != http.StatusOK || page.ct != "text/html; charset=utf-8" {
 		t.Fatalf("GET page = %d %s", page.code, page.ct)
 	}
-	if !strings.Contains(page.csp, "default-src 'none'") || strings.Contains(page.csp, "script-src") {
+	if !strings.Contains(page.csp, "default-src 'none'") || strings.Contains(page.csp, "script-src") ||
+		strings.Contains(page.csp, "https:;") || strings.Contains(page.csp, "http:") ||
+		!strings.Contains(page.csp, "https://covers.example ") {
 		t.Errorf("page CSP = %q", page.csp)
 	}
 	for _, s := range []string{
@@ -313,18 +316,25 @@ func TestOnlyShareReadsSkipRemoteUser(t *testing.T) {
 	}
 }
 
-func TestSharedWishesLeaveOutCoversOnTheAppsHost(t *testing.T) {
+func TestSharedWishesLeaveOutCoversThatReachTheApp(t *testing.T) {
 	pool := dbtest.Migrated(t)
 	srv := newServer(t, pool)
 	host := strings.TrimPrefix(srv.URL, "http://")
 	hostname := host[:strings.LastIndex(host, ":")]
-	for i, cover := range []string{
+	covers := []string{
 		srv.URL + "/api/editions/1/cover",
 		"https://" + strings.ToUpper(hostname) + "/pwa-192x192.png",
+		"http://127.1/api/status",
+		"http://0x7f.1/api/status",
+		"http://2130706433/api/status",
+		"http://localhost/api/status",
+		"http://[::1]/api/status",
 		"https://covers.example/kept.jpg",
-	} {
+		"https://covers.example:8443/port.jpg",
+	}
+	for i, cover := range covers {
 		title := insert(t, pool, `INSERT INTO title (kind, name, cover_url) VALUES ('movie', $1, $2)`,
-			"Film "+string(rune('A'+i)), cover)
+			fmt.Sprintf("Film %02d", i), cover)
 		ed := insert(t, pool, `INSERT INTO edition (title_id, format) VALUES ($1, 'dvd')`, title)
 		insert(t, pool, `INSERT INTO copy (edition_id, status) VALUES ($1, 'wishlist')`, ed)
 	}
@@ -332,17 +342,25 @@ func TestSharedWishesLeaveOutCoversOnTheAppsHost(t *testing.T) {
 
 	var got wishshare.SharedWishlist
 	a := do(t, http.MethodGet, srv.URL+link+"/wishes", nil)
-	if err := json.Unmarshal([]byte(a.body), &got); err != nil || len(got.Wishes) != 3 {
+	if err := json.Unmarshal([]byte(a.body), &got); err != nil || len(got.Wishes) != len(covers) {
 		t.Fatalf("GET wishes = %d %s (%v)", a.code, a.body, err)
 	}
-	for i, want := range []string{"", "", "https://covers.example/kept.jpg"} {
-		c := got.Wishes[i].CoverURL
-		if (want == "") != (c == nil) || (c != nil && *c != want) {
-			t.Errorf("wish %d cover = %v, want %q", i, c, want)
+	kept := map[int]string{7: "https://covers.example/kept.jpg", 8: "https://covers.example:8443/port.jpg"}
+	for i, w := range got.Wishes {
+		want, ok := kept[i]
+		if ok != (w.CoverURL != nil) || (ok && *w.CoverURL != want) {
+			t.Errorf("cover %q became %v", covers[i], w.CoverURL)
 		}
 	}
+
 	page := do(t, http.MethodGet, srv.URL+link, nil)
-	if strings.Contains(page.body, hostname) || strings.Contains(strings.ToLower(page.body), strings.ToLower(hostname)+"/") {
-		t.Errorf("page points at the app's own host:\n%s", page.body)
+	wantCSP := "img-src data: https://covers.example https://covers.example:8443 https://archive.org https://*.archive.org;"
+	if !strings.Contains(page.csp, wantCSP) {
+		t.Errorf("page CSP = %q, want %q", page.csp, wantCSP)
+	}
+	for _, leak := range []string{hostname, "127.1", "0x7f", "2130706433", "localhost", "::1"} {
+		if strings.Contains(page.body, leak) {
+			t.Errorf("page carries %q", leak)
+		}
 	}
 }

@@ -179,16 +179,21 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   by title. Nothing else leaves: no price, limit, note, ID, owned copy or
   "Gdzie szukać". `cover_url` is the edition's or title's outside cover;
   an edition's own photo, served only under `/api`, and any cover on the
-  request's own host are left out, so the page asks the app for nothing
-  outside `/share/`. The token and the wishes are read in one read-only
+  request's own host, an IP address in any spelling or a name without a
+  dot such as `localhost` are left out. The page's `img-src` names only
+  the shown covers' origins, plus `archive.org`, where Open Library and the
+  Cover Art Archive redirect, so neither a cover nor its redirect reaches
+  the app outside `/share/`. The token and the wishes are read in one read-only
   snapshot, so a link turned off mid-request shows nothing it would not
   have shown before.
 - An unknown or turned-off token, any other path under `/share/` and any
   method but GET answer the API's own 404 (`{"error":"not found"}`).
   Share answers carry `Cache-Control: no-store`,
   `Referrer-Policy: no-referrer` and `X-Robots-Tag: noindex, nofollow`.
-  Logs never record the token: the access log, the panic log and every
-  request-context log line write the path as `/share/{token}`.
+  Ohara's logs never record the token: the access log, the panic log and
+  every request-context log line write the path as `/share/{token}`.
+  Traefik logs request paths on its own, so its share router runs without
+  access logging (Automaat/home-nas#946).
 - Okazje offers "Utwórz link" only once the server answered that no link
   is on; after a failed read it offers a retry, since a new link would
   break the one already sent. The service worker leaves `/share/` to the

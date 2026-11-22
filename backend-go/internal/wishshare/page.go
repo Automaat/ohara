@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"html/template"
+	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -25,10 +27,23 @@ p { margin: 0.25rem 0 0; color: var(--muted); font-size: 0.9rem; overflow-wrap: 
 .empty { margin: 0; color: var(--fg); }
 `
 
-// pageCSP lets the page load only its own style and outside cover images;
-// it runs no script, submits no form and is framed by nobody.
-var pageCSP = "default-src 'none'; img-src https: http: data:; style-src 'sha256-" + styleHash() +
-	"'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+// coverRedirects are where the cover hosts Ohara's lookups use send a
+// browser on: Open Library and the Cover Art Archive answer with a redirect
+// to the Internet Archive.
+var coverRedirects = []string{"https://archive.org", "https://*.archive.org"}
+
+// pageCSP lets the page load only its own style and the covers it shows:
+// img-src names each cover's origin and the archive.org redirect targets,
+// so neither a cover nor a redirect from one reaches the app. It runs no
+// script, submits no form and is framed by nobody.
+func pageCSP(origins []string) string {
+	img := append([]string{"data:"}, origins...)
+	if len(origins) > 0 {
+		img = append(img, coverRedirects...)
+	}
+	return "default-src 'none'; img-src " + strings.Join(img, " ") + "; style-src 'sha256-" + styleHash() +
+		"'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+}
 
 func styleHash() string {
 	sum := sha256.Sum256([]byte(pageStyle))
@@ -111,11 +126,30 @@ func pageWishes(wishes []Wish) []pageWish {
 }
 
 // renderPage renders the whole page before anything is sent, so a failed
-// render still answers a clean 500.
-func renderPage(wishes []Wish) (*bytes.Buffer, error) {
+// render still answers a clean 500, and returns its CSP.
+func renderPage(wishes []Wish) (*bytes.Buffer, string, error) {
 	var b bytes.Buffer
 	if err := pageTemplate.Execute(&b, pageWishes(wishes)); err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return &b, nil
+	return &b, pageCSP(coverOrigins(wishes)), nil
+}
+
+// coverOrigins returns the origins of the covers, each once, in order.
+func coverOrigins(wishes []Wish) []string {
+	var out []string
+	for _, w := range wishes {
+		if w.CoverURL == nil {
+			continue
+		}
+		u, err := url.Parse(*w.CoverURL)
+		if err != nil {
+			continue
+		}
+		o := u.Scheme + "://" + strings.ToLower(u.Host)
+		if !slices.Contains(out, o) {
+			out = append(out, o)
+		}
+	}
+	return out
 }

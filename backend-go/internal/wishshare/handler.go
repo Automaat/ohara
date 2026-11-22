@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -137,21 +138,46 @@ func (h *Handler) sharedWishes(w http.ResponseWriter, r *http.Request) ([]Wish, 
 	return wishes, true
 }
 
-// outsideCover reports a cover URL that is HTTP or HTTPS on another host
-// than host, the one the request named.
+// coverHost matches a host a cover may name: a DNS name with an optional
+// port, nothing a header or a CSP source could misread.
+var coverHost = regexp.MustCompile(`^[a-z0-9-]+(\.[a-z0-9-]+)+(:\d{1,5})?$`)
+
+// outsideCover reports a cover URL the guest's browser may load: HTTP or
+// HTTPS on a DNS name other than host, the one the request named. An IP
+// address in any spelling a browser accepts (127.1, 0x7f.1, 2130706433),
+// a name without a dot such as localhost, and the request's own host are
+// left out, since each can reach the app outside the share paths.
 func outsideCover(cover *string, host string) bool {
 	if cover == nil {
 		return false
 	}
 	u, err := url.Parse(*cover)
-	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Hostname() == "" {
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil {
+		return false
+	}
+	h := strings.ToLower(u.Host)
+	if !coverHost.MatchString(h) {
+		return false
+	}
+	name := strings.ToLower(u.Hostname())
+	labels := strings.Split(name, ".")
+	if endsInNumber(labels[len(labels)-1]) {
 		return false
 	}
 	own := host
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		own = h
+	if hh, _, err := net.SplitHostPort(host); err == nil {
+		own = hh
 	}
-	return !strings.EqualFold(u.Hostname(), strings.Trim(own, "[]"))
+	return !strings.EqualFold(name, own)
+}
+
+// endsInNumber reports a last label that makes a browser read the whole
+// host as an IPv4 address: decimal digits, or 0x and hex digits.
+func endsInNumber(label string) bool {
+	if hex, ok := strings.CutPrefix(label, "0x"); ok {
+		return strings.Trim(hex, "0123456789abcdef") == ""
+	}
+	return label != "" && strings.Trim(label, "0123456789") == ""
 }
 
 func (h *Handler) wishes(w http.ResponseWriter, r *http.Request) {
@@ -167,14 +193,14 @@ func (h *Handler) page(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	body, err := renderPage(wishes)
+	body, csp, err := renderPage(wishes)
 	if err != nil {
 		httpx.WriteInternal(w, r, h.logger, "shared wishlist page", err)
 		return
 	}
 	hd := w.Header()
 	hd.Set("Content-Type", "text/html; charset=utf-8")
-	hd.Set("Content-Security-Policy", pageCSP)
+	hd.Set("Content-Security-Policy", csp)
 	w.WriteHeader(http.StatusOK)
 	if _, err := body.WriteTo(w); err != nil {
 		h.logger.DebugContext(r.Context(), "write shared wishlist page", "err", err)

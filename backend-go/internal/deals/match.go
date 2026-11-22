@@ -224,16 +224,19 @@ type ListingText struct {
 	// lastYear is the latest release year a number after a name can be:
 	// next year, read once for the listing.
 	lastYear int
-	// lot is set when the listing sells several titles, and manyDiscs
-	// when it counts five discs or more, a lot for an album.
-	lot, manyDiscs bool
+	// titleCount is set when the listing counts titles ("3 filmy"), a
+	// lot anywhere, and leads are where it names a set ("zestaw") or
+	// counts five discs or volumes or more ("5 płyt"), a lot only before
+	// the wanted name.
+	titleCount bool
+	leads      []int
 }
 
 // NewListingText readies a listing title for matching under rules.
 func NewListingText(title string, rules Rules) *ListingText {
 	text := words(title)
 	plain := withoutDiscCounts(text)
-	lot, manyDiscs := lotWords(text)
+	titleCount, leads := lotWords(text)
 	return &ListingText{
 		words:       text,
 		format:      listingFormat(text),
@@ -241,8 +244,8 @@ func NewListingText(title string, rules Rules) *ListingText {
 		plain:       plain,
 		significant: significant(plain),
 		lastYear:    time.Now().Year() + 1,
-		lot:         lot,
-		manyDiscs:   manyDiscs,
+		titleCount:  titleCount,
+		leads:       leads,
 	}
 }
 
@@ -476,8 +479,9 @@ func sequelAfter(text, nameWords []string, lastYear int) bool {
 		if romanParts[next] || (part && ordinalParts[next]) {
 			return true
 		}
-		if j+1 < len(text) && (discWords[text[j+1]] || titleCounts[text[j+1]]) {
-			// "Trylogia 3 filmy" counts films, it names no sequel.
+		if !part && j+1 < len(text) && (discWords[text[j+1]] || titleCounts[text[j+1]]) {
+			// "Trylogia 3 filmy" counts films, it names no sequel, while
+			// "Część 2 płyty" still names the second part.
 			continue
 		}
 		if n, ok := number(next); ok && (!part || n != 1) && (n < 1900 || n > lastYear) {
@@ -491,8 +495,8 @@ func sequelAfter(text, nameWords []string, lastYear int) bool {
 // word of one of w's names, the edition's format for a movie, the author's
 // surname for a book, and the artist's words and a medium that fits the
 // edition's for an album. A movie listing naming a sequel of that name does
-// not match, and neither does a lot of several titles unless w is a set
-// itself (ListingText.lotFor).
+// not match, and neither does a lot of several titles
+// (ListingText.lotFor).
 func (w *Want) Matches(title string) bool {
 	return NewListingText(title, Rules{}).matches(w, w.text())
 }
@@ -503,25 +507,59 @@ func (l *ListingText) matches(w *Want, p *wantText) bool {
 }
 
 // lotFor reports whether the listing sells several titles for the want
-// of p: it names a set ("zestaw", "pakiet", "kolekcja filmów") or counts
-// titles ("3 filmy", "20 szt.", "8 tomów"), or, for an album, five discs
-// or more ("5 płyt"). One title on a few discs ("2 płyty", "5xDVD") or in
-// a newspaper's collection is no lot, and a want named as a set
-// ("Trylogia") keeps its sets.
+// of p. It counts titles ("3 filmy", "20 szt.") or a collection of them
+// ("kolekcja filmów"), unless the want is a set itself ("Trylogia"); or,
+// before the wanted name, where it starts a list, it names a set
+// ("zestaw", "pakiet", "komplet") or counts five discs or volumes or more
+// ("5 płyt", "8 tomów"), unless a name of the want holds that word. Past
+// the name those words describe one title's edition ("zestaw 4K +
+// Blu-ray", "6 płyt CD", "5 tomów"), and one title on a few discs ("2
+// płyty", "5xDVD") or in a newspaper's collection is no lot.
 func (l *ListingText) lotFor(kind string, p *wantText) bool {
-	return !p.set && (l.lot || (kind == "music" && l.manyDiscs))
+	if l.titleCount && !p.set {
+		return true
+	}
+	if len(l.leads) == 0 {
+		return false
+	}
+	start := p.nameStart(kind, l)
+	for _, i := range l.leads {
+		if i < start && !p.owns(l.words[i]) {
+			return true
+		}
+	}
+	return false
 }
 
-// setWords in a want's name make it a set, which lots may be.
+// nameStart is where the first word of a name of p the listing carries
+// stands in it, or -1 when it carries none.
+func (p *wantText) nameStart(kind string, l *ListingText) int {
+	start := -1
+	for i := range p.names {
+		n := &p.names[i]
+		if !n.carriedBy(kind, l) {
+			continue
+		}
+		for _, w := range n.req {
+			if j := slices.Index(l.words, w); j >= 0 && (start < 0 || j < start) {
+				start = j
+			}
+		}
+	}
+	return start
+}
+
+// setWords in a want's name make it a set, which counts of titles may be.
 var setWords = map[string]bool{
 	"trylogia": true, "trilogy": true, "tetralogia": true, "saga": true, "antologia": true, "anthology": true,
 	"kolekcja": true, "collection": true, "komplet": true, "zestaw": true, "pakiet": true, "box": true, "boxset": true,
 }
 
-// lotNouns name a set of several titles.
+// lotNouns name a set, of several titles when they start a list.
 var lotNouns = map[string]bool{
 	"zestaw": true, "zestawy": true, "zestawu": true, "zestawie": true, "zestawow": true,
 	"pakiet": true, "pakiety": true, "pakietu": true, "pakiecie": true, "pakietow": true,
+	"komplet": true, "komplety": true, "kompletu": true, "komplecie": true, "kompletow": true,
 }
 
 // collections are a collection's forms, a lot when it holds the titles
@@ -534,34 +572,41 @@ var collected = map[string]bool{
 	"filmow": true, "ksiazek": true, "plyt": true, "albumow": true, "bajek": true, "tytulow": true,
 }
 
-// titleCounts follow a count of titles or pieces, as in "3 filmy", "20
-// szt." or "8 tomów"; "tomów" counts five volumes or more, which one title
-// rarely spans, while "2 tomy" can be one.
+// titleCounts follow a count of titles or pieces, as in "3 filmy" or "20
+// szt.".
 var titleCounts = map[string]bool{
 	"filmy": true, "filmow": true, "ksiazki": true, "ksiazek": true, "albumy": true, "albumow": true,
-	"tytuly": true, "tytulow": true, "szt": true, "sztuk": true, "sztuki": true, "tomow": true,
+	"tytuly": true, "tytulow": true, "szt": true, "sztuk": true, "sztuki": true,
 }
 
-// lotWords reports whether text names a lot of several titles, and
-// whether it counts five discs or more: "płyt" follows counts from five.
-func lotWords(text []string) (bool, bool) {
-	lot, manyDiscs := false, false
+// manyUnits follow counts of five discs or volumes or more: "5 płyt",
+// "8 tomów", while "2 płyty" and "2 tomy" take other forms.
+var manyUnits = map[string]bool{"plyt": true, "tomow": true}
+
+// lotWords reports whether text counts titles, and where it names a set
+// or counts five discs or volumes or more.
+func lotWords(text []string) (bool, []int) {
+	titleCount := false
+	var leads []int
 	for i, t := range text {
-		if lotNouns[t] || (collections[t] && i+1 < len(text) && collected[text[i+1]]) {
-			lot = true
+		if lotNouns[t] {
+			leads = append(leads, i)
 		}
 		if i+1 >= len(text) {
 			continue
 		}
-		n, ok := number(t)
-		if !ok || n < 2 {
-			continue
-		}
 		next := text[i+1]
-		lot = lot || titleCounts[next]
-		manyDiscs = manyDiscs || next == "plyt"
+		if collections[t] && collected[next] {
+			titleCount = true
+		}
+		if n, ok := number(t); ok && n >= 2 {
+			titleCount = titleCount || titleCounts[next]
+			if manyUnits[next] {
+				leads = append(leads, i)
+			}
+		}
 	}
-	return lot, manyDiscs
+	return titleCount, leads
 }
 
 // qualifies reports whether a listing fits w apart from its names: the

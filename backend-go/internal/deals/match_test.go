@@ -399,6 +399,13 @@ func TestLotsDoNotMatch(t *testing.T) {
 		{"newspaper collection", bladeRunner("dvd"), "Blade Runner DVD Kolekcja Gazety Wyborczej", true},
 		{"collector's edition", bladeRunner("bluray"), "Łowca Androidów Blu-Ray PL Edycja kolekcjonerska 30 rocznica", true},
 		{"wished set", trylogia, "Władca Pierścieni Trylogia 3 filmy DVD", true},
+		{"package holding the wished set", trylogia, "Pakiet DVD: Władca Pierścieni Trylogia 3 filmy + Hobbit Trylogia", false},
+		{"set of two films", bladeRunner("dvd"), "Komplet DVD: Blade Runner + Gladiator", false},
+		{"album discs past the name", album("White Album", "The Beatles", "cd"), "The Beatles White Album Super Deluxe – 6 płyt CD", true},
+		{"book volumes past the name", Want{Kind: "book", Name: "Nędznicy", Authors: []string{"Victor Hugo"}}, "Nędznicy Victor Hugo – 5 tomów", true},
+		{"formats of one film", bladeRunner("uhd"), "Blade Runner 4K UHD – zestaw 4K + Blu-ray", true},
+		{"wished set word", Want{Kind: "book", Name: "Wiedźmin komplet", Authors: []string{"Andrzej Sapkowski"}}, "Komplet Wiedźmin Sapkowski 8 tomów", true},
+		{"sequel on discs", Want{Kind: "movie", Name: "Diuna", Format: new("bluray")}, "Diuna część 2 – płyty Blu-ray", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httptrace"
@@ -818,6 +819,7 @@ func TestValuedReadsOneSnapshot(t *testing.T) {
 // requests per release.
 type gradedMarket struct {
 	suggestions map[int64]discogs.Suggestions
+	suggestErr  error
 	stats       map[int64]int
 	suggested   map[int64]int
 }
@@ -829,7 +831,7 @@ func (m *gradedMarket) Stats(_ context.Context, id int64, _ string) (discogs.Sta
 
 func (m *gradedMarket) PriceSuggestions(_ context.Context, id int64) (discogs.Suggestions, error) {
 	m.suggested[id]++
-	return m.suggestions[id], nil
+	return m.suggestions[id], m.suggestErr
 }
 
 func TestDiscogsMidFollowsCondition(t *testing.T) {
@@ -918,6 +920,39 @@ func TestDiscogsMidFollowsCondition(t *testing.T) {
 		if w := want[c.CopyID]; c.Mid == nil || c.Mid.Cents != w.mid || c.MidGrade != w.grade {
 			t.Fatalf("title page copy %d mid = %+v grade %q, want %d at %s", c.CopyID, c.Mid, c.MidGrade, w.mid, w.grade)
 		}
+	}
+
+	mids := func() map[int64]value {
+		t.Helper()
+		if _, err := r.Run(ctx); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		copies, _, err := r.store.Valued(ctx, r.Window())
+		if err != nil {
+			t.Fatalf("Valued: %v", err)
+		}
+		out := map[int64]value{}
+		for _, c := range copies {
+			if c.Mid == nil {
+				t.Fatalf("copy %d lost its used value", c.CopyID)
+			}
+			out[c.CopyID] = value{c.Mid.Cents, c.MidGrade, 0}
+		}
+		return out
+	}
+	// An answer that leaves Good out values the fair copy at VG+ again.
+	noGoodNow := maps.Clone(every)
+	delete(noGoodNow, "Good (G)")
+	noGoodNow["Very Good Plus (VG+)"] = eur(25)
+	market.suggestions[500] = noGoodNow
+	got := mids()
+	if got[2] != (value{10000, GradeVGPlus, 0}) || got[1] != (value{12000, GradeNearMint, 0}) {
+		t.Fatalf("after an answer without Good: fair %+v, mint %+v", got[2], got[1])
+	}
+	// A failed suggestions request keeps the last answer's grades.
+	market.suggestErr = discogs.StatusError{Code: http.StatusTooManyRequests}
+	if after := mids(); !maps.Equal(after, got) {
+		t.Fatalf("after a failed request: %+v, want the last answer's %+v", after, got)
 	}
 }
 

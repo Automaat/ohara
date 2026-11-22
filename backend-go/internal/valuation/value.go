@@ -56,6 +56,17 @@ var gradeSources = map[string]string{
 	GradePoor:     SourceDiscogsPoor,
 }
 
+// isGradeSource reports a source holding the suggestion of a middle
+// grade.
+func isGradeSource(source string) bool {
+	for _, s := range gradeSources {
+		if s == source {
+			return true
+		}
+	}
+	return false
+}
+
 // conditionGrades maps a copy's condition to the Discogs grade its used
 // value is priced at. A worse condition never maps to a better grade; a
 // mint copy is no sealed one, so it takes Near Mint and leaves Mint to the
@@ -130,7 +141,9 @@ func groupOf(titleID int64, format *string) group {
 // median of OLX prices that are not for new copies, pooled over
 // every edition of the same title and format. The edition's own latest
 // Discogs suggestions replace the middle and give the ceiling, as a
-// Discogs release is one pressing.
+// Discogs release is one pressing. A middle grade counts only when the
+// edition's newest suggestions answer named it: one run stores an answer
+// at one instant, so a grade it left out is older and does not count.
 type Ranges struct {
 	floors       map[int64]*Estimate
 	mids         map[group]*Estimate
@@ -180,6 +193,12 @@ func NewRanges(prices []Price) Ranges {
 			}
 		}
 	}
+	newest := map[int64]time.Time{}
+	for k, p := range latest {
+		if isGradeSource(k.source) && p.SeenAt.After(newest[k.editionID]) {
+			newest[k.editionID] = p.SeenAt
+		}
+	}
 	r := Ranges{
 		floors:       map[int64]*Estimate{},
 		mids:         make(map[group]*Estimate, len(used)),
@@ -194,6 +213,9 @@ func NewRanges(prices []Price) Ranges {
 		case SourceDiscogsMint:
 			r.discogsCeils[k.editionID] = e
 		default:
+			if !p.SeenAt.Equal(newest[k.editionID]) {
+				continue
+			}
 			if r.discogsMids[k.editionID] == nil {
 				r.discogsMids[k.editionID] = map[string]*Estimate{}
 			}

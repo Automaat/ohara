@@ -59,6 +59,12 @@ func (s *Store) Holdings(ctx context.Context) ([]Holding, error) {
 	})
 }
 
+// RecordAll stores ls as prices of h's edition in one transaction, so
+// they share their last seen time.
+func (s *Store) RecordAll(ctx context.Context, ls []deals.Listing, h *Holding) error {
+	return s.deals.RecordAll(ctx, ls, &h.Want)
+}
+
 // Rules returns the deal matcher's editable phrases.
 func (s *Store) Rules(ctx context.Context) (deals.Rules, error) {
 	return s.deals.Rules(ctx)

@@ -160,15 +160,47 @@ type observationRaw struct {
 // alert. It reports whether the listing was new and whether an alert was
 // queued.
 func (s *Store) Record(ctx context.Context, l *Listing, w *Want, alert bool) (bool, bool, error) {
-	raw, err := json.Marshal(observationRaw{Title: l.Title, Data: l.Raw, PhotoURL: l.PhotoURL, WishlistCopyID: w.CopyID})
-	if err != nil {
-		return false, false, fmt.Errorf("record: encode raw: %w", err)
-	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return false, false, fmt.Errorf("record: begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	isNew, alerted, err := record(ctx, tx, l, w, alert)
+	if err != nil {
+		return false, false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, false, fmt.Errorf("record: commit: %w", err)
+	}
+	return isNew, alerted, nil
+}
+
+// RecordAll stores ls as observations of w as Record does, in one
+// transaction and queuing no alert, so every one of them is last seen at
+// the same instant.
+func (s *Store) RecordAll(ctx context.Context, ls []Listing, w *Want) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("record: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	for i := range ls {
+		if _, _, err := record(ctx, tx, &ls[i], w, false); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("record: commit: %w", err)
+	}
+	return nil
+}
+
+// record is Record inside tx.
+func record(ctx context.Context, tx pgx.Tx, l *Listing, w *Want, alert bool) (bool, bool, error) {
+	raw, err := json.Marshal(observationRaw{Title: l.Title, Data: l.Raw, PhotoURL: l.PhotoURL, WishlistCopyID: w.CopyID})
+	if err != nil {
+		return false, false, fmt.Errorf("record: encode raw: %w", err)
+	}
 	var id int64
 	var isNew, dismissed, alerted bool
 	err = tx.QueryRow(ctx, `INSERT INTO price_observation
@@ -191,9 +223,6 @@ func (s *Store) Record(ctx context.Context, l *Listing, w *Want, alert bool) (bo
 		if alerted, err = queueAlert(ctx, tx, id, w.CopyID, l.PriceCents); err != nil {
 			return false, false, err
 		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return false, false, fmt.Errorf("record: commit: %w", err)
 	}
 	return isNew, alerted, nil
 }

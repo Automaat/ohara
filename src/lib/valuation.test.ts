@@ -589,6 +589,16 @@ describe('copy rows', () => {
 		expect(copyNote(copy({}))).toBe('brak danych');
 		const discogs = { cents: 3200, source: 'discogs' as const, count: 1, trimmed: 0 };
 		expect(copyNote(copy({ mid: discogs, mid_grade: 'P' }))).toBe('Discogs · sugestia P');
+		const discogsRange = {
+			floor: { ...discogs, cents: 4000 },
+			ceiling: { ...discogs, cents: 16000 }
+		};
+		expect(nbsp(copyNote(copy({ ...discogsRange, mid: discogs, mid_grade: 'G' })))).toBe(
+			'40–160 zł · sugestia G'
+		);
+		expect(nbsp(copyNote(copy({ ...discogsRange, mid: discogs })))).toBe(
+			'40–160 zł · sugestia VG+'
+		);
 	});
 
 	it('marks a missing ceiling under every valued copy without one', () => {

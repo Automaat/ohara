@@ -301,3 +301,23 @@ func TestConditionGradesNeverImprove(t *testing.T) {
 		t.Fatalf("grades for %d conditions, want %d", len(conditionGrades), len(conditions))
 	}
 }
+
+func TestDiscogsMidSkipsGradesLeftOutOfTheNewestAnswer(t *testing.T) {
+	cd := "cd"
+	fair := "fair"
+	now := time.Now()
+	earlier := now.Add(-24 * time.Hour)
+	r := NewRanges([]Price{
+		{EditionID: 7, TitleID: 700, Format: &cd, Source: SourceDiscogsGood, Cents: 3200, SeenAt: earlier},
+		{EditionID: 7, TitleID: 700, Format: &cd, Source: SourceDiscogsVGPlus, Cents: 9000, SeenAt: earlier},
+		{EditionID: 7, TitleID: 700, Format: &cd, Source: SourceDiscogsVGPlus, Cents: 10000, SeenAt: now},
+		{EditionID: 7, TitleID: 700, Format: &cd, Source: SourceDiscogsMint, Cents: 16000, SeenAt: earlier},
+	})
+	got, grade := r.ForCopy(7, 700, &cd, &fair)
+	if got.Mid == nil || got.Mid.Cents != 10000 || grade != GradeVGPlus {
+		t.Fatalf("fair copy mid = %+v at %q, want the newest answer's VG+ 10000", got.Mid, grade)
+	}
+	if got.Ceiling == nil || got.Ceiling.Cents != 16000 {
+		t.Fatalf("ceiling = %+v, want the last Mint suggestion", got.Ceiling)
+	}
+}

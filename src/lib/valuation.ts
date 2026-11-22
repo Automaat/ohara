@@ -65,6 +65,9 @@ export function estimateValue(e: Estimate | null): string {
 	return e ? formatPLN(e.cents) : '—';
 }
 
+/** The grade of a Discogs used value when the server names none. */
+const defaultGrade: DiscogsGrade = 'VG+';
+
 /**
  * Where one bound of a copy comes from, as "OLX · 5 ofert (2 odrzucone)". A Discogs middle names
  * the grade of its suggestion, VG+ when the server names none.
@@ -72,7 +75,7 @@ export function estimateValue(e: Estimate | null): string {
 export function estimateSource(
 	bound: BoundKey,
 	e: Estimate | null,
-	grade: DiscogsGrade = 'VG+'
+	grade: DiscogsGrade = defaultGrade
 ): string {
 	if (!e) return 'brak danych';
 	if (e.source === 'discogs') {
@@ -419,9 +422,14 @@ export function missingCeiling(c: CopyValue): string | null {
 		: null;
 }
 
-/** The line under a copy's value: its range, else where its used value comes from. */
+/**
+ * The line under a copy's value: its range, with the grade of a Discogs used value, as
+ * "40–160 zł · sugestia G", else where its used value comes from.
+ */
 export function copyNote(c: CopyValue): string {
-	return copyRange(c) ?? estimateSource('mid', c.mid, c.mid_grade);
+	const range = copyRange(c);
+	if (range === null) return estimateSource('mid', c.mid, c.mid_grade);
+	return c.mid?.source === 'discogs' ? `${range} · sugestia ${c.mid_grade ?? defaultGrade}` : range;
 }
 
 /** The Discogs release a copy's shown prices come from, or null when none is from Discogs. */

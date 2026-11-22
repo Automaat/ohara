@@ -3,7 +3,10 @@ package wishshare
 import (
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -113,23 +116,42 @@ func (h *Handler) notFound(w http.ResponseWriter, _ *http.Request) {
 }
 
 // sharedWishes answers the wishes when the request's token is the active
-// one; otherwise it writes the 404 or 500 itself and reports false.
+// one; otherwise it writes the 404 or 500 itself and reports false. A cover
+// on this site's own host is left out, so the page asks nothing of the app
+// outside the share paths.
 func (h *Handler) sharedWishes(w http.ResponseWriter, r *http.Request) ([]Wish, bool) {
-	ok, err := h.store.Valid(r.Context(), chi.URLParam(r, "token"))
+	wishes, ok, err := h.store.SharedWishes(r.Context(), chi.URLParam(r, "token"))
 	if err != nil {
-		httpx.WriteInternal(w, r, h.logger, "share token", err)
+		httpx.WriteInternal(w, r, h.logger, "shared wishes", err)
 		return nil, false
 	}
 	if !ok {
 		h.notFound(w, r)
 		return nil, false
 	}
-	wishes, err := h.store.Wishes(r.Context())
-	if err != nil {
-		httpx.WriteInternal(w, r, h.logger, "shared wishes", err)
-		return nil, false
+	for i := range wishes {
+		if !outsideCover(wishes[i].CoverURL, r.Host) {
+			wishes[i].CoverURL = nil
+		}
 	}
 	return wishes, true
+}
+
+// outsideCover reports a cover URL that is HTTP or HTTPS on another host
+// than host, the one the request named.
+func outsideCover(cover *string, host string) bool {
+	if cover == nil {
+		return false
+	}
+	u, err := url.Parse(*cover)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Hostname() == "" {
+		return false
+	}
+	own := host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		own = h
+	}
+	return !strings.EqualFold(u.Hostname(), strings.Trim(own, "[]"))
 }
 
 func (h *Handler) wishes(w http.ResponseWriter, r *http.Request) {

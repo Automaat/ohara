@@ -312,3 +312,37 @@ func TestOnlyShareReadsSkipRemoteUser(t *testing.T) {
 		}
 	}
 }
+
+func TestSharedWishesLeaveOutCoversOnTheAppsHost(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	srv := newServer(t, pool)
+	host := strings.TrimPrefix(srv.URL, "http://")
+	hostname := host[:strings.LastIndex(host, ":")]
+	for i, cover := range []string{
+		srv.URL + "/api/editions/1/cover",
+		"https://" + strings.ToUpper(hostname) + "/pwa-192x192.png",
+		"https://covers.example/kept.jpg",
+	} {
+		title := insert(t, pool, `INSERT INTO title (kind, name, cover_url) VALUES ('movie', $1, $2)`,
+			"Film "+string(rune('A'+i)), cover)
+		ed := insert(t, pool, `INSERT INTO edition (title_id, format) VALUES ($1, 'dvd')`, title)
+		insert(t, pool, `INSERT INTO copy (edition_id, status) VALUES ($1, 'wishlist')`, ed)
+	}
+	link := createLink(t, srv.URL)
+
+	var got wishshare.SharedWishlist
+	a := do(t, http.MethodGet, srv.URL+link+"/wishes", nil)
+	if err := json.Unmarshal([]byte(a.body), &got); err != nil || len(got.Wishes) != 3 {
+		t.Fatalf("GET wishes = %d %s (%v)", a.code, a.body, err)
+	}
+	for i, want := range []string{"", "", "https://covers.example/kept.jpg"} {
+		c := got.Wishes[i].CoverURL
+		if (want == "") != (c == nil) || (c != nil && *c != want) {
+			t.Errorf("wish %d cover = %v, want %q", i, c, want)
+		}
+	}
+	page := do(t, http.MethodGet, srv.URL+link, nil)
+	if strings.Contains(page.body, hostname) || strings.Contains(strings.ToLower(page.body), strings.ToLower(hostname)+"/") {
+		t.Errorf("page points at the app's own host:\n%s", page.body)
+	}
+}

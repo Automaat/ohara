@@ -107,6 +107,29 @@ test('Okazje creates, copies and turns off the wishlist link', async ({
 	await expectNoSourceRequests(request);
 });
 
+test('a failed read of the link offers a retry, never a new link', async ({ page, request }) => {
+	const link = await createLink(request);
+	let fail = true;
+	await page.route('**/api/wishlist/share', async (route) => {
+		if (fail && route.request().method() === 'GET') {
+			await route.fulfill({ status: 503, json: { error: 'unavailable' } });
+		} else {
+			await route.fallback();
+		}
+	});
+	await page.goto('/deals');
+	await page.getByText('Udostępnij listę życzeń').click();
+	await expect(page.getByText('Nie udało się wczytać linku')).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Utwórz link' })).toHaveCount(0);
+
+	fail = false;
+	await page.getByRole('button', { name: 'Spróbuj ponownie' }).click();
+	await expect(page.getByRole('textbox', { name: 'Link do listy życzeń' })).toHaveValue(
+		new URL(link, page.url()).href
+	);
+	expect((await request.get(link)).status()).toBe(200);
+});
+
 test('the shared list shows the wishes without the app or its data', async ({
 	browser,
 	baseURL,
@@ -141,17 +164,14 @@ test('the shared list shows the wishes without the app or its data', async ({
 	}
 	expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
 
-	const shown = wishes.filter({ hasText: book }).locator('img.cover');
-	await expect
-		.poll(() => shown.evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0))
-		.toBe(true);
+	await expect(wishes.filter({ hasText: book }).locator('img')).toHaveCount(0);
 
 	const origin = new URL(baseURL ?? '').origin;
-	expect(guest.requested).toContain(cover);
+	expect(guest.requested.length).toBeGreaterThan(0);
+	expect(guest.requested).not.toContain(cover);
 	for (const url of guest.requested) {
 		const u = new URL(url);
-		if (url === cover) continue;
-		expect(`${u.origin}${u.pathname}`, 'a request outside the share paths and covers').toMatch(
+		expect(`${u.origin}${u.pathname}`, 'a request outside the share paths').toMatch(
 			new RegExp(`^${origin}/share/`)
 		);
 	}

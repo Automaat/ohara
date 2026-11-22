@@ -103,26 +103,42 @@ func (s *Store) Delete(ctx context.Context) error {
 	return nil
 }
 
-// Valid reports whether token is the active link's token. The comparison
-// takes the same time wherever the two differ.
-func (s *Store) Valid(ctx context.Context, token string) (bool, error) {
+// SharedWishes returns the wishes when token is the active link's token,
+// and false when it is not. The token and the wishes are read in one
+// read-only snapshot, so a link turned off before the snapshot shows
+// nothing, not even wishes added afterwards. The token comparison takes the
+// same time wherever the two differ.
+func (s *Store) SharedWishes(ctx context.Context, token string) ([]Wish, bool, error) {
 	if len(token) != tokenLen {
-		return false, nil
+		return nil, false, nil
 	}
-	l, err := s.Current(ctx)
-	if errors.Is(err, ErrNoLink) {
-		return false, nil
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return nil, false, fmt.Errorf("shared wishes: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var active string
+	err = tx.QueryRow(ctx, `SELECT token FROM wishlist_share`).Scan(&active)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, false, nil
 	}
 	if err != nil {
-		return false, err
+		return nil, false, fmt.Errorf("share token: %w", err)
 	}
-	return subtle.ConstantTimeCompare([]byte(token), []byte(l.Token)) == 1, nil
+	if subtle.ConstantTimeCompare([]byte(token), []byte(active)) != 1 {
+		return nil, false, nil
+	}
+	wishes, err := wishes(ctx, tx)
+	if err != nil {
+		return nil, false, err
+	}
+	return wishes, true, nil
 }
 
-// Wishes returns every copy on the wishlist, by title, with only the fields
+// wishes returns every copy on the wishlist, by title, with only the fields
 // the public page shows.
-func (s *Store) Wishes(ctx context.Context) ([]Wish, error) {
-	rows, err := s.pool.Query(ctx, `SELECT
+func wishes(ctx context.Context, tx pgx.Tx) ([]Wish, error) {
+	rows, err := tx.Query(ctx, `SELECT
 			CASE WHEN t.kind = 'tv' THEN t.name || ', sezon ' || t.season ELSE t.name END,
 			t.authors, t.year, t.kind, e.format, e.binding, COALESCE(e.cover_url, t.cover_url)
 		FROM copy c JOIN edition e ON e.id = c.edition_id JOIN title t ON t.id = e.title_id

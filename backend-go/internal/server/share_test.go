@@ -1,12 +1,15 @@
 package server_test
 
 import (
+	"bytes"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"testing/fstest"
 
+	"github.com/Automaat/ohara/backend-go/internal/reqlog"
 	"github.com/Automaat/ohara/backend-go/internal/server"
 )
 
@@ -55,5 +58,39 @@ func TestShareReadsSkipRemoteUser(t *testing.T) {
 				t.Errorf("share handler reached = %v", reached)
 			}
 		})
+	}
+}
+
+func TestShareTokenStaysOutOfLogs(t *testing.T) {
+	const token = "SecretToken0123456789abcdefghijklmnopqrstu"
+	var buf bytes.Buffer
+	logger := slog.New(reqlog.NewHandler(slog.NewTextHandler(&buf, nil)))
+	share := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/boom") {
+			panic("share failed")
+		}
+		logger.ErrorContext(r.Context(), "shared wishes", "err", "db down")
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	h := server.New(server.Config{AccessLog: true, RequireRemoteUser: true}, logger,
+		server.Deps{DB: fakeDB{}, Share: share})
+	for _, path := range []string{"/share/" + token, "/share/" + token + "/wishes", "/share/" + token + "/boom"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, http.NoBody))
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("GET %s = %d", path, rec.Code)
+		}
+	}
+	logs := buf.String()
+	if strings.Contains(logs, token) {
+		t.Fatalf("logs carry the share token:\n%s", logs)
+	}
+	for _, want := range []string{
+		"path=/share/{token}", "path=/share/{token}/wishes", "path=/share/{token}/boom",
+		`msg="shared wishes"`, `msg="handler panic"`, `msg=request`,
+	} {
+		if !strings.Contains(logs, want) {
+			t.Errorf("logs lack %q:\n%s", want, logs)
+		}
 	}
 }

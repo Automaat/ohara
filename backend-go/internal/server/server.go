@@ -174,7 +174,7 @@ func recoverer(logger *slog.Logger) func(http.Handler) http.Handler {
 				logger.Error("handler panic",
 					"request_id", middleware.GetReqID(r.Context()),
 					"method", r.Method,
-					"path", r.URL.Path,
+					"path", logPath(r.URL.Path),
 					"panic", rvr,
 					"stack", string(debug.Stack()),
 				)
@@ -240,7 +240,7 @@ func requestID(next http.Handler) http.Handler {
 	assign := middleware.RequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := middleware.GetReqID(r.Context())
 		w.Header().Set(middleware.RequestIDHeader, id)
-		next.ServeHTTP(w, r.WithContext(reqlog.WithRequest(r.Context(), id, r.Method, r.URL.Path)))
+		next.ServeHTTP(w, r.WithContext(reqlog.WithRequest(r.Context(), id, r.Method, logPath(r.URL.Path))))
 	}))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get(middleware.RequestIDHeader) != "" {
@@ -344,6 +344,21 @@ func sharePath(r *http.Request) bool {
 	return strings.HasPrefix(path, wishshare.Prefix+"/")
 }
 
+// logPath is a request path as logs record it: a share link's token, which
+// opens the wishlist to whoever reads it, becomes {token}. The access log,
+// the panic log and every *Context log line take the path from here.
+func logPath(path string) string {
+	rest, ok := strings.CutPrefix(path, wishshare.Prefix+"/")
+	if !ok || rest == "" {
+		return path
+	}
+	_, tail, more := strings.Cut(rest, "/")
+	if more {
+		return wishshare.Prefix + "/{token}/" + tail
+	}
+	return wishshare.Prefix + "/{token}"
+}
+
 // crossOriginGuard answers 403 to a cross-origin write. Authelia's session
 // cookie covers every sibling site of the parent domain, so their pages could
 // otherwise write here.
@@ -404,7 +419,7 @@ func requestObserver(logger *slog.Logger, accessLog bool) func(http.Handler) htt
 			logger.Info("request",
 				"request_id", middleware.GetReqID(r.Context()),
 				"method", r.Method,
-				"path", r.URL.Path,
+				"path", logPath(r.URL.Path),
 				"route", route,
 				"status", status,
 				"bytes", ww.BytesWritten(),

@@ -11,8 +11,8 @@
 	const current = $derived(currentTab(page.url.pathname));
 	const deals = $derived(dealBadge.count);
 
-	afterNavigate(() => {
-		void refreshDealBadge(fetch);
+	afterNavigate((nav) => {
+		if (!nav.shallow) void refreshDealBadge(fetch);
 	});
 
 	onMount(() => {

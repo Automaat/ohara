@@ -275,6 +275,11 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   result line and the item's name once from a polite `status`
   (`ScanFlow.announcement`); the other results speak through their live
   `Callout`. Only a typed code moves focus to the next step.
+- The scan sheet's history entries are shallow navigations, which skip the
+  Okazje badge refresh. The camera's queue count
+  (`src/lib/queue-tally.svelte.ts`) is read once when the scanner opens,
+  then moved by queued scans, adds that create a queued code's edition and
+  their undo, without reading the queue again.
 - A code whose check gets no answer is kept in IndexedDB
   (`src/lib/pending-scans.svelte.ts`, barcode only, once in the server's
   normalized form) and posted to `/api/scan-queue` as `lookup_failed` on app
@@ -311,7 +316,8 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   or an inline script's hash.
 - The smoke suite (`e2e/`, `npm run test:e2e`) drives the production image
   in Chromium at 390 × 844 with touch: a wedge scan, quick confirm and
-  "Cofnij", and "Dodaj tytuł" by hand. `scripts/e2e.sh` builds the image
+  "Cofnij", "Dodaj tytuł" by hand, the scan sheet sending no deals or queue
+  read, and the queue count following a queued scan, its add and undo. `scripts/e2e.sh` builds the image
   (or takes one as its first argument), starts it from `e2e/compose.yaml`
   with Postgres, `OHARA_LOOKUP_STUB=true`, `OHARA_MUSICBRAINZ=false` and no
   provider keys, and removes it afterwards. App and Postgres sit on an

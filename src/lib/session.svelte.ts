@@ -1,5 +1,6 @@
 import { ApiError, request } from './api';
 import type { CopyStatus, Kind } from './collection';
+import { queueTally } from './queue-tally.svelte';
 import { retractScan } from './recent.svelte';
 
 /** One copy this visit added through the quick confirm, with what undoing it has to remove. */
@@ -88,13 +89,15 @@ async function deleteUnused(fetchFn: typeof fetch, path: string): Promise<boolea
  * uses it, then the title on the same terms. The server puts the scan queue entry the edition
  * took out back in the same step as the edition's delete, so a repeat never puts it back twice.
  * An edition or a title the add found is never touched. The add leaves the visit and its recent
- * scan reads as undone. A failure leaves the add in place; trying again picks up where the last
+ * scan reads as undone, and the scanner's queue count takes back the code the edition had
+ * resolved. A failure leaves the add in place; trying again picks up where the last
  * attempt stopped.
  */
 export async function undoAdd(fetchFn: typeof fetch, add: SessionAdd): Promise<void> {
 	await deleteCopy(fetchFn, add.copyID);
 	if (add.createdEdition) {
 		const gone = await deleteUnused(fetchFn, `/api/editions/${add.editionID}?requeue=1`);
+		if (gone) queueTally.requeued(add.editionID);
 		if (gone && add.createdTitle) await deleteUnused(fetchFn, `/api/titles/${add.titleID}`);
 	}
 	session.adds = session.adds.filter((a) => a.id !== add.id);

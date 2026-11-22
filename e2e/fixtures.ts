@@ -67,9 +67,12 @@ export async function expectNoSourceRequests(request: APIRequestContext) {
 	}
 }
 
-/** A valid EAN-13 that is no ISBN, unique to this run, so the stub answers it as a DVD. */
-export function uniqueEAN(): string {
-	const body = `590${String(Date.now()).slice(-9)}`;
+/**
+ * A valid EAN-13 that is no ISBN, unique to this run, so the stub answers it as a DVD. Codes
+ * taken in the same millisecond differ by offset.
+ */
+export function uniqueEAN(offset = 0): string {
+	const body = `590${String(Date.now() + offset).slice(-9)}`;
 	let sum = 0;
 	for (let i = 0; i < 12; i++) sum += Number(body[i]) * (i % 2 === 0 ? 1 : 3);
 	return body + String((10 - (sum % 10)) % 10);

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { invalidBarcodeMessage } from './api';
 import { formatPLN, type EditionDetail } from './collection';
+import { queueTally } from './queue-tally.svelte';
 import { recentScans } from './recent.svelte';
 import {
 	ScanFlow,
@@ -690,6 +691,35 @@ describe('ScanFlow.save', () => {
 			cover: 'https://image.tmdb.org/t/p/w342/d.jpg',
 			priceCents: null
 		});
+	});
+
+	it('takes a code out of the queue count only when its add created the edition', async () => {
+		await queueTally.load(
+			server({
+				'GET /api/scan-queue': [
+					200,
+					[
+						{ id: 1, barcode: code },
+						{ id: 2, barcode: other }
+					]
+				]
+			}).fetchFn
+		);
+		const s = server({
+			...lookup([movie], false),
+			'GET /api/titles?tmdb_id=1': [200, []],
+			'POST /api/titles': [201, { id: 9, name: 'Diuna: Część druga', kind: 'movie' }],
+			'POST /api/editions': [201, { id: 21, title_id: 9, barcode: code, format: 'uhd' }],
+			'POST /api/copies?cover=auto': copyReply({ id: 41, edition_id: 21 })
+		});
+		const found = new ScanFlow(server(ownedRoutes()).fetchFn, memory());
+		await found.load(code);
+		await found.save();
+		expect(queueTally.count).toBe(2);
+		const flow = new ScanFlow(s.fetchFn, memory());
+		await flow.load(code);
+		await flow.save();
+		expect(queueTally.count).toBe(1);
 	});
 
 	it('records a book by its binding and a wish without a price', async () => {

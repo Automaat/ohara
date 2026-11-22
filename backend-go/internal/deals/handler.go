@@ -65,6 +65,7 @@ func NewHandler(store *Store, hunter *Hunter, logger *slog.Logger) *Handler {
 // Mount registers the routes under the /api router.
 func (h *Handler) Mount(r chi.Router) {
 	r.Get("/deals", h.list)
+	r.Get("/deals/matched", h.listMatched)
 	r.Post("/deals/run", h.run)
 	r.Get("/deals/keywords", h.listKeywords)
 	r.Post("/deals/keywords", h.addKeyword)
@@ -82,16 +83,33 @@ type View struct {
 	Observations   []Observation `json:"observations"`
 }
 
+// MatchedView is the GET /api/deals/matched body with display-only comparisons.
+type MatchedView struct {
+	View
+	Automatic []AutomaticDeal `json:"automatic"`
+}
+
 // list reads the hunter status before the listings, so a run that ends mid-request still reads
 // as running and the page asks again for the listings it stored.
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
+	h.listDeals(w, r, false)
+}
+
+func (h *Handler) listMatched(w http.ResponseWriter, r *http.Request) {
+	h.listDeals(w, r, true)
+}
+
+func (h *Handler) listDeals(w http.ResponseWriter, r *http.Request, matched bool) {
 	filter, fe := recentFilter(r)
 	if fe != nil {
 		httpx.WriteFieldError(w, h.logger, fe)
 		return
 	}
+	if matched {
+		filter = RecentFilter{Limit: filter.Limit, Matched: true}
+	}
 	status := h.hunter.Status()
-	obs, err := h.store.Recent(r.Context(), filter)
+	obs, automatic, err := h.store.recent(r.Context(), filter, matched)
 	if err != nil {
 		httpx.WriteInternal(w, r, h.logger, "recent deals", err)
 		return
@@ -106,7 +124,12 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteInternal(w, r, h.logger, "searched wish count", err)
 		return
 	}
-	httpx.WriteJSON(w, h.logger, http.StatusOK, View{Status: status, Wishes: wishes, SearchedWishes: searched, Observations: obs})
+	view := View{Status: status, Wishes: wishes, SearchedWishes: searched, Observations: obs}
+	if matched {
+		httpx.WriteJSON(w, h.logger, http.StatusOK, MatchedView{View: view, Automatic: automatic})
+		return
+	}
+	httpx.WriteJSON(w, h.logger, http.StatusOK, view)
 }
 
 func recentFilter(r *http.Request) (RecentFilter, *httpx.FieldError) {

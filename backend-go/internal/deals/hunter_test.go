@@ -1415,3 +1415,44 @@ func TestRunCutShortByShutdownCounts(t *testing.T) {
 		t.Fatalf("first wait = %v, want about 2h after a run started just now", got)
 	}
 }
+
+func TestRunSkipsMoreSpecificTitle(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		owned bool
+	}{
+		{"owned", true},
+		{"without copies", false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			pool := dbtest.Migrated(t)
+			wish := obcy()
+			wish.MaxPriceCents = new(int64(2500))
+			wishlist(t, pool, &wish)
+			ctx := context.Background()
+			var titleID int64
+			if err := pool.QueryRow(ctx, `INSERT INTO title (kind, name) VALUES ('movie', 'Alien: Covenant')
+				RETURNING id`).Scan(&titleID); err != nil {
+				t.Fatal(err)
+			}
+			if tt.owned {
+				if _, err := pool.Exec(ctx, `WITH e AS (INSERT INTO edition (title_id, format) VALUES ($1, 'bluray') RETURNING id)
+					INSERT INTO copy (edition_id, status) SELECT id, 'owned' FROM e`, titleID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			olx := &fakeSource{name: "olx", perQuery: true, listings: []Listing{
+				{Source: "olx", ExternalID: "covenant", Title: "Alien Covenant DVD", URL: "https://www.olx.pl/d/covenant", PriceCents: 2000},
+				{Source: "olx", ExternalID: "alien", Title: "Alien DVD Ridley Scott 1979", URL: "https://www.olx.pl/d/alien", PriceCents: 2000},
+			}}
+			notifier := &fakeNotifier{}
+			res := mustRun(t, newTestHunter(pool, notifier, olx))
+			if res.New != 1 || res.Sent != 1 {
+				t.Fatalf("run = %+v, want only the Alien listing", res)
+			}
+			if n := count(t, pool, `SELECT count(*) FROM price_observation WHERE external_id = 'covenant'`); n != 0 {
+				t.Fatalf("recorded the Alien: Covenant listing for the Alien wish")
+			}
+		})
+	}
+}

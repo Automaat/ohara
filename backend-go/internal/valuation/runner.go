@@ -206,6 +206,7 @@ type run struct {
 	r        *Runner
 	holdings []Holding
 	rules    deals.Rules
+	titles   deals.Titles
 	res      RunResult
 	first    bool
 }
@@ -224,7 +225,11 @@ func (r *Runner) Run(ctx context.Context) (RunResult, error) {
 	if err != nil {
 		return RunResult{}, err
 	}
-	x := &run{r: r, holdings: holdings, rules: rules, first: true}
+	titles, err := r.store.Titles(ctx)
+	if err != nil {
+		return RunResult{}, err
+	}
+	x := &run{r: r, holdings: holdings, rules: rules, titles: titles, first: true}
 	x.res.Editions = len(holdings)
 	x.res.Errors = []string{}
 	queries := searchQueries(holdings)
@@ -324,7 +329,7 @@ func (x *run) search(ctx context.Context, src deals.Source, queries []string) er
 		x.res.Listings += len(listings)
 		for i := range listings {
 			l := &listings[i]
-			h := match(x.holdings, l, x.rules)
+			h := match(x.holdings, l, x.rules, x.titles)
 			if h == nil {
 				continue
 			}
@@ -341,11 +346,13 @@ func (x *run) search(ctx context.Context, src deals.Source, queries []string) er
 	return nil
 }
 
-// match returns the first holding a listing is a copy of, or nil.
-func match(holdings []Holding, l *deals.Listing, rules deals.Rules) *Holding {
+// match returns the first holding a listing is a copy of, or nil. A
+// listing that names another known title more specifically than a
+// holding's (deals.Titles.Outranks) is not a copy of that holding.
+func match(holdings []Holding, l *deals.Listing, rules deals.Rules, titles deals.Titles) *Holding {
 	for i := range holdings {
 		w := &holdings[i].Want
-		if w.Matches(l.Title) && !rules.RejectedFor(l.Title, w) {
+		if w.Matches(l.Title) && !rules.RejectedFor(l.Title, w) && !titles.Outranks(w, l.Title) {
 			return &holdings[i]
 		}
 	}

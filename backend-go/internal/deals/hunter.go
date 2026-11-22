@@ -265,8 +265,10 @@ type run struct {
 	wants  []Want
 	rules  Rules
 	titles Titles
-	res    RunResult
-	first  bool
+	// asOf is when the run read wants and titles, for RecordAsOf.
+	asOf  time.Time
+	res   RunResult
+	first bool
 	// percent is whether a want has a market percent, whose market price
 	// the listings this run stores may move.
 	percent bool
@@ -286,6 +288,10 @@ type run struct {
 // Source failures are collected in the result; a database failure or
 // cancellation stops the run.
 func (h *Hunter) Run(ctx context.Context) (RunResult, error) {
+	asOf, err := h.store.Now(ctx)
+	if err != nil {
+		return RunResult{}, err
+	}
 	wants, err := h.store.Wants(ctx)
 	if err != nil {
 		return RunResult{}, err
@@ -298,7 +304,8 @@ func (h *Hunter) Run(ctx context.Context) (RunResult, error) {
 	if err != nil {
 		return RunResult{}, err
 	}
-	r := &run{h: h, wants: wants, rules: rules, titles: titles, first: true, tried: map[int64]bool{}, missed: map[string]Listing{}}
+	r := &run{h: h, wants: wants, rules: rules, titles: titles, asOf: asOf, first: true, tried: map[int64]bool{},
+		missed: map[string]Listing{}}
 	for i := range wants {
 		wants[i].Prepare()
 		r.percent = r.percent || wants[i].MaxMarketPercent != nil
@@ -467,7 +474,7 @@ func (r *run) record(ctx context.Context, listings []Listing) error {
 		}
 		r.res.Matched++
 		alert := r.h.notifier != nil && w.Meets(l.PriceCents)
-		isNew, alerted, err := r.h.store.Record(ctx, l, w, alert)
+		isNew, alerted, err := r.h.store.RecordAsOf(ctx, l, w, alert, r.asOf)
 		if err != nil {
 			return err
 		}
@@ -510,7 +517,7 @@ func (r *run) remeasure(ctx context.Context, refreshed map[string]bool) error {
 		if w == nil || !w.Meets(l.PriceCents) {
 			continue
 		}
-		_, alerted, err := r.h.store.Record(ctx, &l, w, true)
+		_, alerted, err := r.h.store.RecordAsOf(ctx, &l, w, true, r.asOf)
 		if err != nil {
 			return err
 		}

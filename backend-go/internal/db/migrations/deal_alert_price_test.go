@@ -10,8 +10,8 @@ import (
 )
 
 // TestDealAlertPriceMigration stores a sent and an unsent alert before
-// 0016, then applies it: the sent one takes its listing's stored price as
-// the price it named, the unsent one none, and neither changes otherwise.
+// 0016, then applies it: neither gets a price, since the one the sent alert
+// named was overwritten since, and neither changes otherwise.
 func TestDealAlertPriceMigration(t *testing.T) {
 	pool := dbtest.Pool(t)
 	ctx := context.Background()
@@ -40,7 +40,7 @@ func TestDealAlertPriceMigration(t *testing.T) {
 	if _, err := db.Migrate(ctx, pool, all); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	rows, err := pool.Query(ctx, `SELECT o.external_id, a.alerted_price_cents, a.sent_at IS NOT NULL, a.attempts, a.last_error
+	rows, err := pool.Query(ctx, `SELECT o.external_id, coalesce(a.alerted_price_cents, a.queued_price_cents), a.sent_at IS NOT NULL, a.attempts, a.last_error
 		FROM deal_alert a JOIN price_observation o ON o.id = a.observation_id ORDER BY o.external_id`)
 	if err != nil {
 		t.Fatalf("alerts: %v", err)
@@ -66,7 +66,7 @@ func TestDealAlertPriceMigration(t *testing.T) {
 	}
 	if len(got) != 2 ||
 		got[0].id != "pending" || got[0].price != nil || got[0].sent || got[0].attempts != 2 || got[0].lastErr != "telegram: status 502" ||
-		got[1].id != "sent" || got[1].price == nil || *got[1].price != 4000 || !got[1].sent || got[1].attempts != 1 || got[1].lastErr != "" {
-		t.Fatalf("alerts after 0016 = %+v; want the sent one at 40 zł, the pending one without a price, both otherwise kept", got)
+		got[1].id != "sent" || got[1].price != nil || !got[1].sent || got[1].attempts != 1 || got[1].lastErr != "" {
+		t.Fatalf("alerts after 0016 = %+v; want both without a price and otherwise kept", got)
 	}
 }

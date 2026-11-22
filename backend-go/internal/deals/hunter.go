@@ -486,7 +486,7 @@ func (r *run) deliver(ctx context.Context, only map[string]bool) error {
 		metrics.ObserveDealAlert(err)
 		if err != nil {
 			r.h.logger.Warn("telegram alert failed", "observation", a.ObservationID, "err", err)
-			if err := r.h.store.MarkFailed(ctx, a.ObservationID, err.Error()); err != nil {
+			if err := r.h.store.MarkFailed(ctx, a.ObservationID, a.PriceCents, err.Error()); err != nil {
 				return err
 			}
 			continue
@@ -499,6 +499,8 @@ func (r *run) deliver(ctx context.Context, only map[string]bool) error {
 		if err != nil {
 			return err
 		}
+		// A later sighting in this run may queue it again at a lower price.
+		delete(r.tried, a.ObservationID)
 		r.res.Sent++
 	}
 	return nil

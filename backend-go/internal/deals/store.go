@@ -135,9 +135,11 @@ type observationRaw struct {
 // dropped under the limit, still alerts. A listing whose alert was sent
 // alerts again when its price is under the one that alert named, unless
 // an alert for it is still waiting to be sent: that one goes out at the
-// current price. A repeat alert that gave up or expired unsent is queued
-// again only when the price drops once more. It reports whether the
-// listing was new and whether an alert was queued.
+// current price. An alert that gave up or expired unsent is queued again
+// only under the lowest price it was queued or tried at. An unsent alert
+// whose wish is gone or no longer wished for moves to w, keeping its
+// attempts and age. It reports whether the listing was new and whether an
+// alert was queued.
 func (s *Store) Record(ctx context.Context, l *Listing, w *Want, alert bool) (bool, bool, error) {
 	raw, err := json.Marshal(observationRaw{Title: l.Title, Data: l.Raw, PhotoURL: l.PhotoURL, WishlistCopyID: w.CopyID})
 	if err != nil {
@@ -150,11 +152,7 @@ func (s *Store) Record(ctx context.Context, l *Listing, w *Want, alert bool) (bo
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	var id int64
 	var isNew, alerted bool
-	var prevPrice *int64
-	err = tx.QueryRow(ctx, `WITH prev AS (
-			SELECT price_cents FROM price_observation WHERE source = $1 AND external_id = $2
-		)
-		INSERT INTO price_observation
+	err = tx.QueryRow(ctx, `INSERT INTO price_observation
 			(source, external_id, price_cents, acquired_as, url, edition_id, title_id, raw)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		ON CONFLICT (source, external_id) WHERE external_id IS NOT NULL DO UPDATE SET
@@ -165,27 +163,42 @@ func (s *Store) Record(ctx context.Context, l *Listing, w *Want, alert bool) (bo
 			acquired_as = coalesce(EXCLUDED.acquired_as, price_observation.acquired_as),
 			edition_id = coalesce(price_observation.edition_id, EXCLUDED.edition_id),
 			title_id = coalesce(price_observation.title_id, EXCLUDED.title_id)
-		RETURNING id, xmax = 0, (SELECT price_cents FROM prev)`,
-		l.Source, l.ExternalID, l.PriceCents, l.AcquiredAs, l.URL, w.EditionID, w.TitleID, raw).Scan(&id, &isNew, &prevPrice)
+		RETURNING id, xmax = 0`,
+		l.Source, l.ExternalID, l.PriceCents, l.AcquiredAs, l.URL, w.EditionID, w.TitleID, raw).Scan(&id, &isNew)
 	if err != nil {
 		return false, false, fmt.Errorf("record observation: %w", err)
 	}
 	if alert {
-		tag, err := tx.Exec(ctx, `INSERT INTO deal_alert (observation_id, copy_id) VALUES ($1, $2)
-			ON CONFLICT (observation_id) DO UPDATE SET copy_id = EXCLUDED.copy_id, created_at = now(),
-				sent_at = NULL, attempts = 0, last_error = ''
-			WHERE $3 < deal_alert.alerted_price_cents AND (deal_alert.sent_at IS NOT NULL
-				OR $3 < $5 AND (deal_alert.attempts >= $4 OR deal_alert.created_at <= now() - `+alertWindow+`))`,
-			id, w.CopyID, l.PriceCents, MaxAttempts, prevPrice)
-		if err != nil {
-			return false, false, fmt.Errorf("record alert: %w", err)
+		if alerted, err = queueAlert(ctx, tx, id, w.CopyID, l.PriceCents); err != nil {
+			return false, false, err
 		}
-		alerted = tag.RowsAffected() == 1
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return false, false, fmt.Errorf("record: commit: %w", err)
 	}
 	return isNew, alerted, nil
+}
+
+// queueAlert queues the alert for observation id at priceCents for wishlist
+// copy copyID, as Record describes, and reports whether it did.
+func queueAlert(ctx context.Context, tx pgx.Tx, id, copyID, priceCents int64) (bool, error) {
+	if _, err := tx.Exec(ctx, `UPDATE deal_alert SET copy_id = $2
+		WHERE observation_id = $1 AND sent_at IS NULL AND copy_id IS DISTINCT FROM $2
+			AND NOT EXISTS (SELECT FROM copy c WHERE c.id = deal_alert.copy_id AND c.status = 'wishlist')`,
+		id, copyID); err != nil {
+		return false, fmt.Errorf("record alert: rebind: %w", err)
+	}
+	tag, err := tx.Exec(ctx, `INSERT INTO deal_alert (observation_id, copy_id, queued_price_cents) VALUES ($1, $2, $3)
+		ON CONFLICT (observation_id) DO UPDATE SET copy_id = EXCLUDED.copy_id, created_at = now(),
+			sent_at = NULL, attempts = 0, last_error = '', queued_price_cents = EXCLUDED.queued_price_cents
+		WHERE $3 < deal_alert.alerted_price_cents AND (deal_alert.sent_at IS NOT NULL
+			OR $3 < deal_alert.queued_price_cents
+				AND (deal_alert.attempts >= $4 OR deal_alert.created_at <= now() - `+alertWindow+`))`,
+		id, copyID, priceCents, MaxAttempts)
+	if err != nil {
+		return false, fmt.Errorf("record alert: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
 }
 
 // Alert is a queued Telegram message with what it reports.
@@ -243,10 +256,10 @@ func (s *Store) MarkSent(ctx context.Context, observationID, priceCents int64) e
 	return nil
 }
 
-// MarkFailed records a failed delivery attempt.
-func (s *Store) MarkFailed(ctx context.Context, observationID int64, reason string) error {
-	_, err := s.pool.Exec(ctx, `UPDATE deal_alert SET attempts = attempts + 1, last_error = $2
-		WHERE observation_id = $1`, observationID, reason)
+// MarkFailed records a failed delivery attempt at priceCents.
+func (s *Store) MarkFailed(ctx context.Context, observationID, priceCents int64, reason string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE deal_alert SET attempts = attempts + 1, last_error = $2,
+		queued_price_cents = least(queued_price_cents, $3) WHERE observation_id = $1`, observationID, reason, priceCents)
 	if err != nil {
 		return fmt.Errorf("mark failed: %w", err)
 	}

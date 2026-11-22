@@ -230,7 +230,10 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   a later price under it, within the limit, queues the same row again and
   its message names the earlier price ("było …"). An alert still waiting
   goes out at the current price; one that gave up or expired is queued
-  again only on a further drop.
+  again only under the lowest price it was queued or tried at
+  (`queued_price_cents`). An unsent alert whose wish is gone moves to the
+  wish that now matches, keeping its attempts and age. Alerts sent before
+  migration 0016 have no stored price and never repeat.
   The wish a listing was recorded for (`raw.wishlist_copy_id`) is also the
   generated, indexed column `wishlist_copy_id`, so the deals list's filters
   start from wished listings instead of reading every observation.

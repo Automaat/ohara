@@ -17,6 +17,10 @@ export const invalidBarcodeMessage = 'Nieprawidłowy kod kreskowy: sprawdź cyfr
 /** What the server's 413 for a cover photo means. */
 export const coverTooLargeMessage = 'Wybierz plik o rozmiarze do 8 MiB.';
 
+/** What the server's 422 for a cover photo means, and what a photo the browser cannot read says. */
+export const invalidCoverMessage =
+	'Wybierz prawidłowe zdjęcie JPEG lub PNG o rozdzielczości do 16 megapikseli.';
+
 /** What a request that never got an answer says. */
 export const noAnswerMessage = 'Serwer nie odpowiada.';
 
@@ -39,7 +43,7 @@ const fieldMessages: Record<string, Record<number, string>> = {
 	cover_photo: {
 		400: 'Przesyłanie zdjęcia zostało przerwane. Spróbuj ponownie.',
 		413: coverTooLargeMessage,
-		422: 'Wybierz prawidłowe zdjęcie JPEG lub PNG o rozdzielczości do 16 megapikseli.'
+		422: invalidCoverMessage
 	}
 };
 

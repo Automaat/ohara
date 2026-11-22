@@ -24,6 +24,16 @@ export function copyCount(count: number): string {
 	return counted(count, 'egzemplarz', 'egzemplarze', 'egzemplarzy');
 }
 
+/** The discs an edition holds, such as "2 płyty". */
+export function discCount(count: number): string {
+	return counted(count, 'płyta', 'płyty', 'płyt');
+}
+
+/** A limited edition's run, such as "nakład 500 egz.". */
+export function limitedRun(count: number): string {
+	return `nakład ${numberFormat.format(count)} egz.`;
+}
+
 /** Copies on their way, such as "2 zamówione". */
 export function orderedCount(count: number): string {
 	return counted(count, 'zamówiony', 'zamówione', 'zamówionych');

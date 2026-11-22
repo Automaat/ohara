@@ -491,7 +491,7 @@ func (h *Handler) getEdition(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) decodeEdition(w http.ResponseWriter, r *http.Request) (*EditionInput, bool) {
 	var in EditionInput
-	if !httpx.DecodeJSON(w, r, h.logger, &in) {
+	if !httpx.DecodeJSONFields(w, r, h.logger, &in, "disc_count", "limited_to", "color") {
 		return nil, false
 	}
 	if fe := in.Normalize(); fe != nil {

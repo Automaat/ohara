@@ -99,6 +99,9 @@ export type EditionPayload = {
 	packaging: Packaging[];
 	binding: Binding | null;
 	discogs_release_id: number | null;
+	disc_count?: number | null;
+	limited_to?: number | null;
+	color?: string | null;
 	notes: string;
 	cover_url?: string;
 	contents?: number[];
@@ -128,6 +131,9 @@ export type Edition = {
 	packaging: Packaging[];
 	binding: Binding | null;
 	discogs_release_id: number | null;
+	disc_count?: number | null;
+	limited_to?: number | null;
+	color?: string | null;
 	notes: string;
 	cover_url?: string;
 	request_key?: string;
@@ -192,6 +198,9 @@ export type EditionWithCopies = {
 	packaging: Packaging[];
 	binding: Binding | null;
 	discogs_release_id: number | null;
+	disc_count?: number | null;
+	limited_to?: number | null;
+	color?: string | null;
 	notes: string;
 	cover_url?: string;
 	request_key?: string;
@@ -251,6 +260,9 @@ export type EditionDetail = {
 	packaging: Packaging[];
 	binding: Binding | null;
 	discogs_release_id: number | null;
+	disc_count?: number | null;
+	limited_to?: number | null;
+	color?: string | null;
 	notes: string;
 	cover_url?: string;
 	request_key?: string;
@@ -333,6 +345,9 @@ export type CollectionItem = {
 	label: string;
 	format: Format | null;
 	binding: Binding | null;
+	disc_count?: number;
+	limited_to?: number;
+	color?: string;
 	title_id: number;
 	kind: Kind;
 	name: string;

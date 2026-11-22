@@ -77,6 +77,7 @@ type Hunter struct {
 	store    *Store
 	sources  []Source
 	notifier Notifier
+	poller   *TelegramPoller
 	logger   *slog.Logger
 	cfg      Config
 	sleep    func(ctx context.Context, d time.Duration) error
@@ -136,12 +137,20 @@ func jitter(d time.Duration, spread float64) time.Duration {
 	return time.Duration(float64(d) * (1 - spread + 2*spread*u))
 }
 
+// PollTelegram makes Start run p, which turns presses of an alert's
+// "Ignoruj" button into dismissals, until Start's context ends.
+func (h *Hunter) PollTelegram(p *TelegramPoller) { h.poller = p }
+
 // Start restores the last stored run, then runs the schedule until ctx
-// ends; manual runs also stop with ctx. The first scheduled run comes one
-// interval after the last run started, or about five minutes after start
-// without one, and never sooner than firstRunDelay.
+// ends; manual runs and the Telegram poller also stop with ctx. The first
+// scheduled run comes one interval after the last run started, or about
+// five minutes after start without one, and never sooner than
+// firstRunDelay.
 func (h *Hunter) Start(ctx context.Context) {
 	h.base = ctx
+	if h.poller != nil {
+		h.wg.Go(func() { h.poller.Run(ctx) })
+	}
 	last, ok := h.restore(ctx)
 	if h.cfg.Interval <= 0 {
 		return
@@ -496,7 +505,7 @@ func (r *run) deliver(ctx context.Context, only map[string]bool) error {
 		}
 		r.tried[a.ObservationID] = true
 		delivered, err := r.h.store.SendAlert(ctx, a.ObservationID, func(due *Alert) error {
-			err := r.h.notifier.Send(ctx, alertText(due))
+			err := r.h.notify(ctx, due)
 			r.h.sent()
 			metrics.ObserveDealAlert(err)
 			if err != nil {
@@ -514,6 +523,15 @@ func (r *run) deliver(ctx context.Context, only map[string]bool) error {
 		}
 	}
 	return nil
+}
+
+// notify sends the message for a, with its "Ignoruj" button when the
+// notifier can attach one.
+func (h *Hunter) notify(ctx context.Context, a *Alert) error {
+	if n, ok := h.notifier.(AlertNotifier); ok {
+		return n.SendAlert(ctx, alertText(a), a.ObservationID)
+	}
+	return h.notifier.Send(ctx, alertText(a))
 }
 
 // sendWait is what is left of telegramPause since the notifier last

@@ -40,6 +40,7 @@ Same layout and tooling as `../baratie`. `package.json` and
   /lib/components/     # forms shared by create and edit pages, camera and quick confirm
   /service-worker/     # SUI service worker (index.ts): precache, update only on the reader's consent
 /static/               # icons, web app manifest, robots.txt
+/e2e/                  # Playwright smoke flows against the built image (compose.yaml, scripts/e2e.sh)
 ```
 
 One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
@@ -292,6 +293,17 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   needs its directive there. `npm run build` ends with
   `scripts/check-csp.mjs`, which fails when a built page lacks the policy
   or an inline script's hash.
+- The smoke suite (`e2e/`, `npm run test:e2e`) drives the production image
+  in Chromium at 390 × 844 with touch: a wedge scan, quick confirm and
+  "Cofnij", and "Dodaj tytuł" by hand. `scripts/e2e.sh` builds the image
+  (or takes one as its first argument), starts it from `e2e/compose.yaml`
+  with Postgres, `OHARA_LOOKUP_STUB=true`, `OHARA_MUSICBRAINZ=false` and no
+  provider keys, and removes it afterwards. App and Postgres sit on an
+  internal network, so no public provider is reachable; each test also
+  fails on a browser request to another origin and checks that
+  `ohara_source_requests_total` stayed 0. The camera starts only on "Włącz
+  aparat" or a remembered choice, so a fresh browser gets no camera prompt.
+  Needs `npx playwright install chromium` once.
 
 ### Auth
 
@@ -357,6 +369,7 @@ mise run test-backend                # go test ./... with DB tests in ohara_test
 
 npm run lint && npm run check        # oxlint + prettier, svelte-check
 npm run test:coverage                # vitest
+npm run test:e2e                     # Playwright smoke flows against the built image (Docker)
 npm run build                        # SPA into build/
 cd backend-go && go test ./...       # DB tests skip unless OHARA_TEST_DATABASE_URL is set
 cd backend-go && golangci-lint run ./...
@@ -392,8 +405,8 @@ and cuts the GitHub release, in that order. `:latest` comes only from CI on
 
 - Conventional commits `type(scope): description`, signed with `-s -S`.
 - CI: frontend (lint, check, coverage, build), Go (vet, test against
-  Postgres, golangci-lint, nilaway), image build; `main` pushes
-  `:latest` and `:<sha>`. Pushed images (`main` and `release.yml`)
+  Postgres, golangci-lint, nilaway), browser smoke flows (`e2e`), image
+  build; `main` pushes `:latest` and `:<sha>` only after all of them pass. Pushed images (`main` and `release.yml`)
   carry BuildKit's SBOM and max-mode provenance attestations.
 - CI fails on known vulnerabilities (`scripts/check-vulnerabilities.sh`),
   on every push and PR and nightly: `govulncheck` for Go code the backend

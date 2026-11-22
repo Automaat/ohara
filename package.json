@@ -14,11 +14,13 @@
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"test": "vitest",
 		"test:coverage": "vitest run --coverage",
+		"test:e2e": "scripts/e2e.sh",
 		"lint": "oxlint && prettier --check .",
 		"format": "prettier --write ."
 	},
 	"devDependencies": {
 		"@fontsource-variable/fraunces": "5.3.0",
+		"@playwright/test": "1.65.1",
 		"@smykla-skalski/sui": "0.3.1",
 		"@sveltejs/adapter-static": "4.0.1",
 		"@sveltejs/kit": "3.4.0",

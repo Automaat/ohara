@@ -247,11 +247,12 @@ func (s *Store) record(ctx context.Context, l *Listing, w *Want, alert bool, asO
 	var titleID *int64
 	err = tx.QueryRow(ctx, `INSERT INTO price_observation
 			(source, external_id, price_cents, acquired_as, url, edition_id, title_id, raw, assigned_as_of,
-				first_price_cents)
-		VALUES ($1, $2, $3, $4, $5, nullif($6::bigint, 0), nullif($7::bigint, 0), $8, `+matchedAsOf+`, $10)
+				first_price_cents, last_offered_at)
+		VALUES ($1, $2, $3, $4, $5, nullif($6::bigint, 0), nullif($7::bigint, 0), $8, `+matchedAsOf+`, $10, now())
 		ON CONFLICT (source, external_id) WHERE external_id IS NOT NULL DO UPDATE SET
 			price_cents = EXCLUDED.price_cents,
 			last_seen_at = now(),
+			last_offered_at = now(),
 			gone_at = NULL,
 			url = EXCLUDED.url,
 			raw = CASE WHEN `+movedTitle+` THEN coalesce(price_observation.raw, '{}'::jsonb) - 'wishlist_copy_id' || EXCLUDED.raw
@@ -303,12 +304,13 @@ func (s *Store) record(ctx context.Context, l *Listing, w *Want, alert bool, asO
 // complete, not seen and last seen before since (the run's start on the
 // database clock, so a listing another run recorded meanwhile stays) is
 // gone. gone_at is set once; last_seen_at keeps the last time the listing
-// was offered. It reports how many listings it marked gone.
+// was offered with a price and last_offered_at the last time it was
+// offered at all (MarkOffered). It reports how many listings it marked
+// gone.
 func (s *Store) UpdateGone(ctx context.Context, source string, complete, seen []string, since time.Time) (int64, error) {
 	seen = append([]string{}, seen...)
-	if _, err := s.pool.Exec(ctx, `UPDATE price_observation SET gone_at = NULL
-		WHERE source = $1 AND gone_at IS NOT NULL AND external_id = ANY ($2)`, source, seen); err != nil {
-		return 0, fmt.Errorf("offered again: %w", err)
+	if err := s.MarkOffered(ctx, source, seen); err != nil {
+		return 0, err
 	}
 	if len(complete) == 0 {
 		return 0, nil
@@ -323,23 +325,41 @@ func (s *Store) UpdateGone(ctx context.Context, source string, complete, seen []
 	return tag.RowsAffected(), nil
 }
 
+// MarkOffered records that an answer of source held the listings with
+// externalIDs, priced or not, matching or not: their last_offered_at moves
+// to now and a gone one is no longer gone. last_seen_at and the price stay,
+// so the valuation window still counts only priced sightings. IDs of
+// listings never stored are ignored.
+func (s *Store) MarkOffered(ctx context.Context, source string, externalIDs []string) error {
+	if len(externalIDs) == 0 {
+		return nil
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE price_observation SET gone_at = NULL, last_offered_at = now()
+		WHERE source = $1 AND external_id = ANY ($2)`, source, externalIDs); err != nil {
+		return fmt.Errorf("mark offered: %w", err)
+	}
+	return nil
+}
+
 // pruneBatch bounds the listings one delete of Prune removes, so no
 // statement holds many rows or runs long.
 const pruneBatch = 1000
 
-// Prune deletes the listings last seen more than olderThan ago, in batches
-// of pruneBatch, and reports how many it deleted. A listing whose alert is
+// Prune deletes the listings neither seen with a price (last_seen_at) nor
+// offered at all (last_offered_at) within olderThan, in batches of
+// pruneBatch, and reports how many it deleted. A listing whose alert is
 // still unsent with attempts left and younger than the alert window stays,
 // whatever its age, and a listing another transaction holds (a run
 // recording it, an alert on its way) is left for the next prune. Their
-// alerts go with them through deal_alert's cascade. A sighting moves
-// last_seen_at, so a listing the runs still see is never deleted.
+// alerts go with them through deal_alert's cascade. Every answer that
+// holds a stored listing moves one of the two, so a listing the runs still
+// see is never deleted.
 func (s *Store) Prune(ctx context.Context, olderThan time.Duration) (int64, error) {
 	var total int64
 	for {
 		tag, err := s.pool.Exec(ctx, `DELETE FROM price_observation WHERE id IN (
 			SELECT o.id FROM price_observation o
-			WHERE o.last_seen_at < now() - make_interval(secs => $1)
+			WHERE greatest(o.last_seen_at, o.last_offered_at) < now() - make_interval(secs => $1)
 				AND NOT EXISTS (SELECT FROM deal_alert a WHERE a.observation_id = o.id
 					AND a.sent_at IS NULL AND a.attempts < $2 AND a.created_at > now() - `+alertWindow+`)
 			ORDER BY o.id LIMIT $3 FOR UPDATE SKIP LOCKED)`,

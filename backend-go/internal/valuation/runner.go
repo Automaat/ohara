@@ -31,8 +31,8 @@ const pruneInterval = 24 * time.Hour
 // Config tunes the runner. Interval 0 disables the schedule; a run can
 // still be started by hand. Delay separates two source requests, jittered.
 // Window is how far back a price still counts. Retention, when above 0,
-// deletes stored listings last seen longer ago than that once a day, on a
-// timer of its own; 0 keeps them all.
+// deletes once a day, on a timer of its own, the stored listings neither
+// seen with a price nor offered at all within it; 0 keeps them all.
 type Config struct {
 	Interval  time.Duration
 	Delay     time.Duration
@@ -394,6 +394,13 @@ func (x *run) search(ctx context.Context, src deals.Source, queries []string) er
 		}
 		x.res.Listings += len(listings)
 		seen = append(seen, page.Seen...)
+		if !paged {
+			for i := range listings {
+				if listings[i].ExternalID != "" {
+					seen = append(seen, listings[i].ExternalID)
+				}
+			}
+		}
 		for i := range listings {
 			l := &listings[i]
 			h := match(x.holdings, l, x.rules, x.titles)
@@ -411,7 +418,7 @@ func (x *run) search(ctx context.Context, src deals.Source, queries []string) er
 		}
 	}
 	if !paged {
-		return nil
+		return x.r.store.MarkOffered(ctx, src.Name(), seen)
 	}
 	return x.gone(ctx, src.Name(), complete, seen)
 }

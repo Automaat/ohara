@@ -385,6 +385,9 @@ func (r *run) searchAll(ctx context.Context, src Source, f *Refused, queries []s
 		}
 		r.canary(src, ok, len(listings))
 		results += len(listings)
+		if err := r.offered(ctx, listings); err != nil {
+			return err
+		}
 	}
 	for _, q := range queries {
 		listings, ok, err := r.ask(ctx, src, f, q)
@@ -447,11 +450,32 @@ func (r *run) fail(msg string) {
 	}
 }
 
+// offered records that one answer held listings, matching or not
+// (Store.MarkOffered), so the stored ones a run still sees outlast
+// OHARA_PRICE_RETENTION_DAYS.
+func (r *run) offered(ctx context.Context, listings []Listing) error {
+	ids := map[string][]string{}
+	for i := range listings {
+		if l := &listings[i]; l.ExternalID != "" {
+			ids[l.Source] = append(ids[l.Source], l.ExternalID)
+		}
+	}
+	for source, ext := range ids {
+		if err := r.h.store.MarkOffered(ctx, source, ext); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // record stores the matching listings of one answer, then sends their
 // pending alerts before the run asks a source again. PendingAlerts checks
 // the refreshed price against the wish's current limit, which may have
 // changed since the run read the wishlist.
 func (r *run) record(ctx context.Context, listings []Listing) error {
+	if err := r.offered(ctx, listings); err != nil {
+		return err
+	}
 	r.res.Listings += len(listings)
 	refreshed := map[string]bool{}
 	for i := range listings {

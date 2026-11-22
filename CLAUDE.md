@@ -324,15 +324,18 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   sighting. A first page, a failed or skipped query tells nothing, and a
   gone listing any answer holds again, matching or not, is no longer gone.
   Gone listings stay stored and price as before; no request is sent per
-  listing. Stored listings stay forever unless `OHARA_PRICE_RETENTION_DAYS`
-  is set (never below the valuation window): then the valuation runner,
-  scheduled or not, deletes in batches of 1000 those last seen longer ago,
-  5 minutes after start and then daily, logs the count and adds it to
+  listing. Every hunt or valuation answer that holds a stored listing,
+  priced or not, matching or not, moves its `last_offered_at` (null for
+  rows not offered since migration 0022); `last_seen_at` moves only with a
+  recorded price. Stored listings stay forever unless
+  `OHARA_PRICE_RETENTION_DAYS` is set (never below the valuation window):
+  then the valuation runner, scheduled or not, deletes in batches of 1000
+  those whose later of the two is older, 5 minutes after start and then
+  daily, logs the count and adds it to
   `ohara_price_observations_pruned_total`. A listing whose alert is unsent
   with attempts left and younger than a week stays, as does one a run or
-  an alert holds; its other alerts go through the cascade. A sighting
-  moves `last_seen_at`, so a listing the runs still see is never pruned.
-  An owned album edition
+  an alert holds; its other alerts go through the cascade. A listing the
+  runs still see is never pruned. An owned album edition
   with a `discogs_release_id` is
   priced on Discogs (marketplace stats in EUR, price suggestions in the
   seller-settings currency, converted to PLN at the NBP table A rate): its

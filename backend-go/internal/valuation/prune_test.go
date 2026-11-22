@@ -93,6 +93,32 @@ func TestRetentionPrunesListings(t *testing.T) {
 		}
 	})
 
+	t.Run("a valuation keeps the stored listings its answers hold unpriced or unmatched", func(t *testing.T) {
+		pool := dbtest.Migrated(t)
+		seed(t, pool)
+		exec(t, pool, `INSERT INTO price_observation (source, external_id, price_cents, edition_id, title_id, raw,
+				observed_at, last_seen_at)
+			VALUES ('olx', 'unpriced', 2000, 10, 1, '{}', now() - interval '200 days', now() - interval '200 days'),
+			       ('olx', 'unmatched', 2100, 10, 1, '{}', now() - interval '200 days', now() - interval '200 days'),
+			       ('olx', 'gone', 2200, 10, 1, '{}', now() - interval '200 days', now() - interval '200 days')`)
+		olx := &pagedSource{}
+		olx.answer(false, nil, listing("unmatched", "Ojciec chrzestny DVD", 2100, used()))
+		olx.alsoUnpriced("unpriced")
+		r := newPagedRunner(pool, olx)
+		res, err := r.Run(t.Context())
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if res.Matched != 0 {
+			t.Fatalf("run = %+v, want no match", res)
+		}
+		r.cfg.Retention = 100 * day
+		r.prune(t.Context())
+		if got, want := storedListings(t, pool), []string{"unmatched", "unpriced"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("listings %v, want %v: an answer still offered them", got, want)
+		}
+	})
+
 	t.Run("pruning at the window leaves the collection's value unchanged", func(t *testing.T) {
 		pool := dbtest.Migrated(t)
 		seed(t, pool)

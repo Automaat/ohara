@@ -96,6 +96,43 @@ func TestPrune(t *testing.T) {
 		}
 	})
 
+	t.Run("keeps an old priced sighting a later answer still offered", func(t *testing.T) {
+		pool := dbtest.Migrated(t)
+		id := listingSeen(t, pool, "offered", 40)
+		listingSeen(t, pool, "gone", 40)
+		if _, err := pool.Exec(ctx, `UPDATE price_observation SET last_offered_at = now() - interval '1 day'
+			WHERE id = $1`, id); err != nil {
+			t.Fatal(err)
+		}
+		n, err := NewStore(pool).Prune(ctx, 30*day)
+		if err != nil {
+			t.Fatalf("Prune: %v", err)
+		}
+		if got := listings(t, pool); n != 1 || len(got) != 1 || got[0] != "offered" {
+			t.Fatalf("pruned %d, left %v; want 1 pruned and [offered] left", n, got)
+		}
+	})
+
+	t.Run("a hunt keeps a stored listing its answer holds without a match", func(t *testing.T) {
+		pool := dbtest.Migrated(t)
+		wishlist(t, pool, wantBluray(nil))
+		listingSeen(t, pool, "unmatched", 40)
+		listingSeen(t, pool, "unseen", 40)
+		src := &fakeSource{name: "olx", listings: []Listing{
+			{Source: "olx", ExternalID: "unmatched", Title: "Ojciec chrzestny DVD", PriceCents: 1000},
+		}}
+		if res := mustRun(t, newTestHunter(pool, nil, src)); res.Matched != 0 {
+			t.Fatalf("run = %+v, want no match", res)
+		}
+		n, err := NewStore(pool).Prune(ctx, 30*day)
+		if err != nil {
+			t.Fatalf("Prune: %v", err)
+		}
+		if got := listings(t, pool); n != 1 || len(got) != 1 || got[0] != "unmatched" {
+			t.Fatalf("pruned %d, left %v; want the unseen one pruned and [unmatched] left", n, got)
+		}
+	})
+
 	t.Run("leaves a listing another transaction holds", func(t *testing.T) {
 		pool := dbtest.Migrated(t)
 		id := listingSeen(t, pool, "held", 40)

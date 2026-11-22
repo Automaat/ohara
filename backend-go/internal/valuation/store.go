@@ -90,8 +90,14 @@ func (s *Store) UpdateGone(ctx context.Context, source string, complete, seen []
 	return s.deals.UpdateGone(ctx, source, complete, seen, since)
 }
 
-// Prune deletes the stored listings last seen more than olderThan ago,
-// through the deal hunter's store (deals.Store.Prune).
+// MarkOffered records that an answer of source held the listings with
+// externalIDs, through the deal hunter's store (deals.Store.MarkOffered).
+func (s *Store) MarkOffered(ctx context.Context, source string, externalIDs []string) error {
+	return s.deals.MarkOffered(ctx, source, externalIDs)
+}
+
+// Prune deletes the stored listings neither seen with a price nor offered
+// within olderThan, through the deal hunter's store (deals.Store.Prune).
 func (s *Store) Prune(ctx context.Context, olderThan time.Duration) (int64, error) {
 	return s.deals.Prune(ctx, olderThan)
 }

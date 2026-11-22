@@ -211,17 +211,29 @@ func timeoutAfter(d time.Duration, logger *slog.Logger) func(http.Handler) http.
 
 // watchResponse wraps w for a middleware that answers in a handler's place:
 // the WrapResponseWriter's Status tells whether the handler wrote, and the
-// hijackRecorder under it whether the handler took the connection over.
+// hijackRecorder under it whether the handler took the connection over. The
+// recorder offers ReadFrom and Push only when w has them, so the
+// WrapResponseWriter keeps the interfaces it would have had over w: chi's
+// ReadFrom sends the status before the first read, which over a writer
+// without one, like the gzip writer, would commit a 200 for a handler that
+// panics or times out before its source yields anything.
 func watchResponse(w http.ResponseWriter, r *http.Request) (middleware.WrapResponseWriter, *hijackRecorder) {
 	hj := &hijackRecorder{ResponseWriter: w}
-	return middleware.NewWrapResponseWriter(hj, r.ProtoMajor), hj
+	var inner http.ResponseWriter = hj
+	if r.ProtoMajor == 2 {
+		if ps, ok := w.(http.Pusher); ok {
+			inner = pushRecorder{hijackRecorder: hj, ps: ps}
+		}
+	} else if rf, ok := w.(io.ReaderFrom); ok {
+		inner = readFromRecorder{hijackRecorder: hj, rf: rf}
+	}
+	return middleware.NewWrapResponseWriter(inner, r.ProtoMajor), hj
 }
 
-// hijackRecorder notes a successful Hijack. It offers Flush, Hijack and
-// ReadFrom, so the WrapResponseWriter around it keeps all three for the
-// handler, and passes each to the writer it wraps through
-// http.ResponseController or, for ReadFrom, that writer's own ReadFrom when
-// it has one.
+// hijackRecorder notes a successful Hijack. It always offers Hijack, since a
+// handler can reach the connection through http.ResponseController even when
+// the writer it wraps has no Hijack of its own, and Flush; both go to the
+// wrapped writer through http.ResponseController.
 type hijackRecorder struct {
 	http.ResponseWriter
 	hijacked bool
@@ -239,15 +251,27 @@ func (h *hijackRecorder) Flush() {
 	_ = http.NewResponseController(h.ResponseWriter).Flush()
 }
 
-func (h *hijackRecorder) ReadFrom(src io.Reader) (int64, error) {
-	if rf, ok := h.ResponseWriter.(io.ReaderFrom); ok {
-		return rf.ReadFrom(src)
-	}
-	return io.Copy(h.ResponseWriter, src)
-}
-
 // Unwrap lets http.ResponseController reach the underlying writer.
 func (h *hijackRecorder) Unwrap() http.ResponseWriter { return h.ResponseWriter }
+
+// readFromRecorder is a hijackRecorder over a writer with ReadFrom, such as
+// net/http's own, which can send a file without copying it through memory.
+type readFromRecorder struct {
+	*hijackRecorder
+	rf io.ReaderFrom
+}
+
+func (r readFromRecorder) ReadFrom(src io.Reader) (int64, error) { return r.rf.ReadFrom(src) }
+
+// pushRecorder is a hijackRecorder over an HTTP/2 writer with Push.
+type pushRecorder struct {
+	*hijackRecorder
+	ps http.Pusher
+}
+
+func (p pushRecorder) Push(target string, opts *http.PushOptions) error {
+	return p.ps.Push(target, opts)
+}
 
 // isAbortHandler reports a panic with http.ErrAbortHandler itself, the value
 // net/http and chi's Recoverer compare against; a wrapped one is an ordinary

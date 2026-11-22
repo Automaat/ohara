@@ -8,12 +8,14 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
 
+	"github.com/Automaat/ohara/backend-go/internal/barcode"
 	"github.com/Automaat/ohara/backend-go/internal/collection"
 	"github.com/Automaat/ohara/backend-go/internal/dbtest"
 	"github.com/Automaat/ohara/backend-go/internal/lookup"
@@ -420,6 +422,73 @@ func TestLookupSkipsOutOfScopeProviders(t *testing.T) {
 	svc.Lookup(context.Background(), "9780140449136")
 	if booksOnly.fetches != 1 {
 		t.Fatalf("in-scope fetches = %d", booksOnly.fetches)
+	}
+}
+
+// isbnFallback is a movie or music provider: book providers answer an
+// ISBN-range code first.
+type isbnFallback struct{ fixedProvider }
+
+func (*isbnFallback) Fallback(code string) bool { return barcode.IsBook(code) }
+
+func TestLookupFallsBackForISBNsNoBookProviderKnows(t *testing.T) {
+	const isbn = "9788375780635"
+	release := lookup.Candidate{Type: "music", Title: lookup.TitleFields{Name: "Pan Tadeusz (audiobook)"}, Edition: lookup.EditionFields{Barcode: isbn}, Confidence: 0.9}
+	tests := []struct {
+		name string
+		code string
+		// books is what the bn provider answers; booksErr makes it fail.
+		books     []lookup.Candidate
+		booksErr  error
+		music     []lookup.Candidate
+		wantTypes []string
+		// wantAsked is how often each of movie and music was fetched.
+		wantAsked  int
+		wantErrors []string
+	}{
+		{name: "books know nothing", code: isbn, music: []lookup.Candidate{release}, wantTypes: []string{"music"}, wantAsked: 1},
+		{name: "a book provider resolves it", code: isbn, books: []lookup.Candidate{book(isbn, "Pan Tadeusz", 0.9)}, music: []lookup.Candidate{release}, wantTypes: []string{"book"}, wantAsked: 0},
+		{name: "a failed book provider is no answer", code: isbn, booksErr: errors.New("timeout"), music: []lookup.Candidate{release}, wantTypes: []string{"music"}, wantAsked: 1, wantErrors: []string{"bn"}},
+		{name: "every provider misses", code: isbn, wantTypes: []string{}, wantAsked: 1},
+		{name: "a disc code skips the book round", code: "5901234123457", music: []lookup.Candidate{release}, wantTypes: []string{"music"}, wantAsked: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var bn lookup.Provider = &fixedProvider{name: "bn", cands: tt.books, scope: barcode.IsBook}
+			if tt.booksErr != nil {
+				bn = &fakeProvider{name: "bn", fetchErr: tt.booksErr}
+			}
+			openLibrary := &fixedProvider{name: "openlibrary", scope: barcode.IsBook}
+			movie := &isbnFallback{fixedProvider{name: "movie"}}
+			music := &isbnFallback{fixedProvider{name: "music", cands: tt.music}}
+			r := &lookup.Registry{}
+			for _, p := range []lookup.Provider{bn, openLibrary, movie, music} {
+				if err := r.Register(p, time.Hour); err != nil {
+					t.Fatal(err)
+				}
+			}
+			res := lookup.NewService(r, &memCache{}, discard()).Lookup(context.Background(), tt.code)
+			types := []string{}
+			for _, c := range res.Candidates {
+				types = append(types, c.Type)
+			}
+			if !slices.Equal(types, tt.wantTypes) {
+				t.Errorf("candidate types = %v, want %v", types, tt.wantTypes)
+			}
+			if movie.fetches != tt.wantAsked || music.fetches != tt.wantAsked {
+				t.Errorf("movie fetched %d times, music %d, want %d", movie.fetches, music.fetches, tt.wantAsked)
+			}
+			errs := []string{}
+			for _, e := range res.Errors {
+				errs = append(errs, e.Provider)
+			}
+			if !slices.Equal(errs, append([]string{}, tt.wantErrors...)) {
+				t.Errorf("errors = %+v, want providers %v", res.Errors, tt.wantErrors)
+			}
+			if len(res.Candidates) == 0 && !res.NeedsConfirmation {
+				t.Error("an empty result must need confirmation")
+			}
+		})
 	}
 }
 

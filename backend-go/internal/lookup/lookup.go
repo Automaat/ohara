@@ -79,6 +79,16 @@ type Scoped interface {
 	Accepts(barcode string) bool
 }
 
+// Fallback is implemented by providers that answer some barcodes only when
+// the other providers found nothing for them, such as the movie and music
+// chains for an ISBN-range code, which book catalogs answer first. A
+// provider whose Fallback reports true for a code is asked in a second
+// round, only when no provider of the first round returned a candidate; a
+// failed first-round provider counts as no answer and keeps its error.
+type Fallback interface {
+	Fallback(barcode string) bool
+}
+
 // Cache stores raw provider responses keyed by provider and barcode.
 type Cache interface {
 	Get(ctx context.Context, provider, barcode string, maxAge time.Duration) (json.RawMessage, bool, error)
@@ -233,8 +243,10 @@ type outcome struct {
 // barcode per period.
 const RecheckAfter = time.Hour
 
-// Lookup queries every provider concurrently for a normalized barcode. A
-// failing provider is reported in Result.Errors and does not fail the lookup.
+// Lookup queries every provider concurrently for a normalized barcode, and
+// the providers that are a Fallback for it afterwards, when the others
+// returned no candidate. A failing provider is reported in Result.Errors
+// and does not fail the lookup.
 // A stored selection short-circuits the providers.
 func (s *Service) Lookup(ctx context.Context, code string) Result {
 	return s.lookup(ctx, code, false)
@@ -255,17 +267,10 @@ func (s *Service) lookup(ctx context.Context, code string, recheck bool) Result 
 		return Result{Barcode: code, Candidates: []Candidate{sel}, Errors: []ProviderError{}}
 	}
 	outcomes := make([]outcome, len(s.registry.entries))
-	var wg sync.WaitGroup
-	for i, e := range s.registry.entries {
-		if scoped, ok := e.provider.(Scoped); ok && !scoped.Accepts(code) {
-			continue
-		}
-		wg.Go(func() {
-			cands, err := s.query(ctx, e, code, recheck)
-			outcomes[i] = outcome{candidates: cands, err: err}
-		})
+	s.round(ctx, code, recheck, outcomes, false)
+	if !slices.ContainsFunc(outcomes, func(o outcome) bool { return len(o.candidates) > 0 }) {
+		s.round(ctx, code, recheck, outcomes, true)
 	}
-	wg.Wait()
 
 	res := Result{Barcode: code, Candidates: []Candidate{}, Errors: []ProviderError{}}
 	order := make(map[string]int, len(outcomes))
@@ -294,6 +299,26 @@ func (s *Service) lookup(ctx context.Context, code string, recheck bool) Result 
 	})
 	res.NeedsConfirmation = needsConfirmation(res.Candidates)
 	return res
+}
+
+// round queries, concurrently, every provider that accepts code and is a
+// fallback for it exactly when fallback is set, storing each answer at the
+// provider's registry index in outcomes.
+func (s *Service) round(ctx context.Context, code string, recheck bool, outcomes []outcome, fallback bool) {
+	var wg sync.WaitGroup
+	for i, e := range s.registry.entries {
+		if scoped, ok := e.provider.(Scoped); ok && !scoped.Accepts(code) {
+			continue
+		}
+		if f, ok := e.provider.(Fallback); (ok && f.Fallback(code)) != fallback {
+			continue
+		}
+		wg.Go(func() {
+			cands, err := s.query(ctx, e, code, recheck)
+			outcomes[i] = outcome{candidates: cands, err: err}
+		})
+	}
+	wg.Wait()
 }
 
 // ErrNoCache reports a selection without a cache to keep it in.

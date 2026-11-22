@@ -284,14 +284,14 @@ func TestPolishEANsResolveToTMDB(t *testing.T) {
 		}
 	})
 
-	t.Run("books are not looked up", func(t *testing.T) {
-		if u.provider().Accepts("9788324631766") || !u.provider().Accepts("5906190326195") {
+	t.Run("an ISBN no book provider knows is looked up", func(t *testing.T) {
+		if !u.provider().Fallback("9788324631766") || u.provider().Fallback("5906190326195") {
 			t.Fatal("scope")
 		}
 		before := u.count("allegro")
-		res := svc.Lookup(context.Background(), "9788324631766")
-		if len(res.Candidates) != 0 || u.count("allegro") != before {
-			t.Fatalf("result = %+v, allegro hits %d -> %d", res, before, u.count("allegro"))
+		svc.Lookup(context.Background(), "9788324631766")
+		if u.count("allegro") == before {
+			t.Fatalf("allegro hits %d -> %d", before, u.count("allegro"))
 		}
 	})
 

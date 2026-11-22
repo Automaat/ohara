@@ -188,7 +188,10 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   `Parse` turns raw JSON into candidates) and register in `cmd/api` with a
   cache TTL. Candidate `title`/`edition` fields match the POST bodies of
   `/api/titles` and `/api/editions`. A provider that only knows some
-  barcodes implements `lookup.Scoped`. Book candidates for the scanned ISBN
+  barcodes implements `lookup.Scoped`. The movie and music providers are a
+  `lookup.Fallback` for an ISBN-range code: they are asked in a second
+  round, only when no book provider returned a candidate (a failed one
+  counts as no answer and keeps its error). Book candidates for the scanned ISBN
   from several providers merge into one; registration order is the field
   priority. Every provider gets `ohara_lookup_provider_requests_total`,
   `ohara_lookup_provider_errors_total` and `ohara_lookup_cache_hits_total`.

@@ -604,3 +604,57 @@ test('turning a phone sideways and back keeps the place on the shelf', async ({
 		.poll(() => tiles.nth(1500).evaluate((el) => el.getBoundingClientRect().top))
 		.toBeCloseTo(before, 0);
 });
+
+/**
+ * Marks a copy sold in its form and finds it under "Sprzedane" only. The copy is deleted at the
+ * end, since later tests count every copy the collection lists without a status.
+ */
+test('a copy marked sold leaves the shelf and shows under Sprzedane', async ({ page, request }) => {
+	const name = `Sprzedany ${tag()}`;
+	const { copyID } = await seed(
+		request,
+		{ kind: 'movie', name },
+		{ format: 'dvd' },
+		{ price_cents: 4999 }
+	);
+	try {
+		await page.goto(`/copies/${copyID}`);
+		const status = page.getByRole('combobox', { name: 'Status' });
+		if (await status.isVisible()) await status.selectOption('sold');
+		else await page.getByRole('radio', { name: 'Sprzedany' }).check();
+		await page.getByRole('textbox', { name: 'Data sprzedaży' }).fill('2026-05-10');
+		await page.getByRole('textbox', { name: 'Cena sprzedaży (zł)' }).fill('35');
+		await page.getByRole('button', { name: 'Zapisz zmiany' }).tap();
+		await expect(page.getByText('Zapisano.')).toBeVisible();
+		await expect(page.getByRole('heading', { name: `Sprzedany: ${name}` })).toBeVisible();
+
+		const copy = (await (await request.get(`/api/copies/${copyID}`)).json()) as {
+			status: string;
+			price_cents: number;
+			sold_on: string;
+			sale_price_cents: number;
+		};
+		expect(copy).toMatchObject({
+			status: 'sold',
+			price_cents: 4999,
+			sold_on: '2026-05-10',
+			sale_price_cents: 3500
+		});
+
+		await page.goto('/');
+		await expect(shelf(page).getByRole('listitem').first()).toBeVisible();
+		await expect(tile(page, name)).toHaveCount(0);
+
+		await page.getByRole('button', { name: /^Sortowanie i filtry/ }).tap();
+		const sheet = page.getByRole('dialog', { name: 'Sortowanie i filtry' });
+		await sheet.getByText('Sprzedane', { exact: true }).tap();
+		await expect(sheet.getByRole('switch', { name: 'Sprzedane' })).toBeChecked();
+		await expect(page).toHaveURL(/\/\?status=sold$/);
+		await sheet.getByRole('button', { name: 'Gotowe' }).tap();
+		await expect(tile(page, name)).toBeVisible();
+		await expect(tile(page, name)).toContainText(/Sprzedany 10 maj 2026 · 35,00\szł/);
+		await expectNoSourceRequests(request);
+	} finally {
+		await request.delete(`/api/copies/${copyID}`);
+	}
+});

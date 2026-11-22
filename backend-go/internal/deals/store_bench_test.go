@@ -83,8 +83,9 @@ func seedObservations(tb testing.TB, pool *pgxpool.Pool) *Want {
 			`CASE WHEN g % 10 <> 0 THEN 1000 + g % 9000 WHEN g % 100 = 0 THEN 4000 ELSE 6000 END`),
 		`INSERT INTO deal_alert (observation_id, copy_id, created_at, sent_at, attempts)
 			SELECT o.id, (o.raw->>'wishlist_copy_id')::bigint, o.observed_at,
-				CASE WHEN o.id % 2 = 0 THEN o.observed_at END, CASE WHEN o.id % 2 = 0 THEN 1 ELSE 0 END
-			FROM price_observation o WHERE o.raw ? 'wishlist_copy_id' AND o.price_cents = 4000`)
+				CASE WHEN n.g / 100 % 2 = 0 THEN o.observed_at END, CASE WHEN n.g / 100 % 2 = 0 THEN 1 ELSE 0 END
+			FROM price_observation o, LATERAL (SELECT split_part(o.external_id, '-', 2)::int AS g) n
+			WHERE o.raw ? 'wishlist_copy_id' AND o.price_cents = 4000`)
 }
 
 // seedDenseObservations fills an empty schema with seedCollection and
@@ -100,9 +101,37 @@ func seedDenseObservations(tb testing.TB, pool *pgxpool.Pool) *Want {
 			SELECT o.id, o.wishlist_copy_id, o.observed_at, o.observed_at, 1 FROM price_observation o`)
 }
 
+// seedBoughtObservations is seedDenseObservations after every one of its 50 wishes was bought,
+// with one new wish for which the hunter recorded nothing yet: no stored listing passes a
+// filter. It returns the new wish.
+func seedBoughtObservations(tb testing.TB, pool *pgxpool.Pool) *Want {
+	tb.Helper()
+	seedDenseObservations(tb, pool)
+	ctx := context.Background()
+	var w Want
+	for _, q := range []string{
+		`UPDATE copy SET status = 'owned', max_price_cents = NULL WHERE status = 'wishlist'`,
+		`INSERT INTO title (kind, name) VALUES ('movie', 'Wished later')`,
+		`INSERT INTO edition (title_id, format) SELECT id, 'bluray' FROM title WHERE name = 'Wished later'`,
+		`INSERT INTO copy (edition_id, status, max_price_cents) SELECT e.id, 'wishlist', 5000 FROM edition e
+			JOIN title t ON t.id = e.title_id WHERE t.name = 'Wished later'`,
+		`ANALYZE`,
+	} {
+		if _, err := pool.Exec(ctx, q); err != nil {
+			tb.Fatalf("seed: %v\n%s", err, q)
+		}
+	}
+	if err := pool.QueryRow(ctx, `SELECT c.id, e.id, e.title_id FROM copy c JOIN edition e ON e.id = c.edition_id
+		WHERE c.status = 'wishlist'`).Scan(&w.CopyID, &w.EditionID, &w.TitleID); err != nil {
+		tb.Fatalf("seed wish: %v", err)
+	}
+	return &w
+}
+
 // BenchmarkRecent times the deals lists the app asks for, on
 // benchObservations stored listings: those of seedObservations, then as
-// dense/ those of seedDenseObservations, which every filter keeps.
+// dense/ those of seedDenseObservations, which every filter keeps, and as
+// bought/ those of seedBoughtObservations, which no filter keeps.
 //
 //	OHARA_TEST_DATABASE_URL=... go test ./internal/deals -run '^$' -bench Recent
 func BenchmarkRecent(b *testing.B) {
@@ -113,6 +142,7 @@ func BenchmarkRecent(b *testing.B) {
 	}{
 		{prefix: "", seed: seedObservations},
 		{prefix: "dense/", seed: seedDenseObservations},
+		{prefix: "bought/", seed: seedBoughtObservations},
 	} {
 		pool := dbtest.Migrated(b)
 		history.seed(b, pool)

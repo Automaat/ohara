@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/Automaat/ohara/backend-go/internal/dbtest"
@@ -514,5 +515,38 @@ func TestExactEditionHoldsStoredListings(t *testing.T) {
 	}
 	if got := pending(); !slices.Equal(got, []string{"legacy", "plain", "steelbook"}) {
 		t.Errorf("pending alerts of a wish whose edition needs nothing = %v", got)
+	}
+}
+
+// TestRecentFreshAsOfSnapshot pins the clock a filtered page judges a Discogs listing's
+// freshness by: its snapshot's, so a listing that expired before an alert was sent is not shown
+// with that alert, even when the send commits after the page's transaction began.
+func TestRecentFreshAsOfSnapshot(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	want := wished(t, pool, *wantBluray(new(int64(5000))))
+	listing := Listing{Source: DiscogsSource, ExternalID: "expiring", Title: "Blade Runner Blu-ray", PriceCents: 4000}
+	if _, alerted, err := store.Record(ctx, &listing, &want, true); err != nil || !alerted {
+		t.Fatalf("record = %v, %v", alerted, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE price_observation
+		SET last_offered_at = now() - make_interval(secs => $1) + interval '2 seconds'`,
+		discogsShown.Seconds()); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	time.Sleep(3 * time.Second)
+	if _, err := pool.Exec(ctx, `UPDATE deal_alert SET sent_at = now(), attempts = 1`); err != nil {
+		t.Fatal(err)
+	}
+	page, err := wishedPage(ctx, tx, RecentFilter{Limit: 1, Sent: true},
+		marketTable{titles: []int64{}, formats: []string{}, cents: []int64{}})
+	if err != nil || len(page) != 0 {
+		t.Fatalf("page = %v, %v; want the expired listing left out", page, err)
 	}
 }

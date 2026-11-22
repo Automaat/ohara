@@ -650,3 +650,44 @@ func TestRecentFreshAsOfSnapshot(t *testing.T) {
 		t.Fatalf("page = %v, %v; want the expired listing left out", page, err)
 	}
 }
+
+// TestRecentLeavesOutUnverifiedAlbums pins the album recheck on both pages: a stored listing its
+// album wish no longer verifies keeps its place in the deals list without that wish, and no
+// filter keeps it.
+func TestRecentLeavesOutUnverifiedAlbums(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	want := wished(t, pool, Want{
+		Kind: "music", Name: "David Bowie aka Space Oddity", Authors: []string{"David Bowie"},
+		Format: new("vinyl"), MaxPriceCents: new(int64(9000)),
+	})
+	for _, l := range []struct{ id, title string }{
+		{id: "verified", title: "David Bowie – Space Oddity (Parlophone 2016) LP"},
+		{id: "unverified", title: "David Bowie – Hunky Dory Parlophone 2016 LP"},
+	} {
+		if _, err := pool.Exec(ctx, `INSERT INTO price_observation
+				(source, external_id, price_cents, url, edition_id, title_id, raw)
+			VALUES ('olx', $1, 5000, 'https://www.olx.pl/d/oferta/' || $1 || '.html', $2, $3,
+				jsonb_build_object('title', $4::text, 'wishlist_copy_id', $5::bigint))`,
+			l.id, want.EditionID, want.TitleID, l.title, want.CopyID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	all, err := store.Recent(ctx, RecentFilter{Limit: 10})
+	if err != nil || !slices.Equal(externalIDs(all), []string{"unverified", "verified"}) {
+		t.Fatalf("Recent() = %v, %v; want both listings", externalIDs(all), err)
+	}
+	if all[0].MaxPriceCents != nil || all[1].MaxPriceCents == nil {
+		t.Fatalf("Recent() limits = %v, %v; want the wish's only on the verified listing",
+			all[0].MaxPriceCents, all[1].MaxPriceCents)
+	}
+	for _, f := range []RecentFilter{
+		{Limit: 10, Matched: true}, {Limit: 10, UnderLimit: true},
+	} {
+		got, err := store.Recent(ctx, f)
+		if err != nil || !slices.Equal(externalIDs(got), []string{"verified"}) {
+			t.Errorf("Recent(%+v) = %v, %v; want the verified listing only", f, externalIDs(got), err)
+		}
+	}
+}

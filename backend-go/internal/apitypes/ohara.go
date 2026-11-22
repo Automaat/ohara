@@ -81,6 +81,7 @@ func Ohara() API {
 			Of[valuation.CopyValue]("CopyValue"),
 			Of[valuation.Bound]("Bound"),
 			Of[valuation.Gain]("Gain"),
+			Of[valuation.Realized]("Realized"),
 			Of[valuation.Summary]("Summary"),
 			Of[valuation.HistoryPoint]("HistoryPoint"),
 			Of[valuation.RunResult]("ValuationRunResult"),

@@ -470,6 +470,12 @@ export type Gain = {
 	spent_cents: number;
 };
 
+export type Realized = {
+	copies: number;
+	gain_cents: number;
+	unpriced: number;
+};
+
 export type Summary = {
 	copies: number;
 	spent_cents: number;
@@ -477,6 +483,7 @@ export type Summary = {
 	mid: Bound;
 	ceiling: Bound;
 	low_confidence: number;
+	realized: Realized;
 	gain: Gain;
 };
 
@@ -489,6 +496,7 @@ export type HistoryPoint = {
 	mid: Bound;
 	ceiling: Bound;
 	low_confidence: number;
+	realized: Realized;
 };
 
 export type ValuationRunResult = {

@@ -8,6 +8,7 @@ import type {
 	Estimate,
 	Gain,
 	HistoryPoint,
+	Realized,
 	RunnerStatus,
 	Summary,
 	ValuationRunResult,
@@ -25,6 +26,7 @@ export type {
 	Estimate,
 	Gain,
 	HistoryPoint,
+	Realized,
 	RunnerStatus,
 	Summary,
 	TitleValues,
@@ -218,6 +220,24 @@ export function heroFigures(summary: Summary) {
 		delta,
 		coverage
 	};
+}
+
+export const realizedLabel = 'Zysk ze sprzedaży';
+
+/**
+ * What sold copies made over what they cost, as "Zysk ze sprzedaży: −30,00 zł · 2 egzemplarze":
+ * the amount signed unless it is 0, the copies it counts and the sold copies missing a sale or
+ * purchase price, "1 bez ceny", which it leaves out. Null without a sold copy, also when an older
+ * server sent no gain.
+ */
+export function realizedLine(summary: Summary): string | null {
+	// A response from a server older than the realized gain has none.
+	const r: Realized | undefined = summary.realized;
+	if (!r || r.copies + r.unpriced === 0) return null;
+	if (r.copies === 0) return `${realizedLabel}: ${copiesLabel(r.unpriced)} bez ceny`;
+	const parts = [signed(r.gain_cents, formatPLN(Math.abs(r.gain_cents))), copiesLabel(r.copies)];
+	if (r.unpriced > 0) parts.push(`${zl.format(r.unpriced)} bez ceny`);
+	return `${realizedLabel}: ${parts.join(' · ')}`;
 }
 
 function percentOf(value: number, low: number, high: number): number {

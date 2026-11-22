@@ -168,7 +168,13 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   Moon (50th Anniversary Remaster) (Vinyl)"); a film has none. A disc
   count before the medium moves behind it ("Shogun (5 DVD)" becomes
   "Shogun (DVD, 5 płyt)"), since the matcher reads a number right after a
-  film's name as a sequel. Products out of stock, e-books and audio
+  film's name as a sequel. The `url_key`'s last word gives the listing's
+  kinds (`deals.Listing.Kinds`): `ksiazka` and `podreczniki` a book,
+  `muzyka` an album, `film` a movie or TV season; the hunter gives a
+  listing with kinds to no want of another kind, so a book about an album,
+  whose name carries the artist, never alerts that album's wish. Another
+  ending, and every other source, sets no kinds and matches by title
+  alone. Products out of stock, e-books and audio
   files (`url_key` ending `-e-book` or `-audiobook`) are left out. An
   answer with GraphQL `errors`, without `data.products.items` or that is
   no JSON counts as `parse_error`; an empty `items` list is an answer

@@ -114,6 +114,16 @@ type swiatKsiazkiPerson struct {
 	Name string `json:"name"`
 }
 
+// swiatKsiazkiKinds are the title kinds of a product by its url_key's
+// last word, the shop's catalog: a film disc can be a movie or a TV
+// season. A product with another ending says nothing of its kind.
+var swiatKsiazkiKinds = map[string][]string{
+	"ksiazka":     {"book"},
+	"podreczniki": {"book"},
+	"muzyka":      {"music"},
+	"film":        {"movie", "tv"},
+}
+
 // swiatKsiazkiFiles are the url_key endings of products that are files,
 // not copies: e-books and audio files.
 var swiatKsiazkiFiles = []string{"-e-book", "-audiobook"}
@@ -123,7 +133,9 @@ var swiatKsiazkiFiles = []string{"-e-book", "-audiobook"}
 // price is left out. The listing title is the product's authors,
 // performers and composers, then its name ("Pink Floyd - The Dark Side of
 // the Moon (Vinyl)"), since the name alone leaves them out and the
-// matcher needs a book's author and an album's artist. The name's disc
+// matcher needs a book's author and an album's artist. Its Kinds come
+// from the url_key (swiatKsiazkiKinds), so a book about an album, whose
+// name carries the artist, never alerts an album wish. The name's disc
 // count follows its medium (discCountAfterMedium). An answer with
 // GraphQL errors or without a products list is a parse error.
 func parseSwiatKsiazki(body []byte) ([]Listing, error) {
@@ -161,6 +173,7 @@ func parseSwiatKsiazki(body []byte) ([]Listing, error) {
 			PriceCents: cents,
 			AcquiredAs: new("new"),
 			Raw:        raw,
+			Kinds:      swiatKsiazkiKinds[p.URLKey[strings.LastIndexByte(p.URLKey, '-')+1:]],
 		}
 		if p.SmallImage != nil {
 			l.PhotoURL = imageURL(p.SmallImage.URL)

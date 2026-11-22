@@ -24,7 +24,10 @@ import (
 // Listing is one offer a source found. AcquiredAs is "new", "used" or nil
 // when the source does not say. Raw is the source's own record of the
 // listing, kept for later valuation work. Query is the search a Pager
-// found it with, empty for other sources.
+// found it with, empty for other sources. Kinds are the title kinds the
+// listing can be when its source's catalog says ("book", or "movie" and
+// "tv" for a film disc), nil when it does not; a listing with Kinds
+// belongs to no want of another kind.
 type Listing struct {
 	Source     string
 	ExternalID string
@@ -35,6 +38,7 @@ type Listing struct {
 	AcquiredAs *string
 	Raw        json.RawMessage
 	Query      string
+	Kinds      []string
 }
 
 func imageURL(value string) string {

@@ -59,6 +59,29 @@ func TestParseSwiatKsiazki(t *testing.T) {
 	if title := got["7634092"].Title; title != "Shogun (DVD, 5 płyt)" {
 		t.Fatalf("film title = %q", title)
 	}
+	for id, kinds := range map[string][]string{
+		"5387986": {"book"}, "6976474": {"book"}, "7420295": {"music"}, "7634092": {"movie", "tv"},
+	} {
+		if !slices.Equal(got[id].Kinds, kinds) {
+			t.Errorf("listing %s kinds = %v, want %v", id, got[id].Kinds, kinds)
+		}
+	}
+}
+
+func TestPickSkipsWantsOfAnotherKind(t *testing.T) {
+	cd := Want{Kind: "music", Name: "The Dark Side of the Moon", Authors: []string{"Pink Floyd"}, Format: new("cd")}
+	book := Listing{Title: "Pink Floyd: The Dark Side Of The Moon: The Official 50th Anniversary Book"}
+	if got := pick([]Want{cd}, &book, Rules{}, Titles{}); got == nil {
+		t.Fatalf("a listing without kinds no longer matches by title")
+	}
+	book.Kinds = []string{"book"}
+	if got := pick([]Want{cd}, &book, Rules{}, Titles{}); got != nil {
+		t.Fatalf("a book listing went to the album want")
+	}
+	shogun := Listing{Title: "Shogun (DVD, 5 płyt)", Kinds: []string{"movie", "tv"}}
+	if got := pick([]Want{{Kind: "tv", Name: "Shogun", Format: new("dvd")}}, &shogun, Rules{}, Titles{}); got == nil {
+		t.Fatalf("a film disc did not go to the TV want")
+	}
 }
 
 func TestDiscCountAfterMedium(t *testing.T) {
@@ -232,5 +255,26 @@ func TestRunAlertsOnSwiatKsiazkiListing(t *testing.T) {
 	}
 	if res := mustRun(t, h); res.New != 0 || res.Sent != 0 {
 		t.Fatalf("repeat run = %+v, want nothing new", res)
+	}
+}
+
+// TestRunKeepsSwiatKsiazkiBooksFromAlbumWishes: the fixture's two books
+// about the album carry "Pink Floyd" in their names, yet a CD wish under
+// a limit above both alerts only for the CD.
+func TestRunKeepsSwiatKsiazkiBooksFromAlbumWishes(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	wishlist(t, pool, &Want{
+		Kind: "music", Name: "The Dark Side of the Moon", Authors: []string{"Pink Floyd"},
+		Format: new("cd"), MaxPriceCents: new(int64(20000)),
+	})
+	d := newSwiatKsiazkiDouble(t)
+	notifier := &fakeNotifier{}
+	h := newTestHunter(pool, notifier, SwiatKsiazki{Client: d.srv.Client(), BaseURL: d.srv.URL + "/graphql"})
+
+	if res := mustRun(t, h); len(res.Errors) != 0 || res.Matched != 1 || res.Sent != 1 {
+		t.Fatalf("run = %+v, want only the CD", res)
+	}
+	if msgs := notifier.messages(); len(msgs) != 1 || !strings.Contains(msgs[0], "-7420295-muzyka.html") {
+		t.Fatalf("messages = %q, want one for the Digipack CD", msgs)
 	}
 }

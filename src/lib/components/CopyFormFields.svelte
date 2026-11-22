@@ -13,8 +13,10 @@
 	import {
 		acquiredLabels,
 		conditionLabels,
+		mediaGradeLabels,
 		options,
 		priceHint,
+		sleeveGradeLabels,
 		statusLabels,
 		type CopyForm,
 		type CopyStatus,
@@ -40,7 +42,10 @@
 		submitLabel: string;
 		/** The used market price of the copy's title and format, shown under a wish's limit. */
 		market?: MarketPrice | null;
-		/** The kind of the copy's title: an album's wish has no edition-only matching. */
+		/**
+		 * The kind of the copy's title: an album's wish has no edition-only matching, and only an
+		 * album's copy takes the Goldmine grades.
+		 */
 		kind?: Kind | null;
 		onsubmit: () => void;
 		oncancel?: () => void;
@@ -75,6 +80,8 @@
 		'shop',
 		'acquired_as',
 		'condition',
+		'media_grade',
+		'sleeve_grade',
 		'notes',
 		'max_price_cents',
 		'max_market_percent',
@@ -218,6 +225,30 @@
 			/>
 		{/snippet}
 	</Field>
+	{#if kind === 'music'}
+		<Field
+			label="Stan nośnika"
+			hint="Skala Goldmine, jak na Discogs."
+			error={errorFor('media_grade')}
+		>
+			{#snippet control(c)}
+				<Select
+					{...c}
+					bind:value={form.media_grade}
+					options={[{ value: '', label: 'Nie oceniono' }, ...options(mediaGradeLabels)]}
+				/>
+			{/snippet}
+		</Field>
+		<Field label="Stan okładki" error={errorFor('sleeve_grade')}>
+			{#snippet control(c)}
+				<Select
+					{...c}
+					bind:value={form.sleeve_grade}
+					options={[{ value: '', label: 'Nie oceniono' }, ...options(sleeveGradeLabels)]}
+				/>
+			{/snippet}
+		</Field>
+	{/if}
 	<Field label="Notatki" error={errorFor('notes')}>
 		{#snippet control(c)}
 			<Textarea {...c} rows={3} bind:value={form.notes} />

@@ -626,6 +626,8 @@ export function scanCopyPayload(f: QuickForm, editionID: number, requestKey: str
 			shop: owned ? f.shop : '',
 			acquired_as: owned ? f.acquired_as : '',
 			condition: owned && f.acquired_as === 'used' ? f.condition : '',
+			media_grade: '',
+			sleeve_grade: '',
 			notes: '',
 			max_price: owned ? '' : f.price,
 			market_percent: '',

@@ -96,6 +96,12 @@ func (s *Store) UpdateGone(ctx context.Context, source string, complete, seen []
 	return s.deals.UpdateGone(ctx, source, complete, seen, since)
 }
 
+// HoldRun takes the run lock shared until the returned function runs, so
+// no prune runs during a valuation (deals.Store.HoldRun).
+func (s *Store) HoldRun(ctx context.Context) (func(), error) {
+	return s.deals.HoldRun(ctx)
+}
+
 // MarkOffered records that an answer of source held the listings with
 // externalIDs, through the deal hunter's store (deals.Store.MarkOffered).
 func (s *Store) MarkOffered(ctx context.Context, source string, externalIDs []string) error {

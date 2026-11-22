@@ -324,22 +324,28 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   query, a listing last found by a query whose answer held fewer offers
   than the 50 asked for, each with a readable ID (`deals.Pager`, a
   complete answer), that no answer of the run held (priced or not) and
-  last seen before the run started on the database clock gets `gone_at`; `last_seen_at` keeps its last
-  sighting. A first page, a failed or skipped query tells nothing, and a
+  neither seen with a price nor offered at all (`last_seen_at`,
+  `last_offered_at`) since the run started on the database clock gets
+  `gone_at`; `last_seen_at` keeps its last sighting. A first page, a failed or skipped query tells nothing, and a
   gone listing any answer holds again, matching or not, is no longer gone.
   Gone listings stay stored and price as before; no request is sent per
-  listing. Every hunt or valuation answer that holds a stored listing,
-  priced or not, matching or not, moves its `last_offered_at` (null for
-  rows not offered since migration 0023); `last_seen_at` moves only with a
-  recorded price. Stored listings stay forever unless
-  `OHARA_PRICE_RETENTION_DAYS` is set (never below the valuation window):
-  then the valuation runner, scheduled or not, deletes in batches of 1000
-  those whose later of the two is older, 5 minutes after start and then
-  daily, logs the count and adds it to
-  `ohara_price_observations_pruned_total`. A listing whose alert is unsent
-  with attempts left and younger than a week stays, as does one a run or
-  an alert holds; its other alerts go through the cascade. A listing the
-  runs still see is never pruned. An owned album edition
+  listing. Every hunt or valuation answer, canary and feed answers with an
+  empty wishlist included, moves `last_offered_at` (null for rows not
+  offered since migration 0023) of every stored listing it holds, priced
+  or not, matching or not, as it arrives: an OLX or Pepper `deals.Pager`
+  names every offer with a readable ID in `Page.Seen`, also those its
+  listings leave out; `last_seen_at` moves only with a recorded price.
+  Stored listings stay forever unless `OHARA_PRICE_RETENTION_DAYS` is set
+  (never below the valuation window): then the valuation runner, scheduled
+  or not, deletes in batches of 1000 those whose later of the two is
+  older, 5 minutes after start and then daily, logs the count and adds it
+  to `ohara_price_observations_pruned_total`. A hunt or valuation holds a
+  shared advisory lock (keyed by schema) on a connection of its own for
+  its whole run; a prune takes it exclusive without waiting, so it never
+  runs during one: it deletes nothing and tries again 10 minutes later. A
+  listing whose alert is unsent with attempts left and younger than a week
+  stays, as does one an alert holds; its other alerts go through the
+  cascade. A listing the runs still see is never pruned. An owned album edition
   with a `discogs_release_id` is
   priced on Discogs (marketplace stats in EUR, price suggestions in the
   seller-settings currency, converted to PLN at the NBP table A rate): its

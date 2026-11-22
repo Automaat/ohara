@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -27,6 +28,10 @@ const firstRunDelay = 5 * time.Minute
 // pruneInterval is how often stored listings past the retention are
 // deleted.
 const pruneInterval = 24 * time.Hour
+
+// pruneRetry is how soon a prune that found a hunt or valuation running
+// tries again.
+const pruneRetry = 10 * time.Minute
 
 // Config tunes the runner. Interval 0 disables the schedule; a run can
 // still be started by hand. Delay separates two source requests, jittered.
@@ -159,8 +164,10 @@ func (r *Runner) Start(ctx context.Context) {
 		r.wg.Go(func() {
 			wait := jitter(firstRunDelay, 0.1)
 			for r.sleep(ctx, wait) == nil {
-				r.prune(ctx)
 				wait = jitter(pruneInterval, 0.1)
+				if !r.prune(ctx) {
+					wait = jitter(pruneRetry, 0.1)
+				}
 			}
 		})
 	}
@@ -240,22 +247,27 @@ func (r *Runner) execute(ctx context.Context) {
 }
 
 // prune deletes the stored listings past the retention, logs how many and
-// counts them in ohara_price_observations_pruned_total. A failure or a
-// panic is logged and the next prune tries again.
-func (r *Runner) prune(ctx context.Context) {
+// counts them in ohara_price_observations_pruned_total. It reports false
+// when a hunt or valuation was running, so nothing was deleted and the
+// prune is due again soon. A failure or a panic is logged and the next
+// daily prune tries again.
+func (r *Runner) prune(ctx context.Context) bool {
 	n, err := recovery.Call(r.logger, "pruning listings panicked", func() (int64, error) {
 		return r.store.Prune(ctx, r.cfg.Retention)
 	})
 	metrics.AddPrunedListings(n)
-	if err != nil && ctx.Err() != nil {
+	switch {
+	case errors.Is(err, deals.ErrRunning):
+		r.logger.Info("prune listings waits for a running hunt or valuation", "retry_in", pruneRetry)
+		return false
+	case err != nil && ctx.Err() != nil:
 		r.logger.Info("prune listings stopped by shutdown", "pruned", n)
-		return
-	}
-	if err != nil {
+	case err != nil:
 		r.logger.Error("prune listings", "err", err, "pruned", n)
-		return
+	default:
+		r.logger.Info("pruned listings", "pruned", n, "retention_days", int(r.cfg.Retention.Hours()/24))
 	}
-	r.logger.Info("pruned listings", "pruned", n, "retention_days", int(r.cfg.Retention.Hours()/24))
+	return true
 }
 
 // run is one valuation: its counters and pacing between requests.
@@ -278,6 +290,11 @@ type run struct {
 // Source failures are collected in the result; a database failure or
 // cancellation stops the run.
 func (r *Runner) Run(ctx context.Context) (RunResult, error) {
+	release, err := r.store.HoldRun(ctx)
+	if err != nil {
+		return RunResult{}, err
+	}
+	defer release()
 	asOf, err := r.store.Now(ctx)
 	if err != nil {
 		return RunResult{}, err
@@ -410,14 +427,19 @@ func (x *run) search(ctx context.Context, src deals.Source, queries []string) er
 			complete = append(complete, deals.QueryKey(q))
 		}
 		x.res.Listings += len(listings)
-		seen = append(seen, page.Seen...)
+		offered := page.Seen
 		if !paged {
+			offered = nil
 			for i := range listings {
 				if listings[i].ExternalID != "" {
-					seen = append(seen, listings[i].ExternalID)
+					offered = append(offered, listings[i].ExternalID)
 				}
 			}
 		}
+		if err := x.r.store.MarkOffered(ctx, src.Name(), offered); err != nil {
+			return err
+		}
+		seen = append(seen, offered...)
 		for i := range listings {
 			l := &listings[i]
 			h := match(x.holdings, l, x.rules, x.titles)
@@ -435,7 +457,7 @@ func (x *run) search(ctx context.Context, src deals.Source, queries []string) er
 		}
 	}
 	if !paged {
-		return x.r.store.MarkOffered(ctx, src.Name(), seen)
+		return nil
 	}
 	return x.gone(ctx, src.Name(), complete, seen)
 }

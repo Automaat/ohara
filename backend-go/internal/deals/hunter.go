@@ -288,6 +288,11 @@ type run struct {
 // Source failures are collected in the result; a database failure or
 // cancellation stops the run.
 func (h *Hunter) Run(ctx context.Context) (RunResult, error) {
+	release, err := h.store.HoldRun(ctx)
+	if err != nil {
+		return RunResult{}, err
+	}
+	defer release()
 	asOf, err := h.store.Now(ctx)
 	if err != nil {
 		return RunResult{}, err
@@ -397,9 +402,6 @@ func (r *run) searchAll(ctx context.Context, src Source, f *Refused, queries []s
 		}
 		r.canary(src, ok, len(listings))
 		results += len(listings)
-		if err := r.offered(ctx, listings); err != nil {
-			return err
-		}
 	}
 	for _, q := range queries {
 		listings, ok, err := r.ask(ctx, src, f, q)
@@ -421,8 +423,10 @@ func (r *run) searchAll(ctx context.Context, src Source, f *Refused, queries []s
 // ask sends one request to the source after the pause and counts its
 // outcome. A source failure is logged and kept in the result with ok
 // false; a refusal is kept once, when the source is done. A source that
-// refused is not asked again: the query is skipped without a pause. err is
-// only the run's cancellation.
+// refused is not asked again: the query is skipped without a pause. Every
+// offer a successful answer holds, priced or not, matching or not, is
+// recorded as offered (Store.MarkOffered) before ask returns. err is the
+// run's cancellation or a database failure.
 func (r *run) ask(ctx context.Context, src Source, f *Refused, query string) ([]Listing, bool, error) {
 	if f.Skip() {
 		return nil, false, ctx.Err()
@@ -430,7 +434,7 @@ func (r *run) ask(ctx context.Context, src Source, f *Refused, query string) ([]
 	if err := r.pause(ctx); err != nil {
 		return nil, false, err
 	}
-	listings, err := src.Search(ctx, query)
+	page, err := searchPage(ctx, src, query)
 	if err != nil && ctx.Err() != nil {
 		return nil, false, ctx.Err()
 	}
@@ -442,7 +446,29 @@ func (r *run) ask(ctx context.Context, src Source, f *Refused, query string) ([]
 		}
 		return nil, false, nil
 	}
-	return listings, true, nil
+	if err := r.h.store.MarkOffered(ctx, src.Name(), page.Seen); err != nil {
+		return nil, false, err
+	}
+	return page.Listings, true, nil
+}
+
+// searchPage asks src one query. A Pager's answer names every offer it
+// holds in Seen; another source's Seen is its listings' external IDs.
+func searchPage(ctx context.Context, src Source, query string) (Page, error) {
+	if pager, ok := src.(Pager); ok {
+		return pager.SearchPage(ctx, query)
+	}
+	listings, err := src.Search(ctx, query)
+	if err != nil {
+		return Page{}, err
+	}
+	page := Page{Listings: listings}
+	for i := range listings {
+		if listings[i].ExternalID != "" {
+			page.Seen = append(page.Seen, listings[i].ExternalID)
+		}
+	}
+	return page, nil
 }
 
 // canary publishes the canary outcome of src; an answer without listings
@@ -462,24 +488,6 @@ func (r *run) fail(msg string) {
 	}
 }
 
-// offered records that one answer held listings, matching or not
-// (Store.MarkOffered), so the stored ones a run still sees outlast
-// OHARA_PRICE_RETENTION_DAYS.
-func (r *run) offered(ctx context.Context, listings []Listing) error {
-	ids := map[string][]string{}
-	for i := range listings {
-		if l := &listings[i]; l.ExternalID != "" {
-			ids[l.Source] = append(ids[l.Source], l.ExternalID)
-		}
-	}
-	for source, ext := range ids {
-		if err := r.h.store.MarkOffered(ctx, source, ext); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // record stores the matching listings of one answer, then sends their
 // pending alerts before the run asks a source again. PendingAlerts checks
 // the refreshed price against the wish's current limit and market share,
@@ -487,9 +495,6 @@ func (r *run) offered(ctx context.Context, listings []Listing) error {
 // this run that met no rule is judged again against the market prices read
 // once the answer is stored, since its listings may have moved them.
 func (r *run) record(ctx context.Context, listings []Listing) error {
-	if err := r.offered(ctx, listings); err != nil {
-		return err
-	}
 	r.res.Listings += len(listings)
 	refreshed := map[string]bool{}
 	for i := range listings {

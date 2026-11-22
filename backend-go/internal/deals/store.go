@@ -424,12 +424,12 @@ func record(ctx context.Context, tx pgx.Tx, l *Listing, w *Want, alert bool, asO
 // and whose answers to the query keys complete held every offer the site
 // has. A listing seen is offered, so it is no longer gone, whether or not
 // it still matches what it was stored for. A listing last found by one of
-// complete, not seen and last seen before since (the run's start on the
-// database clock, so a listing another run recorded meanwhile stays) is
-// gone. gone_at is set once; last_seen_at keeps the last time the listing
-// was offered with a price and last_offered_at the last time it was
-// offered at all (MarkOffered). It reports how many listings it marked
-// gone.
+// complete, not seen, and neither seen with a price nor offered at all
+// after since (the run's start on the database clock, so a listing another
+// run recorded or saw meanwhile stays) is gone. gone_at is set once;
+// last_seen_at keeps the last time the listing was offered with a price
+// and last_offered_at the last time it was offered at all (MarkOffered).
+// It reports how many listings it marked gone.
 func (s *Store) UpdateGone(ctx context.Context, source string, complete, seen []string, since time.Time) (int64, error) {
 	seen = append([]string{}, seen...)
 	if err := s.MarkOffered(ctx, source, seen); err != nil {
@@ -440,7 +440,8 @@ func (s *Store) UpdateGone(ctx context.Context, source string, complete, seen []
 	}
 	tag, err := s.pool.Exec(ctx, `UPDATE price_observation SET gone_at = now()
 		WHERE source = $1 AND gone_at IS NULL AND external_id IS NOT NULL
-			AND raw->>'query' = ANY ($2) AND external_id <> ALL ($3) AND last_seen_at < $4`,
+			AND raw->>'query' = ANY ($2) AND external_id <> ALL ($3)
+			AND greatest(last_seen_at, last_offered_at) < $4`,
 		source, complete, seen, since)
 	if err != nil {
 		return 0, fmt.Errorf("mark gone: %w", err)
@@ -468,6 +469,43 @@ func (s *Store) MarkOffered(ctx context.Context, source string, externalIDs []st
 // statement holds many rows or runs long.
 const pruneBatch = 1000
 
+// runLock is the advisory lock key a hunt or valuation holds shared for
+// its whole run (HoldRun) and Prune holds exclusive, so a listing a run
+// has seen but not yet recorded is never pruned under it. The key names
+// the schema, as advisory locks span the database.
+const runLock = `hashtextextended('ohara.run:' || current_schema(), 0)`
+
+// ErrRunning reports that Prune found a hunt or valuation running and
+// deleted nothing.
+var ErrRunning = errors.New("a hunt or valuation is running")
+
+// HoldRun takes the run lock shared on a connection of its own, waiting
+// for a prune in progress, and returns the function that gives it back.
+// A connection whose unlock fails is closed, which drops its lock.
+func (s *Store) HoldRun(ctx context.Context) (func(), error) {
+	conn, err := s.pool.Acquire(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("run lock: %w", err)
+	}
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock_shared(`+runLock+`)`); err != nil {
+		closeConn(ctx, conn)
+		return nil, fmt.Errorf("run lock: %w", err)
+	}
+	return func() {
+		if _, err := conn.Exec(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock_shared(`+runLock+`)`); err != nil {
+			closeConn(ctx, conn)
+			return
+		}
+		conn.Release()
+	}, nil
+}
+
+// closeConn takes conn out of the pool and closes it, ending its session
+// and with it every advisory lock it holds.
+func closeConn(ctx context.Context, conn *pgxpool.Conn) {
+	_ = conn.Hijack().Close(context.WithoutCancel(ctx))
+}
+
 // Prune deletes the listings neither seen with a price (last_seen_at) nor
 // offered at all (last_offered_at) within olderThan, in batches of
 // pruneBatch, and reports how many it deleted. A listing whose alert is
@@ -475,12 +513,38 @@ const pruneBatch = 1000
 // whatever its age, and a listing another transaction holds (a run
 // recording it, an alert on its way) is left for the next prune. Their
 // alerts go with them through deal_alert's cascade. Every answer that
-// holds a stored listing moves one of the two, so a listing the runs still
-// see is never deleted.
+// holds a stored listing moves one of the two as it arrives, and Prune
+// takes the run lock exclusive without waiting: while a hunt or valuation
+// runs it deletes nothing and returns ErrRunning, so a listing the runs
+// still see is never deleted.
 func (s *Store) Prune(ctx context.Context, olderThan time.Duration) (int64, error) {
+	conn, err := s.pool.Acquire(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("prune listings: %w", err)
+	}
+	var locked bool
+	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock(`+runLock+`)`).Scan(&locked); err != nil {
+		closeConn(ctx, conn)
+		return 0, fmt.Errorf("prune listings: lock: %w", err)
+	}
+	if !locked {
+		conn.Release()
+		return 0, ErrRunning
+	}
+	total, err := prune(ctx, conn, olderThan)
+	if _, unlockErr := conn.Exec(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock(`+runLock+`)`); unlockErr != nil {
+		closeConn(ctx, conn)
+		return total, err
+	}
+	conn.Release()
+	return total, err
+}
+
+// prune is Prune's deletes, on conn, which holds the run lock.
+func prune(ctx context.Context, conn *pgxpool.Conn, olderThan time.Duration) (int64, error) {
 	var total int64
 	for {
-		tag, err := s.pool.Exec(ctx, `DELETE FROM price_observation WHERE id IN (
+		tag, err := conn.Exec(ctx, `DELETE FROM price_observation WHERE id IN (
 			SELECT o.id FROM price_observation o
 			WHERE greatest(o.last_seen_at, o.last_offered_at) < now() - make_interval(secs => $1)
 				AND NOT EXISTS (SELECT FROM deal_alert a WHERE a.observation_id = o.id

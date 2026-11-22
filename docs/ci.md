@@ -79,6 +79,10 @@ What the settings do not cover:
   creates tags, so such a release can only name a commit a `main` run
   tagged; an old copy never gets there, because its own tag push fails
   first.
+- A draft release changes no ref either, so any token with
+  `contents: write` can save a draft for a tag that does not exist. It
+  creates no tag and stays private to writers, and publishing it is
+  refused: publishing creates the tag, which the ruleset refuses.
 - Every job on `main` that names `environment: release` gets the key,
   whatever its workflow file. Add the environment to no other job.
 - Every write deploy key bypasses the ruleset, so add no other deploy key

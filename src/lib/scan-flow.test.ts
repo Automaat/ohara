@@ -7,8 +7,10 @@ import {
 	ScanFlow,
 	checkTimeout,
 	announceSettle,
+	phaseTitle,
 	resetVisit,
 	resultAnnouncement,
+	type FlowPhase,
 	type Keeper
 } from './scan-flow.svelte';
 import { resetSession, session } from './session.svelte';
@@ -1443,6 +1445,37 @@ describe('ScanFlow.manual and dismiss', () => {
 		flow.dismiss();
 		flow.manual();
 		expect(recentScans.list).toHaveLength(0);
+	});
+});
+
+describe('phaseTitle', () => {
+	it.each([
+		[{ kind: 'loading' }, 'Sprawdzam kod…'],
+		[
+			{
+				kind: 'queued',
+				entry: {
+					id: 1,
+					barcode: '5901234123457',
+					reason: 'lookup_failed',
+					detail: '',
+					scans: 1,
+					created_at: '',
+					last_scanned_at: ''
+				}
+			},
+			'Nie znaleziono'
+		],
+		[{ kind: 'invalid', message: 'x' }, 'Nieprawidłowy kod'],
+		[{ kind: 'failed', message: 'x' }, 'Nie udało się sprawdzić kodu'],
+		[{ kind: 'offline' }, 'Zapisano bez połączenia'],
+		[{ kind: 'expired', saved: true }, 'Sesja wygasła'],
+		[{ kind: 'expired', saved: false }, 'Sesja wygasła'],
+		[{ kind: 'ready', status: 'found' }, 'Znaleziono'],
+		[{ kind: 'ready', status: 'owned' }, 'Masz już to wydanie'],
+		[{ kind: 'ready', status: 'missing' }, 'Dodaj ręcznie']
+	] satisfies [FlowPhase, string][])('titles %o as %s', (phase, title) => {
+		expect(phaseTitle(phase)).toBe(title);
 	});
 });
 

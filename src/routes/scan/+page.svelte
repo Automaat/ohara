@@ -34,7 +34,7 @@
 	import { pendingScans } from '#lib/pending-scans.svelte.js';
 	import { queueTally } from '#lib/queue-tally.svelte.js';
 	import { outcomeLabels, outcomeTones, recentScans } from '#lib/recent.svelte.js';
-	import { ScanFlow, type Added } from '#lib/scan-flow.svelte.js';
+	import { ScanFlow, phaseTitle, type Added } from '#lib/scan-flow.svelte.js';
 	import { addLine, session, sessionSpent, undoAdd, type SessionAdd } from '#lib/session.svelte.js';
 	import {
 		RepeatGuard,
@@ -43,6 +43,7 @@
 		cleanBarcode,
 		looksLikeBarcode
 	} from '#lib/scan.js';
+	import { toastHeld } from '#lib/toast-hold.js';
 
 	type Sheet = NonNullable<App.PageState['scanSheet']>;
 
@@ -95,10 +96,7 @@
 		{
 			toast,
 			dismiss,
-			holding: (id) => {
-				const el = document.querySelector(`[data-toast="${id}"]`);
-				return el !== null && (el.matches(':hover') || el.contains(document.activeElement));
-			},
+			holding: (id) => toastHeld(document, id),
 			single: () => cramped,
 			listing: () => listOpen
 		},
@@ -108,7 +106,7 @@
 	const sheet = $derived(page.state.scanSheet);
 	const trayShown = $derived(session.adds.length > 0);
 	const spent = $derived(formatPLN(sessionSpent(session.adds)));
-	const sheetTitle = $derived(titleFor());
+	const sheetTitle = $derived(phaseTitle(flow.phase));
 	const sheetStyle = $derived(
 		[
 			sheetTop === null ? '' : `--scan-sheet-top: ${sheetTop}px`,
@@ -118,26 +116,6 @@
 			.filter(Boolean)
 			.join('; ')
 	);
-
-	function titleFor(): string {
-		const p = flow.phase;
-		switch (p.kind) {
-			case 'loading':
-				return 'Sprawdzam kod…';
-			case 'queued':
-				return 'Nie znaleziono';
-			case 'invalid':
-				return 'Nieprawidłowy kod';
-			case 'failed':
-				return 'Nie udało się sprawdzić kodu';
-			case 'offline':
-				return 'Zapisano bez połączenia';
-			case 'expired':
-				return 'Sesja wygasła';
-		}
-		if (p.status === 'owned') return 'Masz już to wydanie';
-		return p.status === 'missing' ? 'Dodaj ręcznie' : 'Znaleziono';
-	}
 
 	/** Stands the phone sheet's top just below the top of the scan band, so the band stays in view. */
 	function placeSheet() {

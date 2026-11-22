@@ -1191,7 +1191,7 @@ func (s *Store) LastRun(ctx context.Context) (LastRun, bool, error) {
 		if err := json.Unmarshal(result, &res); err != nil {
 			return LastRun{}, false, fmt.Errorf("last run result: %w", err)
 		}
-		res.RunResult.coverage = res.Coverage
+		res.coverage = res.Coverage
 		run.Result = &res.RunResult
 	}
 	return run, true, nil

@@ -57,10 +57,11 @@ func TestPruneDuringAValuation(t *testing.T) {
 		exec(t, pool, `INSERT INTO price_observation (source, external_id, price_cents, raw, last_seen_at)
 			VALUES ('olx', 'old', 2000, '{}', now() - interval '200 days')`)
 		store := NewStore(pool)
-		release, err := store.HoldRun(t.Context())
+		release, err := store.HoldRun(context.Background())
 		if err != nil {
 			t.Fatal(err)
 		}
+		t.Cleanup(release)
 		r := NewRunner(store, nil, nil, nil, Config{Window: 90 * day, Retention: 100 * day}, slog.New(slog.DiscardHandler))
 		var waits []time.Duration
 		r.sleep = func(_ context.Context, d time.Duration) error {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -493,24 +494,56 @@ const runLock = `hashtextextended('ohara.run:' || current_schema(), 0)`
 // deleted nothing.
 var ErrRunning = errors.New("a hunt or valuation is running")
 
-// HoldRun takes the run lock shared on a connection of its own, waiting
-// for a prune in progress, and returns the function that gives it back.
-// A connection whose unlock fails is closed, which drops its lock.
+// running counts the hunts and valuations this process runs against each
+// pool, so Prune defers to them even when a run's lock session ended under
+// it (a server timeout or a dropped connection releases the advisory lock
+// while the run goes on).
+var running = struct {
+	sync.Mutex
+	runs map[*pgxpool.Pool]int
+}{runs: map[*pgxpool.Pool]int{}}
+
+func addRunning(pool *pgxpool.Pool, n int) {
+	running.Lock()
+	defer running.Unlock()
+	running.runs[pool] += n
+	if running.runs[pool] == 0 {
+		delete(running.runs, pool)
+	}
+}
+
+func isRunning(pool *pgxpool.Pool) bool {
+	running.Lock()
+	defer running.Unlock()
+	return running.runs[pool] > 0
+}
+
+// HoldRun marks a hunt or valuation running in this process and takes the
+// run lock shared on a connection of its own, waiting for a prune in
+// progress. It returns the function that gives both back. A connection
+// whose unlock fails is closed, which drops its lock.
 func (s *Store) HoldRun(ctx context.Context) (func(), error) {
+	addRunning(s.pool, 1)
 	conn, err := s.pool.Acquire(ctx)
 	if err != nil {
+		addRunning(s.pool, -1)
 		return nil, fmt.Errorf("run lock: %w", err)
 	}
 	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock_shared(`+runLock+`)`); err != nil {
 		closeConn(ctx, conn)
+		addRunning(s.pool, -1)
 		return nil, fmt.Errorf("run lock: %w", err)
 	}
+	var once sync.Once
 	return func() {
-		if _, err := conn.Exec(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock_shared(`+runLock+`)`); err != nil {
-			closeConn(ctx, conn)
-			return
-		}
-		conn.Release()
+		once.Do(func() {
+			defer addRunning(s.pool, -1)
+			if _, err := conn.Exec(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock_shared(`+runLock+`)`); err != nil {
+				closeConn(ctx, conn)
+				return
+			}
+			conn.Release()
+		})
 	}, nil
 }
 
@@ -529,9 +562,13 @@ func closeConn(ctx context.Context, conn *pgxpool.Conn) {
 // alerts go with them through deal_alert's cascade. Every answer that
 // holds a stored listing moves one of the two as it arrives, and Prune
 // takes the run lock exclusive without waiting: while a hunt or valuation
-// runs it deletes nothing and returns ErrRunning, so a listing the runs
-// still see is never deleted.
+// runs, in this process or holding the lock from another, it deletes
+// nothing and returns ErrRunning, so a listing the runs still see is never
+// deleted.
 func (s *Store) Prune(ctx context.Context, olderThan time.Duration) (int64, error) {
+	if isRunning(s.pool) {
+		return 0, ErrRunning
+	}
 	conn, err := s.pool.Acquire(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("prune listings: %w", err)

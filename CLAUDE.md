@@ -365,8 +365,10 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   older, 5 minutes after start and then daily, logs the count and adds it
   to `ohara_price_observations_pruned_total`. A hunt or valuation holds a
   shared advisory lock (keyed by schema) on a connection of its own for
-  its whole run; a prune takes it exclusive without waiting, so it never
-  runs during one: it deletes nothing and tries again 10 minutes later. A
+  its whole run and is counted as running in the process, which still
+  holds if that lock's session ends; a prune takes the lock exclusive
+  without waiting and checks the count, so it never runs during one: it
+  deletes nothing and tries again 10 minutes later. A
   listing whose alert is unsent with attempts left and younger than a week
   stays, as does one an alert holds; its other alerts go through the
   cascade. A listing the runs still see is never pruned.

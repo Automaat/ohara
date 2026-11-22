@@ -142,10 +142,41 @@ func TestPruneWaitsForRuns(t *testing.T) {
 		if err != nil {
 			t.Fatalf("HoldRun: %v", err)
 		}
+		t.Cleanup(release)
 		n, err := store.Prune(ctx, 30*24*time.Hour)
 		if !errors.Is(err, ErrRunning) || n != 0 {
 			t.Fatalf("Prune during a run = %d, %v; want 0, ErrRunning", n, err)
 		}
+		release()
+		if got := pruneAt30Days(t, pool); len(got) != 0 {
+			t.Fatalf("listings %v after the run, want the old one pruned", got)
+		}
+	})
+
+	t.Run("defers to a run whose lock session ended", func(t *testing.T) {
+		pool := dbtest.Migrated(t)
+		oldListing(t, pool, "olx", "old")
+		store := NewStore(pool)
+		release, err := store.HoldRun(ctx)
+		if err != nil {
+			t.Fatalf("HoldRun: %v", err)
+		}
+		t.Cleanup(release)
+		var ended int
+		if err := pool.QueryRow(ctx, `SELECT count(pg_terminate_backend(l.pid)) FROM pg_locks l
+			WHERE l.locktype = 'advisory' AND l.mode = 'ShareLock'
+				AND (l.classid::bigint << 32 | l.objid::bigint) = (`+runLock+` & x'ffffffffffffffff'::bigint)`).
+			Scan(&ended); err != nil {
+			t.Fatal(err)
+		}
+		if ended != 1 {
+			t.Fatalf("ended %d lock sessions, want the run's one", ended)
+		}
+		n, err := store.Prune(ctx, 30*24*time.Hour)
+		if !errors.Is(err, ErrRunning) || n != 0 {
+			t.Fatalf("Prune while the run goes on without its lock = %d, %v; want 0, ErrRunning", n, err)
+		}
+		release()
 		release()
 		if got := pruneAt30Days(t, pool); len(got) != 0 {
 			t.Fatalf("listings %v after the run, want the old one pruned", got)
@@ -159,7 +190,7 @@ func TestPruneWaitsForRuns(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer first()
+		t.Cleanup(first)
 		timeout, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 		second, err := store.HoldRun(timeout)

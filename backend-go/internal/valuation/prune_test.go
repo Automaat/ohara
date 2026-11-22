@@ -123,6 +123,12 @@ func TestRetentionPrunesListings(t *testing.T) {
 		pool := dbtest.Migrated(t)
 		seed(t, pool)
 		seedPrices(t, pool)
+		exec(t, pool, `INSERT INTO price_observation
+				(source, external_id, price_cents, edition_id, title_id, acquired_as, observed_at, last_seen_at, gone_at)
+			VALUES ('olx', 's1', 1900, 10, 1, 'used', now() - interval '40 days', now() - interval '35 days', now() - interval '30 days'),
+			       ('olx', 's2', 2100, 10, 1, 'used', now() - interval '50 days', now() - interval '45 days', now() - interval '40 days'),
+			       ('olx', 's3', 2200, 10, 1, 'used', now() - interval '60 days', now() - interval '55 days', now() - interval '50 days'),
+			       ('olx', 's-old', 500, 10, 1, 'used', now() - interval '300 days', now() - interval '295 days', now() - interval '290 days')`)
 		ctx := t.Context()
 		store := NewStore(pool)
 		copiesBefore, sumBefore, err := store.Valued(ctx, 90*day)
@@ -131,8 +137,8 @@ func TestRetentionPrunesListings(t *testing.T) {
 		}
 		r := NewRunner(store, nil, nil, nil, Config{Window: 90 * day, Retention: 90 * day}, logger)
 		r.prune(ctx)
-		if got := storedListings(t, pool); len(got) != 7 {
-			t.Fatalf("listings %v, want the 3 older than 90 days pruned", got)
+		if got := storedListings(t, pool); len(got) != 10 {
+			t.Fatalf("listings %v, want the 4 older than 90 days pruned", got)
 		}
 		copiesAfter, sumAfter, err := store.Valued(ctx, 90*day)
 		if err != nil {
@@ -143,6 +149,13 @@ func TestRetentionPrunesListings(t *testing.T) {
 		}
 		if sumBefore.Mid.Copies == 0 || sumBefore.Floor.Copies == 0 {
 			t.Fatalf("summary %+v values no copy: the comparison proves nothing", sumBefore)
+		}
+		likelySold := false
+		for i := range copiesBefore {
+			likelySold = likelySold || copiesBefore[i].LikelySold != nil
+		}
+		if !likelySold {
+			t.Fatalf("copies %+v have no likely-sold price: the comparison does not cover it", copiesBefore)
 		}
 	})
 }

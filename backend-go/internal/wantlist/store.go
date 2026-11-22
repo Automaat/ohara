@@ -57,8 +57,8 @@ func (s *Store) Wished(ctx context.Context) (Wished, error) {
 
 // Owned is the record of a want Ohara put on the wantlist. ConfirmedAt is
 // when Discogs accepted the add, nil while its outcome is unknown;
-// DiscogsAddedAt is the date_added Discogs keeps for that want, nil until
-// a sync reads it.
+// DiscogsAddedAt is the date_added Discogs keeps for that want, read by
+// the sync that added it, nil when that read did not identify it.
 type Owned struct {
 	Release        int64
 	AddedAt        time.Time

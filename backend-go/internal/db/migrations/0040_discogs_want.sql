@@ -1,7 +1,7 @@
 -- The wants Ohara put on the Discogs wantlist of the token's owner. A row
 -- is written before the add is sent and stays unconfirmed until Discogs
--- accepts it (confirmed_at); a sync later reads the want's date_added from
--- the wantlist (discogs_added_at). A sync removes a want only when its
+-- accepts it (confirmed_at); right after its adds the same sync reads the
+-- want's date_added from the wantlist (discogs_added_at). A sync removes a want only when its
 -- row holds a date_added equal to the listed want's, so a want that was
 -- on the wantlist before Ohara added it, or that the owner re-added by
 -- hand, stays there.

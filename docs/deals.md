@@ -171,13 +171,16 @@ Moved from `CLAUDE.md`, whose conventions still apply.
 - `discogs_want` records the wants Ohara added, per username. A want is
   removed (`DELETE`) only while it is provably Ohara's: its add was
   confirmed (Discogs answered 2xx) and the row holds the want's
-  `date_added`, read by a sync from the wantlist when it falls between the
-  row's writing and the confirmation, give or take a minute of clock
-  skew, and the listed want still has that `date_added`. A want that was
-  there before, one the owner re-added by hand (a new `date_added`) and
-  one whose add has no confirmation (a canceled sync, a lost answer, a
-  5xx) is never removed; its row is forgotten instead. A sync with
-  nothing to change sends no write.
+  `date_added`, and the listed want still has that `date_added`. Right
+  after its adds the same sync reads the wantlist again and keeps each
+  confirmed want's `date_added` when it falls between sending the add and
+  its answer, give or take 10 s of clock skew; no later sync does. A want
+  that was there before, one the owner re-added by hand (a new
+  `date_added`) and one left unidentified (an add with no confirmation:
+  a canceled sync, a lost answer, a 5xx; or a failed second read) is
+  never removed; its row is forgotten instead. Only a manual re-add
+  within those 10 s, before the second read, could pass as Ohara's. A
+  sync with nothing to change sends no write.
 - An add writes its row first, so a database failure stops the sync
   before the request; Discogs refusing it (a redirect or a 4xx, 429
   included) drops the row. A removal forgets the row only after Discogs

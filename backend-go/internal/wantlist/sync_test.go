@@ -146,14 +146,14 @@ func (f *fakeDiscogs) write(w http.ResponseWriter, r *http.Request) {
 var discogsZone = time.FixedZone("PDT", -7*60*60)
 
 // byHand is the owner taking release id off the wantlist on discogs.com,
-// when it is there, and putting it back later.
+// when it is there, and putting it back a second later.
 func (f *fakeDiscogs) byHand(id int64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if !slices.Contains(f.wants, id) {
 		f.wants = append(f.wants, id)
 	}
-	f.dates[id] = time.Now().Add(10 * time.Minute).Truncate(time.Second)
+	f.dates[id] = time.Now().Truncate(time.Second).Add(time.Second)
 }
 
 func (f *fakeDiscogs) fail(w http.ResponseWriter) {
@@ -592,6 +592,25 @@ func TestManualReAddIsNeverRemoved(t *testing.T) {
 	}
 	if got := recorded(t, store); len(got) != 0 {
 		t.Fatalf("recorded %v", got)
+	}
+}
+
+func TestManualReAddRightAfterTheSyncIsNeverRemoved(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	fake, client := newFakeDiscogs(t)
+	store := NewStore(pool)
+	syncer := NewSyncer(store, client, nil)
+	copyID := wish(t, pool, "music", 105)
+	mustSync(t, syncer)
+	fake.took()
+
+	fake.byHand(105)
+	exec(t, pool, `DELETE FROM copy WHERE id = $1`, copyID)
+	if got, want := mustSync(t, syncer), (Result{}); got != want {
+		t.Fatalf("sync = %+v, want %+v", got, want)
+	}
+	if writes, wants := fake.took(); len(writes) != 0 || !slices.Equal(wants, []int64{105}) {
+		t.Fatalf("a want re-added a second after Ohara's add was removed: writes %v, wantlist %v", writes, wants)
 	}
 }
 

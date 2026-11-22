@@ -17,7 +17,10 @@ import (
 // MarketCents is the trusted used market price of the wished title and
 // format, nil without one. A want with neither rule has its listings
 // recorded but never alerted. Barcode is the edition's normalized
-// barcode, nil when it has none.
+// barcode, nil when it has none. ExactEdition makes a movie or book want
+// match only listings that name its edition's details: Packaging,
+// PLVoiceover and PLSubtitles ("yes", "no" or "unknown") and Binding
+// (editionNamed).
 type Want struct {
 	CopyID           int64
 	EditionID        int64
@@ -32,6 +35,11 @@ type Want struct {
 	MaxPriceCents    *int64
 	MaxMarketPercent *int
 	MarketCents      *int64
+	ExactEdition     bool
+	Packaging        []string
+	PLVoiceover      string
+	PLSubtitles      string
+	Binding          *string
 
 	// prepared is the text work matching needs from the names and
 	// authors, kept by Prepare.
@@ -369,6 +377,8 @@ type ListingText struct {
 	// the wanted name.
 	titleCount bool
 	leads      []int
+	// details are the edition details the listing names (namedDetails).
+	details []string
 }
 
 // NewListingText readies a listing title for matching under rules.
@@ -386,6 +396,7 @@ func NewListingText(title string, rules Rules) *ListingText {
 		lastYear:    time.Now().Year() + 1,
 		titleCount:  titleCount,
 		leads:       leads,
+		details:     namedDetails(text),
 	}
 }
 
@@ -637,7 +648,8 @@ func sequelAfter(text, nameWords []string, lastYear int) bool {
 // Matches reports whether a listing title is w: it contains every required
 // word of one of w's names, the edition's format for a movie, the author's
 // surname for a book, and the artist's words and a medium that fits the
-// edition's for an album. A movie listing naming a sequel of that name does
+// edition's for an album. A want of only its edition also needs the
+// edition's details (editionNamed). A movie listing naming a sequel of that name does
 // not match, and neither does a lot of several titles
 // (ListingText.lotFor).
 func (w *Want) Matches(title string) bool {
@@ -760,11 +772,15 @@ func lotWords(text []string) (bool, []int) {
 }
 
 // qualifies reports whether a listing fits w apart from its names: the
-// edition's format for a movie, the author's surname for a book, and the
-// artist's words and a fitting medium for an album.
+// edition's format for a movie, the author's surname for a book, the
+// artist's words and a fitting medium for an album, and the edition's
+// details for a want of only its edition (editionNamed).
 func qualifies(w *Want, p *wantText, l *ListingText) bool {
 	text := l.words
 	if w.Kind == "movie" && w.Format != nil && l.format != *w.Format {
+		return false
+	}
+	if !editionNamed(w, l.details) {
 		return false
 	}
 	if w.Kind == "book" && p.surname != "" && !namesSurname(text, p.surname) {

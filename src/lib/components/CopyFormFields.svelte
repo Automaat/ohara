@@ -1,6 +1,7 @@
 <script lang="ts">
 	import {
 		Button,
+		Checkbox,
 		Combobox,
 		Field,
 		FormError,
@@ -17,7 +18,8 @@
 		statusLabels,
 		type CopyForm,
 		type CopyStatus,
-		type FormIssue
+		type FormIssue,
+		type Kind
 	} from '#lib/collection.js';
 	import { marketLabel, type MarketPrice } from '#lib/deals.js';
 	import { request } from '#lib/api.js';
@@ -28,6 +30,7 @@
 		saving,
 		submitLabel,
 		market = null,
+		kind = null,
 		onsubmit,
 		oncancel
 	}: {
@@ -37,6 +40,8 @@
 		submitLabel: string;
 		/** The used market price of the copy's title and format, shown under a wish's limit. */
 		market?: MarketPrice | null;
+		/** The kind of the copy's title: an album's wish has no edition-only matching. */
+		kind?: Kind | null;
 		onsubmit: () => void;
 		oncancel?: () => void;
 	} = $props();
@@ -166,6 +171,13 @@
 			bind:value={form.market_percent}
 			error={errorFor('max_market_percent')}
 		/>
+		{#if kind !== 'music'}
+			<Checkbox
+				label="Tylko to wydanie"
+				description="Oferta musi wymieniać opakowanie, polskiego lektora, napisy i oprawę tego wydania, jeśli je ma."
+				bind:checked={form.exact_edition}
+			/>
+		{/if}
 	{/if}
 	<Field
 		label={form.status === 'wishlist' ? 'Gdzie szukać' : 'Sklep lub sprzedawca'}

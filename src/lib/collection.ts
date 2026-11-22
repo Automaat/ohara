@@ -38,6 +38,7 @@ export type {
 	Edition,
 	EditionDetail,
 	EditionPayload,
+	FinishPayload,
 	Format,
 	Kind,
 	Loan,
@@ -345,6 +346,17 @@ export const collectionStatusLabels: Record<CollectionStatus, string> = {
 /** The filter that keeps only copies out on loan, the server's `?loaned=1`. */
 export const loanedLabel = 'Wypożyczone';
 
+/**
+ * The filter that keeps only owned copies of titles not yet watched, read or heard, the server's
+ * `?unfinished=1`.
+ */
+export const unfinishedLabel = 'Do nadrobienia';
+
+/** Whether a status leaves owned copies to list, so "Do nadrobienia" can narrow it. */
+export function listsOwned(status: CollectionFilter['status']): boolean {
+	return status === '' || status === 'owned' || status === 'unpriced';
+}
+
 export type CollectionFilter = {
 	kind: Kind | '';
 	format: Format | '';
@@ -354,13 +366,16 @@ export type CollectionFilter = {
 	q: string;
 	/** Only copies with an open loan; left out when off. */
 	loaned?: boolean;
+	/** Only owned copies of titles not finished; left out when off. */
+	unfinished?: boolean;
 	/** A tag of the title, the whole tag, case aside; absent for any title. */
 	tag?: string;
 };
 
 /**
  * The filter a collection address names. A title has no format, location or loan, so `none`
- * drops them.
+ * drops them; "Do nadrobienia" stays only beside a status that lists owned copies, as the sheet
+ * offers it.
  */
 export function readCollectionFilter(params: Pick<URLSearchParams, 'get'>): CollectionFilter {
 	function read<K extends string>(key: string, labels: Record<K, string>): K | '' {
@@ -378,6 +393,7 @@ export function readCollectionFilter(params: Pick<URLSearchParams, 'get'>): Coll
 		...(location ? { location } : {}),
 		q: params.get('q') ?? '',
 		...(status !== 'none' && params.get('loaned') === '1' ? { loaned: true } : {}),
+		...(listsOwned(status) && params.get('unfinished') === '1' ? { unfinished: true } : {}),
 		...(tag ? { tag } : {})
 	};
 }
@@ -388,6 +404,7 @@ export function collectionSearch(f: CollectionFilter): string {
 	if (f.format) params.set('format', f.format);
 	if (f.status) params.set('status', f.status);
 	if (f.loaned) params.set('loaned', '1');
+	if (f.unfinished) params.set('unfinished', '1');
 	const location = trimSpace(f.location ?? '');
 	if (location) params.set('location', location);
 	if (f.q.trim()) params.set('q', f.q.trim());
@@ -689,6 +706,7 @@ export type CopyForm = {
 	notes: string;
 	max_price: string;
 	market_percent: string;
+	exact_edition: boolean;
 	sold_on: string;
 	sale_price: string;
 	expected_on: string;
@@ -707,6 +725,7 @@ export function copyToForm(c: CopyPayload | null): CopyForm {
 		notes: c?.notes ?? '',
 		max_price: centsToInput(c?.max_price_cents ?? null),
 		market_percent: c?.max_market_percent == null ? '' : String(c.max_market_percent),
+		exact_edition: c?.exact_edition ?? false,
 		sold_on: c?.sold_on ?? '',
 		sale_price: centsToInput(c?.sale_price_cents ?? null),
 		expected_on: c?.expected_on ?? '',
@@ -725,10 +744,10 @@ export function parsePercent(input: string): number | null | undefined {
 
 /**
  * The request body for a copy. A wishlist copy carries no price or purchase date, an owned, sold
- * or ordered copy no maximum price or market percent, only a sold copy its sale's day, which it
- * needs, and price, only an ordered copy its expected delivery and only an owned copy its
- * location. A field a copy does not carry is left out, which the server reads as none, so a sold
- * copy put back on the shelf drops its sale and a received one its delivery day.
+ * or ordered copy no maximum price, market percent or exact edition, only a sold copy its sale's
+ * day, which it needs, and price, only an ordered copy its expected delivery and only an owned
+ * copy its location. A field a copy does not carry is left out, which the server reads as none,
+ * so a sold copy put back on the shelf drops its sale and a received one its delivery day.
  */
 export function copyPayload(f: CopyForm, editionID: number): Parsed<CopyPayload> {
 	const sold = f.status === 'sold';
@@ -785,6 +804,7 @@ export function copyPayload(f: CopyForm, editionID: number): Parsed<CopyPayload>
 			notes: f.notes.trim(),
 			max_price_cents: maxPrice,
 			...(marketPercent == null ? {} : { max_market_percent: marketPercent }),
+			...(!owned && f.exact_edition ? { exact_edition: true } : {}),
 			...sale,
 			...(expected ? { expected_on: expected } : {}),
 			...(location ? { location } : {})

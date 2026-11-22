@@ -127,6 +127,7 @@ function form(over: Partial<QuickForm> = {}): QuickForm {
 		shop: '',
 		acquired_as: '',
 		condition: '',
+		exact_edition: false,
 		...over
 	};
 }
@@ -457,7 +458,8 @@ describe('quickForm', () => {
 			purchased_on: '2026-11-19',
 			shop: 'Empik',
 			acquired_as: 'used',
-			condition: ''
+			condition: '',
+			exact_edition: false
 		});
 		expect(quickForm(movie, sticky, movie.edition.barcode).purchased_on).toBe('');
 		expect(quickForm(book, emptySticky, book.edition.barcode)).toMatchObject({
@@ -1340,6 +1342,21 @@ describe('copy payload', () => {
 		expect(used.ok && used.value.condition).toBe('good');
 		const fresh = scanCopyPayload(form({ acquired_as: 'new', condition: 'good' }), 1, 'k');
 		expect(fresh.ok && fresh.value.condition).toBeNull();
+	});
+
+	it('sends a wish of only its edition, never for an album or an owned copy', () => {
+		const wish = scanCopyPayload(form({ status: 'wishlist', exact_edition: true }), 1, 'k');
+		expect(wish.ok && wish.value.exact_edition).toBe(true);
+		const album = scanCopyPayload(
+			form({ kind: 'music', format: 'cd', status: 'wishlist', exact_edition: true }),
+			1,
+			'k'
+		);
+		expect(album.ok && 'exact_edition' in album.value).toBe(false);
+		const owned = scanCopyPayload(form({ exact_edition: true }), 1, 'k');
+		expect(owned.ok && 'exact_edition' in owned.value).toBe(false);
+		const any = scanCopyPayload(form({ status: 'wishlist' }), 1, 'k');
+		expect(any.ok && 'exact_edition' in any.value).toBe(false);
 	});
 });
 

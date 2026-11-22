@@ -145,6 +145,14 @@ type TitleInput struct {
 	OpenLibraryID *string  `json:"openlibrary_id"`
 	Notes         string   `json:"notes"`
 	CoverURL      *string  `json:"cover_url,omitempty"`
+	// Finished says whether the owner has watched, read or heard the title.
+	// A create without it makes an unfinished title; an update without it
+	// keeps the stored state and day. A title always carries it.
+	Finished *bool `json:"finished,omitempty" ts:",null"`
+	// FinishedOn is the latest day the title was finished, null when that
+	// day is unknown. It needs a finished title, implies one when Finished
+	// is left out, and cannot be after today in Poland (the store checks).
+	FinishedOn *Date `json:"finished_on,omitempty" ts:",null"`
 	// Rating is the owner's own rating, a whole number from MinRating to
 	// MaxRating; null clears it.
 	Rating *int `json:"rating,omitempty" ts:",null"`
@@ -230,7 +238,8 @@ type Edition struct {
 // its day. MaxPriceCents, the most a wishlist copy may
 // cost, and MaxMarketPercent, the share of the used market price it may
 // cost, apply only to wishlist copies: the deal hunter alerts on listings
-// at or below either.
+// at or below either. So does ExactEdition, which keeps the hunter to
+// listings naming the edition's details.
 type CopyInput struct {
 	EditionID     int64   `json:"edition_id"`
 	Status        string  `json:"status" ts:"CopyStatus"`
@@ -244,6 +253,10 @@ type CopyInput struct {
 	// MaxMarketPercent is 1 to 100: a listing at or under that percent of
 	// the used market price of the wished title and format alerts.
 	MaxMarketPercent *int `json:"max_market_percent,omitempty" ts:",null"`
+	// ExactEdition makes a wish of a movie or book match only listings
+	// that name its edition's packaging, Polish voice-over or subtitles
+	// and binding; false matches every edition of the title and format.
+	ExactEdition bool `json:"exact_edition,omitempty"`
 	// SoldOn is the day a sold copy was sold; SalePriceCents what it sold
 	// for, null when unknown.
 	SoldOn         *Date  `json:"sold_on,omitempty" ts:",null"`
@@ -436,6 +449,9 @@ func (in *TitleInput) Normalize() *httpx.FieldError {
 	if in.TMDBID != nil && *in.TMDBID <= 0 {
 		return fieldErr("tmdb_id", "must be positive")
 	}
+	if fe := in.normalizeFinished(); fe != nil {
+		return fe
+	}
 	if len(in.Authors) > maxAuthors {
 		return fieldErr("authors", "too many authors")
 	}
@@ -445,6 +461,22 @@ func (in *TitleInput) Normalize() *httpx.FieldError {
 		}
 	}
 	return in.checkKindFields()
+}
+
+// normalizeFinished makes a finish day imply a finished title and refuses
+// one on a title marked unfinished.
+func (in *TitleInput) normalizeFinished() *httpx.FieldError {
+	if in.FinishedOn == nil {
+		return nil
+	}
+	if in.Finished == nil {
+		finished := true
+		in.Finished = &finished
+	}
+	if !*in.Finished {
+		return fieldErr("finished_on", "applies only to finished titles")
+	}
+	return nil
 }
 
 // TagList is the tags a title body carries: a JSON array of strings or
@@ -680,6 +712,9 @@ func (in *CopyInput) Normalize() *httpx.FieldError {
 			return fieldErr("max_market_percent", "applies only to wishlist copies")
 		}
 	}
+	if in.ExactEdition && in.Status != StatusWishlist {
+		return fieldErr("exact_edition", "applies only to wishlist copies")
+	}
 	if in.Status == StatusWishlist {
 		if in.PriceCents != nil {
 			return fieldErr("price_cents", "applies only to owned, sold and ordered copies")
@@ -756,6 +791,27 @@ func checkDue(due *Date, lentOn time.Time) *httpx.FieldError {
 	if due != nil && due.Before(lentOn) {
 		return fieldErr("due_on", "cannot be before lent_on")
 	}
+	return nil
+}
+
+// FinishInput is the body of PUT /api/titles/{id}/finished: the title's
+// finished state alone, so marking it never writes back a stale name or
+// notes. Finished is required unless FinishedOn names the day.
+type FinishInput struct {
+	Finished   *bool `json:"finished"`
+	FinishedOn *Date `json:"finished_on"`
+}
+
+// Normalize checks the input as TitleInput checks its finished fields.
+func (in *FinishInput) Normalize() *httpx.FieldError {
+	if in.Finished == nil && in.FinishedOn == nil {
+		return fieldErr("finished", "is required")
+	}
+	t := TitleInput{Finished: in.Finished, FinishedOn: in.FinishedOn}
+	if fe := t.normalizeFinished(); fe != nil {
+		return fe
+	}
+	in.Finished = t.Finished
 	return nil
 }
 

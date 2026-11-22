@@ -56,6 +56,7 @@ func Ohara() API {
 			Of[collection.EditionDetail]("EditionDetail"),
 			Of[collection.LoanInput]("LoanPayload"),
 			Of[collection.ReturnInput]("ReturnPayload"),
+			Of[collection.FinishInput]("FinishPayload"),
 			Of[collection.Loan]("Loan"),
 			Of[collection.CopyDetail]("CopyDetail"),
 			Of[collection.Item]("CollectionItem"),

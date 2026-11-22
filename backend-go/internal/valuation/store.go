@@ -302,6 +302,22 @@ func (s *Store) TitleValued(ctx context.Context, window time.Duration, titleID i
 	return owned, err
 }
 
+// OwnedValues values every owned copy as Valued does, reading copies and
+// prices through tx, so a caller can read them in the snapshot it reads
+// other rows from.
+func OwnedValues(ctx context.Context, tx pgx.Tx, window time.Duration) ([]CopyValue, error) {
+	owned, err := copies(ctx, tx, 0)
+	if err != nil {
+		return nil, err
+	}
+	seen, err := prices(ctx, tx, window, 0)
+	if err != nil {
+		return nil, err
+	}
+	Value(owned, NewRanges(seen))
+	return owned, nil
+}
+
 // sales is the gain realized by the copies sold on or before day, the
 // snapshot's date (YYYY-MM-DD).
 type sales struct {

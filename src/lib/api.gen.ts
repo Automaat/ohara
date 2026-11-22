@@ -51,6 +51,8 @@ export type TitlePayload = {
 	openlibrary_id: string | null;
 	notes: string;
 	cover_url?: string;
+	finished?: boolean | null;
+	finished_on?: string | null;
 	rating?: number | null;
 	tags?: string[];
 	series_name?: string | null;
@@ -71,6 +73,8 @@ export type Title = {
 	openlibrary_id: string | null;
 	notes: string;
 	cover_url?: string;
+	finished?: boolean | null;
+	finished_on?: string | null;
 	rating?: number | null;
 	series_name?: string | null;
 	series_number?: number | null;
@@ -137,6 +141,7 @@ export type CopyPayload = {
 	notes: string;
 	max_price_cents: number | null;
 	max_market_percent?: number | null;
+	exact_edition?: boolean;
 	sold_on?: string | null;
 	sale_price_cents?: number | null;
 	expected_on?: string | null;
@@ -156,6 +161,7 @@ export type Copy = {
 	notes: string;
 	max_price_cents: number | null;
 	max_market_percent?: number | null;
+	exact_edition?: boolean;
 	sold_on?: string | null;
 	sale_price_cents?: number | null;
 	expected_on?: string | null;
@@ -201,6 +207,8 @@ export type TitleDetail = {
 	openlibrary_id: string | null;
 	notes: string;
 	cover_url?: string;
+	finished?: boolean | null;
+	finished_on?: string | null;
 	rating?: number | null;
 	series_name?: string | null;
 	series_number?: number | null;
@@ -248,6 +256,11 @@ export type ReturnPayload = {
 	returned_on: string | null;
 };
 
+export type FinishPayload = {
+	finished: boolean | null;
+	finished_on: string | null;
+};
+
 export type Loan = {
 	id: number;
 	copy_id: number;
@@ -271,6 +284,7 @@ export type CopyDetail = {
 	notes: string;
 	max_price_cents: number | null;
 	max_market_percent?: number | null;
+	exact_edition?: boolean;
 	sold_on?: string | null;
 	sale_price_cents?: number | null;
 	expected_on?: string | null;
@@ -313,6 +327,8 @@ export type CollectionItem = {
 	rating?: number;
 	loan_borrower?: string;
 	loan_due_on?: string;
+	finished: boolean;
+	finished_on?: string;
 	tags?: string[];
 };
 

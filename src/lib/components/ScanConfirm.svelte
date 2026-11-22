@@ -1,5 +1,12 @@
 <script lang="ts">
-	import { Button, Field, FormError, SegmentedControl, Select } from '@smykla-skalski/sui';
+	import {
+		Button,
+		Checkbox,
+		Field,
+		FormError,
+		SegmentedControl,
+		Select
+	} from '@smykla-skalski/sui';
 	import { tick } from 'svelte';
 	import {
 		acquiredLabels,
@@ -213,6 +220,13 @@
 		</div>
 		{#if priceError}
 			<p class="error" id="scan-price-error">{priceError}</p>
+		{/if}
+		{#if wish && form.kind !== 'music'}
+			<Checkbox
+				label="Tylko to wydanie"
+				description="Oferta musi wymieniać opakowanie, polskiego lektora, napisy i oprawę tego wydania, jeśli je ma."
+				bind:checked={form.exact_edition}
+			/>
 		{/if}
 
 		{#if !wish}

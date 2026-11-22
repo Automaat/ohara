@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Observation } from './deals';
 
 type Badge = typeof import('./deal-badge.svelte');
@@ -133,6 +133,71 @@ describe('loadUnderLimit', () => {
 			badge.loadUnderLimit(vi.fn(async () => new Response('{}', { status: 500 })))
 		).rejects.toThrow();
 		expect(badge.dealBadge.count).toBe(1);
+	});
+});
+
+describe('Discogs listings', () => {
+	const discogs = { ...listing(3900, 4000), source: 'discogs_inventory' as const };
+	const fake = () =>
+		vi.useFakeTimers({
+			now: new Date('2026-11-22T10:00:00Z'),
+			toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'Date', 'performance']
+		});
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it('leave the badge within 30 seconds of 14 minutes after their answer, the rest stays', async () => {
+		fake();
+		await badge.loadUnderLimit(deals([listing(3500, 4000), discogs]));
+		vi.advanceTimersByTime(13 * 60_000 + 59_000);
+		expect(badge.dealBadge.count).toBe(2);
+		vi.advanceTimersByTime(31_000);
+		expect(badge.dealBadge.count).toBe(1);
+		expect(badge.dealBadge.listings?.map((l) => l.id)).toEqual([3500]);
+	});
+
+	it('stay while newer answers keep confirming them, also after a failed request', async () => {
+		fake();
+		await badge.loadUnderLimit(deals([discogs]));
+		vi.advanceTimersByTime(10 * 60_000);
+		await badge.refreshDealBadge(vi.fn(async () => new Response('{}', { status: 500 })));
+		await badge.loadUnderLimit(deals([discogs]));
+		vi.advanceTimersByTime(13 * 60_000);
+		expect(badge.dealBadge.count).toBe(1);
+		vi.advanceTimersByTime(90_000);
+		expect(badge.dealBadge.count).toBe(0);
+	});
+
+	it('leave at once when their answer arrives after its 14 minutes', async () => {
+		fake();
+		const held = Promise.withResolvers<Response>();
+		const load = badge.loadUnderLimit(vi.fn(() => held.promise));
+		vi.setSystemTime(Date.now() + 16 * 60_000);
+		held.resolve(dealsResponse([discogs]));
+		await load;
+		expect(badge.dealBadge.count).toBe(0);
+	});
+
+	it('leave at once when checked after the timers slept past their time', async () => {
+		fake();
+		await badge.loadUnderLimit(deals([discogs]));
+		vi.setSystemTime(new Date('2026-11-22T10:16:00Z'));
+		badge.expireUnconfirmed();
+		expect(badge.dealBadge.count).toBe(0);
+	});
+
+	it('stay when checked within their time', async () => {
+		fake();
+		await badge.loadUnderLimit(deals([discogs]));
+		badge.expireUnconfirmed();
+		expect(badge.dealBadge.count).toBe(1);
+	});
+
+	it('are not checked before the first answer', () => {
+		badge.expireUnconfirmed();
+		expect(badge.dealBadge.listings).toBeNull();
 	});
 });
 

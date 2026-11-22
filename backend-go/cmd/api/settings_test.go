@@ -27,6 +27,7 @@ func unsetSettings(t *testing.T) {
 		"OHARA_VALUATION_WINDOW_DAYS",
 		"OHARA_PRICE_RETENTION_DAYS",
 		"OHARA_DISCOGS_TOKEN",
+		"OHARA_DISCOGS_SELLERS",
 	} {
 		t.Setenv(key, "")
 		if err := os.Unsetenv(key); err != nil {
@@ -201,6 +202,84 @@ func TestNewValuationDiscogs(t *testing.T) {
 	}
 	cmd := exec.CommandContext(t.Context(), os.Args[0], args...)
 	cmd.Env = append(os.Environ(), discogsChild+"=1", "OHARA_DISCOGS_TOKEN=token")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("child: %v\n%s", err, out)
+	}
+}
+
+func TestDiscogsSellersNeedTokenAndList(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		env     map[string]string
+		wantErr string
+	}{
+		{name: "neither"},
+		{name: "sellers without token", env: map[string]string{"OHARA_DISCOGS_SELLERS": "heyjoerecords"}},
+		{name: "token without sellers", env: map[string]string{"OHARA_DISCOGS_TOKEN": "token"}},
+		{name: "empty list", env: map[string]string{"OHARA_DISCOGS_TOKEN": "token", "OHARA_DISCOGS_SELLERS": " , "}},
+		{
+			name:    "not a username",
+			env:     map[string]string{"OHARA_DISCOGS_TOKEN": "token", "OHARA_DISCOGS_SELLERS": "heyjoerecords,a/b"},
+			wantErr: "OHARA_DISCOGS_SELLERS",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			unsetSettings(t)
+			for k, v := range tc.env {
+				t.Setenv(k, v)
+			}
+			sources, err := discogsSellers(nil)
+			checkErr(t, err, tc.wantErr)
+			if len(sources) != 0 {
+				t.Fatalf("sources = %v, want none", sources)
+			}
+		})
+	}
+	if got := metricSources(t, "ohara_source_"); slices.Contains(got, deals.DiscogsSource) {
+		t.Fatalf("sources with metrics = %v, want none for %s", got, deals.DiscogsSource)
+	}
+}
+
+const sellersChild = "OHARA_TEST_DISCOGS_SELLERS_CHILD"
+
+// TestNewHunterDiscogsSellers builds the hunter with a Discogs token and
+// sellers in a child process: the sellers register their source and nbp in
+// the process-wide metrics, which the source checks of the other tests
+// reject.
+func TestNewHunterDiscogsSellers(t *testing.T) {
+	if os.Getenv(sellersChild) == "1" {
+		sources, err := discogsSellers(nil)
+		if err != nil {
+			t.Fatalf("discogsSellers: %v", err)
+		}
+		var names []string
+		for _, src := range sources {
+			seller, ok := src.(deals.DiscogsSeller)
+			if !ok {
+				t.Fatalf("source %T, want deals.DiscogsSeller", src)
+			}
+			names = append(names, seller.Seller)
+		}
+		if !slices.Equal(names, []string{"heyjoerecords", "other.shop"}) {
+			t.Fatalf("sellers = %v, want each username once", names)
+		}
+		if _, _, err := newHunter(nil, deals.NewPacer(0).Lane(), slog.New(slog.DiscardHandler)); err != nil {
+			t.Fatalf("newHunter: %v", err)
+		}
+		got := metricSources(t, "ohara_source_")
+		if !slices.Contains(got, deals.DiscogsSource) || !slices.Contains(got, "nbp") {
+			t.Fatalf("sources with metrics = %v, want %s and nbp", got, deals.DiscogsSource)
+		}
+		return
+	}
+	unsetSettings(t)
+	args := []string{"-test.run=^TestNewHunterDiscogsSellers$"}
+	if f := flag.Lookup("test.gocoverdir"); f != nil && f.Value.String() != "" {
+		args = append(args, "-test.gocoverdir="+f.Value.String())
+	}
+	cmd := exec.CommandContext(t.Context(), os.Args[0], args...)
+	cmd.Env = append(os.Environ(), sellersChild+"=1", "OHARA_DISCOGS_TOKEN=token",
+		"OHARA_DISCOGS_SELLERS=heyjoerecords, HeyJoeRecords ,other.shop")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("child: %v\n%s", err, out)
 	}

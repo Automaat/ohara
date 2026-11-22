@@ -47,6 +47,8 @@
 		sentPath,
 		wantlistPath,
 		wantlistSummary,
+		ageClock,
+		confirmedListings,
 		wishFacts,
 		wishesPath,
 		withoutDismissed,
@@ -68,11 +70,15 @@
 		searchedWishes: number;
 		all: Observation[];
 		sent: Observation[];
+		/** When the requests for all and sent were asked, on the age clock (confirmedListings). */
+		askedAt: number;
 	};
 
 	let deals = $state<Deals | null>(null);
 	let markets = $state<MarketPrice[]>([]);
 	let now = $state(new Date());
+	/** The age clock's reading that expires Discogs cards (confirmedListings), moved with now. */
+	let clock = $state(ageClock());
 	let segment = $state<DealSegment>('under');
 	let failure = $state<string | null>(null);
 	let loading = $state(true);
@@ -92,37 +98,44 @@
 
 	let poll: ReturnType<typeof setTimeout> | undefined;
 	let issued = 0;
+	let destroyed = false;
 
 	/**
 	 * "Pod limitem" lists the listings the Okazje badge last counted, so a refresh from this page,
 	 * a navigation or a returning tab moves the segment and the badge together. The page asks again
 	 * when the tab becomes visible, so the other segments follow. An answer that arrives after a
 	 * later request's answer is dropped. The search counts as running while any answer says so.
-	 * The wishes' market prices load beside them without holding them back.
+	 * The wishes' market prices load beside them without holding them back. A failed request keeps
+	 * the lists; their Discogs listings leave them unconfirmedAfterMs after the answer that held
+	 * them (confirmedListings). A page left while a request is on its way asks nothing more.
 	 */
 	async function load() {
+		if (destroyed) return;
 		const ticket = ++issued;
 		loading = true;
 		try {
 			void loadMarkets();
 			void loadWishes();
+			const askedAt = ageClock();
 			const [under, all, sent] = await Promise.all([
 				loadUnderLimit(fetch),
 				request<DealsView>(fetch, 'GET', matchedPath),
 				request<DealsView>(fetch, 'GET', sentPath)
 			]);
-			if (ticket !== issued) return;
+			if (ticket !== issued || destroyed) return;
 			now = new Date();
+			clock = ageClock();
 			deals = {
 				status: [under, all, sent].find((v) => v.status.running)?.status ?? all.status,
 				wishes: all.wishes,
 				searchedWishes: all.searched_wishes,
 				all: all.observations,
-				sent: sent.observations
+				sent: sent.observations,
+				askedAt
 			};
 			failure = null;
 		} catch (err) {
-			if (ticket !== issued) return;
+			if (ticket !== issued || destroyed) return;
 			failure = errorMessage(err);
 		}
 		loading = false;
@@ -199,6 +212,12 @@
 		}
 	}
 
+	/**
+	 * A visible page asks for its lists again every 10 minutes, so a listing a scheduled run found
+	 * gone leaves the page and its Discogs cards stay confirmed (confirmedListings).
+	 */
+	const reloadEvery = 10 * 60_000;
+
 	/** The Discogs wantlist sync; without a Discogs token the server says it is disabled. */
 	const wantlist = new WantlistSync({
 		status: () => request<WantlistStatus>(fetch, 'GET', wantlistPath),
@@ -209,16 +228,27 @@
 		void load();
 		void loadKeywords();
 		void wantlist.load();
-		const clock = setInterval(() => (now = new Date()), 30_000);
-		const onvisibility = () => {
+		const ticking = setInterval(() => {
+			now = new Date();
+			clock = ageClock();
+		}, 30_000);
+		const reload = setInterval(() => {
 			if (document.visibilityState === 'visible') void load();
+		}, reloadEvery);
+		const onvisibility = () => {
+			if (document.visibilityState !== 'visible') return;
+			now = new Date();
+			clock = ageClock();
+			void load();
 		};
 		document.addEventListener('visibilitychange', onvisibility);
 		return () => {
 			dismissals.destroy();
 			clearTimeout(poll);
 			wantlist.destroy();
-			clearInterval(clock);
+			clearInterval(ticking);
+			clearInterval(reload);
+			destroyed = true;
 			document.removeEventListener('visibilitychange', onvisibility);
 		};
 	});
@@ -269,9 +299,20 @@
 
 	const status = $derived(deals?.status);
 	const lists = $derived<Record<DealSegment, Observation[]>>({
-		under: withoutDismissed(deals ? (dealBadge.listings ?? []) : [], dismissals.hidden),
-		all: withoutDismissed(deals?.all ?? [], dismissals.hidden),
-		sent: withoutDismissed(deals?.sent ?? [], dismissals.hidden)
+		under: withoutDismissed(
+			deals && dealBadge.answeredAt !== null
+				? confirmedListings(dealBadge.listings ?? [], dealBadge.answeredAt, clock)
+				: [],
+			dismissals.hidden
+		),
+		all: withoutDismissed(
+			deals ? confirmedListings(deals.all, deals.askedAt, clock) : [],
+			dismissals.hidden
+		),
+		sent: withoutDismissed(
+			deals ? confirmedListings(deals.sent, deals.askedAt, clock) : [],
+			dismissals.hidden
+		)
 	});
 	const segments = $derived(
 		(['under', 'all', 'sent'] as const).map((value) => ({

@@ -1,0 +1,150 @@
+{
+  "pagination": {
+    "page": 1,
+    "pages": 3435,
+    "per_page": 5,
+    "items": 17172,
+    "urls": {
+      "last": "https://api.discogs.com/users/heyjoerecords/inventory?sort=listed&sort_order=desc&per_page=5&page=3435",
+      "next": "https://api.discogs.com/users/heyjoerecords/inventory?sort=listed&sort_order=desc&per_page=5&page=2"
+    }
+  },
+  "listings": [
+    {
+      "id": 3401234501,
+      "resource_url": "https://api.discogs.com/marketplace/listings/3401234501",
+      "uri": "https://www.discogs.com/sell/item/3401234501",
+      "status": "For Sale",
+      "condition": "Very Good Plus (VG+)",
+      "sleeve_condition": "Very Good (VG)",
+      "comments": "Gatefold, light ring wear.",
+      "ships_from": "Poland",
+      "posted": "2026-11-21T09:14:02-08:00",
+      "allow_offers": true,
+      "audio": false,
+      "price": { "value": 149.0, "currency": "EUR" },
+      "original_price": { "curr_abbr": "EUR", "curr_id": 3, "formatted": "€149.00", "value": 149.0 },
+      "shipping_price": { "currency": "EUR", "value": 12.0 },
+      "seller": { "id": 1234567, "username": "heyjoerecords", "resource_url": "https://api.discogs.com/users/heyjoerecords" },
+      "release": {
+        "id": 1873013,
+        "description": "Pink Floyd - A Momentary Lapse Of Reason (LP, Album, Gat)",
+        "resource_url": "https://api.discogs.com/releases/1873013",
+        "thumbnail": "https://i.discogs.example.test/R-1873013.jpeg",
+        "artist": "Pink Floyd",
+        "format": "LP, Album, Gat",
+        "title": "A Momentary Lapse Of Reason",
+        "year": 1987,
+        "catalog_number": "EMD 1003"
+      }
+    },
+    {
+      "id": 3401234502,
+      "resource_url": "https://api.discogs.com/marketplace/listings/3401234502",
+      "uri": "https://www.discogs.com/sell/item/3401234502",
+      "status": "For Sale",
+      "condition": "Mint (M)",
+      "sleeve_condition": "Mint (M)",
+      "comments": "",
+      "ships_from": "Poland",
+      "posted": "2026-11-21T09:12:40-08:00",
+      "allow_offers": false,
+      "audio": false,
+      "price": { "value": 45.0, "currency": "PLN" },
+      "original_price": { "curr_abbr": "PLN", "curr_id": 9, "formatted": "45,00 zł", "value": 45.0 },
+      "seller": { "id": 1234567, "username": "heyjoerecords", "resource_url": "https://api.discogs.com/users/heyjoerecords" },
+      "release": {
+        "id": 367145,
+        "description": "Pink Floyd - A Momentary Lapse Of Reason (CD, Album, RE)",
+        "resource_url": "https://api.discogs.com/releases/367145",
+        "thumbnail": "",
+        "artist": "Pink Floyd",
+        "format": "CD, Album, RE",
+        "title": "A Momentary Lapse Of Reason",
+        "year": 1987,
+        "catalog_number": "CDP 7480682"
+      }
+    },
+    {
+      "id": 3401234503,
+      "resource_url": "https://api.discogs.com/marketplace/listings/3401234503",
+      "uri": "https://www.discogs.com/sell/item/3401234503",
+      "status": "For Sale",
+      "condition": "Good Plus (G+)",
+      "sleeve_condition": "Generic",
+      "comments": "Tape plays fine.",
+      "ships_from": "Poland",
+      "posted": "2026-11-21T09:10:11-08:00",
+      "allow_offers": true,
+      "audio": false,
+      "price": { "value": 25.5, "currency": "PLN" },
+      "original_price": { "curr_abbr": "PLN", "curr_id": 9, "formatted": "25,50 zł", "value": 25.5 },
+      "seller": { "id": 1234567, "username": "heyjoerecords", "resource_url": "https://api.discogs.com/users/heyjoerecords" },
+      "release": {
+        "id": 1290233,
+        "description": "Pink Floyd - A Momentary Lapse Of Reason (Cass, Album)",
+        "resource_url": "https://api.discogs.com/releases/1290233",
+        "thumbnail": "https://i.discogs.example.test/R-1290233.jpeg",
+        "artist": "Pink Floyd",
+        "format": "Cass, Album",
+        "title": "A Momentary Lapse Of Reason",
+        "year": 1987,
+        "catalog_number": "EMI 4C 1003"
+      }
+    },
+    {
+      "id": 3401234504,
+      "resource_url": "https://api.discogs.com/marketplace/listings/3401234504",
+      "uri": "https://www.discogs.com/sell/item/3401234504",
+      "status": "For Sale",
+      "condition": "Near Mint (NM or M-)",
+      "sleeve_condition": "Near Mint (NM or M-)",
+      "comments": "",
+      "ships_from": "Poland",
+      "posted": "2026-11-21T09:05:00-08:00",
+      "allow_offers": false,
+      "audio": false,
+      "price": { "value": 3200.0, "currency": "JPY" },
+      "original_price": { "curr_abbr": "JPY", "curr_id": 7, "formatted": "¥3,200", "value": 3200.0 },
+      "seller": { "id": 1234567, "username": "heyjoerecords", "resource_url": "https://api.discogs.com/users/heyjoerecords" },
+      "release": {
+        "id": 2457911,
+        "description": "Pink Floyd - The Wall (2xLP, Album, RE)",
+        "resource_url": "https://api.discogs.com/releases/2457911",
+        "thumbnail": "",
+        "artist": "Pink Floyd",
+        "format": "2xLP, Album, RE",
+        "title": "The Wall",
+        "year": 1979,
+        "catalog_number": "SHDW 411"
+      }
+    },
+    {
+      "id": 3401234505,
+      "resource_url": "https://api.discogs.com/marketplace/listings/3401234505",
+      "uri": "https://www.discogs.com/sell/item/3401234505",
+      "status": "Sold",
+      "condition": "Very Good (VG)",
+      "sleeve_condition": "Very Good (VG)",
+      "comments": "",
+      "ships_from": "Poland",
+      "posted": "2026-11-20T18:00:00-08:00",
+      "allow_offers": false,
+      "audio": false,
+      "price": { "value": 60.0, "currency": "PLN" },
+      "original_price": { "curr_abbr": "PLN", "curr_id": 9, "formatted": "60,00 zł", "value": 60.0 },
+      "seller": { "id": 1234567, "username": "heyjoerecords", "resource_url": "https://api.discogs.com/users/heyjoerecords" },
+      "release": {
+        "id": 1873013,
+        "description": "Pink Floyd - A Momentary Lapse Of Reason (LP, Album, Gat)",
+        "resource_url": "https://api.discogs.com/releases/1873013",
+        "thumbnail": "",
+        "artist": "Pink Floyd",
+        "format": "LP, Album, Gat",
+        "title": "A Momentary Lapse Of Reason",
+        "year": 1987,
+        "catalog_number": "EMD 1003"
+      }
+    }
+  ]
+}

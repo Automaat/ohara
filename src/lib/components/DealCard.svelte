@@ -7,6 +7,7 @@
 		isUnderLimit,
 		marketLabel,
 		sourceLabels,
+		sourceNotices,
 		wishComparison,
 		wishLimit,
 		type MarketPrice,
@@ -25,6 +26,7 @@
 		[deal.listing_photo_url, deal.cover_url].find((url) => url && !failed.includes(url))
 	);
 	const under = $derived(isUnderLimit(deal));
+	const notice = $derived(sourceNotices[deal.source]);
 	const wishHref = $derived(
 		deal.edition_id
 			? `/editions/${deal.edition_id}`
@@ -64,6 +66,10 @@
 					{wishComparison(deal)}
 				</Pill>
 			</p>
+			{#if notice}
+				<!-- The source's terms want this link followable: no rel="nofollow". -->
+				<a class="notice" href={deal.url} target="_blank" rel="noopener">{notice}</a>
+			{/if}
 		</div>
 	</div>
 	<div class="foot">
@@ -166,6 +172,11 @@
 
 	.meta {
 		margin: 0;
+		color: var(--sui-text-muted);
+		font-size: 0.75rem;
+	}
+
+	.notice {
 		color: var(--sui-text-muted);
 		font-size: 0.75rem;
 	}

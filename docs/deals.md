@@ -229,6 +229,74 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   valuation does not ask it. Its regulamin (in force from 10.10.2025)
   sets the terms of sale and says nothing of automated access.
 
+## Discogs sellers
+
+- With `OHARA_DISCOGS_TOKEN` and `OHARA_DISCOGS_SELLERS` (Discogs
+  usernames, comma-separated, each kept once), every run reads each
+  seller's 100 newest listings
+  (`GET /users/{seller}/inventory?sort=listed&sort_order=desc&per_page=100`)
+  as a feed source of its own, `deals.DiscogsSeller`, all under the
+  source name `discogs_inventory` (label "Discogs"). Without either
+  variable no such source exists, so `/metrics` has no series for it.
+  Each request waits `OHARA_DEALS_DELAY` after the run's previous one and
+  its turn in the token's Discogs budget (background priority), and counts
+  in `ohara_source_requests_total` under `discogs_inventory`, not under
+  the Discogs client's `discogs`. A 429 or 403 stops only that seller
+  until the next run; a body that is no inventory (`{}`, HTML), or one
+  with a listing that has no ID or status, is a `parse_error` and marks
+  nothing gone. The sellers share the canary and results gauges: the
+  canary holds once any seller answered with listings, and results count
+  them all.
+- Each listing "For Sale" becomes one listing: the Discogs listing ID,
+  the release description as its title ("Pink Floyd - A Momentary Lapse Of
+  Reason (LP, Album, Gat)"), `https://www.discogs.com/sell/item/<id>` and
+  the release thumbnail. Its price turns into grosze at the NBP table A
+  mid rate (`valuation.NBP`, `OHARA_VALUATION_NBP_URL`); a currency
+  without a rate leaves the listing out, so a foreign amount is never
+  stored as złoty, and the answer does not count as offering it: a stored
+  listing whose currency lost its rate is gone, so its old złoty price is
+  neither shown nor alerted on. A `Mint (M)` copy has no condition, every
+  other grade is used; each answer sets the stored condition anew, so a
+  copy regraded Mint loses "used".
+- The listing's medium comes from the Discogs format, not its title
+  (`Listing.Medium`, `deals.discogsMedium`): LP, vinyl and 7", 10" or 12"
+  discs are vinyl, CD, CDr, SACD and HDCD a CD, Cass a cassette, the first
+  of them in a box set's parts; anything else (DVD, File) or no format at
+  all is no album medium (`other`). Such a listing matches album wants
+  only, a CD want only a CD and a vinyl want only vinyl. The medium is
+  stored with the listing (`raw.data.medium`), and a pending alert and the
+  deals view check it against the wish's current edition (`mediumFits`),
+  so a wish edited from vinyl to CD no longer holds an LP. Listings of
+  other sources still take their medium from the title.
+- The Discogs API Terms of Use make seller inventory Restricted Data:
+  no commercial use, no transfer to third parties, never shown more than
+  six hours older than discogs.com, kept no longer than needed. So a
+  stored listing of a seller whose answer no longer holds it is gone at
+  once (`Store.UpdateGone`, scoped to the seller through the listing's
+  query), a listing gone or not offered by an answer for 5 h 45 min
+  (`discogsShown`) leaves Okazje and its alert is not sent
+  (`freshListing`), and every run first
+  deletes the Discogs listings no answer has offered for 30 days, alerts,
+  dismissals and purchases included (`Store.ForgetStale`). The 30 days
+  keep a listing's dismissal and sent alert while its seller cannot be
+  read. Every Telegram alert for one ends with "Data provided by
+  Discogs." under its link, and its card in Okazje carries the same
+  notice as a followable link to the listing. A visible Okazje page asks
+  for its lists again every 10 minutes, and every list, the badge's
+  included, draws a Discogs listing only while less than 14 minutes have
+  passed since its request was asked (`confirmedListings`), checked when
+  an answer arrives, every 30 seconds and when the tab shows again. The
+  time is read on an age clock (`ageClock`) that moves by the larger of
+  the wall and the monotonic clock's steps and never back; when the two
+  part by more than 2 seconds between readings (the system clock was set,
+  the computer slept), it expires every earlier answer, since how long
+  passed is unknown. So with the 5 h 45 min window no card is more than
+  6 hours old, whatever requests fail, overlap or hang, the system clock
+  does or the computer sleeps, and one a run found gone leaves within 10
+  minutes. The purchase happens on discogs.com.
+- The valuation never reads `discogs_inventory`, and wants are not
+  matched by Discogs release ID.
+
 ## Discogs wantlist
 
 - `internal/wantlist` mirrors the album wishes to the Discogs wantlist of

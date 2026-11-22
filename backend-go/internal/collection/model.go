@@ -42,6 +42,17 @@ const (
 	// Filmweb and lubimyczytac.pl use.
 	MinRating = 1
 	MaxRating = 10
+	// MaxSeriesNumber bounds a title's number in its series and a series'
+	// total of volumes.
+	MaxSeriesNumber = 10000
+
+	// VolumeOwned and the other volume states say what a title of a series
+	// has on the shelf: an owned copy, else one on order, else a wish, else
+	// nothing. Sold copies count as none.
+	VolumeOwned    = "owned"
+	VolumeOrdered  = "ordered"
+	VolumeWishlist = "wishlist"
+	VolumeNone     = "none"
 )
 
 var (
@@ -55,6 +66,7 @@ var (
 	statuses     = []string{StatusOwned, StatusWishlist, StatusSold, StatusOrdered}
 	acquiredAs   = []string{"new", "used"}
 	conditions   = []string{"mint", "very_good", "good", "fair", "poor"}
+	volumeStates = []string{VolumeOwned, VolumeOrdered, VolumeWishlist, VolumeNone}
 )
 
 // Enums lists the values each enum field of this package's JSON accepts, by
@@ -71,6 +83,7 @@ func Enums() map[string][]string {
 		"CopyStatus":  slices.Clone(statuses),
 		"AcquiredAs":  slices.Clone(acquiredAs),
 		"Condition":   slices.Clone(conditions),
+		"VolumeState": slices.Clone(volumeStates),
 	}
 }
 
@@ -93,6 +106,8 @@ var (
 	ErrReturned         = errors.New("this loan is already returned")
 	// ErrNotOrdered refuses to receive a copy that is not on order.
 	ErrNotOrdered = errors.New("only ordered copies can be received")
+	// ErrDuplicateSeriesNumber refuses a number another title of the series has.
+	ErrDuplicateSeriesNumber = errors.New("another title of this series has this number")
 )
 
 // Date is a calendar day carried as YYYY-MM-DD in JSON.
@@ -139,6 +154,15 @@ type TitleInput struct {
 	// Tags are the owner's own groupings of the work. An update without
 	// them (nil) keeps the stored tags; an empty list clears them.
 	Tags TagList `json:"tags,omitempty"`
+	// SeriesName names the series the title is in: a series of the title's
+	// kind whose name matches it, case aside, or a new one. Null is none.
+	SeriesName *string `json:"series_name,omitempty" ts:",null"`
+	// SeriesNumber is the title's number in its series, a whole number from
+	// 1 to MaxSeriesNumber; it needs SeriesName.
+	SeriesNumber *int `json:"series_number,omitempty" ts:",null"`
+	// KeepSeries makes an update leave the stored series and number as they
+	// are, for a PUT body without either. Creates ignore it.
+	KeepSeries bool `json:"-"`
 	// RequestKey makes a create safe to retry: a second create with the
 	// same key returns the first title. Updates ignore it.
 	RequestKey *string `json:"request_key,omitempty"`
@@ -156,7 +180,9 @@ type Title struct {
 	TitleInput
 	// Tags shadows TitleInput.Tags so an answer always lists them, each
 	// with the spelling it was first saved with, in the title's order.
-	Tags         []string  `json:"tags"`
+	Tags []string `json:"tags"`
+	// SeriesID is the series SeriesName names, absent without one.
+	SeriesID     *int64    `json:"series_id,omitempty" ts:",null"`
 	EditionCount int       `json:"edition_count"`
 	CopyCount    int       `json:"copy_count"`
 	CreatedAt    time.Time `json:"created_at"`
@@ -314,6 +340,40 @@ func checkRating(rating *int) *httpx.FieldError {
 	return nil
 }
 
+// seriesNumberMsg says what a series number or total may be.
+const seriesNumberMsg = "must be a whole number from 1 to 10000"
+
+func checkSeriesNumber(field string, n *int) *httpx.FieldError {
+	if n != nil && (*n < 1 || *n > MaxSeriesNumber) {
+		return fieldErr(field, seriesNumberMsg)
+	}
+	return nil
+}
+
+// checkSeries checks a title's series name, trimmed already, and number. A
+// series name is one line of text, as the form's field holds it.
+func (in *TitleInput) checkSeries() *httpx.FieldError {
+	if in.SeriesName != nil {
+		name := *in.SeriesName
+		if e := checkLen("series_name", name, maxText); e != nil {
+			return e
+		}
+		if !utf8.ValidString(name) {
+			return fieldErr("series_name", "is not valid")
+		}
+		if e := checkText("series_name", name); e != nil {
+			return e
+		}
+	}
+	if e := checkSeriesNumber("series_number", in.SeriesNumber); e != nil {
+		return e
+	}
+	if in.SeriesNumber != nil && in.SeriesName == nil {
+		return fieldErr("series_number", "needs series_name")
+	}
+	return nil
+}
+
 func firstErr(errs ...*httpx.FieldError) *httpx.FieldError {
 	for _, e := range errs {
 		if e != nil {
@@ -332,6 +392,7 @@ func (in *TitleInput) Normalize() *httpx.FieldError {
 	in.PolishTitle = trimOpt(in.PolishTitle)
 	in.BNID = trimOpt(in.BNID)
 	in.OpenLibraryID = trimOpt(in.OpenLibraryID)
+	in.SeriesName = trimOpt(in.SeriesName)
 	key, fe := normalizeRequestKey(in.RequestKey)
 	if fe != nil {
 		return fe
@@ -368,6 +429,7 @@ func (in *TitleInput) Normalize() *httpx.FieldError {
 		normalizeCoverURL(in.CoverURL),
 		checkYear("year", in.Year),
 		checkRating(in.Rating),
+		in.checkSeries(),
 	); e != nil {
 		return e
 	}

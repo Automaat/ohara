@@ -45,6 +45,10 @@ func (h *Handler) Mount(r chi.Router) {
 
 	r.Get("/tags", h.listTags)
 
+	r.Get("/series", h.listSeries)
+	r.Get("/series/{id}", h.getSeries)
+	r.Put("/series/{id}", h.setSeriesTotal)
+
 	r.Get("/editions", h.listEditions)
 	r.Post("/editions", h.createEdition)
 	r.Get("/editions/{id}", h.getEdition)
@@ -81,6 +85,8 @@ func (h *Handler) writeErr(w http.ResponseWriter, r *http.Request, op string, er
 		httpx.WriteJSON(w, h.logger, http.StatusConflict, httpx.Error{Error: err.Error(), Field: "tmdb_id"})
 	case errors.Is(err, ErrRequestDiscarded):
 		httpx.WriteJSON(w, h.logger, http.StatusConflict, httpx.Error{Error: err.Error(), Field: "request_key"})
+	case errors.Is(err, ErrDuplicateSeriesNumber):
+		httpx.WriteJSON(w, h.logger, http.StatusConflict, httpx.Error{Error: err.Error(), Field: "series_number"})
 	case errors.Is(err, ErrKindLocked):
 		httpx.WriteJSON(w, h.logger, http.StatusConflict, httpx.Error{Error: err.Error(), Field: "kind"})
 	case errors.Is(err, ErrNotOrdered):
@@ -281,11 +287,13 @@ func (h *Handler) getTitle(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, h.logger, http.StatusOK, detail)
 }
 
-// titleBody reads a title's rating as it was sent, since a body without
-// one keeps the stored rating and a null clears it.
+// titleBody reads a title's rating and series as they were sent, since a
+// body without them keeps the stored ones and a null clears them.
 type titleBody struct {
 	TitleInput
-	Rating json.RawMessage `json:"rating"`
+	Rating       json.RawMessage `json:"rating"`
+	SeriesName   json.RawMessage `json:"series_name"`
+	SeriesNumber json.RawMessage `json:"series_number"`
 }
 
 func (h *Handler) decodeTitle(w http.ResponseWriter, r *http.Request) (*TitleInput, bool) {
@@ -297,6 +305,15 @@ func (h *Handler) decodeTitle(w http.ResponseWriter, r *http.Request) (*TitleInp
 	in.KeepRating = body.Rating == nil
 	if !in.KeepRating && json.Unmarshal(body.Rating, &in.Rating) != nil {
 		httpx.WriteFieldError(w, h.logger, fieldErr("rating", ratingMsg))
+		return nil, false
+	}
+	in.KeepSeries = body.SeriesName == nil && body.SeriesNumber == nil
+	if body.SeriesName != nil && json.Unmarshal(body.SeriesName, &in.SeriesName) != nil {
+		httpx.WriteFieldError(w, h.logger, fieldErr("series_name", "must be text or null"))
+		return nil, false
+	}
+	if body.SeriesNumber != nil && json.Unmarshal(body.SeriesNumber, &in.SeriesNumber) != nil {
+		httpx.WriteFieldError(w, h.logger, fieldErr("series_number", seriesNumberMsg))
 		return nil, false
 	}
 	if fe := in.Normalize(); fe != nil {

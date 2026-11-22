@@ -64,6 +64,8 @@ func mapErr(err, notFound error, op string) error {
 		return ErrDuplicateTMDB
 	case code == pgUniqueViolation && constraint == "discarded_request_key":
 		return ErrRequestDiscarded
+	case code == pgUniqueViolation && constraint == "title_series_number_key":
+		return ErrDuplicateSeriesNumber
 	}
 	return fmt.Errorf("%s: %w", op, err)
 }
@@ -82,6 +84,7 @@ func hasTag(param string) string {
 
 const titleColumns = `t.id, t.kind, t.name, t.original_title, t.polish_title, t.year,
 	t.tmdb_id, t.authors, t.bn_id, t.openlibrary_id, t.notes, t.cover_url, t.rating, ` + titleTags + `,
+	t.series_id, (SELECT s.name FROM series s WHERE s.id = t.series_id), t.series_number,
 	t.created_at, t.updated_at,
 	(SELECT count(*) FROM edition e WHERE e.title_id = t.id),
 	(SELECT count(*) FROM copy c JOIN edition e ON e.id = c.edition_id WHERE e.title_id = t.id)`
@@ -90,7 +93,7 @@ func scanTitle(row pgx.Row) (Title, error) {
 	var t Title
 	err := row.Scan(&t.ID, &t.Kind, &t.Name, &t.OriginalTitle, &t.PolishTitle, &t.Year,
 		&t.TMDBID, &t.Authors, &t.BNID, &t.OpenLibraryID, &t.Notes, &t.CoverURL, &t.Rating, &t.Tags,
-		&t.CreatedAt, &t.UpdatedAt, &t.EditionCount, &t.CopyCount)
+		&t.SeriesID, &t.SeriesName, &t.SeriesNumber, &t.CreatedAt, &t.UpdatedAt, &t.EditionCount, &t.CopyCount)
 	if t.Tags == nil {
 		t.Tags = []string{}
 	}
@@ -199,13 +202,35 @@ func (s *Store) CreateTitle(ctx context.Context, in *TitleInput) (Title, bool, e
 			return err
 		}
 		var id int64
+		// A repeat answers with the key's title before a series is joined
+		// or made: one made here would stay without a title.
+		if in.RequestKey != nil {
+			err := tx.QueryRow(ctx, `SELECT id FROM title WHERE request_key = $1`, *in.RequestKey).Scan(&id)
+			if err == nil {
+				created = false
+				t, err = getTitle(ctx, tx, id)
+				return err
+			}
+			if !errors.Is(err, pgx.ErrNoRows) {
+				return fmt.Errorf("replay title: %w", err)
+			}
+		}
+		var seriesID *int64
+		if in.SeriesName != nil {
+			joined, err := joinSeries(ctx, tx, in.Kind, *in.SeriesName, nil)
+			if err != nil {
+				return err
+			}
+			seriesID = &joined
+		}
 		err := tx.QueryRow(ctx, `INSERT INTO title
 			(kind, name, original_title, polish_title, year, tmdb_id, authors, bn_id, openlibrary_id, notes,
-			cover_url, request_key, rating)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, ''), $12, $13)
+			cover_url, request_key, rating, series_id, series_number)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, ''), $12, $13, $14, $15)
 			ON CONFLICT (request_key) DO NOTHING RETURNING id`,
 			in.Kind, in.Name, in.OriginalTitle, in.PolishTitle, in.Year, in.TMDBID, in.Authors,
-			in.BNID, in.OpenLibraryID, in.Notes, in.CoverURL, in.RequestKey, in.Rating).Scan(&id)
+			in.BNID, in.OpenLibraryID, in.Notes, in.CoverURL, in.RequestKey, in.Rating,
+			seriesID, in.SeriesNumber).Scan(&id)
 		if errors.Is(err, pgx.ErrNoRows) && in.RequestKey != nil {
 			created = false
 			err = tx.QueryRow(ctx, `SELECT id FROM title WHERE request_key = $1`, *in.RequestKey).Scan(&id)
@@ -227,12 +252,17 @@ func (s *Store) CreateTitle(ctx context.Context, in *TitleInput) (Title, bool, e
 }
 
 // UpdateTitle replaces a title. The kind cannot change while editions exist,
-// since their kind-specific fields would no longer apply. A nil cover URL
-// and in.KeepRating keep the stored cover and rating.
+// since their kind-specific fields would no longer apply. A nil cover URL,
+// in.KeepRating and in.KeepSeries keep the stored cover, rating and series;
+// a title of another kind keeps its series' name and number in a series of
+// its new kind. The series the title leaves goes once no title is in it.
 func (s *Store) UpdateTitle(ctx context.Context, id int64, in *TitleInput) (Title, error) {
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
 		var kind string
-		err := tx.QueryRow(ctx, `SELECT kind FROM title WHERE id = $1 FOR UPDATE`, id).Scan(&kind)
+		var stored storedSeries
+		err := tx.QueryRow(ctx, `SELECT t.kind, t.series_id, s.name, t.series_number
+			FROM title t LEFT JOIN series s ON s.id = t.series_id WHERE t.id = $1 FOR UPDATE OF t`, id).
+			Scan(&kind, &stored.id, &stored.name, &stored.number)
 		if err != nil {
 			return mapErr(err, ErrTitleNotFound, "lock title")
 		}
@@ -241,13 +271,30 @@ func (s *Store) UpdateTitle(ctx context.Context, id int64, in *TitleInput) (Titl
 				return err
 			}
 		}
+		keepSeries := in.KeepSeries && kind == in.Kind
+		var seriesID *int64
+		if !keepSeries {
+			if in.KeepSeries {
+				in.SeriesName, in.SeriesNumber = stored.name, stored.number
+			}
+			if in.SeriesName != nil {
+				joined, err := joinSeries(ctx, tx, in.Kind, *in.SeriesName, stored.id)
+				if err != nil {
+					return err
+				}
+				seriesID = &joined
+			}
+		}
 		_, err = tx.Exec(ctx, `UPDATE title SET kind = $2, name = $3, original_title = $4,
 			polish_title = $5, year = $6, tmdb_id = $7, authors = $8, bn_id = $9,
 			openlibrary_id = $10, notes = $11, cover_url = NULLIF(COALESCE($12, cover_url), ''),
 			rating = CASE WHEN $13 THEN rating ELSE $14 END,
+			series_id = CASE WHEN $15 THEN series_id ELSE $16 END,
+			series_number = CASE WHEN $15 THEN series_number ELSE $17 END,
 			updated_at = now(), edited_at = now() WHERE id = $1`,
 			id, in.Kind, in.Name, in.OriginalTitle, in.PolishTitle, in.Year, in.TMDBID, in.Authors,
-			in.BNID, in.OpenLibraryID, in.Notes, in.CoverURL, in.KeepRating, in.Rating)
+			in.BNID, in.OpenLibraryID, in.Notes, in.CoverURL, in.KeepRating, in.Rating,
+			keepSeries, seriesID, in.SeriesNumber)
 		if err != nil {
 			return mapErr(err, ErrTitleNotFound, "update title")
 		}

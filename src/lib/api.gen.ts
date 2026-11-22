@@ -21,6 +21,8 @@ export type AcquiredAs = 'new' | 'used';
 
 export type Condition = 'mint' | 'very_good' | 'good' | 'fair' | 'poor';
 
+export type VolumeState = 'owned' | 'ordered' | 'wishlist' | 'none';
+
 export type QueueReason = 'not_found' | 'lookup_failed';
 
 export type DealSource = 'olx' | 'pepper';
@@ -51,6 +53,8 @@ export type TitlePayload = {
 	cover_url?: string;
 	rating?: number | null;
 	tags?: string[];
+	series_name?: string | null;
+	series_number?: number | null;
 	request_key?: string;
 };
 
@@ -68,8 +72,11 @@ export type Title = {
 	notes: string;
 	cover_url?: string;
 	rating?: number | null;
+	series_name?: string | null;
+	series_number?: number | null;
 	request_key?: string;
 	tags: string[];
+	series_id?: number | null;
 	edition_count: number;
 	copy_count: number;
 	created_at: string;
@@ -195,8 +202,11 @@ export type TitleDetail = {
 	notes: string;
 	cover_url?: string;
 	rating?: number | null;
+	series_name?: string | null;
+	series_number?: number | null;
 	request_key?: string;
 	tags: string[];
+	series_id?: number | null;
 	edition_count: number;
 	copy_count: number;
 	created_at: string;
@@ -323,6 +333,47 @@ export type CollectionView = {
 export type TagCount = {
 	name: string;
 	title_count: number;
+};
+
+export type Series = {
+	id: number;
+	kind: Kind;
+	name: string;
+	total_volumes: number | null;
+	title_count: number;
+	missing_count: number;
+};
+
+export type SeriesVolume = {
+	title_id: number;
+	name: string;
+	polish_title: string | null;
+	year: number | null;
+	authors: string[];
+	cover_url: string | null;
+	number: number | null;
+	state: VolumeState;
+};
+
+export type MissingVolume = {
+	number: number;
+	title_id: number | null;
+	state: VolumeState;
+};
+
+export type SeriesDetail = {
+	id: number;
+	kind: Kind;
+	name: string;
+	total_volumes: number | null;
+	title_count: number;
+	missing_count: number;
+	volumes: SeriesVolume[];
+	missing: MissingVolume[];
+};
+
+export type SeriesTotalPayload = {
+	total_volumes: number | null;
 };
 
 export type CandidateTitle = {

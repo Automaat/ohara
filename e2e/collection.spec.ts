@@ -18,7 +18,7 @@ async function seed(
 	request: APIRequestContext,
 	title: { kind: string; name: string; authors?: string[] },
 	edition: { format?: string; barcode?: string } = {},
-	copy: { status?: string; shop?: string } = {}
+	copy: { status?: string; shop?: string; price_cents?: number } = {}
 ): Promise<Seeded> {
 	const cover = new URL('/pwa-192x192.png', test.info().project.use.baseURL).href;
 	const titleID = await created(
@@ -402,6 +402,78 @@ for (const viewport of viewports) {
 			await press(sheet.getByRole('button', { name: 'Gotowe' }));
 			release();
 			await expect(tile(page, second)).toBeVisible();
+		});
+
+		test('Bez ceny lists owned copies without a price and stays in the address', async ({
+			page,
+			request
+		}) => {
+			const t = tag();
+			const film = `Film ${t}`;
+			const album = `Album ${t}`;
+			const book = `Książka ${t}`;
+			const wish = `Życzenie ${t}`;
+			await seed(request, { kind: 'movie', name: film }, { format: 'dvd' }, { price_cents: 2999 });
+			await seed(request, { kind: 'music', name: album }, { format: 'cd' }, { price_cents: 0 });
+			const unpriced = await seed(request, { kind: 'book', name: book });
+			await seed(request, { kind: 'movie', name: wish }, { format: 'dvd' }, { status: 'wishlist' });
+
+			await page.goto(`/?q=${t}`);
+			await expect(shelf(page).getByRole('listitem')).toHaveCount(4);
+
+			const count = page.getByRole('button', { name: /^\d[\d\s]* bez ceny$/ });
+			if (viewport.touch) {
+				// A phone shows the count beside the summary, and a tap on it turns the filter on.
+				await expect(count).toBeVisible();
+				await press(count);
+				await expect(count).toHaveAttribute('aria-pressed', 'true');
+			} else {
+				await expect(count).toBeHidden();
+				await press(page.getByRole('button', { name: /^Sortowanie i filtry/ }));
+				const sheet = page.getByRole('dialog', { name: 'Sortowanie i filtry' });
+				await pickStatus(sheet, false, 'unpriced', 'Bez ceny');
+				await press(sheet.getByRole('button', { name: 'Gotowe' }));
+			}
+			const address = new RegExp(`/\\?status=unpriced&q=${t}$`);
+			await expect(page).toHaveURL(address);
+			await expect(shelf(page).getByRole('listitem')).toHaveCount(1);
+			await expect(tile(page, book)).toBeVisible();
+			const choices = page.getByRole('group', { name: 'Sortowanie i filtry' });
+			await expect(choices.getByText('Bez ceny', { exact: true })).toBeVisible();
+
+			await page.reload();
+			await expect(shelf(page).getByRole('listitem')).toHaveCount(1);
+			await expect(tile(page, book)).toBeVisible();
+
+			await press(tile(page, book).getByRole('link'));
+			await expect(page).toHaveURL(new RegExp(`/titles/${unpriced.titleID}$`));
+			await page.goBack();
+			await expect(page).toHaveURL(address);
+			await expect(shelf(page).getByRole('listitem')).toHaveCount(1);
+			await expect(tile(page, book)).toBeVisible();
+
+			// The only unpriced copy is a book, so films without a price are none.
+			await press(chip(page, /^Filmy/));
+			await expect(page).toHaveURL(new RegExp(`\\?kind=movie&status=unpriced&q=${t}$`));
+			await expect(page.getByText('Nic nie pasuje', { exact: true })).toBeVisible();
+			await press(page.getByRole('button', { name: 'Wyczyść filtry' }));
+			await expect(page).toHaveURL(/\/$/);
+			await expect(tile(page, film)).toBeVisible();
+			await expectNoSourceRequests(request);
+		});
+
+		test('the count of copies without a price is gone once every copy has one', async ({
+			page
+		}) => {
+			await page.route('**/api/collection', async (route) => {
+				const res = await route.fetch();
+				const view = (await res.json()) as { totals: { owned: number; priced: number } };
+				view.totals.priced = view.totals.owned;
+				await route.fulfill({ response: res, json: view });
+			});
+			await page.goto('/');
+			await expect(page.locator('.phone-head .summary')).toContainText('na półce');
+			await expect(page.getByRole('button', { name: /bez ceny$/ })).toHaveCount(0);
 		});
 
 		test('empty and failed loads keep their states', async ({ page }) => {

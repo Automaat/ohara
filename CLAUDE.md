@@ -337,7 +337,8 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   or an inline script's hash.
 - The smoke suite (`e2e/`, `npm run test:e2e`) drives the production image
   in Chromium at 390 × 844 with touch: a wedge scan, quick confirm and
-  "Cofnij", and "Dodaj tytuł" by hand. `scripts/e2e.sh` builds the image
+  "Cofnij", "Dodaj tytuł" by hand, and Kolekcja's sort orders under
+  active filters. `scripts/e2e.sh` builds the image
   (or takes one as its first argument), starts it from `e2e/compose.yaml`
   with Postgres, `OHARA_LOOKUP_STUB=true`, `OHARA_MUSICBRAINZ=false` and no
   provider keys, and removes it afterwards. App and Postgres sit on an

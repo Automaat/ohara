@@ -69,7 +69,10 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   startup in version order, each in its own transaction, under an advisory
   lock. Never edit an applied migration. Applied versions the binary has
   no file for (a rollback to an older release) log one error at startup
-  and set `ohara_db_unknown_migrations`; the app still starts.
+  and set `ohara_db_unknown_migrations`; the app still starts. A new
+  migration takes a version above the current `main`'s highest:
+  `scripts/check-migrations.sh origin/main` fails on one `main` already
+  uses (see Git and CI).
 - Linters: `golangci-lint` (`.golangci.yml`) and `nilaway`. Never add
   suppression directives; fix the root cause.
 - Errors are `{"error": "...", "field": "..."}`: 422 for validation (field
@@ -597,6 +600,16 @@ and cuts the GitHub release, in that order. `:latest` comes only from CI on
   Postgres, golangci-lint, nilaway), browser smoke flows (`e2e`), image
   build; `main` pushes `:latest` and `:<sha>` only after all of them pass. Pushed images (`main` and `release.yml`)
   carry BuildKit's SBOM and max-mode provenance attestations.
+- CI's `migrations` job (`scripts/check-migrations.sh`) fails when two
+  migrations share a version: a PR's merge commit, or a migration the PR
+  adds to its base branch whose version the current `main` already uses
+  (both files named), and `main` itself after a merge. A PR stacked on
+  another answers only for its own migrations. Nothing reruns a PR's CI
+  when `main` moves, so each push to `main` checks every open PR that adds
+  a migration against the `main` of that moment and sets the
+  `migrations against main` commit status on its head
+  (`migrations-open-prs`); a PR without migrations gets none. A red status
+  means renumbering above `main`'s highest.
 - CI fails on known vulnerabilities (`scripts/check-vulnerabilities.sh`),
   on every push and PR and nightly: `govulncheck` for Go code the backend
   calls, under the go.mod toolchain; `npm audit` for high and critical

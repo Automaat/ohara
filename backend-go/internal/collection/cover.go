@@ -2,6 +2,7 @@ package collection
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"image"
 	_ "image/jpeg"
@@ -20,14 +21,35 @@ const (
 	coverCacheControl = "private, max-age=31536000, immutable"
 )
 
-func validCover(photo []byte) bool {
+// coverDecodeSlot lets one cover decode run at a time in the process. A full
+// decode of a 16 megapixel 16-bit interlaced PNG holds a few hundred MiB, so
+// concurrent uploads could push the container past its memory limit.
+var coverDecodeSlot = make(chan struct{}, 1)
+
+// decodeImage is image.Decode; tests replace it to hold a decode open.
+var decodeImage = image.Decode
+
+// validCover reports whether photo is a JPEG or PNG of at most
+// maxCoverPixels that decodes in full. The header check runs at once; the
+// full decode waits for coverDecodeSlot and gives up with ctx's error when
+// ctx has ended, also when the slot frees at the same moment.
+func validCover(ctx context.Context, photo []byte) (bool, error) {
 	config, format, err := image.DecodeConfig(bytes.NewReader(photo))
 	if err != nil || (format != "jpeg" && format != "png") || config.Width <= 0 ||
 		config.Height <= 0 || config.Width > maxCoverPixels/config.Height {
-		return false
+		return false, nil
 	}
-	_, _, err = image.Decode(bytes.NewReader(photo))
-	return err == nil
+	select {
+	case coverDecodeSlot <- struct{}{}:
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
+	defer func() { <-coverDecodeSlot }()
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	_, _, err = decodeImage(bytes.NewReader(photo))
+	return err == nil, nil
 }
 
 // getEditionCover answers the edition's photo. A URL whose one `v` names the
@@ -56,6 +78,9 @@ func (h *Handler) getEditionCover(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// putEditionCover stores a new photo for the edition. A request whose
+// context ends while it waits for the decode slot writes nothing: the client
+// has left, or the router's timeout answers 504.
 func (h *Handler) putEditionCover(w http.ResponseWriter, r *http.Request) {
 	id, ok := httpx.PathID(w, r, h.logger, "id")
 	if !ok {
@@ -72,7 +97,12 @@ func (h *Handler) putEditionCover(w http.ResponseWriter, r *http.Request) {
 			httpx.Error{Error: "photo upload interrupted; try again", Field: "cover_photo"})
 		return
 	}
-	if !validCover(photo) {
+	valid, err := validCover(r.Context(), photo)
+	if err != nil {
+		h.logger.DebugContext(r.Context(), "wait for cover decode", "error", err)
+		return
+	}
+	if !valid {
 		httpx.WriteFieldError(w, h.logger, fieldErr("cover_photo", "choose a valid JPEG or PNG up to 16 megapixels"))
 		return
 	}

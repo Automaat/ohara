@@ -7,7 +7,8 @@
 		large = false,
 		name,
 		wish = false,
-		lent = false
+		lent = false,
+		eager = false
 	}: {
 		kind: Kind;
 		url?: string;
@@ -18,6 +19,8 @@
 		wish?: boolean;
 		/** A copy out on loan: the cover carries an arrow leaving a box. */
 		lent?: boolean;
+		/** Load the image at once, as a page meant for printing needs every cover. */
+		eager?: boolean;
 	} = $props();
 	let failedURL = $state<string>();
 	let loadedURL = $state<string>();
@@ -46,7 +49,7 @@
 				src={thumbnail}
 				class:loaded={loadedURL === thumbnail}
 				alt=""
-				loading="lazy"
+				loading={eager ? 'eager' : 'lazy'}
 				decoding="async"
 				referrerpolicy="no-referrer"
 				onload={() => (loadedURL = thumbnail)}

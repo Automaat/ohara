@@ -127,6 +127,11 @@
 	</Button>
 {/snippet}
 
+{#snippet headerActions()}
+	<Button href="/valuation/report">Raport dla ubezpieczyciela</Button>
+	{@render runButton()}
+{/snippet}
+
 {#snippet runStatus()}
 	{#if status}
 		<p class="status metadata" role="status">
@@ -158,7 +163,7 @@
 	{/if}
 {/snippet}
 
-<PageHeader title="Wartość" {description} actions={valued ? runButton : undefined} />
+<PageHeader title="Wartość" {description} actions={valued ? headerActions : undefined} />
 
 <div class="content">
 	<FormError message={runError} />

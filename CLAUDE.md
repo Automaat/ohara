@@ -626,6 +626,17 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   browser cannot decode, sends nothing, and a photo still shrinking when
   its sheet is gone is never sent. The server's 8 MiB and 16 megapixel
   limits stay as a backstop.
+- Wartość's "Raport dla ubezpieczyciela" (`/valuation/report`) lists every
+  owned copy for an insurer: cover, title, creators, format or binding,
+  barcode, condition, price paid and the used and new values, "brak
+  wyceny" for a missing one, then totals that each name the copies they
+  cover (`src/lib/insurance-report.ts`) and the last valuation's day. It
+  joins `GET /api/valuation` with `GET /api/collection?status=owned` by
+  copy for the condition, creators and binding; the values are Wartość's.
+  The browser's Print to PDF makes the document: an `@media print` rule
+  hides the navigation, tab bar and buttons, repeats the table header on
+  each A4 page and keeps every row whole, and covers load eagerly.
+  Before the first valuation it says none exists and links to Wartość.
 - Discogs data carries `DiscogsCredit`: "Data provided by Discogs." linked
   to its release page, never `nofollow`, under a quick confirm candidate
   with a `discogs_release_id` and a copy priced from Discogs on Wartość.
@@ -648,8 +659,9 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   "Cofnij", "Dodaj tytuł" by hand, the scan sheet sending no deals or queue
   read, the queue count following a queued scan, its add and undo,
   Kolekcja's filters, which also run at 1440 × 900, and its sort orders
-  under active filters, tags from the title form to Kolekcja's filter, and
-  cover photo uploads. `scripts/e2e.sh` builds
+  under active filters, tags from the title form to Kolekcja's filter,
+  cover photo uploads, and the insurance report with its A4 printout.
+  `scripts/e2e.sh` builds
   the image (or takes one as its first argument), starts it from
   `e2e/compose.yaml`
   with Postgres, `OHARA_LOOKUP_STUB=true`, `OHARA_MUSICBRAINZ=false` and no

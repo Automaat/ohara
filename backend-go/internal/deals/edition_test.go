@@ -1,6 +1,9 @@
 package deals
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 // TestExactEditionWants checks that a want of only its edition needs a
 // listing to name the edition's packaging, Polish voice-over or subtitles
@@ -55,22 +58,29 @@ func TestExactEditionWants(t *testing.T) {
 			"Blade Runner 2049 DVD steelbook":      false,
 		}},
 		{"Polish voice-over", lektor, map[string]bool{
-			"Łowca androidów DVD lektor PL":      true,
-			"Łowca androidów DVD z lektorem":     true,
-			"Łowca androidów DVD polski dubbing": true,
-			"Blade Runner DVD":                   false,
-			"Blade Runner DVD napisy":            false,
-			"Łowca androidów DVD":                false,
+			"Łowca androidów DVD lektor PL":             true,
+			"Łowca androidów DVD z lektorem":            true,
+			"Łowca androidów DVD polski dubbing":        true,
+			"Blade Runner DVD":                          false,
+			"Blade Runner DVD napisy":                   false,
+			"Łowca androidów DVD":                       false,
+			"Łowca androidów DVD bez lektora":           false,
+			"Łowca androidów DVD brak lektora":          false,
+			"Łowca androidów DVD bez polskiego lektora": false,
+			"Łowca androidów DVD lektor bez napisów":    true,
 		}},
 		{"Polish subtitles", subtitles, map[string]bool{
-			"Blade Runner DVD napisy PL":         true,
-			"Łowca androidów DVD polskie napisy": true,
-			"Łowca androidów DVD lektor":         false,
+			"Blade Runner DVD napisy PL":          true,
+			"Łowca androidów DVD polskie napisy":  true,
+			"Łowca androidów DVD lektor":          false,
+			"Łowca androidów DVD bez napisów PL":  false,
+			"Łowca androidów DVD brak PL napisów": false,
 		}},
 		{"voice-over and subtitles", both, map[string]bool{
-			"Łowca androidów DVD lektor napisy PL": true,
-			"Łowca androidów DVD lektor PL":        false,
-			"Blade Runner DVD napisy":              false,
+			"Łowca androidów DVD lektor napisy PL":   true,
+			"Łowca androidów DVD lektor bez napisów": false,
+			"Łowca androidów DVD lektor PL":          false,
+			"Blade Runner DVD napisy":                false,
 		}},
 		{"hardcover", hardcover, map[string]bool{
 			"Ostatnie życzenie Sapkowski twarda oprawa":        true,
@@ -142,4 +152,19 @@ func anyEdition(w Want, title string) bool {
 	w.ExactEdition = false
 	w.Packaging, w.PLVoiceover, w.PLSubtitles, w.Binding = nil, "unknown", "unknown", nil
 	return w.Matches(title)
+}
+
+func TestNamedDetails(t *testing.T) {
+	for title, want := range map[string][]string{
+		"Blade Runner 2049 Blu-ray steelbook lektor PL":    {"pl_voiceover", "steelbook"},
+		"Łowca androidów DVD bez lektora, napisy PL":       {"pl_subtitles"},
+		"Wiedźmin twarda oprawa":                           {"hardcover"},
+		"Wiedźmin oprawa miękka bez obwoluty":              {"paperback"},
+		"Blade Runner 2049 Blu-ray":                        nil,
+		"Blade Runner Digipak Mediabook z obwolutą napisy": {"digipak", "mediabook", "pl_subtitles", "slipcover"},
+	} {
+		if got := namedDetails(words(title)); !slices.Equal(got, want) {
+			t.Errorf("namedDetails(%q) = %q, want %q", title, got, want)
+		}
+	}
 }

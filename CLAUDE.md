@@ -326,7 +326,14 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   `yes` Polish voice-over ("lektor", "dubbing") or subtitles ("napisy"),
   and a hardcover ("twarda oprawa") or paperback ("miękka okładka",
   "broszurowa") binding (`deals.editionNamed`); `no`, `unknown` and an
-  `other` binding need nothing. Albums and the valuation ignore it.
+  `other` binding need nothing, and a mention after "bez" or "brak"
+  ("bez lektora", "brak polskich napisów") names nothing. Each stored
+  listing keeps the details its title names (`edition_details`, null
+  before migration 0034, naming none), so a wish turned exact later
+  stops alerting on its stored listings and the wished deals lists
+  (matched, "Pod limitem", "Wysłane", the badge) drop them. The wish form
+  and the quick confirm's wish (Okazje's "Dodaj pozycję" too) offer it,
+  except for albums. Albums and the valuation ignore it.
   A sent alert stores the price it named (`deal_alert.alerted_price_cents`);
   a later price under it, within the limit, queues the same row again and
   its message names the earlier price ("było …"). An alert still waiting

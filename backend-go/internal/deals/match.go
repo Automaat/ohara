@@ -377,6 +377,8 @@ type ListingText struct {
 	// the wanted name.
 	titleCount bool
 	leads      []int
+	// details are the edition details the listing names (namedDetails).
+	details []string
 }
 
 // NewListingText readies a listing title for matching under rules.
@@ -394,6 +396,7 @@ func NewListingText(title string, rules Rules) *ListingText {
 		lastYear:    time.Now().Year() + 1,
 		titleCount:  titleCount,
 		leads:       leads,
+		details:     namedDetails(text),
 	}
 }
 
@@ -777,7 +780,7 @@ func qualifies(w *Want, p *wantText, l *ListingText) bool {
 	if w.Kind == "movie" && w.Format != nil && l.format != *w.Format {
 		return false
 	}
-	if !editionNamed(w, text) {
+	if !editionNamed(w, l.details) {
 		return false
 	}
 	if w.Kind == "book" && p.surname != "" && !namesSurname(text, p.surname) {

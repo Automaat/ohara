@@ -459,7 +459,8 @@ export class ScanFlow {
 			purchased_on: f.purchased_on,
 			shop: f.shop,
 			acquired_as: f.acquired_as,
-			condition: f.condition
+			condition: f.condition,
+			exact_edition: f.exact_edition
 		};
 		this.issue = null;
 	}

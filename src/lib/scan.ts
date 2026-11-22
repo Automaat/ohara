@@ -376,6 +376,8 @@ export type QuickForm = {
 	shop: string;
 	acquired_as: AcquiredAs | '';
 	condition: Condition | '';
+	/** A wish of a movie or book matches only listings naming its edition's details. */
+	exact_edition: boolean;
 };
 
 /**
@@ -430,7 +432,8 @@ export function quickForm(
 		purchased_on: date,
 		shop: sticky.shop,
 		acquired_as: sticky.acquired_as,
-		condition: ''
+		condition: '',
+		exact_edition: false
 	};
 }
 
@@ -566,8 +569,9 @@ export function scanEditionPayload(
 }
 
 /**
- * The POST /api/copies body. A wish keeps only its price limit: no purchase date, shop, new or
- * used, or condition. The condition goes with a used copy alone.
+ * The POST /api/copies body. A wish keeps only its price limit and, unless it is an album,
+ * whether it takes only its edition: no purchase date, shop, new or used, or condition. The
+ * condition goes with a used copy alone.
  */
 export function scanCopyPayload(f: QuickForm, editionID: number, requestKey: string) {
 	const owned = f.status === 'owned';
@@ -582,7 +586,7 @@ export function scanCopyPayload(f: QuickForm, editionID: number, requestKey: str
 			notes: '',
 			max_price: owned ? '' : f.price,
 			market_percent: '',
-			exact_edition: false,
+			exact_edition: f.kind !== 'music' && f.exact_edition,
 			sold_on: '',
 			sale_price: '',
 			expected_on: '',

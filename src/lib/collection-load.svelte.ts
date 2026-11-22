@@ -54,8 +54,12 @@ export function sourceURL(f: CollectionFilter): Listing['url'] {
 	return f.status === 'none' ? '/api/titles' : '/api/collection';
 }
 
+/** The collection's counts; a kind counts the copies the page lists without a status, none sold. */
 function overviewOf(full: CollectionView): Overview {
-	return { totals: full.totals, kinds: kindCounts(full.items) };
+	return {
+		totals: full.totals,
+		kinds: kindCounts(full.items.filter((item) => item.status !== 'sold'))
+	};
 }
 
 export class CollectionLoad {

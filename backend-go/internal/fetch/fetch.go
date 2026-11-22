@@ -52,6 +52,10 @@ type Request struct {
 	MaxBody int64
 	// OK lists the accepted statuses, 200 when empty.
 	OK []int
+	// SkipBody returns an accepted answer without reading its body, for a
+	// write whose answer says all it needs in its status: a body cut short
+	// cannot then turn a write the source made into an error.
+	SkipBody bool
 }
 
 // Response is an answer: its status, its headers, which can say when to
@@ -105,6 +109,9 @@ func Do(ctx context.Context, client *http.Client, r Request) (Response, error) {
 	accepted := slices.Contains(ok, resp.StatusCode)
 	if !accepted && (resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests) {
 		return answer, StatusError{Code: resp.StatusCode}
+	}
+	if accepted && r.SkipBody {
+		return answer, nil
 	}
 	data, readErr := io.ReadAll(io.LimitReader(resp.Body, r.MaxBody+1))
 	if readErr != nil {

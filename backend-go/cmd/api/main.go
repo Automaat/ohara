@@ -34,6 +34,7 @@ import (
 	"github.com/Automaat/ohara/backend-go/internal/seed"
 	"github.com/Automaat/ohara/backend-go/internal/server"
 	"github.com/Automaat/ohara/backend-go/internal/valuation"
+	"github.com/Automaat/ohara/backend-go/internal/wantlist"
 	"github.com/Automaat/ohara/backend-go/internal/web"
 	"github.com/Automaat/ohara/backend-go/internal/wishshare"
 )
@@ -125,6 +126,9 @@ func run() int {
 	defer valuer.Wait()
 	defer hunter.Wait()
 	defer stopHunt()
+	syncer := newWantlistSyncer(pool, logger)
+	syncer.Start(huntCtx)
+	defer syncer.Wait()
 	queue := scanqueue.NewStore(pool)
 	metrics.RegisterScanQueueCollector(queue.Count)
 	searchers := titleSearchers()
@@ -137,6 +141,7 @@ func run() int {
 		scanqueue.NewHandler(queue, logger),
 		deals.NewHandler(dealStore, hunter, logger),
 		valuation.NewHandler(valueStore, valuer, logger),
+		wantlist.NewHandler(syncer, logger),
 		export.NewHandler(pool, valuer.Window(), logger),
 		shares,
 	}
@@ -342,6 +347,20 @@ func newDiscogs() *discogs.Client {
 	return &discogs.Client{
 		HTTP: discogsHTTP, BaseURL: envOr("OHARA_DISCOGS_URL", discogs.BaseURL), Token: token, Limiter: discogsBudget,
 	}
+}
+
+// newWantlistSyncer mirrors the album wishes to the Discogs wantlist of
+// the OHARA_DISCOGS_TOKEN owner, behind the lookup's requests in the
+// token's budget; disabled without the token.
+func newWantlistSyncer(pool *pgxpool.Pool, logger *slog.Logger) *wantlist.Syncer {
+	store := wantlist.NewStore(pool)
+	d := newDiscogs()
+	if d == nil {
+		logger.Info("discogs wantlist sync disabled: OHARA_DISCOGS_TOKEN not set")
+		return wantlist.NewSyncer(store, nil, logger)
+	}
+	d.Priority = discogs.Background
+	return wantlist.NewSyncer(store, d, logger)
 }
 
 // newMusicProvider builds the music chain: Discogs when a token is set,

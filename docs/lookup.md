@@ -52,6 +52,8 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   over the caller's cap fails (`fetch.Outcome` counts it a parse error),
   a status the caller does not accept is a `fetch.StatusError` returned
   with the response headers, and errors never carry the URL's query.
+  With `SkipBody` an accepted answer returns unread, for a write judged by
+  its status (the Discogs wantlist sync).
   Browser-like sites get `fetch.BrowserUserAgent`.
   When some of its sources fail but others answered, it returns a
   `*lookup.PartialError`: the lookup reports the failure next to the
@@ -84,14 +86,14 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   so BN's wins. `Parse` reads the series from cached answers too, so
   earlier scans need no new request.
 - Every Discogs request in the process (music lookup, title search,
-  valuation), and every redirect it follows, waits for one shared
+  valuation, wantlist sync), and every redirect it follows, waits for one shared
   `discogs.Limiter`: a burst of 4, then one every 1.2 s. Each request
   sent, redirects included, has 8 s from its own turn
   (`discogs.RequestTimeout`) and its own HTTP/1.1
   connection (`discogs.NewHTTPClient`), so net/http cannot resend it
   outside the budget and no minute of arrivals holds more than the
   token's 60. Waiting scans and title searches go before the valuation's
-  `Background` requests, each in arrival order; a caller that gives up
+  and the wantlist sync's `Background` requests, each in arrival order; a caller that gives up
   leaves the queue, and a wait that would outlast the caller's context
   returns its error at once without a request.
 - A lookup result sets `needs_confirmation` unless exactly one candidate

@@ -19,6 +19,7 @@ import {
 	timeAgo,
 	underLimitCount,
 	underLimitLabel,
+	wantlistSummary,
 	wishComparison,
 	wishLimit,
 	withoutDismissed,
@@ -361,6 +362,27 @@ describe('searchedFor', () => {
 	it('says when no run finished since the server started', () => {
 		expect(searchedFor(1, status({}), now)).toBe(
 			'Szukamy ofert dla 1 pozycji z listy życzeń. Od uruchomienia serwera nie było wyszukiwania.'
+		);
+	});
+});
+
+describe('wantlistSummary', () => {
+	const sync = { added: 2, already: 5, removed: 0, skipped: 0 };
+
+	it('is null before the first sync', () => {
+		expect(wantlistSummary(null)).toBeNull();
+	});
+
+	it('counts what the sync did, naming removals and skips only when there are some', () => {
+		expect(wantlistSummary(sync)).toBe('Ostatnia synchronizacja: dodano: 2, już na liście: 5.');
+		expect(wantlistSummary({ ...sync, removed: 1, skipped: 3 })).toBe(
+			'Ostatnia synchronizacja: dodano: 2, już na liście: 5, usunięto: 1, bez wydania Discogs: 3.'
+		);
+	});
+
+	it('reports a sync that stopped, with what it did before', () => {
+		expect(wantlistSummary({ ...sync, added: 1, failure: 'discogs: unexpected status 429' })).toBe(
+			'Synchronizacja przerwana: discogs: unexpected status 429. Przed przerwaniem dodano: 1, już na liście: 5.'
 		);
 	});
 });

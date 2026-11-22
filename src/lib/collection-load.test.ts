@@ -25,6 +25,7 @@ function item(over: Partial<CollectionItem> = {}): CollectionItem {
 		original_title: null,
 		polish_title: null,
 		year: null,
+		finished: false,
 		...over
 	};
 }

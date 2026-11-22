@@ -8,8 +8,12 @@ import {
 	kindLabels,
 	statusLabels,
 	type Copy,
+	type FormIssue,
 	type Kind,
-	type TitleDetail
+	type Parsed,
+	type Title,
+	type TitleDetail,
+	type TitlePayload
 } from '#lib/collection.js';
 import { copyCount, editionCount, purchaseDate } from '#lib/polish.js';
 import {
@@ -123,6 +127,64 @@ export function titleArtwork(t: TitleDetail): string | undefined {
 /** The line above the title, such as "Film · 2014". */
 export function kindAndYear(t: Pick<TitleDetail, 'kind' | 'year'>): string {
 	return [kindLabels[t.kind], t.year?.toString()].filter(Boolean).join(' · ');
+}
+
+/** What a finished title is for its kind: watched, read or heard. */
+export const finishedLabels: Record<Kind, string> = {
+	movie: 'Obejrzane',
+	book: 'Przeczytane',
+	music: 'Przesłuchane'
+};
+
+/** The action that marks a title finished today, such as "Oznacz jako obejrzane". */
+export function finishAction(kind: Kind): string {
+	return `Oznacz jako ${finishedLabels[kind].toLocaleLowerCase('pl-PL')}`;
+}
+
+/**
+ * A finished title's line, such as "Obejrzane 12 maj 2026", or its label alone when the day is
+ * unknown; null while it is not finished.
+ */
+export function finishedLine(t: Pick<Title, 'kind' | 'finished' | 'finished_on'>): string | null {
+	if (!t.finished) return null;
+	return [finishedLabels[t.kind], purchaseDate(t.finished_on ?? null)].filter(Boolean).join(' ');
+}
+
+/**
+ * The finish day a form's text names: null for an empty field, an unknown day. A day after
+ * today, the reader's local day, is refused as the server refuses it.
+ */
+export function finishDay(text: string, today: string): Parsed<string | null> {
+	const day = text.trim();
+	if (!day) return { ok: true, value: null };
+	if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return dayIssue('Data w formacie RRRR-MM-DD.');
+	if (day > today) return dayIssue('Data nie może być późniejsza niż dziś.');
+	return { ok: true, value: day };
+}
+
+function dayIssue(message: string): { ok: false; issue: FormIssue } {
+	return { ok: false, issue: { field: 'finished_on', message } };
+}
+
+/**
+ * The PUT body that records a title as finished on a day (null when unknown) or not finished,
+ * with every other field as the title has it. Without a cover the server keeps the stored one.
+ */
+export function finishPayload(t: Title, finished: boolean, day: string | null): TitlePayload {
+	return {
+		kind: t.kind,
+		name: t.name,
+		original_title: t.original_title,
+		polish_title: t.polish_title,
+		year: t.year,
+		tmdb_id: t.tmdb_id,
+		authors: t.authors,
+		bn_id: t.bn_id,
+		openlibrary_id: t.openlibrary_id,
+		notes: t.notes,
+		finished,
+		finished_on: finished ? day : null
+	};
 }
 
 /** What an edition is, such as "4K UHD · Slipcover", never with its barcode. */

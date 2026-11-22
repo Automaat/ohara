@@ -7,6 +7,11 @@ import {
 	copyLine,
 	copyRequest,
 	editionArtwork,
+	finishAction,
+	finishDay,
+	finishedLabels,
+	finishedLine,
+	finishPayload,
 	editionName,
 	editionsLine,
 	kindAndYear,
@@ -200,6 +205,71 @@ describe('artwork', () => {
 		expect(titleArtwork(title({ cover_url: 'https://t', editions }))).toBe('https://t');
 		expect(titleArtwork(title({ editions }))).toBe('/api/editions/4/cover');
 		expect(titleArtwork(title({ editions: [] }))).toBeUndefined();
+	});
+});
+
+describe('finished titles', () => {
+	it('names finishing by kind', () => {
+		expect(finishedLabels).toEqual({
+			movie: 'Obejrzane',
+			book: 'Przeczytane',
+			music: 'Przesłuchane'
+		});
+		expect(finishAction('movie')).toBe('Oznacz jako obejrzane');
+		expect(finishAction('book')).toBe('Oznacz jako przeczytane');
+		expect(finishAction('music')).toBe('Oznacz jako przesłuchane');
+	});
+
+	it('shows the day when known, the label alone when not, nothing while unfinished', () => {
+		expect(finishedLine({ kind: 'book', finished: true, finished_on: '2026-11-01' })).toBe(
+			'Przeczytane 1 lis 2026'
+		);
+		expect(finishedLine({ kind: 'music', finished: true, finished_on: null })).toBe('Przesłuchane');
+		expect(finishedLine({ kind: 'movie', finished: true })).toBe('Obejrzane');
+		expect(finishedLine({ kind: 'movie', finished: false })).toBeNull();
+		expect(finishedLine({ kind: 'movie', finished: null })).toBeNull();
+		expect(finishedLine({ kind: 'movie' })).toBeNull();
+	});
+
+	it('reads a finish day from the form, empty as an unknown day', () => {
+		const today = '2026-05-12';
+		expect(finishDay(' 2026-05-01 ', today)).toEqual({ ok: true, value: '2026-05-01' });
+		expect(finishDay(today, today)).toEqual({ ok: true, value: today });
+		expect(finishDay('  ', today)).toEqual({ ok: true, value: null });
+		for (const bad of ['12.05.2026', '2026-5-1', 'wczoraj']) {
+			expect(finishDay(bad, today)).toEqual({
+				ok: false,
+				issue: { field: 'finished_on', message: 'Data w formacie RRRR-MM-DD.' }
+			});
+		}
+		expect(finishDay('2026-05-13', today)).toEqual({
+			ok: false,
+			issue: { field: 'finished_on', message: 'Data nie może być późniejsza niż dziś.' }
+		});
+	});
+
+	it('sends the title as it stands with the new state, keeping the stored cover', () => {
+		const t = title({ kind: 'book', authors: ['Bolesław Prus'], notes: 'Tom 1', cover_url: 'x' });
+		expect(finishPayload(t, true, '2026-05-01')).toEqual({
+			kind: 'book',
+			name: 'Interstellar',
+			original_title: null,
+			polish_title: null,
+			year: 2014,
+			tmdb_id: 157336,
+			authors: ['Bolesław Prus'],
+			bn_id: null,
+			openlibrary_id: null,
+			notes: 'Tom 1',
+			finished: true,
+			finished_on: '2026-05-01'
+		});
+		expect(finishPayload(t, true, null)).toMatchObject({ finished: true, finished_on: null });
+		expect(finishPayload(t, false, '2026-05-01')).toMatchObject({
+			finished: false,
+			finished_on: null
+		});
+		expect(finishPayload(t, false, null)).not.toHaveProperty('cover_url');
 	});
 });
 

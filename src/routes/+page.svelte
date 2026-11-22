@@ -28,6 +28,7 @@
 		formatLabels,
 		formatPLN,
 		kindLabels,
+		listsOwned,
 		loanedLabel,
 		readCollectionFilter,
 		shelfSummary,
@@ -37,6 +38,7 @@
 		uncopiedTitles,
 		unpricedCount,
 		unpricedLabel,
+		unfinishedLabel,
 		type CollectionFilter,
 		type CollectionItem
 	} from '#lib/collection.js';
@@ -202,14 +204,15 @@
 
 	function setStatus(status: CollectionFilter['status']) {
 		// A title has no format, location or loan, so listing titles without copies drops those
-		// filters.
+		// filters. "Do nadrobienia" lists owned copies only, so a status without them drops it.
 		const titles = status === 'none';
 		updateFilter({
 			...filter,
 			status,
 			format: titles ? '' : filter.format,
 			location: titles ? '' : filter.location,
-			loaned: titles ? false : filter.loaned
+			loaned: titles ? false : filter.loaned,
+			unfinished: listsOwned(status) ? filter.unfinished : false
 		});
 	}
 
@@ -269,7 +272,8 @@
 				{ key: 'format', label: filter.format && formatLabels[filter.format] },
 				{ key: 'location', label: filter.location },
 				{ key: 'status', label: filter.status && collectionStatusLabels[filter.status] },
-				{ key: 'loaned', label: filter.loaned ? loanedLabel : '' }
+				{ key: 'loaned', label: filter.loaned ? loanedLabel : '' },
+				{ key: 'unfinished', label: filter.unfinished ? unfinishedLabel : '' }
 			] as const
 		).filter((entry) => entry.label)
 	);
@@ -307,6 +311,11 @@
 				key: 'loaned',
 				label: loanedLabel,
 				remove: () => set('loaned', false)
+			},
+			filter.unfinished === true && {
+				key: 'unfinished',
+				label: unfinishedLabel,
+				remove: () => set('unfinished', false)
 			}
 		].filter((choice) => choice !== false && choice !== '')
 	);
@@ -372,12 +381,14 @@
 		format={filter.format}
 		status={filter.status}
 		loaned={filter.loaned ?? false}
+		unfinished={filter.unfinished ?? false}
 		location={filter.location ?? ''}
 		{locations}
 		onsort={setSort}
 		onformat={(format) => set('format', format)}
 		onstatus={setStatus}
 		onloaned={(loaned) => set('loaned', loaned)}
+		onunfinished={(unfinished) => set('unfinished', unfinished)}
 		onlocation={(location) => set('location', location)}
 	/>
 </div>

@@ -3,8 +3,10 @@
 	import {
 		collectionStatusLabels,
 		formatLabels,
+		listsOwned,
 		loanedLabel,
 		options,
+		unfinishedLabel,
 		type CollectionFilter
 	} from '#lib/collection.js';
 	import { foldLocation } from '#lib/collection-filter.js';
@@ -16,12 +18,14 @@
 		format,
 		status,
 		loaned,
+		unfinished,
 		location,
 		locations,
 		onsort,
 		onformat,
 		onstatus,
 		onloaned,
+		onunfinished,
 		onlocation
 	}: {
 		open?: boolean;
@@ -29,6 +33,8 @@
 		format: CollectionFilter['format'];
 		status: CollectionFilter['status'];
 		loaned: boolean;
+		/** Whether only owned copies of titles not finished are listed. */
+		unfinished: boolean;
 		/** The location the copies are filtered by, empty for any. */
 		location: string;
 		/** The locations in use, the most used first. */
@@ -37,6 +43,7 @@
 		onformat: (format: CollectionFilter['format']) => void;
 		onstatus: (status: CollectionFilter['status']) => void;
 		onloaned: (loaned: boolean) => void;
+		onunfinished: (unfinished: boolean) => void;
 		onlocation: (location: string) => void;
 	} = $props();
 
@@ -122,6 +129,13 @@
 			disabled={status === 'none'}
 			checked={loaned}
 			onchange={(e) => onloaned(e.currentTarget.checked)}
+		/>
+		<!-- Only owned copies wait to be watched, read or heard. -->
+		<Switch
+			label={unfinishedLabel}
+			disabled={!listsOwned(status)}
+			checked={unfinished && listsOwned(status)}
+			onchange={(e) => onunfinished(e.currentTarget.checked)}
 		/>
 	</div>
 	{#snippet footer()}

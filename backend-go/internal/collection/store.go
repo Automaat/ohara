@@ -69,15 +69,20 @@ func mapErr(err, notFound error, op string) error {
 }
 
 const titleColumns = `t.id, t.kind, t.name, t.original_title, t.polish_title, t.year,
-	t.tmdb_id, t.authors, t.bn_id, t.openlibrary_id, t.notes, t.cover_url, t.created_at, t.updated_at,
+	t.tmdb_id, t.authors, t.bn_id, t.openlibrary_id, t.notes, t.cover_url, t.finished, t.finished_on,
+	t.created_at, t.updated_at,
 	(SELECT count(*) FROM edition e WHERE e.title_id = t.id),
 	(SELECT count(*) FROM copy c JOIN edition e ON e.id = c.edition_id WHERE e.title_id = t.id)`
 
 func scanTitle(row pgx.Row) (Title, error) {
 	var t Title
+	var finished bool
+	var finishedOn *time.Time
 	err := row.Scan(&t.ID, &t.Kind, &t.Name, &t.OriginalTitle, &t.PolishTitle, &t.Year,
-		&t.TMDBID, &t.Authors, &t.BNID, &t.OpenLibraryID, &t.Notes, &t.CoverURL, &t.CreatedAt, &t.UpdatedAt,
-		&t.EditionCount, &t.CopyCount)
+		&t.TMDBID, &t.Authors, &t.BNID, &t.OpenLibraryID, &t.Notes, &t.CoverURL, &finished, &finishedOn,
+		&t.CreatedAt, &t.UpdatedAt, &t.EditionCount, &t.CopyCount)
+	t.Finished = &finished
+	t.FinishedOn = dateOf(finishedOn)
 	return t, err
 }
 
@@ -179,14 +184,18 @@ func (s *Store) CreateTitle(ctx context.Context, in *TitleInput) (Title, bool, e
 		if err := claimRequestKey(ctx, tx, in.RequestKey); err != nil {
 			return err
 		}
+		if err := checkFinishedOn(ctx, tx, in.FinishedOn); err != nil {
+			return err
+		}
 		var id int64
 		err := tx.QueryRow(ctx, `INSERT INTO title
 			(kind, name, original_title, polish_title, year, tmdb_id, authors, bn_id, openlibrary_id, notes,
-			cover_url, request_key)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, ''), $12)
+			cover_url, request_key, finished, finished_on)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, ''), $12, COALESCE($13, false), $14)
 			ON CONFLICT (request_key) DO NOTHING RETURNING id`,
 			in.Kind, in.Name, in.OriginalTitle, in.PolishTitle, in.Year, in.TMDBID, in.Authors,
-			in.BNID, in.OpenLibraryID, in.Notes, in.CoverURL, in.RequestKey).Scan(&id)
+			in.BNID, in.OpenLibraryID, in.Notes, in.CoverURL, in.RequestKey,
+			in.Finished, timeOf(in.FinishedOn)).Scan(&id)
 		if errors.Is(err, pgx.ErrNoRows) && in.RequestKey != nil {
 			created = false
 			err = tx.QueryRow(ctx, `SELECT id FROM title WHERE request_key = $1`, *in.RequestKey).Scan(&id)
@@ -205,8 +214,25 @@ func (s *Store) CreateTitle(ctx context.Context, in *TitleInput) (Title, bool, e
 	return t, created, nil
 }
 
+// checkFinishedOn refuses a finish day after today in Poland.
+func checkFinishedOn(ctx context.Context, tx pgx.Tx, day *Date) error {
+	if day == nil {
+		return nil
+	}
+	var future bool
+	err := tx.QueryRow(ctx, `SELECT $1::date > (now() AT TIME ZONE 'Europe/Warsaw')::date`, day.Time).Scan(&future)
+	if err != nil {
+		return fmt.Errorf("check finished_on: %w", err)
+	}
+	if future {
+		return fieldErr("finished_on", "cannot be after today")
+	}
+	return nil
+}
+
 // UpdateTitle replaces a title. The kind cannot change while editions exist,
-// since their kind-specific fields would no longer apply.
+// since their kind-specific fields would no longer apply. Without Finished
+// the title keeps its finished state and day.
 func (s *Store) UpdateTitle(ctx context.Context, id int64, in *TitleInput) (Title, error) {
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
 		var kind string
@@ -219,12 +245,17 @@ func (s *Store) UpdateTitle(ctx context.Context, id int64, in *TitleInput) (Titl
 				return err
 			}
 		}
+		if err := checkFinishedOn(ctx, tx, in.FinishedOn); err != nil {
+			return err
+		}
 		_, err = tx.Exec(ctx, `UPDATE title SET kind = $2, name = $3, original_title = $4,
 			polish_title = $5, year = $6, tmdb_id = $7, authors = $8, bn_id = $9,
 			openlibrary_id = $10, notes = $11, cover_url = NULLIF(COALESCE($12, cover_url), ''),
+			finished = COALESCE($13, finished),
+			finished_on = CASE WHEN $13::boolean IS NULL THEN finished_on ELSE $14::date END,
 			updated_at = now(), edited_at = now() WHERE id = $1`,
 			id, in.Kind, in.Name, in.OriginalTitle, in.PolishTitle, in.Year, in.TMDBID, in.Authors,
-			in.BNID, in.OpenLibraryID, in.Notes, in.CoverURL)
+			in.BNID, in.OpenLibraryID, in.Notes, in.CoverURL, in.Finished, timeOf(in.FinishedOn))
 		return mapErr(err, ErrTitleNotFound, "update title")
 	})
 	if err != nil {
@@ -853,6 +884,8 @@ type Filter struct {
 	Typed    string
 	// Loaned keeps only copies with an open loan.
 	Loaned bool
+	// Unfinished keeps only owned copies of titles not finished.
+	Unfinished bool
 }
 
 // foldCase lower-cases text one character at a time, the key locations
@@ -900,16 +933,21 @@ type Item struct {
 	// LoanBorrower and LoanDueOn come from the copy's open loan, if any.
 	LoanBorrower *string `json:"loan_borrower,omitempty"`
 	LoanDueOn    *Date   `json:"loan_due_on,omitempty"`
+	// Finished and FinishedOn are the title's: whether it was watched,
+	// read or heard, and the latest day it was, when known.
+	Finished   bool  `json:"finished"`
+	FinishedOn *Date `json:"finished_on,omitempty"`
 }
 
 func scanItem(row pgx.Row) (Item, error) {
 	var it Item
 	var createdAt time.Time
-	var purchased, sold, due *time.Time
+	var purchased, sold, due, finishedOn *time.Time
 	err := row.Scan(&it.CopyID, &createdAt, &it.Status, &it.PriceCents, &it.MaxPriceCents, &purchased, &it.Shop,
 		&it.AcquiredAs, &it.Condition, &sold, &it.SalePriceCents, &it.Location, &it.EditionID, &it.Barcode, &it.Label, &it.Format, &it.Binding,
 		&it.TitleID, &it.Kind, &it.Name, &it.OriginalTitle, &it.PolishTitle, &it.Year, &it.CoverURL, &it.Authors,
-		&it.LoanBorrower, &due)
+		&it.LoanBorrower, &due, &it.Finished, &finishedOn)
+	it.FinishedOn = dateOf(finishedOn)
 	it.CreatedAtUS = createdAt.UnixMicro()
 	it.PurchasedOn = dateOf(purchased)
 	it.SoldOn = dateOf(sold)
@@ -925,7 +963,7 @@ func (s *Store) Collection(ctx context.Context, f Filter) ([]Item, error) {
 			c.purchased_on, c.shop, c.acquired_as, c.condition, c.sold_on, c.sale_price_cents, c.location,
 			e.id, e.barcode, e.label, e.format, e.binding,
 			t.id, t.kind, t.name, t.original_title, t.polish_title, t.year,
-			`+CoverURL+`, t.authors, l.borrower, l.due_on
+			`+CoverURL+`, t.authors, l.borrower, l.due_on, t.finished, t.finished_on
 		FROM copy c JOIN edition e ON e.id = c.edition_id JOIN title t ON t.id = e.title_id
 		LEFT JOIN loan l ON l.copy_id = c.id AND l.returned_on IS NULL
 		WHERE ($1 = '' OR t.kind = $1) AND ($2 = '' OR e.format = $2) AND ($3 = '' OR c.status = $3)
@@ -933,8 +971,9 @@ func (s *Store) Collection(ctx context.Context, f Filter) ([]Item, error) {
 		       t.polish_title, array_to_string(t.authors, ' '), e.label, c.shop, c.location)), lower($4)) > 0
 		       OR strpos(lower(c.location), lower($5)) > 0)
 		  AND (NOT $6 OR l.id IS NOT NULL)
+		  AND (NOT $7 OR (c.status = 'owned' AND NOT t.finished))
 		ORDER BY lower(t.name), t.id, e.id, c.id`,
-		f.Kind, f.Format, f.Status, strings.TrimSpace(f.Query), strings.TrimSpace(f.Typed), f.Loaned)
+		f.Kind, f.Format, f.Status, strings.TrimSpace(f.Query), strings.TrimSpace(f.Typed), f.Loaned, f.Unfinished)
 	if err != nil {
 		return nil, fmt.Errorf("collection: %w", err)
 	}

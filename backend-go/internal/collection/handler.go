@@ -173,6 +173,12 @@ func (h *Handler) collection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f.Loaned = loaned == "1"
+	unfinished, fe := queryEnum(r, "unfinished", []string{"1"})
+	if fe != nil {
+		httpx.WriteFieldError(w, h.logger, fe)
+		return
+	}
+	f.Unfinished = unfinished == "1"
 	f.Location = r.URL.Query().Get("location")
 	f.Query = r.URL.Query().Get("q")
 	f.Typed = f.Query

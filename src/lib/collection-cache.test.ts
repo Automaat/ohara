@@ -33,6 +33,7 @@ function item(over: Partial<CollectionItem> = {}): CollectionItem {
 		year: 2014,
 		cover_url: 'https://image.test/bluray.jpg',
 		authors: ['Christopher Nolan'],
+		finished: false,
 		...over
 	};
 }

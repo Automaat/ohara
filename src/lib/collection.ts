@@ -308,6 +308,17 @@ export const collectionStatusLabels: Record<CollectionStatus, string> = {
 /** The filter that keeps only copies out on loan, the server's `?loaned=1`. */
 export const loanedLabel = 'Wypożyczone';
 
+/**
+ * The filter that keeps only owned copies of titles not yet watched, read or heard, the server's
+ * `?unfinished=1`.
+ */
+export const unfinishedLabel = 'Do nadrobienia';
+
+/** Whether a status leaves owned copies to list, so "Do nadrobienia" can narrow it. */
+export function listsOwned(status: CollectionFilter['status']): boolean {
+	return status === '' || status === 'owned' || status === 'unpriced';
+}
+
 export type CollectionFilter = {
 	kind: Kind | '';
 	format: Format | '';
@@ -317,11 +328,13 @@ export type CollectionFilter = {
 	q: string;
 	/** Only copies with an open loan; left out when off. */
 	loaned?: boolean;
+	/** Only owned copies of titles not finished; left out when off. */
+	unfinished?: boolean;
 };
 
 /**
- * The filter a collection address names. A title has no format, location or loan, so `none`
- * drops them.
+ * The filter a collection address names. A title has no format, location or loan and is not
+ * owned, so `none` drops them and "Do nadrobienia".
  */
 export function readCollectionFilter(params: Pick<URLSearchParams, 'get'>): CollectionFilter {
 	function read<K extends string>(key: string, labels: Record<K, string>): K | '' {
@@ -337,7 +350,8 @@ export function readCollectionFilter(params: Pick<URLSearchParams, 'get'>): Coll
 		status,
 		...(location ? { location } : {}),
 		q: params.get('q') ?? '',
-		...(status !== 'none' && params.get('loaned') === '1' ? { loaned: true } : {})
+		...(status !== 'none' && params.get('loaned') === '1' ? { loaned: true } : {}),
+		...(status !== 'none' && params.get('unfinished') === '1' ? { unfinished: true } : {})
 	};
 }
 
@@ -347,6 +361,7 @@ export function collectionSearch(f: CollectionFilter): string {
 	if (f.format) params.set('format', f.format);
 	if (f.status) params.set('status', f.status);
 	if (f.loaned) params.set('loaned', '1');
+	if (f.unfinished) params.set('unfinished', '1');
 	const location = trimSpace(f.location ?? '');
 	if (location) params.set('location', location);
 	if (f.q.trim()) params.set('q', f.q.trim());

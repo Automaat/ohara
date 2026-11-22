@@ -30,6 +30,7 @@ function item(over: Partial<CollectionItem>): CollectionItem {
 		original_title: null,
 		polish_title: null,
 		year: null,
+		finished: false,
 		...over
 	};
 }
@@ -217,6 +218,37 @@ describe('the loan filter', () => {
 	] as [string, Partial<CollectionFilter>, number[]][])('%s', (_name, filter, copies) => {
 		const listed = filterCollection(lent, { ...none, loaned: true, ...filter });
 		expect(listed.map((i) => i.copy_id)).toEqual(copies);
+	});
+});
+
+describe('the unfinished filter', () => {
+	/** Owned copies of finished and unfinished titles, a lent one, a wish and a sold copy. */
+	const shelf: CollectionItem[] = [
+		item({ copy_id: 1, kind: 'movie', format: 'dvd', name: 'Rejs' }),
+		item({ copy_id: 2, kind: 'book', name: 'Solaris', finished: true, finished_on: '2025-05-01' }),
+		item({ copy_id: 3, kind: 'book', name: 'Eden', price_cents: 2000 }),
+		item({ copy_id: 4, kind: 'music', format: 'cd', name: 'Kind of Blue', finished: true }),
+		item({ copy_id: 5, kind: 'movie', format: 'dvd', name: 'Miś', status: 'wishlist' }),
+		item({ copy_id: 6, kind: 'book', name: 'Lalka', status: 'sold' }),
+		item({ copy_id: 7, kind: 'book', name: 'Golem XIV', loan_borrower: 'Ania' })
+	];
+
+	it.each([
+		['lists owned copies of titles not finished', {}, [1, 3, 7]],
+		['with a kind', { kind: 'book' }, [3, 7]],
+		['with a search', { q: 'rejs' }, [1]],
+		['with the owned status', { status: 'owned' }, [1, 3, 7]],
+		['with the unpriced copies', { status: 'unpriced' }, [1, 7]],
+		['with the lent copies', { loaned: true }, [7]],
+		['with the wishlist, which is not owned', { status: 'wishlist' }, []],
+		['with the sold copies, which are not owned', { status: 'sold' }, []]
+	] as [string, Partial<CollectionFilter>, number[]][])('%s', (_name, filter, copies) => {
+		const listed = filterCollection(shelf, { ...none, unfinished: true, ...filter });
+		expect(listed.map((i) => i.copy_id)).toEqual(copies);
+	});
+
+	it('lists finished titles too when off', () => {
+		expect(filterCollection(shelf, none).map((i) => i.copy_id)).toEqual([1, 2, 3, 4, 5, 7]);
 	});
 });
 

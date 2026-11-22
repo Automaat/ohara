@@ -6,6 +6,7 @@
 		ConfirmDialog,
 		ErrorState,
 		FactList,
+		Field,
 		FormError,
 		Icon,
 		Link,
@@ -24,6 +25,7 @@
 		displayName,
 		editionPayload,
 		editionToForm,
+		isoDate,
 		titlePayload,
 		titleToForm,
 		type Copy,
@@ -47,6 +49,11 @@
 		copyRequest,
 		editionArtwork,
 		editionName,
+		finishAction,
+		finishDay,
+		finishedLabels,
+		finishedLine,
+		finishPayload,
 		openedFromCollection,
 		plainClick,
 		previewHero,
@@ -95,6 +102,12 @@
 	let titleForm = $state(titleToForm(null));
 	let titleIssue = $state<FormIssue | null>(null);
 	let savingTitle = $state(false);
+
+	/** The sheet that changes or removes a finished title's day, or takes the mark back. */
+	let finishSheet = $state(false);
+	let finishText = $state('');
+	let finishIssue = $state<FormIssue | null>(null);
+	let finishing = $state(false);
 
 	let copySheet = $state(false);
 	let copyTarget = $state<CopyTarget | null>(null);
@@ -267,6 +280,45 @@
 		}
 	}
 
+	function openFinish(t: Title) {
+		finishText = t.finished_on ?? '';
+		finishIssue = null;
+		finishSheet = true;
+	}
+
+	/**
+	 * Records the title as finished on a day (null when unknown) or not finished, sending the title
+	 * as it stands, and shows the answer at once.
+	 */
+	async function saveFinished(t: Title, finished: boolean, day: string | null) {
+		if (finishing) return;
+		finishing = true;
+		finishIssue = null;
+		try {
+			const saved = await request<Title>(
+				fetch,
+				'PUT',
+				`/api/titles/${t.id}`,
+				finishPayload(t, finished, day)
+			);
+			if (detail?.id === saved.id) Object.assign(detail, saved);
+			finishSheet = false;
+		} catch (err) {
+			finishIssue = issueFrom(err);
+		} finally {
+			finishing = false;
+		}
+	}
+
+	function submitFinish(t: Title) {
+		const day = finishDay(finishText, isoDate(new Date()));
+		if (!day.ok) {
+			finishIssue = day.issue;
+			return;
+		}
+		void saveFinished(t, true, day.value);
+	}
+
 	/** Shows a saved copy at once, so it stays in view even when the refresh after it fails. */
 	function applyCopy(saved: Copy) {
 		const edition = detail?.editions.find((e) => e.id === saved.edition_id);
@@ -406,6 +458,20 @@
 	<div class="content">
 		<FormError message={refreshError} />
 		<FormError message={deleteError} />
+
+		<div class="finished">
+			{#if t.finished}
+				<p class="finished-line">{finishedLine(t)}</p>
+				<Button tone="ghost" onclick={() => openFinish(t)}>Zmień datę</Button>
+			{:else}
+				<Button loading={finishing} onclick={() => saveFinished(t, true, isoDate(new Date()))}>
+					{finishAction(t.kind)}
+				</Button>
+			{/if}
+		</div>
+		{#if !finishSheet}
+			<FormError message={finishIssue?.message ?? null} />
+		{/if}
 
 		{#if sole}
 			{@const s = sole}
@@ -583,6 +649,39 @@
 	</Modal>
 
 	<Modal
+		bind:open={finishSheet}
+		title={finishedLabels[t.kind]}
+		closeLabel="Zamknij"
+		busy={finishing}
+	>
+		<form
+			id="finish-form"
+			novalidate
+			onsubmit={(e) => {
+				e.preventDefault();
+				submitFinish(t);
+			}}
+		>
+			<FormError
+				message={finishIssue && finishIssue.field !== 'finished_on' ? finishIssue.message : null}
+			/>
+			<Field
+				label="Data"
+				hint="Zostaw puste, jeśli nie pamiętasz dnia."
+				placeholder="RRRR-MM-DD"
+				bind:value={finishText}
+				error={finishIssue?.field === 'finished_on' ? finishIssue.message : undefined}
+			/>
+		</form>
+		{#snippet footer()}
+			<Button tone="stop-quiet" disabled={finishing} onclick={() => saveFinished(t, false, null)}>
+				Usuń oznaczenie
+			</Button>
+			<Button tone="signal" type="submit" form="finish-form" loading={finishing}>Zapisz</Button>
+		{/snippet}
+	</Modal>
+
+	<Modal
 		bind:open={copySheet}
 		title={copyTarget?.mode === 'add' ? 'Nowy egzemplarz' : 'Edycja egzemplarza'}
 		description={copyEdition ? editionName(copyEdition) : undefined}
@@ -651,6 +750,16 @@
 		display: grid;
 		gap: 1rem;
 		padding: var(--sui-pane-gutter, 1.5rem);
+	}
+	.finished {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.5rem 0.75rem;
+	}
+	.finished-line {
+		margin: 0;
+		font-weight: 600;
 	}
 	.cards {
 		display: grid;

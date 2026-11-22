@@ -253,13 +253,19 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   Every Telegram alert carries an inline "Ignoruj" button (callback data
   `ignore:<observation id>`). With Telegram configured, the hunter's
   `TelegramPoller` long-polls `getUpdates` (no webhook: Telegram cannot
-  reach the LAN) for callback queries only; a press in the alert chat
-  dismisses the listing as Okazje's "Ignoruj" does and takes the button
-  off the message, a press from another chat changes nothing, and every
-  press is answered. The next poll's `offset`, and one more call on
-  shutdown, confirm the handled updates, so a restart neither repeats a
-  press nor loses one Telegram still holds (24 hours). A failed poll (a
-  webhook set on the bot answers 409) is logged and retried after 30 s.
+  reach the LAN) for callback queries only, 20 per call (halved after a
+  reply over 1 MiB); a press in the alert chat dismisses the listing as
+  Okazje's "Ignoruj" does, is answered, then has its button taken off the
+  message, and a press from another chat changes nothing but is answered.
+  The next poll's `offset`, and one more call on shutdown, confirm the
+  handled updates; shutdown leaves the rest of a batch unconfirmed. A
+  press Telegram still holds when polling resumes is handled then
+  (Telegram keeps a callback only minutes, not the 24 hours it keeps
+  other updates), and one sent again is applied once:
+  `Store.DismissPress` records its callback id in `telegram_press` in the
+  dismissal's transaction, so a replay never undoes a later "Cofnij". A
+  failed poll (a webhook set on the bot answers 409) is logged and
+  retried after 30 s.
   The wish a listing was recorded for (`raw.wishlist_copy_id`) is also the
   generated, indexed column `wishlist_copy_id`, so the deals list's filters
   start from wished listings instead of reading every observation.

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,16 +27,23 @@ type formValues = map[string]string
 
 // botDouble is a Bot API double. getUpdates serves the queued updates as
 // Telegram does: an offset confirms and drops every update below it, and
-// an empty answer waits a moment, like a short long poll.
+// an empty answer waits a moment, like a short long poll. With forget set
+// it confirms nothing, as when every confirmation is lost; oversizeAbove
+// answers a getUpdates asking for more updates than it with a reply over
+// telegramUpdatesCap; editDelay holds each keyboard edit.
 type botDouble struct {
-	mu       sync.Mutex
-	queue    []map[string]any
-	polls    []formValues
-	sent     []formValues
-	answers  []formValues
-	edits    []formValues
-	failPoll func(n int, w http.ResponseWriter) bool
-	onAnswer func(form formValues)
+	mu            sync.Mutex
+	queue         []map[string]any
+	polls         []formValues
+	sent          []formValues
+	answers       []formValues
+	edits         []formValues
+	methods       []string
+	forget        bool
+	oversizeAbove int
+	editDelay     time.Duration
+	failPoll      func(n int, w http.ResponseWriter) bool
+	onAnswer      func(form formValues)
 }
 
 func newBotDouble(t *testing.T) (*botDouble, *httptest.Server) {
@@ -59,6 +67,7 @@ func (d *botDouble) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.mu.Lock()
+	d.methods = append(d.methods, method)
 	switch method {
 	case "getUpdates":
 		d.polls = append(d.polls, form)
@@ -66,14 +75,22 @@ func (d *botDouble) serve(w http.ResponseWriter, r *http.Request) {
 			d.mu.Unlock()
 			return
 		}
+		if limit, _ := strconv.Atoi(form["limit"]); d.oversizeAbove > 0 && limit > d.oversizeAbove {
+			d.mu.Unlock()
+			writeResult(w, strings.Repeat("x", telegramUpdatesCap))
+			return
+		}
 		offset, _ := strconv.ParseInt(form["offset"], 10, 64)
 		var pending []map[string]any
 		for _, u := range d.queue {
-			if id, _ := u["update_id"].(int64); id >= offset {
+			if id, _ := u["update_id"].(int64); id >= offset || d.forget {
 				pending = append(pending, u)
 			}
 		}
 		d.queue = pending
+		if limit, _ := strconv.Atoi(form["limit"]); limit > 0 && len(pending) > limit {
+			pending = pending[:limit]
+		}
 		d.mu.Unlock()
 		if len(pending) == 0 {
 			select {
@@ -92,6 +109,11 @@ func (d *botDouble) serve(w http.ResponseWriter, r *http.Request) {
 		}
 	case "editMessageReplyMarkup":
 		d.edits = append(d.edits, form)
+		delay := d.editDelay
+		d.mu.Unlock()
+		time.Sleep(delay)
+		writeResult(w, true)
+		return
 	}
 	d.mu.Unlock()
 	writeResult(w, true)
@@ -123,6 +145,7 @@ func (d *botDouble) press(id, chat int64, data string) {
 // botCalls is what the double has seen so far.
 type botCalls struct {
 	polls, sent, answers, edits []formValues
+	methods                     []string
 	queued                      int
 }
 
@@ -132,7 +155,7 @@ func (d *botDouble) snapshot() botCalls {
 	return botCalls{
 		polls: append([]formValues(nil), d.polls...), sent: append([]formValues(nil), d.sent...),
 		answers: append([]formValues(nil), d.answers...), edits: append([]formValues(nil), d.edits...),
-		queued: len(d.queue),
+		methods: append([]string(nil), d.methods...), queued: len(d.queue),
 	}
 }
 
@@ -408,5 +431,153 @@ func TestTelegramPollerRetries(t *testing.T) {
 	}
 	if strings.Contains(out, "SECRET") {
 		t.Fatalf("logs carry the bot token: %q", out)
+	}
+}
+
+// pressListings stores one alerted Blade Runner listing per external id
+// and returns the store and the listings' ids.
+func pressListings(t *testing.T, exts ...string) (*pgxpool.Pool, *Store, map[string]int64) {
+	t.Helper()
+	pool := dbtest.Migrated(t)
+	wishlist(t, pool, wantBluray(new(int64(5000))))
+	src := &fakeSource{name: "olx"}
+	for i, ext := range exts {
+		src.listings = append(src.listings, bladeRunnerListing(ext, 4000+int64(i)))
+	}
+	if res := mustRun(t, newTestHunter(pool, &fakeNotifier{}, src)); res.Alerts != len(exts) {
+		t.Fatalf("run = %+v, want %d alerts", res, len(exts))
+	}
+	return pool, NewStore(pool), observationIDs(t, pool)
+}
+
+func isDismissed(t *testing.T, pool *pgxpool.Pool, id int64) bool {
+	t.Helper()
+	var dismissed bool
+	if err := pool.QueryRow(context.Background(),
+		`SELECT dismissed_at IS NOT NULL FROM price_observation WHERE id = $1`, id).Scan(&dismissed); err != nil {
+		t.Fatal(err)
+	}
+	return dismissed
+}
+
+// runPoller runs p until the returned func is called, which waits for Run
+// to return.
+func runPoller(p *TelegramPoller) func() {
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		p.Run(ctx)
+	}()
+	return func() {
+		cancel()
+		<-done
+	}
+}
+
+func pressData(id int64) string { return ignoreData + strconv.FormatInt(id, 10) }
+
+func TestTelegramReplayedPressKeepsUndo(t *testing.T) {
+	pool, store, ids := pressListings(t, "a")
+	double, srv := newBotDouble(t)
+	double.forget = true
+	double.press(10, 42, pressData(ids["a"]))
+	poller := func() *TelegramPoller {
+		return &TelegramPoller{Bot: bot(srv), Store: store, Logger: slog.New(slog.DiscardHandler)}
+	}
+	stop := runPoller(poller())
+	waitUntil(t, "the press served again", func() bool {
+		calls := double.snapshot()
+		return len(calls.answers) == 1 && len(calls.polls) >= 3
+	})
+	stop()
+	if !isDismissed(t, pool, ids["a"]) {
+		t.Fatal("press did not dismiss the listing")
+	}
+	if err := store.Undismiss(context.Background(), ids["a"]); err != nil {
+		t.Fatal(err)
+	}
+	before := len(double.snapshot().polls)
+	stop = runPoller(poller())
+	waitUntil(t, "the press served after a restart", func() bool { return len(double.snapshot().polls) >= before+2 })
+	stop()
+	if isDismissed(t, pool, ids["a"]) {
+		t.Fatal("replayed press undid Cofnij")
+	}
+	if calls := double.snapshot(); len(calls.answers) != 1 || len(calls.edits) != 1 {
+		t.Fatalf("answers %v, edits %v, want the press answered and its button removed once", calls.answers, calls.edits)
+	}
+}
+
+func TestTelegramAnswersBeforeSlowEdit(t *testing.T) {
+	pool, store, ids := pressListings(t, "a")
+	double, srv := newBotDouble(t)
+	double.editDelay = 300 * time.Millisecond
+	double.press(10, 42, pressData(ids["a"]))
+	stop := runPoller(&TelegramPoller{Bot: bot(srv), Store: store, Logger: slog.New(slog.DiscardHandler), pressTimeout: 100 * time.Millisecond})
+	waitUntil(t, "the edit", func() bool { return len(double.snapshot().edits) == 1 })
+	stop()
+	calls := double.snapshot()
+	if len(calls.answers) != 1 || calls.answers[0]["text"] != "Zignorowano" {
+		t.Fatalf("answers = %v, want the press answered", calls.answers)
+	}
+	answered := slices.Index(calls.methods, "answerCallbackQuery")
+	if edited := slices.Index(calls.methods, "editMessageReplyMarkup"); answered < 0 || answered > edited {
+		t.Fatalf("calls = %v, want the answer before the edit", calls.methods)
+	}
+	if !isDismissed(t, pool, ids["a"]) {
+		t.Fatal("press did not dismiss the listing")
+	}
+}
+
+func TestTelegramOversizedBatch(t *testing.T) {
+	pool, store, ids := pressListings(t, "a", "b", "c")
+	double, srv := newBotDouble(t)
+	double.oversizeAbove = 5
+	for i, ext := range []string{"a", "b", "c"} {
+		double.press(int64(10+i), 42, pressData(ids[ext]))
+	}
+	stop := runPoller(&TelegramPoller{Bot: bot(srv), Store: store, Logger: slog.New(slog.DiscardHandler), Pause: time.Hour})
+	waitUntil(t, "every press answered", func() bool { return len(double.snapshot().answers) == 3 })
+	stop()
+	var limits []string
+	for _, p := range double.snapshot().polls[:3] {
+		limits = append(limits, p["limit"])
+	}
+	if !slices.Equal(limits, []string{"20", "10", "5"}) {
+		t.Fatalf("limits = %v, want the batch halved after each oversized reply", limits)
+	}
+	for _, ext := range []string{"a", "b", "c"} {
+		if !isDismissed(t, pool, ids[ext]) {
+			t.Fatalf("listing %s not dismissed", ext)
+		}
+	}
+}
+
+func TestTelegramShutdownLeavesRestOfBatch(t *testing.T) {
+	pool, store, ids := pressListings(t, "a", "b", "c")
+	double, srv := newBotDouble(t)
+	for i, ext := range []string{"a", "b", "c"} {
+		double.press(int64(10+i), 42, pressData(ids[ext]))
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	double.onAnswer = func(formValues) { cancel() }
+	(&TelegramPoller{Bot: bot(srv), Store: store, Logger: slog.New(slog.DiscardHandler)}).Run(ctx)
+	if calls := double.snapshot(); len(calls.answers) != 1 || calls.queued != 2 {
+		t.Fatalf("answers %v, %d updates queued, want only the first press handled and confirmed", calls.answers, calls.queued)
+	}
+	if !isDismissed(t, pool, ids["a"]) || isDismissed(t, pool, ids["b"]) {
+		t.Fatal("want only the first listing dismissed before the restart")
+	}
+	double.mu.Lock()
+	double.onAnswer = nil
+	double.mu.Unlock()
+	stop := runPoller(&TelegramPoller{Bot: bot(srv), Store: store, Logger: slog.New(slog.DiscardHandler)})
+	waitUntil(t, "the rest answered after a restart", func() bool { return len(double.snapshot().answers) == 3 })
+	stop()
+	for _, ext := range []string{"b", "c"} {
+		if !isDismissed(t, pool, ids[ext]) {
+			t.Fatalf("listing %s not dismissed after the restart", ext)
+		}
 	}
 }

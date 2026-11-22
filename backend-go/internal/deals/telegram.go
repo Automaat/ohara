@@ -27,6 +27,9 @@ const (
 	telegramUpdatesCap = 1 << 20
 )
 
+// errReplyTooLarge reports a Bot API answer over its cap.
+var errReplyTooLarge = errors.New("telegram: reply too large")
+
 // Notifier delivers one alert message.
 type Notifier interface {
 	Send(ctx context.Context, text string) error
@@ -89,8 +92,24 @@ func (t *Telegram) call(ctx context.Context, method string, form url.Values, res
 	if err == nil || t.Token == "" {
 		return err
 	}
-	return errors.New(strings.ReplaceAll(err.Error(), t.Token, "<token>"))
+	redacted := &redactedError{msg: strings.ReplaceAll(err.Error(), t.Token, "<token>")}
+	if errors.Is(err, errReplyTooLarge) {
+		redacted.kind = errReplyTooLarge
+	}
+	return redacted
 }
+
+// redactedError is an error with the bot token cut out of its text. It
+// unwraps only to a sentinel such as errReplyTooLarge, never to the
+// original error, whose text holds the token.
+type redactedError struct {
+	msg  string
+	kind error
+}
+
+func (e *redactedError) Error() string { return e.msg }
+
+func (e *redactedError) Unwrap() error { return e.kind }
 
 func (t *Telegram) post(ctx context.Context, method string, form url.Values, result any, limit int64) error {
 	endpoint := strings.TrimSuffix(t.BaseURL, "/") + "/bot" + t.Token + "/" + method
@@ -107,9 +126,12 @@ func (t *Telegram) post(ctx context.Context, method string, form url.Values, res
 		return fmt.Errorf("telegram: %w", err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, limit))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
 		return fmt.Errorf("telegram: read reply: %w", err)
+	}
+	if int64(len(body)) > limit {
+		return fmt.Errorf("%w: %s over %d bytes", errReplyTooLarge, method, limit)
 	}
 	var reply telegramReply
 	if json.Unmarshal(body, &reply) != nil || !reply.OK || resp.StatusCode != http.StatusOK {

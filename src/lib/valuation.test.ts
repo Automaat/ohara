@@ -526,6 +526,8 @@ describe('copy rows', () => {
 	it('rounds both ways alike and drops the sign of a difference that rounds to 0', () => {
 		expect(nbsp(copyGain(copy({ mid: est(2750), price_cents: 2500 })))).toBe('+3 zł · +10%');
 		expect(nbsp(copyGain(copy({ mid: est(2250), price_cents: 2500 })))).toBe('−3 zł · −10%');
+		expect(nbsp(copyGain(copy({ mid: est(2570), price_cents: 2000 })))).toBe('+6 zł · +29%');
+		expect(nbsp(copyGain(copy({ mid: est(1430), price_cents: 2000 })))).toBe('−6 zł · −29%');
 		expect(nbsp(copyGain(copy({ mid: est(4960), price_cents: 5000 })))).toBe('0 zł · −1%');
 		expect(nbsp(copyGain(copy({ mid: est(100001), price_cents: 100000 })))).toBe('0 zł · 0%');
 	});

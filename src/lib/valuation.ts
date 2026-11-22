@@ -417,7 +417,7 @@ export function copyGain(c: CopyValue): string {
 	const cents = c.mid.cents - c.price_cents;
 	const amount = signedWhole(cents / 100, formatZl);
 	if (c.price_cents <= 0) return amount;
-	return `${amount} · ${signedWhole((cents / c.price_cents) * 100, (n) => `${n}%`)}`;
+	return `${amount} · ${signedWhole((cents * 100) / c.price_cents, (n) => `${n}%`)}`;
 }
 
 /** A copy's format, or its kind, and what was paid for it: "Winyl · kupiono za 189,99 zł". */

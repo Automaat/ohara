@@ -273,6 +273,12 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   `scan_queue_resolved`; `DELETE /api/editions/{id}?requeue=1` puts it back
   with its scans and times in the same transaction, as the scanner does when
   it undoes an add that created the edition.
+- An edition's own cover photo is served at the `cover_override_url` the API
+  hands out, `/api/editions/{id}/cover?v=` plus the edition's `updated_at`,
+  which a new photo or any edit changes. A request whose query parses and
+  holds one `v`, the current one, answers
+  `Cache-Control: private, max-age=31536000, immutable`; any other `v`, a
+  second one, none or an error answers `no-store`.
 
 ### Frontend
 
@@ -297,6 +303,14 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   time (Web Locks), each POST within 15 s. `request` does not follow
   redirects, so a 401 or Authelia's cross-origin redirect is an expired
   session ("Odśwież"), not a lost connection; the code is kept either way.
+- The scanner's visit ("Ta sesja" adds, "Ostatnie skany" and the purchase
+  date carried to the next add) is kept in `localStorage`
+  (`ohara.scan.visit`, `src/lib/visit.ts`) and restored on load until 12
+  hours after its last add or scan. Each change starts from what storage
+  holds, so tabs keep each other's adds, and an add writes its date, scan
+  and tray entry at once. A waiting scan turns queued once the queue takes
+  its code. Undo toasts are not restored; without storage the visit lasts
+  until the next load.
 - Kolekcja's "Dodaj tytuł" (`/titles/new`) is the scanner's quick confirm
   without a barcode (`ScanFlow.start`): search by title or fill in by hand;
   the save creates the title, a barcode-less edition and the copy. Such

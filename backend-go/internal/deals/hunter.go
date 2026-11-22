@@ -256,6 +256,9 @@ type run struct {
 	titles Titles
 	res    RunResult
 	first  bool
+	// percent is whether a want has a market percent, whose market price
+	// the listings this run stores may move.
+	percent bool
 	// tried holds the observations whose alert this run sent or failed to
 	// send; a failed one waits for the next run.
 	tried map[int64]bool
@@ -282,6 +285,9 @@ func (h *Hunter) Run(ctx context.Context) (RunResult, error) {
 		return RunResult{}, err
 	}
 	r := &run{h: h, wants: wants, rules: rules, titles: titles, first: true, tried: map[int64]bool{}}
+	for i := range wants {
+		r.percent = r.percent || wants[i].MaxMarketPercent != nil
+	}
 	r.res.Wants = len(wants)
 	r.res.Errors = []string{}
 	var queries []string
@@ -432,10 +438,13 @@ func (r *run) fail(msg string) {
 // record stores the matching listings of one answer, then sends their
 // pending alerts before the run asks a source again. PendingAlerts checks
 // the refreshed price against the wish's current limit and market share,
-// which may have changed since the run read the wishlist.
+// which may have changed since the run read the wishlist. A listing that
+// meets no rule is judged again against the market prices read once the
+// answer is stored, since its listings may have moved them.
 func (r *run) record(ctx context.Context, listings []Listing) error {
 	r.res.Listings += len(listings)
 	refreshed := map[string]bool{}
+	var missed []*Listing
 	for i := range listings {
 		l := &listings[i]
 		w := pick(r.wants, l, r.rules, r.titles)
@@ -454,12 +463,43 @@ func (r *run) record(ctx context.Context, listings []Listing) error {
 		if alerted {
 			r.res.Alerts++
 		}
+		if r.h.notifier != nil && r.percent && !alert {
+			missed = append(missed, l)
+		}
 		refreshed[listingKey(l.Source, l.ExternalID)] = true
 	}
 	if len(refreshed) == 0 {
 		return nil
 	}
+	if len(missed) > 0 {
+		if err := r.remeasure(ctx, missed); err != nil {
+			return err
+		}
+	}
 	return r.deliver(ctx, refreshed)
+}
+
+// remeasure reads the market prices again and queues the alerts of the
+// missed listings that now meet a want's share of them. The new prices also
+// judge the rest of the run's answers.
+func (r *run) remeasure(ctx context.Context, missed []*Listing) error {
+	if err := r.h.store.RefreshMarkets(ctx, r.wants); err != nil {
+		return err
+	}
+	for _, l := range missed {
+		w := pick(r.wants, l, r.rules, r.titles)
+		if w == nil || !w.Meets(l.PriceCents) {
+			continue
+		}
+		_, alerted, err := r.h.store.Record(ctx, l, w, true)
+		if err != nil {
+			return err
+		}
+		if alerted {
+			r.res.Alerts++
+		}
+	}
+	return nil
 }
 
 func listingKey(source, externalID string) string { return source + "\x00" + externalID }

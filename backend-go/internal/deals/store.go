@@ -96,6 +96,38 @@ func (s *Store) marketTable(ctx context.Context) (marketTable, error) {
 	return t, nil
 }
 
+// RefreshMarkets sets the MarketCents of every want with a market percent
+// to the current market price of its title and format, nil without one.
+func (s *Store) RefreshMarkets(ctx context.Context, wants []Want) error {
+	markets, err := s.marketTable(ctx)
+	if err != nil {
+		return fmt.Errorf("refresh markets: %w", err)
+	}
+	type key struct {
+		title  int64
+		format string
+	}
+	cents := make(map[key]int64, len(markets.titles))
+	for i, title := range markets.titles {
+		cents[key{title, markets.formats[i]}] = markets.cents[i]
+	}
+	for i := range wants {
+		w := &wants[i]
+		w.MarketCents = nil
+		if w.MaxMarketPercent == nil {
+			continue
+		}
+		format := ""
+		if w.Format != nil {
+			format = *w.Format
+		}
+		if c, ok := cents[key{w.TitleID, format}]; ok {
+			w.MarketCents = &c
+		}
+	}
+	return nil
+}
+
 // Wants returns every wishlist copy with its edition and title, oldest
 // first, and the market price of its title and format when it has a
 // market percent.
@@ -325,14 +357,11 @@ func (s *Store) PendingAlerts(ctx context.Context) ([]Alert, error) {
 // with send's error, at the price send was given. It holds the listing's
 // row from that check until the outcome is stored, so a dismissal or a
 // price change either lands before the check and stops or reprices the
-// alert, or waits until the message is out. The outcome is stored even when
-// ctx ends during send, so a message that went out is not sent again. It
-// reports whether send ran and succeeded.
+// alert, or waits until the message is out. The market prices are read once
+// the row is held, so a market price that moved while the check waited for it
+// counts. The outcome is stored even when ctx ends during send, so a message
+// that went out is not sent again. It reports whether send ran and succeeded.
 func (s *Store) SendAlert(ctx context.Context, observationID int64, send func(*Alert) error) (bool, error) {
-	markets, err := s.marketTable(ctx)
-	if err != nil {
-		return false, fmt.Errorf("send alert: %w", err)
-	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return false, fmt.Errorf("send alert: begin: %w", err)
@@ -340,6 +369,10 @@ func (s *Store) SendAlert(ctx context.Context, observationID int64, send func(*A
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	if _, err := tx.Exec(ctx, `SELECT 1 FROM price_observation WHERE id = $1 FOR UPDATE`, observationID); err != nil {
 		return false, fmt.Errorf("send alert: lock listing: %w", err)
+	}
+	markets, err := s.marketTable(ctx)
+	if err != nil {
+		return false, fmt.Errorf("send alert: %w", err)
 	}
 	due, err := pendingAlerts(ctx, tx, markets, &observationID)
 	if err != nil {

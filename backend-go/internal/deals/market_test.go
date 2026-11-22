@@ -123,7 +123,7 @@ func TestMarketPercentAlerts(t *testing.T) {
 	}{
 		{"70% of 50 zł at 35 zł", nil, new(70), 5, 3500, true},
 		{"70% of 50 zł at 36 zł", nil, new(70), 5, 3600, false},
-		{"fewer than 3 prices", nil, new(70), 2, 1000, false},
+		{"fewer than 3 prices with the listing", nil, new(70), 1, 1000, false},
 		{"no market price", nil, new(100), 0, 100, false},
 		{"percent met beside a limit missed", new(int64(3000)), new(70), 5, 3400, true},
 		{"limit met beside a percent missed", new(int64(4000)), new(10), 5, 3900, true},
@@ -189,4 +189,89 @@ func TestMarketPercentAlerts(t *testing.T) {
 			t.Fatalf("run back at 70%% = %+v, messages %q; want the queued alert sent", res, n.messages())
 		}
 	})
+}
+
+// TestRunAlertsOnAMarketItsOwnListingsMade judges a listing against the
+// market price its answer's listings make: two stored 50 zł prices are too
+// few, the answer's third makes a 50 zł market, and the 35 zł listing in
+// the same answer alerts at 70% in that run.
+func TestRunAlertsOnAMarketItsOwnListingsMade(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	marketWish(t, pool, nil, new(70), 2)
+	n := &notifier{}
+	h, _ := marketHunter(pool, n, bluray("deal", 3500), bluray("third", 5000))
+	res := run(t, h)
+	if msgs := n.messages(); res.Alerts != 1 || res.Sent != 1 || len(msgs) != 1 ||
+		!strings.Contains(msgs[0], "35,00 zł (70% ceny rynkowej 50,00 zł)") {
+		t.Fatalf("run = %+v, messages %q; want the 35 zł listing sent at 70%% of 50 zł", res, msgs)
+	}
+}
+
+// TestSendAlertReadsTheMarketOnceItHoldsTheListing skips an alert whose
+// market price fell from 50 zł to 40 zł, a 28 zł cap at 70%, while
+// SendAlert waited for the listing's row.
+func TestSendAlertReadsTheMarketOnceItHoldsTheListing(t *testing.T) {
+	ctx := context.Background()
+	pool := dbtest.Migrated(t)
+	marketWish(t, pool, nil, new(70), 5)
+	h, store := marketHunter(pool, &notifier{fail: 1}, bluray("a", 3500))
+	if res := run(t, h); res.Alerts != 1 || res.Sent != 0 {
+		t.Fatalf("failing run = %+v, want one alert queued and not sent", res)
+	}
+	var id int64
+	if err := pool.QueryRow(ctx, `SELECT id FROM price_observation WHERE external_id = 'a'`).Scan(&id); err != nil {
+		t.Fatalf("listing: %v", err)
+	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM price_observation WHERE id = $1 FOR UPDATE`, id); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE price_observation SET price_cents = 4000 WHERE external_id LIKE 'market-%'`); err != nil {
+		t.Fatalf("lower market: %v", err)
+	}
+	type outcome struct {
+		sent, called bool
+		err          error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		var called bool
+		sent, err := store.SendAlert(ctx, id, func(*deals.Alert) error {
+			called = true
+			return nil
+		})
+		done <- outcome{sent, called, err}
+	}()
+	waitForLockWait(t, pool)
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	got := <-done
+	if got.err != nil || got.sent || got.called {
+		t.Fatalf("SendAlert = %+v, want the alert skipped under the lowered market", got)
+	}
+}
+
+// waitForLockWait waits until a query of the test database waits for a
+// row lock.
+func waitForLockWait(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		var waiting bool
+		if err := pool.QueryRow(context.Background(), `SELECT EXISTS (SELECT FROM pg_stat_activity
+			WHERE datname = current_database() AND wait_event_type = 'Lock'
+				AND query LIKE 'SELECT 1 FROM price_observation WHERE id = $1 FOR UPDATE%')`).Scan(&waiting); err != nil {
+			t.Fatalf("lock wait: %v", err)
+		}
+		if waiting {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("no query waited for the listing's row")
 }

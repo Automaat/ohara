@@ -448,3 +448,6 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   `/copies/<id>`. A failed answer keeps the last list with a retry; with
   no wish the section is left out and the page's "Lista życzeń jest
   pusta" stands. The offer segments are unchanged.
+- "Szukaj na Allegro" opens a new tab on click with the wish's title and,
+  where available, its TV season, album artist and format. Rendering the
+  wishlist makes no request to Allegro.

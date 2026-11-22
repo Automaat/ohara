@@ -1,35 +1,26 @@
-import {
-	formatPLN,
-	type AcquiredAs,
-	type Format,
-	type FormIssue,
-	type Parsed
-} from '#lib/collection.js';
+import { formatPLN, type FormIssue, type Parsed } from '#lib/collection.js';
+import type {
+	AlertState,
+	DealSource,
+	DealsRunResult,
+	HunterStatus,
+	Keyword,
+	KeywordKind,
+	KeywordPayload,
+	Observation
+} from '#lib/api.gen.js';
 
-export type DealSource = 'olx' | 'pepper';
-export type AlertState = 'none' | 'pending' | 'sent' | 'failed';
-export type KeywordKind = 'reject' | 'accept';
-
-export type Observation = {
-	id: number;
-	source: DealSource;
-	external_id: string;
-	observed_at: string;
-	price_cents: number;
-	acquired_as: AcquiredAs | null;
-	url: string;
-	listing_title: string;
-	title_id: number | null;
-	title_name: string | null;
-	edition_id: number | null;
-	format: Format | null;
-	listing_photo_url: string | null;
-	cover_url: string | null;
-	max_price_cents: number | null;
-	alert: AlertState;
-	alert_error: string;
-	alert_attempts: number;
-};
+export type {
+	AlertState,
+	DealSource,
+	DealsRunResult as RunResult,
+	DealsView,
+	HunterStatus,
+	Keyword,
+	KeywordKind,
+	KeywordPayload,
+	Observation
+} from '#lib/api.gen.js';
 
 const wholePLN = new Intl.NumberFormat('pl-PL', {
 	style: 'currency',
@@ -130,31 +121,6 @@ export function marketLabel(market: Pick<MarketPrice, 'cents' | 'count'> | null)
 	return `Rynek ok. ${dealPrice(market.cents)} (${note})`;
 }
 
-export type RunResult = {
-	wants: number;
-	queries: number;
-	listings: number;
-	matched: number;
-	new: number;
-	alerts: number;
-	sent: number;
-	errors: string[];
-	failure?: string;
-};
-
-export type HunterStatus = {
-	running: boolean;
-	scheduled: boolean;
-	interval_seconds: number;
-	telegram: boolean;
-	last_started_at: string | null;
-	last_finished_at: string | null;
-	last_result: RunResult | null;
-};
-
-/** GET /api/deals: the hunter, how many copies are on the wishlist and the listings asked for. */
-export type DealsView = { status: HunterStatus; wishes: number; observations: Observation[] };
-
 /**
  * Every listing matched to a wish, with or without a limit, filtered by the server before its
  * row limit, so listings for owned editions never push them out.
@@ -203,9 +169,6 @@ export function searchedFor(wishes: number, status: HunterStatus, now: Date): st
 	return `Szukamy ofert dla ${wishes} pozycji z listy życzeń. ${last}`;
 }
 
-export type Keyword = { id: number; kind: KeywordKind; phrase: string; created_at: string };
-export type KeywordPayload = { kind: KeywordKind; phrase: string };
-
 export const sourceLabels: Record<DealSource, string> = {
 	olx: 'OLX',
 	pepper: 'Pepper'
@@ -253,7 +216,7 @@ export function intervalLabel(status: HunterStatus): string {
 }
 
 /** One line about the last finished run, or null before the first one. */
-export function lastRunSummary(result: RunResult | null): string | null {
+export function lastRunSummary(result: DealsRunResult | null): string | null {
 	if (!result) return null;
 	if (result.failure) return `Ostatnie wyszukiwanie przerwane: ${result.failure}`;
 	const parts = [

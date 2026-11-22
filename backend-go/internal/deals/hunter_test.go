@@ -513,6 +513,169 @@ func TestRunAlertsOnListingsStoredBefore(t *testing.T) {
 	}
 }
 
+// TestRunAlertsAgainOnPriceDrop follows one listing under a 50 zł wish
+// through price changes: only a price under the one the last sent alert
+// named, still within the limit, alerts again.
+func TestRunAlertsAgainOnPriceDrop(t *testing.T) {
+	type step struct {
+		price  int64
+		limit  int64 // changes the wish's limit before the run when not 0
+		fail   int   // failed sends from this run on, unless 0
+		legacy bool  // forgets the sent price, as for an alert sent before 0016
+		expire bool  // ages the alert past the window
+		swap   bool  // deletes the wish and wishes for the edition again
+		stored bool  // the valuation run stores price before the hunter sees it
+		alerts int
+		sent   []string // the messages' price lines
+	}
+	tests := []struct {
+		name  string
+		steps []step
+	}{
+		{"drops alert again and rises do not", []step{
+			{price: 4500, alerts: 1, sent: []string{"45,00 zł (limit 50,00 zł) · OLX"}},
+			{price: 4000, alerts: 1, sent: []string{"40,00 zł (było 45,00 zł, limit 50,00 zł) · OLX"}},
+			{price: 4200},
+			{price: 4100},
+			{price: 4000},
+			{price: 3500, alerts: 1, sent: []string{"35,00 zł (było 40,00 zł, limit 50,00 zł) · OLX"}},
+		}},
+		{"a drop still over the limit", []step{
+			{price: 4500, alerts: 1, sent: []string{"45,00 zł (limit 50,00 zł) · OLX"}},
+			{price: 4000, limit: 3000},
+			{price: 3500},
+		}},
+		{"a drop while the first alert is unsent", []step{
+			{price: 4500, fail: 1, alerts: 1},
+			{price: 4000, sent: []string{"40,00 zł (limit 50,00 zł) · OLX"}},
+			{price: 4000},
+		}},
+		{"a drop valuation stored first after a repeat alert gave up", []step{
+			{price: 4500, alerts: 1, sent: []string{"45,00 zł (limit 50,00 zł) · OLX"}},
+			{price: 4000, fail: MaxAttempts, alerts: 1},
+			{price: 4000},
+			{price: 4000},
+			{price: 4000},
+			{price: 4000},
+			{price: 3500, stored: true, alerts: 1, sent: []string{"35,00 zł (było 45,00 zł, limit 50,00 zł) · OLX"}},
+		}},
+		{"a drop after a repeat alert expired", []step{
+			{price: 4500, alerts: 1, sent: []string{"45,00 zł (limit 50,00 zł) · OLX"}},
+			{price: 4000, fail: 1, alerts: 1},
+			{price: 4000, expire: true},
+			{price: 3900, alerts: 1, sent: []string{"39,00 zł (było 45,00 zł, limit 50,00 zł) · OLX"}},
+		}},
+		{"a waiting repeat moves to the wish that replaced its own", []step{
+			{price: 4500, alerts: 1, sent: []string{"45,00 zł (limit 50,00 zł) · OLX"}},
+			{price: 4000, fail: 1, alerts: 1},
+			{price: 3500, swap: true, sent: []string{"35,00 zł (było 45,00 zł, limit 50,00 zł) · OLX"}},
+		}},
+		{"an alert sent before 0016", []step{
+			{price: 4500, alerts: 1, sent: []string{"45,00 zł (limit 50,00 zł) · OLX"}},
+			{price: 4000, legacy: true},
+			{price: 3000},
+		}},
+		{"a drop after a repeat alert gave up", []step{
+			{price: 4500, alerts: 1, sent: []string{"45,00 zł (limit 50,00 zł) · OLX"}},
+			{price: 4000, fail: MaxAttempts, alerts: 1},
+			{price: 4000},
+			{price: 4000},
+			{price: 4000},
+			{price: 4000},
+			{price: 4000},
+			{price: 3800, alerts: 1, sent: []string{"38,00 zł (było 45,00 zł, limit 50,00 zł) · OLX"}},
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pool := dbtest.Migrated(t)
+			copyID := wishlist(t, pool, wantBluray(new(int64(5000))))
+			listing := Listing{
+				Source: "olx", ExternalID: "777", Title: "Blade Runner Blu-ray", URL: "https://www.olx.pl/d/oferta/z-ID777.html",
+			}
+			olx := &fakeSource{name: "olx", perQuery: true, listings: []Listing{listing}}
+			notifier := &fakeNotifier{}
+			h := newTestHunter(pool, notifier, olx)
+			exec := func(query string, args ...any) {
+				t.Helper()
+				if _, err := pool.Exec(context.Background(), query, args...); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for i, s := range tt.steps {
+				if s.limit != 0 {
+					exec(`UPDATE copy SET max_price_cents = $2 WHERE id = $1`, copyID, s.limit)
+				}
+				if s.legacy {
+					exec(`UPDATE deal_alert SET alerted_price_cents = NULL, queued_price_cents = NULL`)
+				}
+				if s.expire {
+					exec(`UPDATE deal_alert SET created_at = now() - interval '8 days'`)
+				}
+				if s.swap {
+					exec(`DELETE FROM copy WHERE id = $1`, copyID)
+					copyID = wishlist(t, pool, wantBluray(new(int64(5000))))
+				}
+				olx.listings[0].PriceCents = s.price
+				if s.stored {
+					if _, _, err := h.store.Record(context.Background(), &olx.listings[0], &Want{}, false); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if s.fail != 0 {
+					notifier.fail = s.fail
+				}
+				before := len(notifier.messages())
+				res := mustRun(t, h)
+				var sent []string
+				for _, msg := range notifier.messages()[before:] {
+					sent = append(sent, strings.Split(msg, "\n")[1])
+				}
+				if res.Alerts != s.alerts || !slices.Equal(sent, s.sent) {
+					t.Fatalf("step %d at %d grosze: %d alerts queued, sent %q; want %d, %q",
+						i, s.price, res.Alerts, sent, s.alerts, s.sent)
+				}
+			}
+			if n := count(t, pool, `SELECT count(*) FROM deal_alert`); n != 1 {
+				t.Fatalf("stored %d alerts, want one row for the listing", n)
+			}
+		})
+	}
+}
+
+// pricedSource answers every search with its listing at the next price.
+type pricedSource struct {
+	listing Listing
+	prices  []int64
+}
+
+func (*pricedSource) Name() string   { return "olx" }
+func (*pricedSource) PerQuery() bool { return true }
+
+func (p *pricedSource) Search(context.Context, string) ([]Listing, error) {
+	l := p.listing
+	l.PriceCents, p.prices = p.prices[0], p.prices[1:]
+	return []Listing{l}, nil
+}
+
+// TestRunSendsARepeatQueuedLaterInTheSameRun sees a listing at 45 zł for
+// one query and at 40 zł for the next: both alerts go out in that run.
+func TestRunSendsARepeatQueuedLaterInTheSameRun(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	wishlist(t, pool, wantBluray(new(int64(5000))))
+	src := &pricedSource{
+		listing: Listing{Source: "olx", ExternalID: "777", Title: "Blade Runner Blu-ray", URL: "https://www.olx.pl/d/oferta/z-ID777.html"},
+		prices:  []int64{4500, 4000},
+	}
+	notifier := &fakeNotifier{}
+	res := mustRun(t, newTestHunter(pool, notifier, src))
+	msgs := notifier.messages()
+	if res.Queries != 2 || res.Alerts != 2 || res.Sent != 2 || len(msgs) != 2 ||
+		!strings.Contains(msgs[1], "40,00 zł (było 45,00 zł, limit 50,00 zł)") {
+		t.Fatalf("run = %+v, sent %q; want both alerts, the second naming 45 zł", res, msgs)
+	}
+}
+
 // metric reads one series from /metrics, such as
 // `ohara_source_canary_ok{source="olx"}`; the bool is false when it is
 // absent.
@@ -1250,5 +1413,46 @@ func TestRunCutShortByShutdownCounts(t *testing.T) {
 	sameStatus(t, before, after.Status())
 	if got := <-waits; got < 105*time.Minute || got > 135*time.Minute {
 		t.Fatalf("first wait = %v, want about 2h after a run started just now", got)
+	}
+}
+
+func TestRunSkipsMoreSpecificTitle(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		owned bool
+	}{
+		{"owned", true},
+		{"without copies", false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			pool := dbtest.Migrated(t)
+			wish := obcy()
+			wish.MaxPriceCents = new(int64(2500))
+			wishlist(t, pool, &wish)
+			ctx := context.Background()
+			var titleID int64
+			if err := pool.QueryRow(ctx, `INSERT INTO title (kind, name) VALUES ('movie', 'Alien: Covenant')
+				RETURNING id`).Scan(&titleID); err != nil {
+				t.Fatal(err)
+			}
+			if tt.owned {
+				if _, err := pool.Exec(ctx, `WITH e AS (INSERT INTO edition (title_id, format) VALUES ($1, 'bluray') RETURNING id)
+					INSERT INTO copy (edition_id, status) SELECT id, 'owned' FROM e`, titleID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			olx := &fakeSource{name: "olx", perQuery: true, listings: []Listing{
+				{Source: "olx", ExternalID: "covenant", Title: "Alien Covenant DVD", URL: "https://www.olx.pl/d/covenant", PriceCents: 2000},
+				{Source: "olx", ExternalID: "alien", Title: "Alien DVD Ridley Scott 1979", URL: "https://www.olx.pl/d/alien", PriceCents: 2000},
+			}}
+			notifier := &fakeNotifier{}
+			res := mustRun(t, newTestHunter(pool, notifier, olx))
+			if res.New != 1 || res.Sent != 1 {
+				t.Fatalf("run = %+v, want only the Alien listing", res)
+			}
+			if n := count(t, pool, `SELECT count(*) FROM price_observation WHERE external_id = 'covenant'`); n != 0 {
+				t.Fatalf("recorded the Alien: Covenant listing for the Alien wish")
+			}
+		})
 	}
 }

@@ -14,10 +14,12 @@ Same layout and tooling as `../baratie`. `package.json` and
 ```
 /backend-go/
   /cmd/api/            # main: env, migrations, HTTP server, `healthcheck` subcommand
+  /cmd/apitypes/       # writes src/lib/api.gen.ts (`npm run generate:api`)
   /internal/
     /db/               # pgx pool + forward-only migrations (migrations/NNNN_name.sql)
     /dbtest/           # per-test Postgres schema for DB tests
     /httpx/            # JSON request/response and error helpers
+    /apitypes/         # Go structs → TypeScript types: generator and the list of API types and enums
     /barcode/          # EAN/UPC/ISBN normalization (ISBN-10 → ISBN-13)
     /collection/       # titles, editions, copies, collection view
     /lookup/           # GET /api/lookup/{barcode}: provider registry + lookup_cache
@@ -37,7 +39,7 @@ Same layout and tooling as `../baratie`. `package.json` and
     /reqlog/           # slog handler adding a request's request_id, method and path to *Context log lines
 /src/                  # SvelteKit SPA (adapter-static, ssr off)
   /routes/             # pages; /scan is the scanner, /scan/queue the unresolved barcodes
-  /lib/                # nav table, API client, collection types, form helpers, scan flow (pure TS, unit tested)
+  /lib/                # nav table, API client, generated API types (api.gen.ts), form helpers, scan flow (pure TS, unit tested)
   /lib/components/     # forms shared by create and edit pages, camera and quick confirm
   /service-worker/     # SUI service worker (index.ts): precache, update only on the reader's consent
 /static/               # icons, web app manifest, robots.txt
@@ -221,11 +223,22 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   author's surname for books, the artist's words and a fitting medium for
   albums, where a listing naming no medium counts as a CD, minus the
   editable reject phrases a want's own name or artist does not contain),
-  stores
+  skips a want for a listing that names another title of its kind
+  (wished, owned or neither) more specifically: one phrase, past media
+  words and disc counts, holding every word of a want's name it carries
+  and more ("Alien: Covenant" for an "Alien" want), stores
   each listing once in `price_observation` (`source`, `external_id`) and
   queues one `deal_alert` per listing at or below the copy's
   `max_price_cents`; a listing seen again keeps its row, takes the new
   price and `last_seen_at`, and alerts if it has no alert yet. Alerts are retried up to 5 times within a week.
+  A sent alert stores the price it named (`deal_alert.alerted_price_cents`);
+  a later price under it, within the limit, queues the same row again and
+  its message names the earlier price ("było …"). An alert still waiting
+  goes out at the current price; one that gave up or expired is queued
+  again only under the lowest price it was queued or tried at
+  (`queued_price_cents`). An unsent alert whose wish is gone moves to the
+  wish that now matches, keeping its attempts and age. Alerts sent before
+  migration 0016 have no stored price and never repeat.
   The wish a listing was recorded for (`raw.wishlist_copy_id`) is also the
   generated, indexed column `wishlist_copy_id`, so the deals list's filters
   start from wished listings instead of reading every observation.
@@ -287,6 +300,16 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
 ### Frontend
 
 - Svelte 5 runes only. Data comes from `/api` on the same origin.
+- The API's JSON types are generated from the Go structs into
+  `src/lib/api.gen.ts` (`npm run generate:api`, committed, never edited by
+  hand); `collection.ts`, `scan.ts`, `deals.ts`, `valuation.ts` and
+  `status.ts` re-export them. `internal/apitypes.Ohara` lists each struct
+  under its TypeScript name and each enum with its values, taken from the
+  Go constants or validation lists. A pointer field is `T | null`, an
+  omitempty or omitzero one optional, a string field tagged `ts:"Kind"`
+  takes the enum's union, and `ts:",null"` (or `ts:"Kind,null"`) also
+  admits null; any other json tag option fails the generator. CI's `go-tests` job regenerates the file and fails on any
+  difference, so change a JSON struct, then regenerate and commit.
 - Build UI from SUI components; import `@smykla-skalski/sui/styles.css` once in
   the root layout. `build.cssTarget` in `vite.config.ts` keeps SUI's
   `:dir(rtl)` selectors intact.
@@ -446,6 +469,7 @@ npm run lint && npm run check        # oxlint + prettier, svelte-check
 npm run test:coverage                # vitest
 npm run test:e2e                     # Playwright smoke flows against the built image (Docker)
 npm run build                        # SPA into build/
+npm run generate:api                 # src/lib/api.gen.ts from the Go structs (needs Go only)
 cd backend-go && go test ./...       # DB tests skip unless OHARA_TEST_DATABASE_URL is set
 cd backend-go && golangci-lint run ./...
 ./scripts/run-nilaway.sh backend-go github.com/Automaat/ohara/backend-go

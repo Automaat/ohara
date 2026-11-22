@@ -55,6 +55,7 @@ const movie: Candidate = {
 	title: { name: 'Diuna: Część druga', original_title: 'Dune: Part Two', year: 2024, tmdb_id: 1 },
 	edition: { barcode: '5901234123457', format: 'uhd', packaging: ['steelbook'] },
 	provider: 'movie',
+	sources: [],
 	confidence: 0.9
 };
 
@@ -63,6 +64,7 @@ const book: Candidate = {
 	title: { name: 'Lalka', authors: ['Bolesław Prus'] },
 	edition: { barcode: '5901234123457', binding: 'hardcover' },
 	provider: 'bn',
+	sources: [],
 	confidence: 0.5
 };
 
@@ -971,6 +973,7 @@ describe('ScanFlow without a barcode', () => {
 		title: { name: 'Kind of Blue', authors: ['Miles Davis'], year: 1959 },
 		edition: { barcode: '', format: 'vinyl', label: 'Columbia', discogs_release_id: 7 },
 		provider: 'discogs',
+		sources: [],
 		confidence: 0.6
 	};
 
@@ -1075,6 +1078,7 @@ describe('ScanFlow without a barcode', () => {
 			title: { name: 'Rejs', year: 1970, tmdb_id: 2 },
 			edition: { barcode: '', format: 'dvd' },
 			provider: 'tmdb',
+			sources: [],
 			confidence: 0.6
 		};
 		const diuna = { ...movie, edition: { barcode: '', format: 'uhd' as const } };
@@ -1186,6 +1190,7 @@ describe('ScanFlow without a barcode', () => {
 				edition: { barcode: '', format: 'dvd', label: long, publisher: 'Zespół', year: 2201 },
 				cover_url: 'ftp://img.example/rejs.jpg',
 				provider: 'tmdb',
+				sources: [],
 				confidence: 0.6
 			};
 			const s = server({

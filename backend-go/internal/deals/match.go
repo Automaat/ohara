@@ -120,8 +120,14 @@ var stopWords = map[string]bool{
 // words without stop words and single letters. Numbers stay, even single
 // digits, so "Rocky 2" does not match "Rocky 3".
 func required(name string) []string {
-	var out []string
-	for _, w := range words(name) {
+	return significant(words(name))
+}
+
+// significant drops stop words and single letters from ws, keeping
+// numbers.
+func significant(ws []string) []string {
+	out := make([]string, 0, len(ws))
+	for _, w := range ws {
 		if (len([]rune(w)) > 1 || unicode.IsDigit([]rune(w)[0])) && !stopWords[w] {
 			out = append(out, w)
 		}
@@ -339,6 +345,13 @@ func sequelAfter(text []string, name string) bool {
 // not match.
 func (w *Want) Matches(title string) bool {
 	text := words(title)
+	return w.qualifies(text) && len(w.carried(text)) > 0
+}
+
+// qualifies reports whether listing text fits w apart from its names: the
+// edition's format for a movie, the author's surname for a book, and the
+// artist's words and a fitting medium for an album.
+func (w *Want) qualifies(text []string) bool {
 	if w.Kind == "movie" && w.Format != nil && listingFormat(text) != *w.Format {
 		return false
 	}
@@ -353,23 +366,178 @@ func (w *Want) Matches(title string) bool {
 			return false
 		}
 	}
+	return true
+}
+
+// carried returns the required words of each of w's names that listing
+// text carries. A movie listing naming a sequel of a name does not carry
+// that name.
+func (w *Want) carried(text []string) [][]string {
+	var out [][]string
 	for _, n := range w.titleNames() {
 		if req := required(n); len(req) > 0 && containsAll(text, req) &&
 			(w.Kind != "movie" || !sequelAfter(text, n)) {
+			out = append(out, req)
+		}
+	}
+	return out
+}
+
+// Titles are the collection's titles, wished, owned or neither, that a
+// listing may name instead of the want it matched.
+type Titles struct {
+	byKind map[string][]knownTitle
+}
+
+type knownTitle struct {
+	title Want
+	names []knownName
+}
+
+type knownName struct {
+	name string
+	req  []string
+}
+
+// NewTitles readies titles, each a Want without an edition, for Outranks.
+func NewTitles(titles []Want) Titles {
+	t := Titles{byKind: map[string][]knownTitle{}}
+	for _, w := range titles {
+		w.Format = nil
+		k := knownTitle{title: w}
+		for _, n := range w.titleNames() {
+			if req := required(n); len(req) > 0 {
+				k.names = append(k.names, knownName{name: n, req: req})
+			}
+		}
+		t.byKind[w.Kind] = append(t.byKind[w.Kind], k)
+	}
+	return t
+}
+
+// Outranks reports whether a listing w matches names another title of w's
+// kind more specifically: one of that title's names holds every required
+// word of a name of w the listing carries, as often, and more; the listing
+// carries that name as one phrase; and it fits that title's author or
+// artist. A phrase may skip stop words and media words ("Alien DVD
+// Covenant"), and a disc count ("2 płyty") is no part of a title. So
+// "Alien: Covenant DVD" leaves an "Alien" want when "Alien: Covenant" is
+// known, while "Gladiator DVD 2 płyty" stays with "Gladiator" when
+// "Gladiator 2" is.
+func (t Titles) Outranks(w *Want, title string) bool {
+	known := t.byKind[w.Kind]
+	if len(known) == 0 {
+		return false
+	}
+	text := words(title)
+	mine := w.carried(text)
+	if len(mine) == 0 {
+		return false
+	}
+	plain := withoutDiscCounts(text)
+	for i := range known {
+		k := &known[i]
+		if k.title.TitleID == w.TitleID {
+			continue
+		}
+		for _, n := range k.names {
+			if extendsAny(n.req, mine) && carriesPhrase(plain, n.req) &&
+				(k.title.Kind != "movie" || !sequelAfter(plain, n.name)) && k.title.qualifies(text) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// extendsAny reports whether name holds every word of one of names, each
+// at least as often, and more words besides.
+func extendsAny(name []string, names [][]string) bool {
+	for _, shorter := range names {
+		if extends(name, shorter) {
 			return true
 		}
 	}
 	return false
 }
 
-// pick returns the want a listing belongs to, or nil. Among matching wants
-// it prefers one whose maximum price the listing meets, so a cheap listing
-// alerts even when an earlier want for the same title has a lower limit.
-func pick(wants []Want, l *Listing, rules Rules) *Want {
+func extends(name, shorter []string) bool {
+	if len(name) <= len(shorter) {
+		return false
+	}
+	left := slices.Clone(name)
+	for _, w := range shorter {
+		i := slices.Index(left, w)
+		if i < 0 {
+			return false
+		}
+		left = slices.Delete(left, i, i+1)
+	}
+	return true
+}
+
+// mediaWords name a disc format or medium, which sellers put anywhere in
+// a listing title, even inside the film's name.
+var mediaWords = map[string]bool{
+	"dvd": true, "bluray": true, "blu": true, "ray": true, "bd": true, "4k": true, "uhd": true, "ultra": true, "hd": true,
+	"cd": true, "2cd": true, "3cd": true, "cdr": true, "sacd": true, "lp": true, "2lp": true, "3lp": true,
+	"vinyl": true, "vinyls": true, "winyl": true, "winyle": true, "kaseta": true, "kasety": true, "cassette": true, "mc": true,
+}
+
+// discWords follow a disc count, as in "2 płyty" or "2 discs".
+var discWords = map[string]bool{
+	"plyty": true, "plyt": true, "plytach": true, "plytowe": true, "plytowa": true, "plytowy": true,
+	"disc": true, "discs": true, "disk": true, "disks": true, "dyski": true, "dyskow": true,
+}
+
+// withoutDiscCounts drops each number followed by a disc word, and that
+// word.
+func withoutDiscCounts(text []string) []string {
+	out := make([]string, 0, len(text))
+	for i := 0; i < len(text); i++ {
+		if i+1 < len(text) && discWords[text[i+1]] {
+			if _, err := strconv.Atoi(text[i]); err == nil {
+				i++
+				continue
+			}
+		}
+		out = append(out, text[i])
+	}
+	return out
+}
+
+// carriesPhrase reports whether text holds req as consecutive words once
+// stop words, single letters and the media words req lacks are left out.
+func carriesPhrase(text, req []string) bool {
+	run := make([]string, 0, len(text))
+	for _, t := range significant(text) {
+		if !mediaWords[t] || slices.Contains(req, t) {
+			run = append(run, t)
+		}
+	}
+	return hasRun(run, req)
+}
+
+// hasRun reports whether phrase occurs in text as consecutive words.
+func hasRun(text, phrase []string) bool {
+	for i := 0; i+len(phrase) <= len(text); i++ {
+		if slices.Equal(text[i:i+len(phrase)], phrase) {
+			return true
+		}
+	}
+	return false
+}
+
+// pick returns the want a listing belongs to, or nil. A want loses a
+// listing that names another known title more specifically (Outranks).
+// Among the remaining matching wants it prefers one whose maximum price
+// the listing meets, so a cheap listing alerts even when an earlier want
+// for the same title has a lower limit.
+func pick(wants []Want, l *Listing, rules Rules, titles Titles) *Want {
 	var first *Want
 	for i := range wants {
 		w := &wants[i]
-		if !w.Matches(l.Title) || rules.RejectedFor(l.Title, w) {
+		if !w.Matches(l.Title) || rules.RejectedFor(l.Title, w) || titles.Outranks(w, l.Title) {
 			continue
 		}
 		if w.MaxPriceCents != nil && l.PriceCents <= *w.MaxPriceCents {

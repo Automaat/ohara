@@ -35,7 +35,7 @@ var (
 type Entry struct {
 	ID            int64     `json:"id"`
 	Barcode       string    `json:"barcode"`
-	Reason        string    `json:"reason"`
+	Reason        string    `json:"reason" ts:"QueueReason"`
 	Detail        string    `json:"detail"`
 	Scans         int       `json:"scans"`
 	CreatedAt     time.Time `json:"created_at"`

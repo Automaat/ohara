@@ -250,11 +250,12 @@ func (h *Hunter) saveRun(ctx context.Context, save func(context.Context) error) 
 // run is one search: its counters, pacing between requests and the alerts
 // it has already tried to send.
 type run struct {
-	h     *Hunter
-	wants []Want
-	rules Rules
-	res   RunResult
-	first bool
+	h      *Hunter
+	wants  []Want
+	rules  Rules
+	titles Titles
+	res    RunResult
+	first  bool
 	// tried holds the observations whose alert this run sent or failed to
 	// send; a failed one waits for the next run.
 	tried map[int64]bool
@@ -276,7 +277,11 @@ func (h *Hunter) Run(ctx context.Context) (RunResult, error) {
 	if err != nil {
 		return RunResult{}, err
 	}
-	r := &run{h: h, wants: wants, rules: rules, first: true, tried: map[int64]bool{}}
+	titles, err := h.store.Titles(ctx)
+	if err != nil {
+		return RunResult{}, err
+	}
+	r := &run{h: h, wants: wants, rules: rules, titles: titles, first: true, tried: map[int64]bool{}}
 	r.res.Wants = len(wants)
 	r.res.Errors = []string{}
 	var queries []string
@@ -433,7 +438,7 @@ func (r *run) record(ctx context.Context, listings []Listing) error {
 	refreshed := map[string]bool{}
 	for i := range listings {
 		l := &listings[i]
-		w := pick(r.wants, l, r.rules)
+		w := pick(r.wants, l, r.rules, r.titles)
 		if w == nil {
 			continue
 		}
@@ -486,7 +491,7 @@ func (r *run) deliver(ctx context.Context, only map[string]bool) error {
 		metrics.ObserveDealAlert(err)
 		if err != nil {
 			r.h.logger.Warn("telegram alert failed", "observation", a.ObservationID, "err", err)
-			if err := r.h.store.MarkFailed(ctx, a.ObservationID, err.Error()); err != nil {
+			if err := r.h.store.MarkFailed(ctx, a.ObservationID, a.PriceCents, err.Error()); err != nil {
 				return err
 			}
 			continue
@@ -494,11 +499,13 @@ func (r *run) deliver(ctx context.Context, only map[string]bool) error {
 		// The message is out: record it even when ctx was canceled during
 		// the send, or the next run sends it again.
 		markCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), markSentTimeout)
-		err = r.h.store.MarkSent(markCtx, a.ObservationID)
+		err = r.h.store.MarkSent(markCtx, a.ObservationID, a.PriceCents)
 		cancel()
 		if err != nil {
 			return err
 		}
+		// A later sighting in this run may queue it again at a lower price.
+		delete(r.tried, a.ObservationID)
 		r.res.Sent++
 	}
 	return nil
@@ -541,8 +548,15 @@ func alertText(a *Alert) string {
 		}
 	}
 	price := formatPLN(a.PriceCents)
+	var notes []string
+	if a.AlertedPriceCents != nil {
+		notes = append(notes, "było "+formatPLN(*a.AlertedPriceCents))
+	}
 	if a.MaxPriceCents != nil {
-		price += " (limit " + formatPLN(*a.MaxPriceCents) + ")"
+		notes = append(notes, "limit "+formatPLN(*a.MaxPriceCents))
+	}
+	if len(notes) > 0 {
+		price += " (" + strings.Join(notes, ", ") + ")"
 	}
 	price += " · " + sourceLabels[a.Source]
 	if a.AcquiredAs != nil {

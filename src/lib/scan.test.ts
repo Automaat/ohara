@@ -75,6 +75,7 @@ const movie: Candidate = {
 		packaging: ['steelbook']
 	},
 	provider: 'filmweb',
+	sources: [],
 	confidence: 0.9
 };
 
@@ -91,6 +92,7 @@ const album: Candidate = {
 	},
 	cover_url: 'https://i.discogs.com/dsotm.jpeg',
 	provider: 'music',
+	sources: [],
 	confidence: 0.9
 };
 
@@ -99,6 +101,7 @@ const book: Candidate = {
 	title: { name: 'Lalka', authors: ['Bolesław Prus'], bn_id: 'b1', openlibrary_id: 'OL1W' },
 	edition: { barcode: '9788324000016', publisher: 'Znak', year: 2019, binding: 'hardcover' },
 	provider: 'bn',
+	sources: [],
 	confidence: 0.8
 };
 
@@ -635,6 +638,7 @@ describe('scan payloads', () => {
 			},
 			cover_url: 'https://user:pass@img.example/a.jpg',
 			provider: 'music',
+			sources: [],
 			confidence: 0.9
 		};
 		const f = form({ kind: 'music', name: 'Album\0\u0085', format: 'cd' });
@@ -1397,6 +1401,7 @@ describe('searchTitles', () => {
 		title: { name: '1-800-OŚWIECENIE', authors: ['Taco Hemingway'] },
 		edition: { barcode: '0602458447651', format: 'cd', discogs_release_id: 28352929 },
 		provider: 'discogs',
+		sources: [],
 		confidence: 0.6
 	};
 	it.each([
@@ -1439,6 +1444,7 @@ describe('candidateLabel for search results', () => {
 			title: { name: 'Solaris', authors: ['Stanisław Lem'], year: 1961 },
 			edition: { barcode: '' },
 			provider: 'openlibrary',
+			sources: [],
 			confidence: 0.6
 		};
 		expect(candidateLabel(book)).toBe('Stanisław Lem – Solaris · 1961 · openlibrary · 60%');

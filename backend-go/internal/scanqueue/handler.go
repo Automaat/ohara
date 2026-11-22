@@ -47,7 +47,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 // as the provider errors, cut to 500 characters.
 type AddInput struct {
 	Barcode string `json:"barcode"`
-	Reason  string `json:"reason"`
+	Reason  string `json:"reason" ts:"QueueReason"`
 	Detail  string `json:"detail"`
 }
 

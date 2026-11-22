@@ -30,7 +30,7 @@ test('the sheet sorts copies by purchase date and year and keeps the filters', a
 	// Entered in this order, so "Ostatnio dodane" would list them the other way round. The Blu-ray
 	// would lead every order if the format filter were dropped.
 	await add(request, { name: `${run} Alfa`, year: 1999, format: 'dvd', bought: '2024-05-01' });
-	await add(request, { name: `${run} Beta`, year: 2015, format: 'dvd', bought: '2023-06-01' });
+	await add(request, { name: `${run} Beta`, year: 2015, format: 'dvd', bought: '2021-02-01' });
 	await add(request, { name: `${run} Gamma`, year: null, format: 'dvd' });
 	await add(request, { name: `${run} Delta`, year: 2005, format: 'dvd', bought: '2023-01-01' });
 	await add(request, { name: `${run} Blu`, year: 2030, format: 'bluray', bought: '2025-01-01' });
@@ -61,7 +61,7 @@ test('the sheet sorts copies by purchase date and year and keeps the filters', a
 		await expect(search).toHaveValue(run);
 	}
 
-	await sortBy('Ostatnio kupione', 'Sortuj: ostatnio kupione', ['Alfa', 'Beta', 'Delta', 'Gamma']);
+	await sortBy('Ostatnio kupione', 'Sortuj: ostatnio kupione', ['Alfa', 'Delta', 'Beta', 'Gamma']);
 	await sortBy('Rok malejąco', 'Sortuj: rok malejąco', ['Beta', 'Delta', 'Alfa', 'Gamma']);
 	await sortBy('Rok rosnąco', 'Sortuj: rok rosnąco', ['Alfa', 'Delta', 'Beta', 'Gamma']);
 

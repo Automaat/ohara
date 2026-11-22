@@ -3,7 +3,9 @@
  * chip, a sheet choice or a search answers without asking the server. It lists what
  * `GET /api/collection` would for the same filter: the `WHERE` clause of `Store.Collection` in
  * backend-go/internal/collection/store.go, with the search normalized as the handler does.
- * The `unpriced` status, the owned copies without a purchase price, exists only here.
+ * The `unpriced` status, the owned copies without a purchase price, exists only here, and
+ * without a status the page leaves out the sold copies the server lists, which only "Sprzedane"
+ * shows.
  */
 import type { CollectionFilter, CollectionItem } from './collection';
 import { trimSpace } from './go-text';
@@ -70,10 +72,14 @@ function searchedText(item: CollectionItem): string {
 	);
 }
 
-/** Whether a copy has the filter's status; `unpriced` is an owned copy without a price. */
+/**
+ * Whether a copy has the filter's status; `unpriced` is an owned copy without a price, and no
+ * status is any copy not sold.
+ */
 function hasStatus(item: CollectionItem, status: CollectionFilter['status']): boolean {
 	if (status === 'unpriced') return item.status === 'owned' && item.price_cents === null;
-	return !status || item.status === status;
+	if (!status) return item.status !== 'sold';
+	return item.status === status;
 }
 
 /**

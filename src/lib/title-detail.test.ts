@@ -321,6 +321,30 @@ describe('copyFacts with a location', () => {
 	});
 });
 
+describe('copyFacts of a sold copy', () => {
+	it('keeps the purchase and adds the sale', () => {
+		const facts = copyFacts(
+			copy({ status: 'sold', sold_on: '2026-05-10', sale_price_cents: 3500 })
+		);
+		expect(facts.map((f) => [f.label, nbsp(f.value)])).toEqual([
+			['Cena', '89,99 zł'],
+			['Kupiono', '24 gru 2023'],
+			['Sklep', 'Empik'],
+			['Sprzedano', '10 maj 2026'],
+			['Cena sprzedaży', '35,00 zł'],
+			['Stan', 'Nowy']
+		]);
+		expect(copyFacts(copy({ status: 'sold', sold_on: '2026-05-10' }))[4]?.value).toBe('—');
+	});
+
+	it('lists what it sold for in its row', () => {
+		expect(
+			nbsp(copyLine(copy({ status: 'sold', sold_on: '2026-05-10', sale_price_cents: 3500 })))
+		).toBe('Sprzedany · 35,00 zł · Empik');
+		expect(copyLine(copy({ status: 'sold', sold_on: '2026-05-10', shop: '' }))).toBe('Sprzedany');
+	});
+});
+
 describe('copyLine', () => {
 	it('lists the status, the price and the shop that are known', () => {
 		expect(nbsp(copyLine(copy()))).toBe('Na półce · 89,99 zł · Empik');

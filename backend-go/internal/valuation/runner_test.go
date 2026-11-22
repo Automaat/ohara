@@ -649,6 +649,62 @@ func TestValuationAPI(t *testing.T) {
 	}
 }
 
+// TestSoldCopiesAreNotValued sells a copy of the Blu-ray, which another copy
+// still holds, and the only copy of a book edition: neither sold copy is
+// valued, and the edition left without an owned copy gets no search or quote.
+func TestSoldCopiesAreNotValued(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	seed(t, pool)
+	exec(t, pool, `INSERT INTO title (id, kind, name, authors) OVERRIDING SYSTEM VALUE
+		VALUES (3, 'book', 'Lód', '{"Jacek Dukaj"}')`)
+	exec(t, pool, `INSERT INTO edition (id, title_id, barcode, binding) OVERRIDING SYSTEM VALUE
+		VALUES (30, 3, '9788308041239', 'hardcover')`)
+	exec(t, pool, `INSERT INTO copy (edition_id, status, price_cents, sold_on, sale_price_cents) VALUES
+		(30, 'sold', 7000, current_date, 6000), (20, 'sold', 4000, current_date, NULL)`)
+	logger := slog.New(slog.DiscardHandler)
+	olx := &fakeSource{name: "olx", listings: []deals.Listing{
+		listing("1", "Katedra Jacek Dukaj", 2000, used()),
+		listing("2", "Lód Jacek Dukaj", 3000, used()),
+	}}
+	bb := &fakeBuyBack{quotes: map[string]Quote{
+		"9788308073209": {Offered: true, Cents: 537},
+		"9788308041239": {Offered: true, Cents: 900},
+	}}
+	r := newTestRunner(pool, bb, olx)
+	h := NewHandler(r.store, r, logger)
+	srv := httptest.NewServer(server.New(server.Config{}, logger, server.Deps{DB: pool, API: []server.Mounter{h}}))
+	t.Cleanup(srv.Close)
+
+	res, err := r.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Editions != 2 {
+		t.Fatalf("Run valued %d editions, want the 2 with an owned copy", res.Editions)
+	}
+	if strings.Join(bb.asked, ",") != "9788308073209" {
+		t.Fatalf("buy-back asked for %v, want the owned book only", bb.asked)
+	}
+	for _, q := range olx.queries {
+		if strings.Contains(q, "Lód") {
+			t.Fatalf("OLX asked %q for the sold edition", q)
+		}
+	}
+
+	var view View
+	if code := get(t, srv.URL+"/api/valuation", &view); code != http.StatusOK {
+		t.Fatalf("GET = %d", code)
+	}
+	if len(view.Copies) != 3 || view.Summary.Copies != 3 || view.Summary.SpentCents != 8000 {
+		t.Fatalf("view copies %d, summary %+v, want the 3 owned copies", len(view.Copies), view.Summary)
+	}
+	for _, c := range view.Copies {
+		if c.EditionID == 30 {
+			t.Fatalf("valuation lists the sold book: %+v", c)
+		}
+	}
+}
+
 func get(t *testing.T, url string, out any) int {
 	t.Helper()
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, http.NoBody)

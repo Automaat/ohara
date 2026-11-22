@@ -16,6 +16,7 @@ import {
 	options,
 	parsePLN,
 	readCollectionFilter,
+	saleLine,
 	shelfLine,
 	shelfSummary,
 	titlePayload,
@@ -132,6 +133,18 @@ describe('collection search links', () => {
 		const filter = { kind: 'movie', format: 'dvd', status: 'unpriced', q: 'Alien' } as const;
 		expect(collectionSearch(filter)).toBe('?kind=movie&format=dvd&status=unpriced&q=Alien');
 		expect(readCollectionFilter(new URLSearchParams(collectionSearch(filter)))).toEqual(filter);
+	});
+
+	it('keeps the sold copies in the address, with kind, format and search', () => {
+		const filter = { kind: 'movie', format: 'dvd', status: 'sold', q: 'Alien' } as const;
+		expect(collectionSearch(filter)).toBe('?kind=movie&format=dvd&status=sold&q=Alien');
+		expect(readCollectionFilter(new URLSearchParams(collectionSearch(filter)))).toEqual(filter);
+		expect(readCollectionFilter(new URLSearchParams('status=sold'))).toEqual({
+			kind: '',
+			format: '',
+			status: 'sold',
+			q: ''
+		});
 	});
 
 	it('keeps titles without copies in the address, with no format', () => {
@@ -547,6 +560,100 @@ describe('copy form', () => {
 		expect(owned.ok && 'max_market_percent' in owned.value).toBe(false);
 	});
 
+	it('round-trips a sold copy with its purchase and sale', () => {
+		const form = copyToForm({
+			edition_id: 3,
+			status: 'sold',
+			price_cents: 4999,
+			purchased_on: '2024-03-01',
+			shop: 'Empik',
+			acquired_as: 'used',
+			condition: 'good',
+			notes: '',
+			max_price_cents: null,
+			sold_on: '2026-05-10',
+			sale_price_cents: 3500
+		});
+		expect(form).toMatchObject({ sold_on: '2026-05-10', sale_price: '35,00', price: '49,99' });
+		const parsed = copyPayload(form, 3);
+		expect(parsed.ok && parsed.value).toEqual({
+			edition_id: 3,
+			status: 'sold',
+			price_cents: 4999,
+			purchased_on: '2024-03-01',
+			shop: 'Empik',
+			acquired_as: 'used',
+			condition: 'good',
+			notes: '',
+			max_price_cents: null,
+			sold_on: '2026-05-10',
+			sale_price_cents: 3500
+		});
+	});
+
+	it('takes a leap day', () => {
+		const parsed = copyPayload(
+			{ ...copyToForm(null), status: 'sold', purchased_on: '2024-02-29', sold_on: '2028-02-29' },
+			3
+		);
+		expect(parsed.ok && parsed.value).toMatchObject({
+			purchased_on: '2024-02-29',
+			sold_on: '2028-02-29'
+		});
+	});
+
+	it('sends a sold copy without a sale price, and no limit of a wish', () => {
+		const form = {
+			...copyToForm(null),
+			status: 'sold' as const,
+			sold_on: ' 2026-05-10 ',
+			max_price: '60',
+			market_percent: '70'
+		};
+		const parsed = copyPayload(form, 3);
+		expect(parsed.ok && parsed.value).toMatchObject({
+			sold_on: '2026-05-10',
+			max_price_cents: null
+		});
+		expect(parsed.ok && 'sale_price_cents' in parsed.value).toBe(false);
+		expect(parsed.ok && 'max_market_percent' in parsed.value).toBe(false);
+	});
+
+	it.each(['owned', 'wishlist'] as const)('drops the sale of a copy set back to %s', (status) => {
+		const form = copyToForm({
+			edition_id: 3,
+			status: 'sold',
+			price_cents: null,
+			purchased_on: null,
+			shop: '',
+			acquired_as: null,
+			condition: null,
+			notes: '',
+			max_price_cents: null,
+			sold_on: '2026-05-10',
+			sale_price_cents: 3500
+		});
+		const parsed = copyPayload({ ...form, status }, 3);
+		expect(parsed.ok && 'sold_on' in parsed.value).toBe(false);
+		expect(parsed.ok && 'sale_price_cents' in parsed.value).toBe(false);
+	});
+
+	it.each([
+		[{ sold_on: '' }, 'sold_on'],
+		[{ sold_on: '10.05.2026' }, 'sold_on'],
+		[{ sold_on: '2026-02-30' }, 'sold_on'],
+		[{ sold_on: '2026-13-01' }, 'sold_on'],
+		[{ sold_on: '2026-05-10', purchased_on: '2023-02-29' }, 'purchased_on'],
+		[{ sold_on: '2026-05-10', sale_price: 'dużo' }, 'sale_price_cents'],
+		[{ sold_on: '2026-05-10', sale_price: '-5' }, 'sale_price_cents'],
+		[{ sold_on: '2026-05-10', sale_price: '1000000,01' }, 'sale_price_cents'],
+		[{ sold_on: '2026-05-10', price: 'dużo' }, 'price_cents'],
+		[{ sold_on: '2026-05-10', purchased_on: '1.03.2024' }, 'purchased_on']
+	])('rejects a sold copy with %j on %s', (patch, field) => {
+		const parsed = copyPayload({ ...copyToForm(null), status: 'sold', ...patch }, 3);
+		expect(!parsed.ok && parsed.issue.field).toBe(field);
+	});
+
 	it.each(['0', '101', '70,5', 'dużo', '-5'])('rejects market percent %j', (percent) => {
 		const parsed = copyPayload(
 			{ ...copyToForm(null), status: 'wishlist', market_percent: percent },
@@ -629,6 +736,17 @@ describe('shelf tile line', () => {
 	])('names a wish with limit $max', ({ max, want }) => {
 		expect(wishLine(max)).toMatch(want);
 		expect(shelfLine({ ...owned, status: 'wishlist', max_price_cents: max })).toMatch(want);
+	});
+
+	it.each([
+		{ sold: '2026-05-10', cents: 3500, want: /^Sprzedany 10 maj 2026 · 35,00\szł$/ },
+		{ sold: '2026-05-10', cents: null, want: /^Sprzedany 10 maj 2026$/ },
+		{ sold: '2026-05-10', cents: 0, want: /^Sprzedany 10 maj 2026 · 0,00\szł$/ }
+	])('names a sale on $sold for $cents', ({ sold, cents, want }) => {
+		expect(saleLine(sold, cents)).toMatch(want);
+		expect(shelfLine({ ...owned, status: 'sold', sold_on: sold, sale_price_cents: cents })).toMatch(
+			want
+		);
 	});
 
 	it('gives an owned copy its creators and edition, without a status', () => {

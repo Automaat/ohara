@@ -29,6 +29,9 @@
 						{/if}
 					</span>
 					<span class="meta">{copyMeta(c)}</span>
+					{#if likelySoldLine(c, minObservations)}
+						<span class="meta">{likelySoldLine(c, minObservations)}</span>
+					{/if}
 				</span>
 				<span class="value">
 					{c.mid ? wholeZl(c.mid.cents) : '—'}
@@ -36,9 +39,6 @@
 					<small>{copyNote(c)}</small>
 					{#if missingCeiling(c)}
 						<small>{missingCeiling(c)}</small>
-					{/if}
-					{#if likelySoldLine(c, minObservations)}
-						<small>{likelySoldLine(c, minObservations)}</small>
 					{/if}
 				</span>
 			</a>

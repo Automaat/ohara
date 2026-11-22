@@ -566,8 +566,7 @@ describe('likely-sold price', () => {
 	it('shows the median of the vanished listings with their count', () => {
 		const c = copy({ likely_sold: est(5000, 3) });
 
-		expect(nbsp(likelySold(c, 3)?.value ?? '')).toBe('50 zł');
-		expect(likelySold(c, 3)).toMatchObject({ note: '3 oferty', low: false });
+		expect(likelySold(c, 3)).toEqual({ note: '3 oferty', low: false });
 		expect(nbsp(likelySoldLine(c, 3) ?? '')).toBe('Prawdopodobnie sprzedane: 50 zł · 3 oferty');
 	});
 

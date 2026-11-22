@@ -435,25 +435,26 @@ export function copyNote(c: CopyValue): string {
 export const likelySoldLabel = 'Prawdopodobnie sprzedane';
 
 /**
- * A copy's likely-sold price: the amount in whole złoty and how many vanished listings it rests
- * on, as "3 oferty", "1 oferta · mało danych" under minObservations, or with the outliers left
- * out. Null when no listing of its title and format vanished soon enough.
+ * How many vanished listings a copy's likely-sold price rests on, as "3 oferty", "1 oferta · mało
+ * danych" under minObservations, or with the outliers left out. Null when no listing of its title
+ * and format vanished soon enough, so the price is not shown.
  */
 export function likelySold(
 	c: CopyValue,
 	minObservations: number
-): { value: string; note: string; low: boolean } | null {
+): { note: string; low: boolean } | null {
 	const e = c.likely_sold;
 	if (!e) return null;
 	const low = e.count < minObservations;
 	const counted = e.trimmed > 0 ? `${offers(e.count)} (${e.trimmed} odrzucone)` : offers(e.count);
-	return { value: wholeZl(e.cents), note: low ? `${counted} · mało danych` : counted, low };
+	return { note: low ? `${counted} · mało danych` : counted, low };
 }
 
-/** The line under a copy's value on a phone, "Prawdopodobnie sprzedane: 50 zł · 3 oferty". */
+/** A copy's likely-sold price on a phone, in whole złoty: "Prawdopodobnie sprzedane: 50 zł · 3 oferty". */
 export function likelySoldLine(c: CopyValue, minObservations: number): string | null {
 	const sold = likelySold(c, minObservations);
-	return sold ? `${likelySoldLabel}: ${sold.value} · ${sold.note}` : null;
+	if (!sold || !c.likely_sold) return null;
+	return `${likelySoldLabel}: ${wholeZl(c.likely_sold.cents)} · ${sold.note}`;
 }
 
 /** The Discogs release a copy's shown prices come from, or null when none is from Discogs. */

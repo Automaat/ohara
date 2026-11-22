@@ -221,7 +221,7 @@
 					{:else if column.key === 'likely_sold'}
 						{@const sold = likelySold(row, minObservations)}
 						{#if sold}
-							{sold.value}
+							{estimateValue(row.likely_sold)}
 							<span class="meta">{sold.note}</span>
 						{:else}
 							—
@@ -257,11 +257,11 @@
 			</p>
 			<p class="methodology">
 				<strong>{likelySoldLabel}:</strong> mediana ostatnich cen używanych egzemplarzy tego samego
-				tytułu i formatu z ogłoszeń OLX, które zniknęły w ciągu {view.likely_sold_days} dni od pojawienia
-				się, bez wartości odstających. To nie są znane ceny sprzedaży: zakładamy tylko, że tak szybko
-				zdjęte ogłoszenie zakończyło się sprzedażą. Cenę opartą na mniej niż {fewOffers} oznaczamy jako
-				„mało danych”, a bez takich ogłoszeń jej nie pokazujemy. Nie wliczamy jej do sum ani do historii
-				wartości.
+				tytułu i formatu z ogłoszeń OLX, które zniknęły w ciągu {view.likely_sold_days} dni od pierwszego
+				wykrycia przez Oharę, bez wartości odstających. To nie są znane ceny sprzedaży: zakładamy tylko,
+				że tak szybko zdjęte ogłoszenie zakończyło się sprzedażą. Cenę opartą na mniej niż {fewOffers}
+				oznaczamy jako „mało danych”, a bez takich ogłoszeń jej nie pokazujemy. Nie wliczamy jej do sum
+				ani do historii wartości.
 			</p>
 		</Disclosure>
 	{/if}

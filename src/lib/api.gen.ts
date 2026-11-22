@@ -232,6 +232,11 @@ export type ReturnPayload = {
 	returned_on: string | null;
 };
 
+export type FinishPayload = {
+	finished: boolean | null;
+	finished_on: string | null;
+};
+
 export type Loan = {
 	id: number;
 	copy_id: number;

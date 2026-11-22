@@ -607,6 +607,27 @@ func checkDue(due *Date, lentOn time.Time) *httpx.FieldError {
 	return nil
 }
 
+// FinishInput is the body of PUT /api/titles/{id}/finished: the title's
+// finished state alone, so marking it never writes back a stale name or
+// notes. Finished is required unless FinishedOn names the day.
+type FinishInput struct {
+	Finished   *bool `json:"finished"`
+	FinishedOn *Date `json:"finished_on"`
+}
+
+// Normalize checks the input as TitleInput checks its finished fields.
+func (in *FinishInput) Normalize() *httpx.FieldError {
+	if in.Finished == nil && in.FinishedOn == nil {
+		return fieldErr("finished", "is required")
+	}
+	t := TitleInput{Finished: in.Finished, FinishedOn: in.FinishedOn}
+	if fe := t.normalizeFinished(); fe != nil {
+		return fe
+	}
+	in.Finished = t.Finished
+	return nil
+}
+
 // ReturnInput is the body of PUT /api/loans/{id}: the day the copy came back.
 type ReturnInput struct {
 	ReturnedOn *Date `json:"returned_on"`

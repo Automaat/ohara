@@ -143,10 +143,14 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   clears the day. A `PUT` without `finished` (or with null) keeps both.
   One state per title, no log of rewatches. `GET /api/collection` items
   carry the title's `finished` and `finished_on`; `?unfinished=1` lists
-  only owned copies of titles not finished. The title page shows
-  "Obejrzane", "Przeczytane" or "Przesłuchane" with the day, marks it
-  finished today in one tap and changes, forgets or takes back the mark
-  in a sheet, sending the title as it stands.
+  only owned copies of titles not finished. `PUT
+/api/titles/{id}/finished` (`finished` and `finished_on`, checked the
+  same way; `finished` required unless a day is given) writes that state
+  alone, so a page holding an older title never writes its name or notes
+  back. The title page shows "Obejrzane", "Przeczytane" or "Przesłuchane"
+  with the day, marks it finished today in Poland (`todayInPoland`,
+  whatever the browser's zone) in one tap and changes, forgets or takes
+  back the mark in a sheet, all through that endpoint.
 - Lookup providers implement `lookup.Provider` (`Fetch` returns raw JSON,
   `Parse` turns raw JSON into candidates) and register in `cmd/api` with a
   cache TTL. Candidate `title`/`edition` fields match the POST bodies of
@@ -572,7 +576,8 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   every other view, the counts and the default shelf leave out.
   Its "Do nadrobienia" switch (`?unfinished=1`, as on the server) lists
   owned copies of titles not finished; a status without owned copies
-  (wishes, sold, "Bez egzemplarzy") drops it.
+  (wishes, sold, "Bez egzemplarzy") drops it, in the sheet and when
+  read from the address.
   Its "Miejsce" (`?location=`) lists the copies stored at one location,
   the whole value, case aside, picked from the loaded copies' locations,
   the most used first. An owned copy's `location` is one free-text place

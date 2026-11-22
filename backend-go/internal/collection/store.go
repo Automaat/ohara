@@ -264,6 +264,36 @@ func (s *Store) UpdateTitle(ctx context.Context, id int64, in *TitleInput) (Titl
 	return s.GetTitle(ctx, id)
 }
 
+// SetFinished records title id as finished on a day (nil when unknown) or
+// not finished, leaving every other field as stored. Errors:
+// ErrTitleNotFound or a *httpx.FieldError for a day after today in Poland.
+func (s *Store) SetFinished(ctx context.Context, id int64, in *FinishInput) (Title, error) {
+	var t Title
+	err := s.inTx(ctx, func(tx pgx.Tx) error {
+		if err := checkFinishedOn(ctx, tx, in.FinishedOn); err != nil {
+			return err
+		}
+		var finishedOn *time.Time
+		if *in.Finished {
+			finishedOn = timeOf(in.FinishedOn)
+		}
+		tag, err := tx.Exec(ctx, `UPDATE title SET finished = $2, finished_on = $3,
+			updated_at = now(), edited_at = now() WHERE id = $1`, id, *in.Finished, finishedOn)
+		if err != nil {
+			return fmt.Errorf("set finished: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrTitleNotFound
+		}
+		t, err = getTitle(ctx, tx, id)
+		return err
+	})
+	if err != nil {
+		return Title{}, err
+	}
+	return t, nil
+}
+
 // checkNoEditions runs after the title row is locked, as its own statement:
 // under READ COMMITTED a count taken in the locking statement keeps the
 // snapshot from before the wait and misses an edition committed meanwhile.

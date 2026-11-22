@@ -44,11 +44,14 @@ function shown(day: string): string {
 	);
 }
 
-/** Today in the browser's time zone, as the page's action records it. */
+/** Today in Poland, the day the page's action records whatever the browser's time zone. */
 function today(): string {
-	const d = new Date();
-	const pad = (n: number) => String(n).padStart(2, '0');
-	return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+	return new Intl.DateTimeFormat('en-CA', {
+		timeZone: 'Europe/Warsaw',
+		year: 'numeric',
+		month: '2-digit',
+		day: '2-digit'
+	}).format(new Date());
 }
 
 async function finishedState(request: APIRequestContext, titleID: number) {

@@ -21,6 +21,7 @@ import {
 	soleCopy,
 	titleArtwork,
 	titleHero,
+	todayInPoland,
 	valueCard,
 	wantsCopy,
 	type TitleEdition
@@ -248,28 +249,22 @@ describe('finished titles', () => {
 		});
 	});
 
-	it('sends the title as it stands with the new state, keeping the stored cover', () => {
-		const t = title({ kind: 'book', authors: ['Bolesław Prus'], notes: 'Tom 1', cover_url: 'x' });
-		expect(finishPayload(t, true, '2026-05-01')).toEqual({
-			kind: 'book',
-			name: 'Interstellar',
-			original_title: null,
-			polish_title: null,
-			year: 2014,
-			tmdb_id: 157336,
-			authors: ['Bolesław Prus'],
-			bn_id: null,
-			openlibrary_id: null,
-			notes: 'Tom 1',
+	it('sends only the finished state, never the rest of the title', () => {
+		expect(finishPayload(true, '2026-05-01')).toEqual({
 			finished: true,
 			finished_on: '2026-05-01'
 		});
-		expect(finishPayload(t, true, null)).toMatchObject({ finished: true, finished_on: null });
-		expect(finishPayload(t, false, '2026-05-01')).toMatchObject({
-			finished: false,
-			finished_on: null
-		});
-		expect(finishPayload(t, false, null)).not.toHaveProperty('cover_url');
+		expect(finishPayload(true, null)).toEqual({ finished: true, finished_on: null });
+		expect(finishPayload(false, '2026-05-01')).toEqual({ finished: false, finished_on: null });
+	});
+
+	it("takes today as Poland's day, whatever the reader's time zone", () => {
+		// Just after midnight in Tokyo Warsaw is still on the day before, and late in New York
+		// it is already the next day.
+		expect(todayInPoland(new Date('2026-11-22T15:30:00Z'))).toBe('2026-11-22');
+		expect(todayInPoland(new Date('2026-11-22T23:30:00Z'))).toBe('2026-11-23');
+		expect(todayInPoland(new Date('2026-07-01T21:59:00Z'))).toBe('2026-07-01');
+		expect(todayInPoland(new Date('2026-07-01T22:00:00Z'))).toBe('2026-07-02');
 	});
 });
 

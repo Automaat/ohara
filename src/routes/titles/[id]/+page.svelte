@@ -25,7 +25,6 @@
 		displayName,
 		editionPayload,
 		editionToForm,
-		isoDate,
 		titlePayload,
 		titleToForm,
 		type Copy,
@@ -59,6 +58,7 @@
 		previewHero,
 		soleCopy,
 		titleHero,
+		todayInPoland,
 		trendHeight,
 		trendWidth,
 		valueCard,
@@ -287,8 +287,8 @@
 	}
 
 	/**
-	 * Records the title as finished on a day (null when unknown) or not finished, sending the title
-	 * as it stands, and shows the answer at once.
+	 * Records the title as finished on a day (null when unknown) or not finished, sending only that
+	 * state, and shows the answer at once.
 	 */
 	async function saveFinished(t: Title, finished: boolean, day: string | null) {
 		if (finishing) return;
@@ -298,8 +298,8 @@
 			const saved = await request<Title>(
 				fetch,
 				'PUT',
-				`/api/titles/${t.id}`,
-				finishPayload(t, finished, day)
+				`/api/titles/${t.id}/finished`,
+				finishPayload(finished, day)
 			);
 			// The answer leaves out a day it does not know, so the day shown is cleared first.
 			if (detail?.id === saved.id) Object.assign(detail, { finished_on: null }, saved);
@@ -312,7 +312,7 @@
 	}
 
 	function submitFinish(t: Title) {
-		const day = finishDay(finishText, isoDate(new Date()));
+		const day = finishDay(finishText, todayInPoland(new Date()));
 		if (!day.ok) {
 			finishIssue = day.issue;
 			return;
@@ -465,7 +465,10 @@
 				<p class="finished-line">{finishedLine(t)}</p>
 				<Button tone="ghost" onclick={() => openFinish(t)}>Zmień datę</Button>
 			{:else}
-				<Button loading={finishing} onclick={() => saveFinished(t, true, isoDate(new Date()))}>
+				<Button
+					loading={finishing}
+					onclick={() => saveFinished(t, true, todayInPoland(new Date()))}
+				>
 					{finishAction(t.kind)}
 				</Button>
 			{/if}

@@ -171,3 +171,48 @@ func TestCollectionViewUnfinishedFilter(t *testing.T) {
 		a.fails(http.MethodGet, "/api/collection"+q, nil, http.StatusUnprocessableEntity, "unfinished")
 	}
 }
+
+func TestSetFinishedKeepsANewerEditOfTheOtherFields(t *testing.T) {
+	a := newAPI(t)
+	id := a.title("book", "Lalka")
+	path := fmt.Sprintf("/api/titles/%d", id)
+	finished := path + "/finished"
+	a.mustDo(http.MethodPut, path, obj{"kind": "book", "name": "Lalka (wyd. 2)", "notes": "Prus", "authors": []string{"Bolesław Prus"}}, nil, http.StatusOK)
+
+	var got collection.Title
+	a.mustDo(http.MethodPut, finished, obj{"finished": true, "finished_on": "2025-02-01"}, &got, http.StatusOK)
+	if got.Name != "Lalka (wyd. 2)" || got.Notes != "Prus" || len(got.Authors) != 1 || got.Finished == nil || !*got.Finished || day(got.FinishedOn) != "2025-02-01" {
+		t.Fatalf("answer = %+v", got)
+	}
+	a.wantFinished(id, true, "2025-02-01")
+
+	steps := []struct {
+		body     obj
+		finished bool
+		on       string
+	}{
+		{obj{"finished": true}, true, ""},
+		{obj{"finished_on": "2025-03-01"}, true, "2025-03-01"},
+		{obj{"finished": true, "finished_on": nil}, true, ""},
+		{obj{"finished": false}, false, ""},
+		{obj{"finished": true, "finished_on": todayInPoland(t)}, true, todayInPoland(t)},
+	}
+	for _, step := range steps {
+		a.mustDo(http.MethodPut, finished, step.body, nil, http.StatusOK)
+		a.wantFinished(id, step.finished, step.on)
+	}
+
+	tomorrow := time.Now().AddDate(0, 0, 2).Format(time.DateOnly)
+	a.fails(http.MethodPut, finished, obj{}, http.StatusUnprocessableEntity, "finished")
+	a.fails(http.MethodPut, finished, obj{"finished": nil, "finished_on": nil}, http.StatusUnprocessableEntity, "finished")
+	a.fails(http.MethodPut, finished, obj{"finished": true, "finished_on": tomorrow}, http.StatusUnprocessableEntity, "finished_on")
+	a.fails(http.MethodPut, finished, obj{"finished": false, "finished_on": "2020-01-01"}, http.StatusUnprocessableEntity, "finished_on")
+	a.wantFinished(id, true, todayInPoland(t))
+	a.fails(http.MethodPut, "/api/titles/999999/finished", obj{"finished": true}, http.StatusNotFound, "")
+
+	var detail collection.TitleDetail
+	a.mustDo(http.MethodGet, path, nil, &detail, http.StatusOK)
+	if detail.Name != "Lalka (wyd. 2)" || detail.Notes != "Prus" || len(detail.Authors) != 1 {
+		t.Fatalf("other fields changed: %+v", detail.Title)
+	}
+}

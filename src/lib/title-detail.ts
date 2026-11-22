@@ -8,12 +8,12 @@ import {
 	kindLabels,
 	statusLabels,
 	type Copy,
+	type FinishPayload,
 	type FormIssue,
 	type Kind,
 	type Parsed,
 	type Title,
-	type TitleDetail,
-	type TitlePayload
+	type TitleDetail
 } from '#lib/collection.js';
 import { copyCount, editionCount, purchaseDate } from '#lib/polish.js';
 import {
@@ -150,9 +150,24 @@ export function finishedLine(t: Pick<Title, 'kind' | 'finished' | 'finished_on'>
 	return [finishedLabels[t.kind], purchaseDate(t.finished_on ?? null)].filter(Boolean).join(' ');
 }
 
+const warsawDay = new Intl.DateTimeFormat('en-CA', {
+	timeZone: 'Europe/Warsaw',
+	year: 'numeric',
+	month: '2-digit',
+	day: '2-digit'
+});
+
+/**
+ * The day it is in Poland at an instant, YYYY-MM-DD: the server's today, which no finish day may
+ * pass, whatever the reader's time zone.
+ */
+export function todayInPoland(now: Date): string {
+	return warsawDay.format(now);
+}
+
 /**
  * The finish day a form's text names: null for an empty field, an unknown day. A day after
- * today, the reader's local day, is refused as the server refuses it.
+ * today in Poland is refused as the server refuses it.
  */
 export function finishDay(text: string, today: string): Parsed<string | null> {
 	const day = text.trim();
@@ -167,24 +182,12 @@ function dayIssue(message: string): { ok: false; issue: FormIssue } {
 }
 
 /**
- * The PUT body that records a title as finished on a day (null when unknown) or not finished,
- * with every other field as the title has it. Without a cover the server keeps the stored one.
+ * The `PUT /api/titles/{id}/finished` body that records a title as finished on a day (null when
+ * unknown) or not finished. It carries nothing else, so a page holding an older title never
+ * writes its name or notes back.
  */
-export function finishPayload(t: Title, finished: boolean, day: string | null): TitlePayload {
-	return {
-		kind: t.kind,
-		name: t.name,
-		original_title: t.original_title,
-		polish_title: t.polish_title,
-		year: t.year,
-		tmdb_id: t.tmdb_id,
-		authors: t.authors,
-		bn_id: t.bn_id,
-		openlibrary_id: t.openlibrary_id,
-		notes: t.notes,
-		finished,
-		finished_on: finished ? day : null
-	};
+export function finishPayload(finished: boolean, day: string | null): FinishPayload {
+	return { finished, finished_on: finished ? day : null };
 }
 
 /** What an edition is, such as "4K UHD · Slipcover", never with its barcode. */

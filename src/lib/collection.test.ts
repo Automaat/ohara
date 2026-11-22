@@ -163,7 +163,20 @@ describe('collection search links', () => {
 		expect(collectionSearch(lent)).toBe('?kind=book&status=owned&loaned=1&unfinished=1&q=Lem');
 		expect(readCollectionFilter(new URLSearchParams(collectionSearch(lent)))).toEqual(lent);
 		expect(collectionSearch({ ...filter, unfinished: false })).toBe('?kind=book&q=Lem');
-		for (const off of ['unfinished=true', 'unfinished=0', 'status=none&unfinished=1']) {
+		expect(readCollectionFilter(new URLSearchParams('status=unpriced&unfinished=1'))).toEqual({
+			kind: '',
+			format: '',
+			status: 'unpriced',
+			q: '',
+			unfinished: true
+		});
+		for (const off of [
+			'unfinished=true',
+			'unfinished=0',
+			'status=none&unfinished=1',
+			'status=wishlist&unfinished=1',
+			'status=sold&unfinished=1'
+		]) {
 			expect(readCollectionFilter(new URLSearchParams(off))).not.toHaveProperty('unfinished');
 		}
 	});

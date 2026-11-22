@@ -39,6 +39,7 @@ func (h *Handler) Mount(r chi.Router) {
 	r.Post("/titles", h.createTitle)
 	r.Get("/titles/{id}", h.getTitle)
 	r.Put("/titles/{id}", h.updateTitle)
+	r.Put("/titles/{id}/finished", h.setFinished)
 	r.Delete("/titles/{id}", h.deleteTitle)
 
 	r.Get("/editions", h.listEditions)
@@ -310,6 +311,30 @@ func (h *Handler) updateTitle(w http.ResponseWriter, r *http.Request) {
 	t, err := h.store.UpdateTitle(r.Context(), id, in)
 	if err != nil {
 		h.writeErr(w, r, "update title", notFound(err))
+		return
+	}
+	httpx.WriteJSON(w, h.logger, http.StatusOK, t)
+}
+
+// setFinished serves PUT /api/titles/{id}/finished: the title's finished
+// state and day alone, so a page holding an older copy of the title
+// never writes its other fields back.
+func (h *Handler) setFinished(w http.ResponseWriter, r *http.Request) {
+	id, ok := httpx.PathID(w, r, h.logger, "id")
+	if !ok {
+		return
+	}
+	var in FinishInput
+	if !httpx.DecodeJSON(w, r, h.logger, &in) {
+		return
+	}
+	if fe := in.Normalize(); fe != nil {
+		httpx.WriteFieldError(w, h.logger, fe)
+		return
+	}
+	t, err := h.store.SetFinished(r.Context(), id, &in)
+	if err != nil {
+		h.writeErr(w, r, "set finished", notFound(err))
 		return
 	}
 	httpx.WriteJSON(w, h.logger, http.StatusOK, t)

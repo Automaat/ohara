@@ -34,6 +34,7 @@ export type {
 	Edition,
 	EditionDetail,
 	EditionPayload,
+	FinishPayload,
 	Format,
 	Kind,
 	Loan,
@@ -333,8 +334,9 @@ export type CollectionFilter = {
 };
 
 /**
- * The filter a collection address names. A title has no format, location or loan and is not
- * owned, so `none` drops them and "Do nadrobienia".
+ * The filter a collection address names. A title has no format, location or loan, so `none`
+ * drops them; "Do nadrobienia" stays only beside a status that lists owned copies, as the sheet
+ * offers it.
  */
 export function readCollectionFilter(params: Pick<URLSearchParams, 'get'>): CollectionFilter {
 	function read<K extends string>(key: string, labels: Record<K, string>): K | '' {
@@ -351,7 +353,7 @@ export function readCollectionFilter(params: Pick<URLSearchParams, 'get'>): Coll
 		...(location ? { location } : {}),
 		q: params.get('q') ?? '',
 		...(status !== 'none' && params.get('loaned') === '1' ? { loaned: true } : {}),
-		...(status !== 'none' && params.get('unfinished') === '1' ? { unfinished: true } : {})
+		...(listsOwned(status) && params.get('unfinished') === '1' ? { unfinished: true } : {})
 	};
 }
 

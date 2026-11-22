@@ -20,10 +20,13 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/Automaat/ohara/backend-go/internal/lookup"
 )
 
 // ErrNotEmpty means the database already holds titles, listings, value
-// history, scan queue entries or a deal run, so the seed changed nothing.
+// history, scan queue entries, a deal run, deal keywords other than the
+// defaults or a saved lookup selection, so the seed changed nothing.
 var ErrNotEmpty = errors.New("database already holds data; the seed only fills an empty one")
 
 // Counts is what a seed added.
@@ -242,12 +245,40 @@ var ErrNotMigrated = errors.New("database is not migrated to this build; start t
 // dataTables are the tables whose rows make a database not empty.
 var dataTables = []string{"title", "price_observation", "valuation_history", "scan_queue", "deal_run"}
 
+// defaultKeywords are the deal keywords the migrations insert
+// (0003_deals.sql, 0006_valuation.sql), as kind and phrase. A keyword
+// table that differs from them, by an added phrase or a deleted default,
+// holds data. A migration that adds a default must add it here too, or
+// the seed refuses every fresh database and its DB test fails.
+var defaultKeywords = [][2]string{
+	{"reject", "pudełko"},
+	{"reject", "okładka"},
+	{"reject", "uszkodzon"},
+	{"reject", "kupię"},
+	{"reject", "zamienię"},
+	{"reject", "wymienię"},
+	{"reject", "plakat"},
+	{"reject", "soundtrack"},
+	{"accept", "twarda okładka"},
+	{"accept", "miękka okładka"},
+	{"reject", "odtwarzacz"},
+	{"reject", "moduł"},
+}
+
 // Run fills an empty database that holds every migration in versions with
 // the demo collection, in one transaction. It never migrates: a migration
 // commits on its own, so a refused seed could not undo one. It returns
 // ErrNotMigrated or ErrNotEmpty, having changed nothing, when a version is
 // missing or the database already holds titles, listings, value history,
-// scan queue entries or a deal run.
+// scan queue entries, a deal run, deal keywords other than the defaults
+// or a saved lookup selection.
+//
+// Two tables never count. lookup_cache rows other than selections are
+// provider answers the app fetches again when they expire, not something
+// the user made; a selection is the candidate the user picked for a
+// barcode and stays until replaced, so it counts. oauth_token holds an
+// Allegro login: a credential, not collection data, which a dev database
+// may hold before its first seed and which demo rows cannot mix with.
 //
 // It takes the scan queue's lock for every barcode it adds before it locks
 // those tables, the order a queued scan takes them in, then checks them, so
@@ -327,6 +358,33 @@ func checkEmpty(ctx context.Context, tx pgx.Tx) error {
 		if taken {
 			return ErrNotEmpty
 		}
+	}
+	kinds := make([]string, len(defaultKeywords))
+	phrases := make([]string, len(defaultKeywords))
+	for i, k := range defaultKeywords {
+		kinds[i], phrases[i] = k[0], k[1]
+	}
+	var custom bool
+	err := tx.QueryRow(ctx, `SELECT EXISTS (
+		(SELECT kind, phrase FROM deal_keyword
+			EXCEPT SELECT * FROM unnest($1::text[], $2::text[]))
+		UNION ALL
+		(SELECT * FROM unnest($1::text[], $2::text[])
+			EXCEPT SELECT kind, phrase FROM deal_keyword))`, kinds, phrases).Scan(&custom)
+	if err != nil {
+		return fmt.Errorf("seed: check deal_keyword: %w", err)
+	}
+	if custom {
+		return ErrNotEmpty
+	}
+	var selected bool
+	err = tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM lookup_cache WHERE provider = $1)`,
+		lookup.SelectionProvider).Scan(&selected)
+	if err != nil {
+		return fmt.Errorf("seed: check lookup_cache: %w", err)
+	}
+	if selected {
+		return ErrNotEmpty
 	}
 	return nil
 }

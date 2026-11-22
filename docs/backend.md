@@ -21,11 +21,16 @@ Moved from `CLAUDE.md`, whose conventions still apply.
 - `api seed` (`internal/seed`) fills an empty database with demo rows for
   every page in one transaction and sends no request; it refuses (exit 1,
   nothing changed) a database holding titles, listings, value history,
-  scan queue entries or a deal run, and one missing a migration of this
+  scan queue entries, a deal run, deal keywords that differ from the
+  defaults the migrations insert (an added phrase or a deleted default)
+  or a saved lookup selection, and one missing a migration of this
   build: it never migrates, since a migration commits on its own and a
   refusal could not undo it. It takes the scan queue's barcode locks,
   then locks those tables, before the check, the order a queued scan
-  takes them in, so a write from a running app waits for it.
+  takes them in, so a write from a running app waits for it. Cached
+  provider answers and an Allegro login (`oauth_token`) do not count:
+  the app fetches the first again, and the second is a credential, not
+  collection data.
   It seeds no deal run (a running hunter reads that only at startup) and
   never a pending deal alert. Its DB test asserts what each page needs,
   so a schema change that breaks the seed fails CI.

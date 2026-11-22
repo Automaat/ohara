@@ -19,7 +19,7 @@ import (
 
 var tables = []string{
 	"title", "edition", "copy", "price_observation", "deal_alert",
-	"valuation_history", "scan_queue", "deal_run",
+	"valuation_history", "scan_queue", "deal_run", "deal_keyword", "lookup_cache",
 }
 
 func versions(t *testing.T) []string {
@@ -227,6 +227,10 @@ func TestRunRefusesExistingData(t *testing.T) {
 			mid_cents, mid_copies, ceiling_cents, ceiling_copies, low_confidence)
 			VALUES (current_date, 0, 0, 0, 0, 0, 0, 0, 0, 0)`},
 		{"deal run", `INSERT INTO deal_run (started_at) VALUES (now())`},
+		{"added deal keyword", `INSERT INTO deal_keyword (kind, phrase) VALUES ('reject', 'zestaw')`},
+		{"deleted default deal keyword", `DELETE FROM deal_keyword WHERE kind = 'reject' AND phrase = 'plakat'`},
+		{"lookup selection", `INSERT INTO lookup_cache (provider, barcode, response)
+			VALUES ('selection', '9788308073209', '{}')`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			pool := dbtest.Migrated(t)
@@ -246,6 +250,37 @@ func TestRunRefusesExistingData(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestRunIgnoresCachesAndLogins seeds a database that holds a cached
+// provider answer, an Allegro login and the default deal keywords: none of
+// them is the user's data, so the seed fills it and leaves them in place.
+func TestRunIgnoresCachesAndLogins(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	ctx := context.Background()
+	_, err := pool.Exec(ctx, `INSERT INTO lookup_cache (provider, barcode, response)
+		VALUES ('openlibrary', '9788308073209', '[]')`)
+	if err != nil {
+		t.Fatalf("insert cache: %v", err)
+	}
+	_, err = pool.Exec(ctx, `INSERT INTO oauth_token (provider, access_token, refresh_token, expires_at)
+		VALUES ('allegro', 'access', 'refresh', now() + interval '1 hour')`)
+	if err != nil {
+		t.Fatalf("insert token: %v", err)
+	}
+
+	if _, err := Run(ctx, pool, versions(t)); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if n := scalar(t, pool, `SELECT count(*) FROM title`); n != len(demo) {
+		t.Errorf("titles = %d, want %d", n, len(demo))
+	}
+	if n := scalar(t, pool, `SELECT count(*) FROM lookup_cache`); n != 1 {
+		t.Errorf("lookup_cache rows = %d, want 1", n)
+	}
+	if n := scalar(t, pool, `SELECT count(*) FROM oauth_token`); n != 1 {
+		t.Errorf("oauth_token rows = %d, want 1", n)
 	}
 }
 

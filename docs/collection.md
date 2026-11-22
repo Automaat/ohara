@@ -367,7 +367,11 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   until it fits under 1 MB. A file that is no JPEG or PNG, or one the
   browser cannot decode, sends nothing, and a photo still shrinking when
   its sheet is gone is never sent. The server's 8 MiB and 16 megapixel
-  limits stay as a backstop.
+  limits stay as a backstop. The server fully decodes one uploaded photo at
+  a time in the process, since a 16 megapixel 16-bit interlaced PNG holds a
+  few hundred MiB while it decodes; other uploads wait their turn after a
+  header check, and one still waiting when the router's 30 s timeout ends
+  gets its 504.
 - Statystyki (`/stats`, in the side navigation and the phone's settings
   sheet, never a tab) reads `GET /api/collection` once and computes in
   the browser (`src/lib/stats.ts`), over owned copies only: "Wydatki w

@@ -57,7 +57,9 @@ func TestParseWooStoreAnswers(t *testing.T) {
 	if err != nil || len(listings) != 0 {
 		t.Fatalf("empty array = %v, %v; want no listings and no error", listings, err)
 	}
-	for _, body := range []string{`{}`, `<html><body>Błąd</body></html>`, `null`, `{"code":"rest_no_route"}`} {
+	for _, body := range []string{
+		`{}`, `<html><body>Błąd</body></html>`, `null`, `{"code":"rest_no_route"}`, `["maintenance"]`, `[{}, null]`,
+	} {
 		_, err := parseWooStore("bluedvd", []byte(body))
 		if got := sourceStatus(err); got != metrics.SourceParseError {
 			t.Errorf("parseWooStore(%s) status %q (err %v), want %s", body, got, err, metrics.SourceParseError)

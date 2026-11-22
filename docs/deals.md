@@ -164,10 +164,11 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   149,90 zł), condition new. Out-of-stock products and prices in another
   currency than PLN are left out; preorders (`available-on-backorder`)
   stay. An empty array is an answer without listings; any other body
+  that holds no product (an object with an ID), `["maintenance"]` too,
   counts as `parse_error`. The reader (`deals.wooStore`) takes the source
   name and endpoint, so another WooCommerce shop can reuse it. Its canary
-  is `4k` (`deals.Canaried`): `dvd` finds almost only out-of-stock DVDs
-  there; an empty `OHARA_DEALS_CANARY_QUERY` still turns it off. The
+  is `4k` (`deals.Canaried`), not `OHARA_DEALS_CANARY_QUERY`: `dvd` finds
+  almost only out-of-stock DVDs there. The
   valuation does not ask BlueDVD. Its regulamin (§4) asks only that the
   shop is used lawfully and nothing disrupts it; it does not forbid
   automated access.

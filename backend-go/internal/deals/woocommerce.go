@@ -77,7 +77,8 @@ const wooOutOfStock = "out-of-stock"
 
 // parseWooStore reads a Store API products answer for source. Every product
 // becomes a new-condition listing, except those out of stock or priced in
-// another currency than PLN. A body that is not a product array is a parse
+// another currency than PLN. A body that is not a product array, or a
+// non-empty array holding no product (an object with an ID), is a parse
 // error.
 func parseWooStore(source string, body []byte) ([]Listing, error) {
 	var raw []json.RawMessage
@@ -88,11 +89,13 @@ func parseWooStore(source string, body []byte) ([]Listing, error) {
 		return nil, parseError{errors.New(source + ": response is not a product list")}
 	}
 	out := make([]Listing, 0, len(raw))
+	products := 0
 	for _, item := range raw {
 		var p wooProduct
 		if json.Unmarshal(item, &p) != nil || p.ID == 0 {
 			continue
 		}
+		products++
 		title := strings.TrimSpace(html.UnescapeString(p.Name))
 		if title == "" || p.Stock.Class == wooOutOfStock || p.Prices.CurrencyCode != "PLN" {
 			continue
@@ -125,6 +128,9 @@ func parseWooStore(source string, body []byte) ([]Listing, error) {
 			l.PhotoURL = imageURL(p.Images[0].Src)
 		}
 		out = append(out, l)
+	}
+	if products == 0 && len(raw) > 0 {
+		return nil, parseError{errors.New(source + ": response holds no product")}
 	}
 	return out, nil
 }

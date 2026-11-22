@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/Automaat/ohara/backend-go/internal/dbtest"
@@ -187,5 +188,36 @@ func TestRunAlertsOnWinylowniaListing(t *testing.T) {
 	}
 	if n := count(t, pool, `SELECT count(*) FROM price_observation WHERE source = 'winylownia'`); n != 1 {
 		t.Fatalf("stored %d Winylownia observations, want 1", n)
+	}
+}
+
+// TestWinylowniaServesAlbumWishesOnly: a record shop is asked only the
+// queries of album wishes, so a film named like a wished album's soundtrack
+// is never searched there.
+func TestWinylowniaServesAlbumWishesOnly(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	film := Want{Kind: "movie", Name: "Blade Runner 2049", Format: new("uhd"), MaxPriceCents: new(int64(15000))}
+	wishlist(t, pool, &film)
+	lp := album("The Dark Side of the Moon", "Pink Floyd", "vinyl")
+	lp.MaxPriceCents = new(int64(13000))
+	wishlist(t, pool, &lp)
+	var mu sync.Mutex
+	var asked []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		asked = append(asked, r.URL.Query().Get("text"))
+		mu.Unlock()
+		_, _ = w.Write(fixture(t, "winylownia.html"))
+	}))
+	t.Cleanup(srv.Close)
+	notifier := &fakeNotifier{}
+	res := mustRun(t, newTestHunter(pool, notifier, Winylownia{Client: srv.Client(), BaseURL: srv.URL + "/search.php"}))
+	mu.Lock()
+	defer mu.Unlock()
+	if len(asked) != 1 || !strings.Contains(asked[0], "Dark Side") {
+		t.Fatalf("winylownia asked %q, want the album wish's query only", asked)
+	}
+	if res.Sent != 1 || len(notifier.messages()) != 1 {
+		t.Fatalf("run = %+v, want one alert for the album wish", res)
 	}
 }

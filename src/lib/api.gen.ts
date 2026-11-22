@@ -43,7 +43,7 @@ export type VolumeState = 'owned' | 'ordered' | 'wishlist' | 'none';
 
 export type QueueReason = 'not_found' | 'lookup_failed';
 
-export type DealSource = 'olx' | 'bluedvd' | 'winylownia' | 'pepper';
+export type DealSource = 'olx' | 'bluedvd' | 'winylownia' | 'pepper' | 'tezeusz';
 
 export type AlertState = 'none' | 'pending' | 'sent' | 'failed';
 

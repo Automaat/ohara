@@ -225,7 +225,8 @@ export const sourceLabels: Record<DealSource, string> = {
 	olx: 'OLX',
 	bluedvd: 'BlueDVD',
 	winylownia: 'Winylownia',
-	pepper: 'Pepper'
+	pepper: 'Pepper',
+	tezeusz: 'Tezeusz'
 };
 
 export const alertLabels: Record<AlertState, string> = {

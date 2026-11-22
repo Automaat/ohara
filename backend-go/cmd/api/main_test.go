@@ -38,6 +38,7 @@ func newUpstreams(t *testing.T) *upstreams {
 		"/bluedvd/":    "../../internal/deals/testdata/bluedvd.json",
 		"/winylownia/": "../../internal/deals/testdata/winylownia.html",
 		"/pepper":      "../../internal/deals/testdata/pepper.xml",
+		"/tezeusz/":    "../../internal/deals/testdata/tezeusz.html",
 		"/skupszop":    "",
 	}
 	u := &upstreams{}
@@ -69,6 +70,8 @@ func newUpstreams(t *testing.T) *upstreams {
 	t.Setenv("OHARA_DEALS_WINYLOWNIA_URL", u.srv.URL+"/winylownia/search.php")
 	t.Setenv("OHARA_WINYLOWNIA", "true")
 	t.Setenv("OHARA_DEALS_PEPPER_URL", u.srv.URL+"/pepper")
+	t.Setenv("OHARA_DEALS_TEZEUSZ_URL", u.srv.URL+"/tezeusz")
+	t.Setenv("OHARA_TEZEUSZ", "")
 	t.Setenv("OHARA_VALUATION_SKUPSZOP_URL", u.srv.URL+"/skupszop")
 	t.Setenv("OHARA_DEALS_DELAY", "1s")
 	t.Setenv("OHARA_DEALS_CANARY_QUERY", "dvd")
@@ -136,7 +139,7 @@ func sample(body, series string) (float64, bool) {
 func checkSources(t *testing.T) {
 	t.Helper()
 	for _, s := range metricSources(t, "ohara_source_") {
-		if !slices.Contains([]string{"bluedvd", "olx", "pepper", "skupszop", "winylownia"}, s) {
+		if !slices.Contains([]string{"bluedvd", "olx", "pepper", "tezeusz", "winylownia", "skupszop"}, s) {
 			t.Errorf("metrics name source %q", s)
 		}
 	}
@@ -153,21 +156,41 @@ func TestHunterAsksOnlyItsSources(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if got, paths := u.asked(); !slices.Equal(got, []string{"olx", "bluedvd", "winylownia", "pepper"}) {
-		t.Fatalf("asked %v (paths %v), want olx, bluedvd, winylownia and pepper only", got, paths)
+	if got, paths := u.asked(); !slices.Equal(got, []string{"olx", "bluedvd", "winylownia", "pepper", "tezeusz"}) {
+		t.Fatalf("asked %v (paths %v), want olx, bluedvd, winylownia, pepper and tezeusz only", got, paths)
 	}
 	if len(res.Errors) != 0 {
 		t.Fatalf("errors = %q", res.Errors)
 	}
-	if got := metricSources(t, "ohara_source_canary_ok"); !slices.Equal(got, []string{"bluedvd", "olx", "pepper", "winylownia"}) {
-		t.Fatalf("canary series for %v, want bluedvd, olx, pepper and winylownia only", got)
+	if got := metricSources(t, "ohara_source_canary_ok"); !slices.Equal(got, []string{"bluedvd", "olx", "pepper", "tezeusz", "winylownia"}) {
+		t.Fatalf("canary series for %v, want bluedvd, olx, pepper, tezeusz and winylownia only", got)
 	}
-	for _, src := range []string{"bluedvd", "winylownia"} {
-		if got, ok := sample(scrape(t), `ohara_source_canary_ok{source="`+src+`"}`); !ok || got != 1 {
-			t.Fatalf("%s canary = %v (exported %v), want 1", src, got, ok)
-		}
+	if got, ok := sample(scrape(t), `ohara_source_canary_ok{source="bluedvd"}`); !ok || got != 1 {
+		t.Fatalf("bluedvd canary = %v (exported %v), want 1", got, ok)
+	}
+	if v, _ := sample(scrape(t), `ohara_source_canary_ok{source="tezeusz"}`); v != 1 {
+		t.Fatalf("tezeusz canary = %v, want 1", v)
+	}
+	if v, _ := sample(scrape(t), `ohara_source_canary_ok{source="winylownia"}`); v != 1 {
+		t.Fatalf("winylownia canary = %v, want 1", v)
 	}
 	checkSources(t)
+}
+
+func TestHunterWithoutTezeusz(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	u := newUpstreams(t)
+	t.Setenv("OHARA_TEZEUSZ", "false")
+	h, _, err := newHunter(pool, deals.NewPacer(0).Lane(), slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatalf("newHunter: %v", err)
+	}
+	if _, err := h.Run(context.Background()); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got, paths := u.asked(); !slices.Equal(got, []string{"olx", "bluedvd", "winylownia", "pepper"}) {
+		t.Fatalf("asked %v (paths %v), want olx, bluedvd, winylownia and pepper only", got, paths)
+	}
 }
 
 func TestHunterLeavesBlueDVDOutWhenTurnedOff(t *testing.T) {
@@ -181,8 +204,8 @@ func TestHunterLeavesBlueDVDOutWhenTurnedOff(t *testing.T) {
 	if _, err := h.Run(context.Background()); err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if got, paths := u.asked(); !slices.Equal(got, []string{"olx", "winylownia", "pepper"}) {
-		t.Fatalf("asked %v (paths %v), want olx, winylownia and pepper only", got, paths)
+	if got, paths := u.asked(); !slices.Equal(got, []string{"olx", "winylownia", "pepper", "tezeusz"}) {
+		t.Fatalf("asked %v (paths %v), want olx, winylownia, pepper and tezeusz only", got, paths)
 	}
 }
 
@@ -197,8 +220,8 @@ func TestHunterLeavesWinylowniaOutWhenTurnedOff(t *testing.T) {
 	if _, err := h.Run(context.Background()); err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if got, paths := u.asked(); !slices.Equal(got, []string{"olx", "bluedvd", "pepper"}) {
-		t.Fatalf("asked %v (paths %v), want olx, bluedvd and pepper only", got, paths)
+	if got, paths := u.asked(); !slices.Equal(got, []string{"olx", "bluedvd", "pepper", "tezeusz"}) {
+		t.Fatalf("asked %v (paths %v), want olx, bluedvd, pepper and tezeusz only", got, paths)
 	}
 }
 

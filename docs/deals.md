@@ -84,7 +84,7 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   wish that now matches, keeping its attempts and age. Alerts sent before
   migration 0016 have no stored price and never repeat.
   Okazje's "Ignoruj" (`POST /api/deals/{id}/dismissal`, undone by `DELETE`,
-  both 204 when repeated, 404 for an id no OLX, BlueDVD, Winylownia or Pepper listing has) sets
+  both 204 when repeated, 404 for an id no OLX, BlueDVD, Winylownia, Pepper or Tezeusz listing has) sets
   the listing's `dismissed_at`, for every wish it matches: it leaves every
   deals list and the badge, its unsent alert is never sent and a run that
   sees it again keeps it dismissed and queues no alert. The hunter sends
@@ -149,7 +149,9 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   itself, so a run on its own keeps its pacing.
   Every run also asks each query source the canary query, wishlist or not,
   and sets `ohara_source_canary_ok` (a feed's one request is its canary)
-  and `ohara_source_results`. A canary without listings is a broken source.
+  and `ohara_source_results`. A wishlist query that is exactly the canary
+  query takes the canary's answer, or its failure, so the source is asked
+  it once and its listings count once. A canary without listings is a broken source.
   The last run, scheduled, manual or cut short by shutdown, is kept in
   `deal_run`: after a restart the status shows it and the first scheduled
   run comes one interval after it started, at least 5 minutes on.
@@ -174,29 +176,57 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   shop is used lawfully and nothing disrupts it; it does not forbid
   automated access.
 - Winylownia (winylownia.pl, an IdoSell shop of new vinyl records) is a
-  query source, on unless `OHARA_WINYLOWNIA=false`. Each query is one GET
+  query source, on unless `OHARA_WINYLOWNIA=false`. As a record shop
+  (`deals.KindSource`, kinds `music`) it is asked only the queries of album
+  wishes, and its listings match only album wishes. Each query is one GET
   of `/search.php?text=<query>`, the first results page in the shop's
   default order: sorting is a `/settings.php` form, which robots.txt
   disallows, and no further page or product page is fetched. Each product
   tile (`div.product[data-product_id]`) becomes a listing: that ID, the
-  title of its `a.product__name`, its link without IdoSell's `query_id`
-  and the price of `strong.price.--main` ("127,97 zł" is 12797 grosze; the
-  `gtag` JSON on the page holds the price before a discount), condition
-  new. A tile marked `data-product_disable="true"` (out of stock, "Brak")
-  is left out, and so is one without a title, link or price. A search
-  without results redirects to `/pl/noproduct.html`, which answers 404
-  with the no-results page: an answer without listings. Any other 404
-  counts as `http_404`, and a page that is neither a results page
-  (`section#search`) nor the no-results page, or a results page without a
-  product tile, as `parse_error`. The reader (`parseIdoSellSearch`) takes
-  the source name and search URL, so another IdoSell shop can reuse it.
-  Its canary is `OHARA_DEALS_CANARY_QUERY`: `dvd` finds the shop's CD/DVD
-  combos and DVDs. The valuation does not ask Winylownia. Its regulamin
-  (§ 11) says "Zabrania się kopiowania zdjęć oraz opisów (w całości lub w
-  części) bez zgody właściciela i administratora strony", so a listing
-  keeps no photo or description, only the tile's title, price and link;
-  it does not forbid automated access. robots.txt asks `Crawl-delay: 1`,
-  which `OHARA_DEALS_DELAY` (at least 1 s) keeps.
+  title of its `a.product__name` (single-quoted when it holds a `"`), its
+  link without IdoSell's `query_id` and the price of
+  `strong.price.--main` ("127,97 zł" is 12797 grosze; the `gtag` JSON on
+  the page holds the price before a discount), condition new. A tile
+  marked `data-product_disable="true"` (out of stock, "Brak") is left out,
+  and so is one without a title, link or price. A search without results
+  redirects to `/pl/noproduct.html`, which answers 404 with the no-results
+  page: an answer without listings. Any other 404 counts as `http_404`,
+  and a page that is neither a results page (`section#search`) nor the
+  no-results page, or a results page without a product tile, as
+  `parse_error`. The reader (`parseIdoSellSearch`) takes the source name
+  and search URL, so another IdoSell shop can reuse it. Its canary is
+  `OHARA_DEALS_CANARY_QUERY`: `dvd` finds the shop's CD/DVD sets. The
+  valuation does not ask Winylownia. Its regulamin (§ 11) says "Zabrania
+  się kopiowania zdjęć oraz opisów (w całości lub w części) bez zgody
+  właściciela i administratora strony", so a listing keeps no photo or
+  description, only the tile's title, price and link; it does not forbid
+  automated access. robots.txt asks `Crawl-delay: 1`, which
+  `OHARA_DEALS_DELAY` (at least 1 s) keeps.
+
+## Tezeusz
+
+- `deals.Tezeusz` searches the Tezeusz used-book shop (`tezeusz.pl`) as a
+  query source: one `GET /szukaj?szukaj=<query>&tylko_dostepne=1` per
+  query, in stock only, in the site's relevance order (sorting by price
+  put unrelated books first), and no product page. As a bookshop
+  (`deals.KindSource`, kinds `book`) it is asked only the queries of book
+  wishes, and its cards match only book wishes, so "Born to Run - Bruce
+  Springsteen" never alerts for the album. Each product card of
+  the results page is one listing: `data-ga-product-id` as its ID, the
+  card title with its author ("Ostatnie życzenie - Andrzej Sapkowski"),
+  the card link made absolute, its cover and the card's lowest price
+  ("od 27,12 zł do 89,65 zł" is 27,12 zł; a one-copy card's struck-out
+  30-day lowest is not its price). A card is a book with any number of
+  copies, so a listing names no condition. Only cards inside the results
+  column (`#search-products-results-list`) count, not recommendations
+  elsewhere on the page. A results page without cards has no listings; a page without the results column (a Cloudflare
+  challenge, an error page) is a `parse_error`.
+- It shares the canary query (`dvd` finds books sold with a film) and the
+  refusal rule of the other sources. `OHARA_TEZEUSZ=false` leaves it out
+  of runs and `/metrics`; `OHARA_DEALS_TEZEUSZ_URL` points it at a test
+  double. The valuation never asks it.
+- Its regulamin (`/info/regulamin`, read 2026-11-22) has no clause on
+  automated access; robots.txt disallows `/szukaj?`.
 
 ## Discogs wantlist
 

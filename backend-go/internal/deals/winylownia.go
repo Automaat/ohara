@@ -34,6 +34,9 @@ func (Winylownia) Name() string { return "winylownia" }
 // PerQuery implements Source.
 func (Winylownia) PerQuery() bool { return true }
 
+// Kinds implements KindSource: Winylownia sells records.
+func (Winylownia) Kinds() []string { return []string{"music"} }
+
 // Search implements Source. IdoSell redirects a search without results
 // to its no-results page, which answers 404; that page is an answer
 // without listings, any other 404 a failure.

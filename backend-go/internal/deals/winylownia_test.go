@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Automaat/ohara/backend-go/internal/dbtest"
 	"github.com/Automaat/ohara/backend-go/internal/metrics"
@@ -75,6 +76,36 @@ func TestParseIdoSellSearchAnswers(t *testing.T) {
 	}
 }
 
+func TestParseIdoSellSearchReadsEachTileOnly(t *testing.T) {
+	// A tile without a price must not take one from markup after it.
+	body := `<div id="container" class="search_page"><section id="search" class="search products">` +
+		`<div class="product col-6" data-product_id="1"><h2><a class="product__name" href="/p/1.html" title="NIRVANA Nevermind LP">x</a></h2>` +
+		`<div class="product__prices"></div></div>` +
+		`<aside><strong class="price --main">19,99 zł</strong></aside></section></div>`
+	listings, err := parseIdoSellSearch("winylownia", winylowniaSearch, []byte(body))
+	if err != nil || len(listings) != 0 {
+		t.Fatalf("tile without its own price = %+v, %v; want no listing", listings, err)
+	}
+}
+
+func TestParseIdoSellSearchIgnoresAttributeOrder(t *testing.T) {
+	body := `<div class="search_page container" id="container"><section class="products d-flex search" id="search">` +
+		`<div data-product_page="0" data-product_id="7" class="col-6 product"><a title="NIRVANA Bleach LP" href="/p/7.html" class="product__name">x</a>` +
+		`<strong class="--main price">49,99 zł</strong></div></section></div>`
+	listings, err := parseIdoSellSearch("winylownia", winylowniaSearch, []byte(body))
+	if err != nil || len(listings) != 1 || listings[0].ExternalID != "7" || listings[0].PriceCents != 4999 {
+		t.Fatalf("reordered attributes = %+v, %v; want listing 7 at 49,99 zł", listings, err)
+	}
+}
+
+func TestParseIdoSellSearchIgnoresComments(t *testing.T) {
+	body := `<html><body><!-- <div id="container" class="noproduct_page"> --><h1>Przerwa techniczna</h1></body></html>`
+	_, err := parseIdoSellSearch("winylownia", winylowniaSearch, []byte(body))
+	if got := sourceStatus(err); got != metrics.SourceParseError {
+		t.Fatalf("maintenance page with a commented marker status %q (err %v), want %s", got, err, metrics.SourceParseError)
+	}
+}
+
 func TestParseIdoSellSearchTiles(t *testing.T) {
 	tile := func(id, extra, inner string) string {
 		return `<div class="product col-6" data-product_id="` + id + `"` + extra + `>` + inner + `</div>`
@@ -111,33 +142,41 @@ func TestParseIdoSellSearchTiles(t *testing.T) {
 
 // winylowniaDouble serves the fixture on /search.php, sends the query
 // "brak" the way IdoSell does a search without results (a redirect to the
-// no-results page, which answers 404), answers a plain 404 under /gone/
-// and 403 to any other path. It records the search request.
-func winylowniaDouble(t *testing.T) (*httptest.Server, *string) {
+// no-results page, which answers 404), answers a plain 404 under /gone/,
+// a 404 whose no-results marker is only in a comment under /fake404/ and
+// 403 to any other path. It records the search request and when the
+// no-results redirect and its hop arrived.
+func winylowniaDouble(t *testing.T) (*httptest.Server, *string, *[]time.Time) {
 	t.Helper()
 	var gotPath string
+	var hops []time.Time
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/search.php" && r.URL.Query().Get("text") == "brak":
+			hops = append(hops, time.Now())
 			http.Redirect(w, r, "/pl/noproduct.html?reason=product&text=brak", http.StatusFound)
 		case r.URL.Path == "/search.php":
 			gotPath = r.URL.Path + "?" + r.URL.RawQuery
 			_, _ = w.Write(fixture(t, "winylownia.html"))
 		case r.URL.Path == "/pl/noproduct.html":
+			hops = append(hops, time.Now())
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write(fixture(t, "winylownia-noproduct.html"))
 		case strings.HasPrefix(r.URL.Path, "/gone/"):
 			http.NotFound(w, r)
+		case strings.HasPrefix(r.URL.Path, "/fake404/"):
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`<html><!-- <div id="container" class="noproduct_page"> --></html>`))
 		default:
 			w.WriteHeader(http.StatusForbidden)
 		}
 	}))
 	t.Cleanup(srv.Close)
-	return srv, &gotPath
+	return srv, &gotPath, &hops
 }
 
 func TestWinylowniaSearchesOverHTTP(t *testing.T) {
-	srv, gotPath := winylowniaDouble(t)
+	srv, gotPath, hops := winylowniaDouble(t)
 	ctx := context.Background()
 	src := Winylownia{Client: srv.Client(), BaseURL: srv.URL + "/search.php"}
 	listings, err := src.Search(ctx, "Pink Floyd dark side")
@@ -151,7 +190,12 @@ func TestWinylowniaSearchesOverHTTP(t *testing.T) {
 	if err != nil || len(listings) != 0 {
 		t.Fatalf("no results = %v, %v; want no listings and no error", listings, err)
 	}
-	for _, tc := range []struct{ path, status string }{{"/blocked/search.php", "http_403"}, {"/gone/search.php", "http_404"}} {
+	if len(*hops) != 2 || (*hops)[1].Sub((*hops)[0]) < winylowniaCrawlDelay {
+		t.Fatalf("no-results redirect hops at %v, want 2 at least %v apart", *hops, winylowniaCrawlDelay)
+	}
+	for _, tc := range []struct{ path, status string }{
+		{"/blocked/search.php", "http_403"}, {"/gone/search.php", "http_404"}, {"/fake404/search.php", "http_404"},
+	} {
 		_, err = Winylownia{Client: srv.Client(), BaseURL: srv.URL + tc.path}.Search(ctx, "x")
 		if got := sourceStatus(err); got != tc.status {
 			t.Errorf("%s status %q (err %v), want %s", tc.path, got, err, tc.status)
@@ -166,7 +210,7 @@ func TestRunAlertsOnWinylowniaListing(t *testing.T) {
 		Format: new("vinyl"), MaxPriceCents: new(int64(13000)),
 	}
 	wishlist(t, pool, &w)
-	srv, _ := winylowniaDouble(t)
+	srv, _, _ := winylowniaDouble(t)
 	notifier := &fakeNotifier{}
 	src := Winylownia{Client: srv.Client(), BaseURL: srv.URL + "/search.php"}
 	res := mustRun(t, newTestHunter(pool, notifier, src))

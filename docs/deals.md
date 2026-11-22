@@ -181,27 +181,32 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   wishes, and its listings match only album wishes. Each query is one GET
   of `/search.php?text=<query>`, the first results page in the shop's
   default order: sorting is a `/settings.php` form, which robots.txt
-  disallows, and no further page or product page is fetched. Each product
-  tile (`div.product[data-product_id]`) becomes a listing: that ID, the
-  title of its `a.product__name` (single-quoted when it holds a `"`), its
-  link without IdoSell's `query_id` and the price of
-  `strong.price.--main` ("127,97 zł" is 12797 grosze; the `gtag` JSON on
-  the page holds the price before a discount), condition new. A tile
-  marked `data-product_disable="true"` (out of stock, "Brak") is left out,
-  and so is one without a title, link or price. A search without results
-  redirects to `/pl/noproduct.html`, which answers 404 with the no-results
-  page: an answer without listings. Any other 404 counts as `http_404`,
-  and a page that is neither a results page (`section#search`) nor the
-  no-results page, or a results page without a product tile, as
-  `parse_error`. The reader (`parseIdoSellSearch`) takes the source name
-  and search URL, so another IdoSell shop can reuse it. Its canary is
-  `OHARA_DEALS_CANARY_QUERY`: `dvd` finds the shop's CD/DVD sets. The
-  valuation does not ask Winylownia. Its regulamin (§ 11) says "Zabrania
-  się kopiowania zdjęć oraz opisów (w całości lub w części) bez zgody
-  właściciela i administratora strony", so a listing keeps no photo or
-  description, only the tile's title, price and link; it does not forbid
-  automated access. robots.txt asks `Crawl-delay: 1`, which
-  `OHARA_DEALS_DELAY` (at least 1 s) keeps.
+  disallows, and no further page or product page is fetched. The page is
+  read without its HTML comments, matching elements by attribute and class
+  token in any order. Each product tile (a `div` classed `product` with a
+  numeric `data-product_id`) inside the results section
+  (`section#search`, classed `search` and `products`) becomes a listing,
+  read only from inside that tile: the ID, the title of its
+  `a.product__name` (single-quoted when it holds a `"`), its link without
+  IdoSell's `query_id` and the price of its `strong.price.--main`
+  ("127,97 zł" is 12797 grosze; the `gtag` JSON on the page holds the
+  price before a discount), condition new. A tile marked
+  `data-product_disable="true"` (out of stock, "Brak") is left out, and so
+  is one without its own title, link or price. A search without results
+  redirects to `/pl/noproduct.html` (its container `div#container` classed
+  `noproduct_page`), which answers 404: an answer without listings. Any
+  other 404 counts as `http_404`, and a page that is neither a results
+  page nor the no-results page, or a results section without a product
+  tile, as `parse_error`. The reader (`parseIdoSellSearch`) takes the
+  source name and search URL, so another IdoSell shop can reuse it. Its
+  canary is `OHARA_DEALS_CANARY_QUERY`: `dvd` finds the shop's CD/DVD
+  sets. The valuation does not ask Winylownia. Its regulamin (§ 11) says
+  "Zabrania się kopiowania zdjęć oraz opisów (w całości lub w części) bez
+  zgody właściciela i administratora strony", so a listing keeps no photo
+  or description, only the tile's title, price and link; it does not
+  forbid automated access. robots.txt asks `Crawl-delay: 1`: queries keep
+  it through `OHARA_DEALS_DELAY` (at least 1 s), and each redirect hop of
+  a search waits 1 s first, since a lane never paces its own hops.
 
 ## Tezeusz
 

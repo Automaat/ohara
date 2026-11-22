@@ -10,7 +10,9 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
+	"time"
 
 	"github.com/Automaat/ohara/backend-go/internal/fetch"
 )
@@ -37,12 +39,17 @@ func (Winylownia) PerQuery() bool { return true }
 // Kinds implements KindSource: Winylownia sells records.
 func (Winylownia) Kinds() []string { return []string{"music"} }
 
+// winylowniaCrawlDelay is the gap the shop's robots.txt asks between two
+// requests (Crawl-delay: 1); a search's redirect hops wait it too.
+const winylowniaCrawlDelay = time.Second
+
 // Search implements Source. IdoSell redirects a search without results
 // to its no-results page, which answers 404; that page is an answer
-// without listings, any other 404 a failure.
+// without listings, any other 404 a failure. Each redirect hop waits
+// winylowniaCrawlDelay first.
 func (s Winylownia) Search(ctx context.Context, query string) ([]Listing, error) {
 	u := s.BaseURL + "?" + url.Values{"text": {query}}.Encode()
-	resp, err := fetch.Do(ctx, s.Client, fetch.Request{
+	resp, err := fetch.Do(ctx, crawlDelayed(s.Client, winylowniaCrawlDelay), fetch.Request{
 		Source:  s.Name(),
 		URL:     u,
 		Header:  browserHeader("text/html"),
@@ -52,26 +59,134 @@ func (s Winylownia) Search(ctx context.Context, query string) ([]Listing, error)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", s.Name(), err)
 	}
-	if resp.Status == http.StatusNotFound && !idoSellNoProduct(resp.Body) {
+	if resp.Status == http.StatusNotFound && !idoSellNoProduct(withoutComments(resp.Body)) {
 		return nil, fmt.Errorf("%s: %w", s.Name(), fetch.StatusError{Code: http.StatusNotFound})
 	}
 	return parseIdoSellSearch(s.Name(), s.BaseURL, resp.Body)
 }
 
+// maxRedirects is how many redirects a crawl-delayed client follows, as
+// many as net/http's default.
+const maxRedirects = 10
+
+// crawlDelayed is a copy of client (http.DefaultClient when nil) that
+// waits delay before following each redirect, so the hops of one request
+// keep a site's crawl delay too.
+func crawlDelayed(client *http.Client, delay time.Duration) *http.Client {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	c := *client
+	c.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) >= maxRedirects {
+			return fmt.Errorf("stopped after %d redirects", maxRedirects)
+		}
+		t := time.NewTimer(delay)
+		defer t.Stop()
+		select {
+		case <-t.C:
+			return nil
+		case <-req.Context().Done():
+			return req.Context().Err()
+		}
+	}
+	return &c
+}
+
 var (
-	idoSellNoProductPage = regexp.MustCompile(`<div id="container" class="noproduct_page[\s"]`)
-	idoSellResults       = regexp.MustCompile(`<section id="search" class="search products[\s"]`)
-	idoSellTile          = regexp.MustCompile(`<div class="product [^>]*\bdata-product_id="(\d+)"[^>]*>`)
-	idoSellName          = regexp.MustCompile(`<a class="product__name"[^>]*>`)
-	idoSellPrice         = regexp.MustCompile(`<strong class="price --main">([^<]*)<`)
-	idoSellDisabled      = []byte(`data-product_disable="true"`)
-	idoSellAttr          = regexp.MustCompile(`\s([a-z_-]+)=(?:"([^"]*)"|'([^']*)')`)
+	idoSellComment = regexp.MustCompile(`(?s)<!--.*?-->`)
+	idoSellAttr    = regexp.MustCompile(`\s([\w:-]+)=(?:"([^"]*)"|'([^']*)')`)
+	// idoSellTags match an element's opening tag, idoSellEnds its opening
+	// or closing tag (group 1 is "/" for a closing one), by element name.
+	idoSellTags = tagPatterns(`<`)
+	idoSellEnds = tagPatterns(`<(/?)`)
 )
 
-// idoSellNoProduct reports whether body is an IdoSell shop's no-results
-// page.
+// tagPatterns are the tag patterns, starting with prefix, of the elements
+// a search page is read from. A quoted attribute value may hold ">".
+func tagPatterns(prefix string) map[string]*regexp.Regexp {
+	out := map[string]*regexp.Regexp{}
+	for _, name := range []string{"div", "section", "a", "strong"} {
+		out[name] = regexp.MustCompile(`(?i)` + prefix + name + `\b(?:[^>"']|"[^"]*"|'[^']*')*>`)
+	}
+	return out
+}
+
+// withoutComments is body with its HTML comments taken out, so markup
+// inside a comment counts for nothing.
+func withoutComments(body []byte) []byte {
+	return idoSellComment.ReplaceAll(body, nil)
+}
+
+// htmlElement is one element found in a page: its attributes and the
+// markup between its opening and closing tags.
+type htmlElement struct {
+	attrs map[string]string
+	inner []byte
+	end   int
+}
+
+// findElements returns the name elements in b, in order, whose attributes
+// satisfy match. An element's inner markup ends at its own closing tag
+// (nested elements of the same name counted), or at the end of b; a match
+// inside another match is not returned.
+func findElements(b []byte, name string, match func(map[string]string) bool) []htmlElement {
+	var out []htmlElement
+	for from := 0; from < len(b); {
+		loc := idoSellTags[name].FindIndex(b[from:])
+		if loc == nil {
+			break
+		}
+		open := b[from+loc[0] : from+loc[1]]
+		innerStart := from + loc[1]
+		attrs := tagAttrs(open)
+		if !match(attrs) {
+			from = innerStart
+			continue
+		}
+		innerEnd, end := closingTag(b, innerStart, name)
+		out = append(out, htmlElement{attrs: attrs, inner: b[innerStart:innerEnd], end: end})
+		from = end
+	}
+	return out
+}
+
+// closingTag finds the tag closing the name element whose content starts
+// at from: the index where its closing tag starts and the one after it,
+// or len(b) twice when it is not closed.
+func closingTag(b []byte, from int, name string) (int, int) {
+	depth := 1
+	for _, m := range idoSellEnds[name].FindAllSubmatchIndex(b[from:], -1) {
+		if m[3] > m[2] {
+			depth--
+		} else if !bytes.HasSuffix(bytes.TrimRight(b[from+m[0]:from+m[1]], ">"), []byte("/")) {
+			depth++
+		}
+		if depth == 0 {
+			return from + m[0], from + m[1]
+		}
+	}
+	return len(b), len(b)
+}
+
+// hasClasses reports whether the class attribute in attrs holds every
+// token, in any order.
+func hasClasses(attrs map[string]string, tokens ...string) bool {
+	classes := strings.Fields(attrs["class"])
+	for _, t := range tokens {
+		if !slices.Contains(classes, t) {
+			return false
+		}
+	}
+	return true
+}
+
+// idoSellNoProduct reports whether body, without comments, is an IdoSell
+// shop's no-results page: its container div is classed noproduct_page.
 func idoSellNoProduct(body []byte) bool {
-	return idoSellNoProductPage.Match(body)
+	return len(findElements(body, "div", func(a map[string]string) bool {
+		return a["id"] == "container" && hasClasses(a, "noproduct_page")
+	})) > 0
 }
 
 // idoSellRaw is the part of a product tile kept with its listing.
@@ -83,25 +198,28 @@ type idoSellRaw struct {
 }
 
 // parseIdoSellSearch reads an IdoSell shop's search page for source, with
-// base the search URL its links resolve against. Each available product
-// tile becomes a new-condition listing; a tile marked
-// data-product_disable="true" (out of stock) and one without a title,
-// link or price are left out. The no-results page is an answer without
-// listings; a page that is neither, or a results page without a product
-// tile, is a parse error.
+// base the search URL its links resolve against. HTML comments count for
+// nothing. Each available product tile (a div classed product with a
+// data-product_id) in the results section (section#search classed search
+// and products) becomes a new-condition listing, its title and price read
+// only inside the tile; a tile marked data-product_disable="true" (out of
+// stock) and one without a title, link or price are left out. The
+// no-results page is an answer without listings; a page that is neither,
+// or a results section without a product tile, is a parse error.
 func parseIdoSellSearch(source, base string, body []byte) ([]Listing, error) {
+	body = withoutComments(body)
 	if idoSellNoProduct(body) {
 		return nil, nil
 	}
-	start := idoSellResults.FindIndex(body)
-	if start == nil {
+	sections := findElements(body, "section", func(a map[string]string) bool {
+		return a["id"] == "search" && hasClasses(a, "search", "products")
+	})
+	if len(sections) == 0 {
 		return nil, parseError{errors.New(source + ": not a search results page")}
 	}
-	section := body[start[0]:]
-	if end := bytes.Index(section, []byte("</section>")); end >= 0 {
-		section = section[:end]
-	}
-	tiles := idoSellTile.FindAllSubmatchIndex(section, -1)
+	tiles := findElements(sections[0].inner, "div", func(a map[string]string) bool {
+		return hasClasses(a, "product") && idoSellID.MatchString(a["data-product_id"])
+	})
 	if len(tiles) == 0 {
 		return nil, parseError{errors.New(source + ": results page holds no product")}
 	}
@@ -110,16 +228,11 @@ func parseIdoSellSearch(source, base string, body []byte) ([]Listing, error) {
 		return nil, fmt.Errorf("%s: base URL: %w", source, err)
 	}
 	out := make([]Listing, 0, len(tiles))
-	for i, t := range tiles {
-		open := section[t[0]:t[1]]
-		if bytes.Contains(open, idoSellDisabled) {
+	for _, t := range tiles {
+		if t.attrs["data-product_disable"] == "true" {
 			continue
 		}
-		end := len(section)
-		if i+1 < len(tiles) {
-			end = tiles[i+1][0]
-		}
-		l, ok := idoSellListing(source, baseURL, string(section[t[2]:t[3]]), section[t[1]:end])
+		l, ok := idoSellListing(source, baseURL, t.attrs["data-product_id"], t.inner)
 		if !ok {
 			continue
 		}
@@ -128,21 +241,26 @@ func parseIdoSellSearch(source, base string, body []byte) ([]Listing, error) {
 	return out, nil
 }
 
-// idoSellListing reads one available tile, id and its markup after the
-// opening tag.
+var idoSellID = regexp.MustCompile(`^\d+$`)
+
+// idoSellListing reads one available tile: its id and the markup inside
+// it.
 func idoSellListing(source string, base *url.URL, id string, tile []byte) (Listing, bool) {
-	name := idoSellName.Find(tile)
-	if name == nil {
+	names := findElements(tile, "a", func(a map[string]string) bool { return hasClasses(a, "product__name") })
+	prices := findElements(tile, "strong", func(a map[string]string) bool { return hasClasses(a, "price", "--main") })
+	if len(names) == 0 || len(prices) == 0 {
 		return Listing{}, false
 	}
-	attrs := tagAttrs(name)
-	title := strings.TrimSpace(attrs["title"])
-	link := idoSellLink(base, attrs["href"])
-	price := idoSellPrice.FindSubmatch(tile)
-	if title == "" || link == "" || price == nil {
+	title := strings.TrimSpace(names[0].attrs["title"])
+	link := idoSellLink(base, names[0].attrs["href"])
+	if title == "" || link == "" {
 		return Listing{}, false
 	}
-	priceText := strings.TrimSpace(html.UnescapeString(string(price[1])))
+	text := prices[0].inner
+	if i := bytes.IndexByte(text, '<'); i >= 0 {
+		text = text[:i]
+	}
+	priceText := strings.TrimSpace(html.UnescapeString(string(text)))
 	cents, ok := parsePrice(priceText)
 	if !ok || cents == 0 {
 		return Listing{}, false

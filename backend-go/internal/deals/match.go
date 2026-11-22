@@ -7,8 +7,6 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
-
-	"golang.org/x/text/unicode/norm"
 )
 
 // Want is a wishlist copy the hunter searches for, with its edition and
@@ -94,8 +92,8 @@ func newWantText(w *Want) *wantText {
 			continue
 		}
 		ws := words(*n)
-		key := strings.Join(ws, " ")
-		if key == "" || seen[key] {
+		key := spelledKey(*n)
+		if len(ws) == 0 || seen[key] {
 			continue
 		}
 		seen[key] = true
@@ -148,95 +146,78 @@ type Rules struct {
 	Accept []string
 }
 
-// strokes are the Latin letters whose diacritic is no combining mark, so
-// canonical decomposition leaves them whole.
-var strokes = map[rune]rune{
-	'ł': 'l', 'ŀ': 'l', 'ƚ': 'l', 'ø': 'o', 'đ': 'd', 'ħ': 'h', 'ı': 'i',
-	'ɨ': 'i', 'ŧ': 't', 'ƀ': 'b', 'ƶ': 'z',
-}
-
-// fold lowercases s and folds every Latin letter with a diacritic to its
-// base letter: "Björk" and "Bjork", "Márquez" and "Marquez", "Łódź" and
-// "Lodz" fold alike. Marks on letters of other scripts stay.
-func fold(s string) string {
-	s = strings.ToLower(s)
-	if isASCII(s) {
-		return s
-	}
-	var b strings.Builder
-	b.Grow(len(s))
-	latin := false
-	for _, r := range norm.NFD.String(s) {
-		if unicode.Is(unicode.Mn, r) {
-			if latin {
-				continue
-			}
-		} else {
-			latin = unicode.Is(unicode.Latin, r)
-		}
-		if base, ok := strokes[r]; ok {
-			r = base
-		}
-		b.WriteRune(r)
-	}
-	return norm.NFC.String(b.String())
-}
-
-func isASCII(s string) bool {
-	for i := range len(s) {
-		if s[i] >= utf8.RuneSelf {
-			return false
-		}
-	}
-	return true
-}
-
-// words lowercases s, folds diacritics and splits it into runs of letters
-// and digits.
-func words(s string) []string {
-	return strings.FieldsFunc(fold(s), notWordRune)
-}
-
-// spelledWords lowercases s and splits it as words does, keeping its
-// diacritics.
-func spelledWords(s string) []string {
-	return strings.FieldsFunc(norm.NFC.String(strings.ToLower(s)), notWordRune)
-}
-
-func notWordRune(r rune) bool {
-	return !unicode.IsLetter(r) && !unicode.IsDigit(r)
-}
-
-// surnameEndings are the Polish case endings a surname takes after its
-// stem: "Prusa", "Mickiewiczowi", "Sapkowskiego", "Szymborskiej", "Fredry".
-var surnameEndings = map[string]bool{
-	"": true, "a": true, "e": true, "i": true, "o": true, "u": true, "y": true,
-	"ie": true, "em": true, "om": true, "owi": true, "ego": true, "emu": true,
-	"iego": true, "iemu": true, "im": true, "ym": true, "ej": true, "iej": true,
-}
+// Surname forms: the endings a surname takes after its stem in the Polish
+// cases, by how the surname ends. A surname ending in a consonant takes
+// noun endings ("Prusa", "Mickiewiczowi", "Lemem"); one in -i or -y
+// adjective endings ("Sapkowskiego", "Sapkowskim"); one in -a drops it
+// ("Szymborskiej", "Orzeszkowej", "Zagłoby"); one in -o drops it ("Fredry",
+// "Hłaski"); one in -e keeps it ("Goethego"). No ending makes the surname
+// another one: "Greene" is no case of "Green".
+var (
+	consonantEndings = []string{"a", "owi", "em", "iem", "ie", "u", "owie"}
+	adjectiveEndings = []string{"ego", "emu", "m"}
+	aEndings         = []string{"y", "i", "ie", "ej", "iej"}
+	oEndings         = []string{"a", "y", "i", "owi", "em", "ie", "u"}
+	eEndings         = []string{"go", "mu", "m"}
+)
 
 // minSurnameStem is the shortest stem a surname is declined from, so a
 // short one does not match every word that starts with it: "Eco" matches
 // only itself.
 const minSurnameStem = 3
 
-// surnameStem is surname without its final vowel, the part every case of
-// it starts with, and whether it is long enough to decline.
-func surnameStem(surname string) (string, bool) {
-	stem := surname
-	if r, size := utf8.DecodeLastRuneInString(surname); strings.ContainsRune("aeiouy", r) {
-		stem = surname[:len(surname)-size]
+// surnameForm is a stem and the endings that follow it in a surname's
+// declined forms.
+type surnameForm struct {
+	stem    string
+	endings []string
+}
+
+// surnameForms are the stems surname is declined from, with their
+// endings. A surname ending in -ek or -ec also loses its e ("Čapek",
+// "Čapka"; "Mrożek", "Mrożka").
+func surnameForms(surname string) []surnameForm {
+	n := len(surname)
+	if n == 0 {
+		return nil
 	}
-	return stem, utf8.RuneCountInString(stem) >= minSurnameStem
+	var forms []surnameForm
+	add := func(stem string, endings []string) {
+		if utf8.RuneCountInString(stem) >= minSurnameStem {
+			forms = append(forms, surnameForm{stem, endings})
+		}
+	}
+	switch last := surname[n-1]; last {
+	case 'i', 'y':
+		add(surname, adjectiveEndings)
+	case 'a':
+		add(surname[:n-1], aEndings)
+	case 'o':
+		add(surname[:n-1], oEndings)
+	case 'e':
+		add(surname, eEndings)
+	case 'u':
+	default:
+		add(surname, consonantEndings)
+		if n > 2 && surname[n-2] == 'e' && (last == 'k' || last == 'c') {
+			add(surname[:n-2]+surname[n-1:], consonantEndings)
+		}
+	}
+	return forms
 }
 
 // namesSurname reports whether text holds surname in some case:
 // "Sapkowski" in "Ostatnie życzenie Andrzeja Sapkowskiego".
 func namesSurname(text []string, surname string) bool {
-	stem, declines := surnameStem(surname)
+	forms := surnameForms(surname)
 	for _, w := range text {
-		if w == surname || declines && strings.HasPrefix(w, stem) && surnameEndings[w[len(stem):]] {
+		if w == surname {
 			return true
+		}
+		for _, f := range forms {
+			if rest, ok := strings.CutPrefix(w, f.stem); ok && slices.Contains(f.endings, rest) {
+				return true
+			}
 		}
 	}
 	return false

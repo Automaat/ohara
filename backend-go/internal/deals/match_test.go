@@ -1,10 +1,14 @@
 package deals
 
 import (
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"unicode"
+
+	"golang.org/x/text/unicode/runenames"
 )
 
 var defaultRules = Rules{
@@ -176,6 +180,7 @@ func TestWantQueries(t *testing.T) {
 		{"self-titled album", album("Metallica", "Metallica", "cd"), []string{"Metallica"}},
 		{"album without artist", Want{Kind: "music", Name: "Kind of Blue", Format: new("cd")}, []string{"Kind of Blue"}},
 		{"surname in its own spelling", book("Sto lat samotności", "Gabriel García Márquez"), []string{"Sto lat samotności márquez"}},
+		{"accent-only variants of a name", Want{Kind: "movie", Name: "Amélie", OriginalTitle: new("Amelie"), Format: new("dvd")}, []string{"Amelie dvd", "Amélie dvd"}},
 		{"name has the surname unaccented", book("Sto lat samotności Marquez", "Gabriel García Márquez"), []string{"Sto lat samotności Marquez"}},
 	}
 	for _, tt := range tests {
@@ -213,6 +218,17 @@ func TestSearchQueriesDeduplicates(t *testing.T) {
 	b.CopyID = 2
 	got := searchQueries([]Want{a, b, wiedzmin()})
 	want := []string{"Łowca androidów blu-ray", "Blade Runner blu-ray", "Ostatnie życzenie sapkowski"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("searchQueries = %q, want %q", got, want)
+	}
+}
+
+func TestSearchQueriesKeepSpellings(t *testing.T) {
+	plain := Want{CopyID: 1, Kind: "movie", Name: "Amelie", Format: new("dvd")}
+	accented := Want{CopyID: 2, Kind: "movie", Name: "Amélie", Format: new("dvd")}
+	again := Want{CopyID: 3, Kind: "movie", Name: "AMÉLIE", Format: new("dvd")}
+	got := searchQueries([]Want{plain, accented, again})
+	want := []string{"Amelie dvd", "Amélie dvd"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("searchQueries = %q, want %q", got, want)
 	}
@@ -447,6 +463,16 @@ func TestSpellingVariantsMatch(t *testing.T) {
 		{"genitive of a short surname", book("Solaris", "Stanisław Lem"), "Solaris Lema", true},
 		{"genitive of -o", book("Zemsta", "Aleksander Fredro"), "Zemsta Fredry", true},
 		{"another author", book("Ostatnie życzenie", "Andrzej Sapkowski"), "Ostatnie życzenie Pilipiuk", false},
+		{"dative of -ski", book("Ostatnie życzenie", "Andrzej Sapkowski"), "Ostatnie życzenie, nagroda Sapkowskiemu", true},
+		{"feminine form is another person", book("Ostatnie życzenie", "Andrzej Sapkowski"), "Ostatnie życzenie Sapkowska", false},
+		{"genitive of a consonant surname", book("Papierowe miasta", "John Green"), "Papierowe miasta Johna Greena", true},
+		{"a longer surname is another author", book("Papierowe miasta", "John Green"), "Papierowe miasta Graham Greene", false},
+		{"surname ending in e", book("Moc i chwała", "Graham Greene"), "Moc i chwała Grahama Greene'a", true},
+		{"adjective case of a surname ending in e", book("Cierpienia młodego Wertera", "Johann Wolfgang Goethe"), "Cierpienia młodego Wertera Goethego", true},
+		{"fleeting e", book("Wojna z salamandrami", "Karel Čapek"), "Wojna z salamandrami Čapka", true},
+		{"fleeting e, instrumental", book("Tango", "Sławomir Mrożek"), "Tango ze Sławomirem Mrożkiem", true},
+		{"genitive of -owa", book("Nad Niemnem", "Eliza Orzeszkowa"), "Nad Niemnem Orzeszkowej", true},
+		{"stroke letter folded", album("Homogenic", "Aǥa", "cd"), "Aga Homogenic CD", true},
 		{"surname as a prefix of another word", book("Solaris", "Stanisław Lem"), "Solaris Lemański", false},
 		{"short surname takes no ending", book("Imię róży", "Umberto Eco"), "Imię róży Ecoa", false},
 		{"title words are not inflected", book("Lalka", "Bolesław Prus"), "Lalki Prusa", false},
@@ -493,5 +519,43 @@ func TestWordsFoldOnlyLatinLetters(t *testing.T) {
 		if got := words(in); !slices.Equal(got, want) {
 			t.Errorf("words(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// TestWordsFoldEveryLatinDiacritic checks every Latin letter Unicode names
+// "LATIN SMALL LETTER X WITH ..." (or its capital) folds to x.
+func TestWordsFoldEveryLatinDiacritic(t *testing.T) {
+	name := regexp.MustCompile(`^LATIN (?:SMALL|CAPITAL) LETTER ([A-Z]) WITH `)
+	checked := 0
+	for _, rt := range unicode.Latin.R16 {
+		for r := rune(rt.Lo); r <= rune(rt.Hi); r += rune(rt.Stride) {
+			checkFolds(t, name, r, &checked)
+		}
+	}
+	for _, rt := range unicode.Latin.R32 {
+		for r := rune(rt.Lo); r <= rune(rt.Hi); r += rune(rt.Stride) {
+			checkFolds(t, name, r, &checked)
+		}
+	}
+	if checked < 500 {
+		t.Fatalf("checked %d letters, want the Latin script's letters with diacritics", checked)
+	}
+}
+
+func checkFolds(t *testing.T, name *regexp.Regexp, r rune, checked *int) {
+	t.Helper()
+	n := runenames.Name(r)
+	m := name.FindStringSubmatch(n)
+	// "D WITH SMALL LETTER Z" is the title case of a digraph, no diacritic.
+	if m == nil || strings.Contains(n, " WITH SMALL LETTER ") {
+		return
+	}
+	*checked++
+	// A capital Go does not lowercase is left alone: words lowercases first.
+	if unicode.IsUpper(r) && unicode.ToLower(r) == r {
+		return
+	}
+	if got, want := words(string(r)), []string{strings.ToLower(m[1])}; !slices.Equal(got, want) {
+		t.Errorf("words(%q) (%U %s) = %q, want %q", string(r), r, n, got, want)
 	}
 }

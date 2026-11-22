@@ -343,7 +343,7 @@ func searchQueries(wants []Want) []string {
 	seen := map[string]bool{}
 	for i := range wants {
 		for _, q := range wants[i].Queries() {
-			key := strings.Join(words(q), " ")
+			key := spelledKey(q)
 			if !seen[key] {
 				seen[key] = true
 				out = append(out, q)

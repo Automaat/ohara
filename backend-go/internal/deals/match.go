@@ -732,11 +732,28 @@ func (l *ListingText) identifiesAlbum(w *Want, p *wantText) bool {
 		return true
 	}
 	return slices.ContainsFunc(p.names, func(n nameText) bool {
-		if n.short {
-			return n.standsAt(l, p.byline) >= 0
-		}
-		return len(n.req) > 0 && carriesPhrase(l.significant, n.req)
+		return n.albumAliasIn(l, p.byline)
 	})
+}
+
+func (n *nameText) albumAliasIn(l *ListingText, byline []string) bool {
+	for i := range l.words {
+		end := i + len(n.words)
+		if end > len(l.words) {
+			break
+		}
+		if !slices.Equal(l.words[i:end], n.words) || slices.Contains(l.gaps[i+1:end], gapApart) {
+			continue
+		}
+		afterByline := i > 0 && inByline(byline, l.words[i-1])
+		if !l.startsTitle(i, afterByline) {
+			continue
+		}
+		if len(n.words) > 1 || l.endsTitle(end, byline) {
+			return true
+		}
+	}
+	return false
 }
 
 // fitsBookMedium reports whether the listing is the want's book medium: an
@@ -987,12 +1004,15 @@ func (n *nameText) standsAt(l *ListingText, byline []string) int {
 			continue
 		}
 		afterByline := i > 0 && inByline(byline, l.words[i-1])
-		starts := i == 0 || afterByline || l.gaps[i] == gapApart || isMediaWord(l.words[i-1])
-		if starts && (afterByline || l.endsTitle(i+k, byline) || lone && l.gaps[i+k] == gapSpace) {
+		if l.startsTitle(i, afterByline) && (afterByline || l.endsTitle(i+k, byline) || lone && l.gaps[i+k] == gapSpace) {
 			return i
 		}
 	}
 	return -1
+}
+
+func (l *ListingText) startsTitle(i int, afterByline bool) bool {
+	return i == 0 || afterByline || l.gaps[i] == gapApart || isMediaWord(l.words[i-1])
 }
 
 // endsTitle reports whether a title can end before word j: j is past the

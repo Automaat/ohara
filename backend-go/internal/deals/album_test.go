@@ -32,6 +32,30 @@ func TestSelfTitledAlbumRequiresAlbumEvidence(t *testing.T) {
 	}
 }
 
+func TestSelfTitledAlbumRequiresTheAliasAsATitle(t *testing.T) {
+	tests := []struct {
+		name   string
+		album  string
+		artist string
+		title  string
+		match  bool
+	}{
+		{"explicit multiword alias", "The Beatles aka White Album", "The Beatles", "The Beatles – White Album LP", true},
+		{"medium between alias words", "The Beatles aka White Album", "The Beatles", "The Beatles – Abbey Road white vinyl album LP", false},
+		{"alias inside another title", "The Beatles aka White Album", "The Beatles", "The Beatles – Abbey Road White Album LP", false},
+		{"explicit single-word alias", "Peter Gabriel aka Scratch", "Peter Gabriel", "Peter Gabriel – Scratch LP", true},
+		{"longer album title", "Peter Gabriel aka Scratch", "Peter Gabriel", "Peter Gabriel – Scratch My Back 2LP winyl", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := Want{Kind: "music", Name: tt.album, Authors: []string{tt.artist}, Format: new("vinyl")}
+			if got := w.Matches(tt.title); got != tt.match {
+				t.Errorf("Matches(%q) = %t, want %t", tt.title, got, tt.match)
+			}
+		})
+	}
+}
+
 func TestSelfTitledAlbumMatchesByDiscogsRelease(t *testing.T) {
 	wants := []Want{{
 		Kind: "music", Name: "David Bowie", Authors: []string{"David Bowie"},

@@ -263,7 +263,10 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   is never low confidence. Each run upserts today's `valuation_history` row and
   sets the `ohara_collection_*` gauges. Skupksiazek.pl (cart behind an
   app flow) and Rivendo (manual form with photos) have no automatic
-  quote, so movie discs have no floor.
+  quote, so movie discs have no floor. A title page reads
+  `GET /api/valuation/copies?title_id=`: that title's owned copies valued
+  as `GET /api/valuation` values them, from that title's prices only,
+  with no summary or history.
 - A barcode no provider resolves goes to `scan_queue`; a trigger on `edition`
   removes it once an edition carries that barcode. `ohara_scan_queue_size`
   counts it on each scrape. The trigger keeps the entry it removes in

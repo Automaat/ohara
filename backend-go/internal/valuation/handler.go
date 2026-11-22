@@ -3,6 +3,7 @@ package valuation
 import (
 	"log/slog"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 
@@ -30,6 +31,7 @@ func NewHandler(store *Store, runner *Runner, logger *slog.Logger) *Handler {
 // Mount registers the routes under the /api router.
 func (h *Handler) Mount(r chi.Router) {
 	r.Get("/valuation", h.view)
+	r.Get("/valuation/copies", h.titleCopies)
 	r.Post("/valuation/run", h.run)
 }
 
@@ -79,6 +81,27 @@ func (h *Handler) view(w http.ResponseWriter, r *http.Request) {
 		History:         history,
 		LastValuation:   last,
 	})
+}
+
+// TitleCopies is the GET /api/valuation/copies?title_id= body: the
+// title's owned copies valued as the full view values them, without the
+// rest of the collection or its history.
+type TitleCopies struct {
+	Copies []CopyValue `json:"copies"`
+}
+
+func (h *Handler) titleCopies(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.URL.Query().Get("title_id"), 10, 64)
+	if err != nil || id <= 0 {
+		httpx.WriteFieldError(w, h.logger, &httpx.FieldError{Field: "title_id", Msg: "must be a positive integer"})
+		return
+	}
+	copies, err := h.store.TitleValued(r.Context(), h.runner.Window(), id)
+	if err != nil {
+		httpx.WriteInternal(w, r, h.logger, "title valuation", err)
+		return
+	}
+	httpx.WriteJSON(w, h.logger, http.StatusOK, TitleCopies{Copies: copies})
 }
 
 func (h *Handler) run(w http.ResponseWriter, _ *http.Request) {

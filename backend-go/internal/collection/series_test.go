@@ -508,3 +508,23 @@ func TestDetachingANumberedTitleWaitsForACreateJoiningItsSeries(t *testing.T) {
 		t.Fatalf("detached title = %s", seriesLine(got.Title))
 	}
 }
+
+func TestSeriesCountsAVolumeInAnOwnedBoxSetAsOwned(t *testing.T) {
+	a := newAPI(t)
+	first := a.seriesTitle("book", "Ostatnie życzenie", "Wiedźmin", 1)
+	second := a.seriesTitle("book", "Miecz przeznaczenia", "Wiedźmin", 2)
+	third := a.seriesTitle("book", "Krew elfów", "Wiedźmin", 3)
+	box := a.title("book", "Wiedźmin. Kolekcja")
+	boxEdition := a.edition(obj{"title_id": box, "contents": []int64{first.ID, second.ID}})
+	a.copyOf(obj{"edition_id": boxEdition, "status": "owned"})
+	wished := a.edition(obj{"title_id": box, "contents": []int64{third.ID}})
+	a.copyOf(obj{"edition_id": wished, "status": "wishlist"})
+
+	detail := a.seriesDetail(*first.SeriesID)
+	if got, want := missingLine(detail.Missing), fmt.Sprintf("3 none title %d", third.ID); got != want {
+		t.Fatalf("missing with volumes 1 and 2 in an owned box set = %q, want %q", got, want)
+	}
+	if detail.Volumes[0].State != collection.VolumeOwned || detail.Volumes[1].State != collection.VolumeOwned {
+		t.Fatalf("volumes in an owned box set = %+v", detail.Volumes)
+	}
+}

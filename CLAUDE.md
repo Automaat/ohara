@@ -170,7 +170,7 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
 /api/series/{id}`, the key required, null clears it). `GET
 /api/series/{id}` lists its titles by number, those without one last, each
   `owned`, `ordered`, `wishlist` or `none` by its copies (sold ones count as
-  none), and `missing`: every number from 1 to the larger of the total and
+  none; a box set with an owned copy holding the title makes it owned), and `missing`: every number from 1 to the larger of the total and
   the highest number held whose title has no owned copy, with that title and
   its state, or none. `GET /api/series` lists every series with its title
   and missing counts. The `title_series_drop_empty` trigger deletes a series

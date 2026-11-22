@@ -99,10 +99,13 @@ func missingVolumes(total *int, slots []volumeSlot) []MissingVolume {
 	return missing
 }
 
-// volumeState selects what title t has on the shelf: an owned copy, else one
-// on order, else a wish, else nothing. Sold copies count as nothing.
+// volumeState selects what title t has on the shelf: an owned copy, its own
+// or one of a box set holding it, else one on order, else a wish, else
+// nothing. Sold copies count as nothing.
 const volumeState = `(SELECT CASE
-		WHEN bool_or(c.status = 'owned') THEN 'owned'
+		WHEN bool_or(c.status = 'owned') OR EXISTS (SELECT 1 FROM edition_content ec
+			JOIN copy bc ON bc.edition_id = ec.edition_id
+			WHERE ec.title_id = t.id AND bc.status = 'owned') THEN 'owned'
 		WHEN bool_or(c.status = 'ordered') THEN 'ordered'
 		WHEN bool_or(c.status = 'wishlist') THEN 'wishlist'
 		ELSE 'none' END

@@ -15,10 +15,14 @@ import (
 // TelegramURL is the Bot API base.
 const TelegramURL = "https://api.telegram.org"
 
-// ignoreData starts the callback data of an alert's "Ignoruj" button; the
-// listing's observation id follows, which keeps it far under Telegram's 64
-// bytes.
-const ignoreData = "ignore:"
+// ignoreData and boughtData start the callback data of an alert's
+// "Ignoruj" and "Kupione" buttons. The listing's observation id follows,
+// and for "Kupione" a colon and the wish's copy id, at most 46 bytes in
+// all, under Telegram's 64.
+const (
+	ignoreData = "ignore:"
+	boughtData = "bought:"
+)
 
 // telegramReplyCap bounds a Bot API answer; getUpdates gets more, since
 // each update carries the whole alert message.
@@ -47,12 +51,12 @@ type Notifier interface {
 	Send(ctx context.Context, text string) error
 }
 
-// AlertNotifier is a Notifier that also puts an "Ignoruj" button for the
-// listing observationID under the message. The hunter uses it when the
-// notifier has it.
+// AlertNotifier is a Notifier that also puts "Ignoruj" and "Kupione"
+// buttons for the listing observationID and the wish copyID it matched
+// under the message. The hunter uses it when the notifier has it.
 type AlertNotifier interface {
 	Notifier
-	SendAlert(ctx context.Context, text string, observationID int64) error
+	SendAlert(ctx context.Context, text string, observationID, copyID int64) error
 }
 
 // Telegram sends messages through a bot to one chat.
@@ -84,11 +88,16 @@ func (t *Telegram) Send(ctx context.Context, text string) error {
 	return t.call(ctx, "sendMessage", url.Values{"chat_id": {t.ChatID}, "text": {text}}, nil, telegramReplyCap)
 }
 
-// SendAlert implements AlertNotifier: Send with an inline "Ignoruj"
-// button whose press TelegramPoller turns into a dismissal of the listing.
-func (t *Telegram) SendAlert(ctx context.Context, text string, observationID int64) error {
+// SendAlert implements AlertNotifier: Send with inline "Ignoruj" and
+// "Kupione" buttons, whose presses TelegramPoller turns into a dismissal of
+// the listing or the purchase of the wish copyID. The copy is named in the
+// button, so a press buys the wish the message was sent for even after
+// the alert moved to another one.
+func (t *Telegram) SendAlert(ctx context.Context, text string, observationID, copyID int64) error {
+	id := strconv.FormatInt(observationID, 10)
 	markup, err := json.Marshal(inlineKeyboard{InlineKeyboard: [][]inlineButton{{
-		{Text: "Ignoruj", CallbackData: ignoreData + strconv.FormatInt(observationID, 10)},
+		{Text: "Ignoruj", CallbackData: ignoreData + id},
+		{Text: "Kupione", CallbackData: boughtData + id + ":" + strconv.FormatInt(copyID, 10)},
 	}}})
 	if err != nil {
 		return fmt.Errorf("telegram: keyboard: %w", err)

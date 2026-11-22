@@ -229,7 +229,8 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   and more ("Alien: Covenant" for an "Alien" want), stores
   each listing once in `price_observation` (`source`, `external_id`) and
   queues one `deal_alert` per listing at or below the copy's
-  `max_price_cents`; a listing seen again keeps its row, takes the new
+  `max_price_cents` or its `max_market_percent` (1 to 100) of the
+  title and format's used market price, when either holds; a listing seen again keeps its row, takes the new
   price and `last_seen_at`, and alerts if it has no alert yet. Alerts are retried up to 5 times within a week.
   A hunt or valuation that matches a stored listing to another title (its
   edition's) moves it to that title and the matched edition and sets
@@ -352,6 +353,15 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   or not (`?title_id=`: every format of one title), and sends no request
   out: Okazje's deal cards and a wish form's "Cena maksymalna" show it as
   "Rynek ok. 42,50 zł (4 oferty)", with "mało danych" under 3 listings.
+  A wish's market percent reads that price from a 3-listing market up
+  (`valuation.Runner.DealMarkets`, given to `deals.Store.UseMarkets` in
+  `cmd/api`, since `deals` cannot import `valuation`), at queue time, at
+  send time (read once the listing's row is held) and for "Pod limitem",
+  the badge and "Wysłane"; the alert message and deal card name it ("70%
+  ceny rynkowej 50,00 zł"). A run reads it again after each answer while
+  a listing it stored met no rule, and queues the alerts of those that now
+  meet it, so a listing counts in the market that judges it, as on later
+  runs.
 - A barcode no provider resolves goes to `scan_queue`; a trigger on `edition`
   removes it once an edition carries that barcode. `ohara_scan_queue_size`
   counts it on each scrape. The trigger keeps the entry it removes in

@@ -141,6 +141,12 @@ func TestCopyInputNormalize(t *testing.T) {
 		{"owned with max price", collection.CopyInput{EditionID: 1, Status: "owned", MaxPriceCents: new(int64(6000))}, "max_price_cents"},
 		{"negative max price", collection.CopyInput{EditionID: 1, Status: "wishlist", MaxPriceCents: new(int64(-1))}, "max_price_cents"},
 		{"max price over the cap", collection.CopyInput{EditionID: 1, Status: "wishlist", MaxPriceCents: new(int64(collection.MaxPriceCents + 1))}, "max_price_cents"},
+		{"wishlist with market percent", collection.CopyInput{EditionID: 1, Status: "wishlist", MaxMarketPercent: new(70)}, ""},
+		{"market percent beside a max price", collection.CopyInput{EditionID: 1, Status: "wishlist", MaxPriceCents: new(int64(6000)), MaxMarketPercent: new(100)}, ""},
+		{"market percent of 1", collection.CopyInput{EditionID: 1, Status: "wishlist", MaxMarketPercent: new(1)}, ""},
+		{"market percent of 0", collection.CopyInput{EditionID: 1, Status: "wishlist", MaxMarketPercent: new(0)}, "max_market_percent"},
+		{"market percent over 100", collection.CopyInput{EditionID: 1, Status: "wishlist", MaxMarketPercent: new(101)}, "max_market_percent"},
+		{"owned with market percent", collection.CopyInput{EditionID: 1, Status: "owned", MaxMarketPercent: new(70)}, "max_market_percent"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

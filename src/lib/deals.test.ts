@@ -5,6 +5,7 @@ import {
 	dismissalPath,
 	intervalLabel,
 	isUnderLimit,
+	isUnderMarket,
 	keywordPayload,
 	keywordsOf,
 	lastRunSummary,
@@ -17,6 +18,7 @@ import {
 	timeAgo,
 	underLimitCount,
 	underLimitLabel,
+	wishComparison,
 	wishLimit,
 	withoutDismissed,
 	type HunterStatus,
@@ -143,6 +145,65 @@ describe('underLimitCount', () => {
 
 	it('is zero without listings', () => {
 		expect(underLimitCount([])).toBe(0);
+	});
+});
+
+describe('market percent', () => {
+	// A wish at 70% of a 50 zł market price takes listings up to 35 zł.
+	const wish = { max_price_cents: null, max_market_percent: 70, market_cents: 5000 };
+
+	it.each([
+		[3500, true],
+		[3600, false],
+		[0, true]
+	] as const)('%s grosze against 70%% of 50 zł → %s', (price, expected) => {
+		expect(isUnderMarket({ ...wish, price_cents: price })).toBe(expected);
+		expect(isUnderLimit({ ...wish, price_cents: price })).toBe(expected);
+	});
+
+	it('never holds without a trusted market price or a percent', () => {
+		expect(isUnderLimit({ ...wish, market_cents: null, price_cents: 1 })).toBe(false);
+		expect(isUnderLimit({ ...wish, max_market_percent: null, price_cents: 1 })).toBe(false);
+	});
+
+	it('holds beside a limit when either rule does', () => {
+		const both = { max_price_cents: 3000, max_market_percent: 70, market_cents: 5000 };
+		expect(isUnderLimit({ ...both, price_cents: 3400 })).toBe(true);
+		expect(isUnderLimit({ ...both, max_market_percent: 10, price_cents: 2900 })).toBe(true);
+		expect(isUnderLimit({ ...both, price_cents: 3600 })).toBe(false);
+	});
+
+	it('counts percent alerts under the limit, as the badge and "Pod limitem" do', () => {
+		expect(
+			underLimitCount([
+				{ ...wish, price_cents: 3500 },
+				{ ...wish, price_cents: 3600 },
+				{ price_cents: 3500, max_price_cents: 4000 }
+			])
+		).toBe(2);
+	});
+
+	it.each([
+		[{ ...wish, price_cents: 3000 }, '5\u00a0zł pod 70% rynku'],
+		[{ ...wish, price_cents: 3500 }, 'W 70% rynku'],
+		[{ ...wish, price_cents: 3650 }, '1,50\u00a0zł ponad 70% rynku'],
+		[{ ...wish, market_cents: null, price_cents: 3000 }, 'Brak ceny rynkowej'],
+		[{ ...wish, max_price_cents: 3000, price_cents: 3400 }, '1\u00a0zł pod 70% rynku'],
+		[{ ...wish, max_price_cents: 4000, price_cents: 3800 }, '2\u00a0zł pod limitem'],
+		[{ ...wish, max_price_cents: 3000, price_cents: 3600 }, '6\u00a0zł ponad limit'],
+		[{ price_cents: 3600, max_price_cents: null }, 'Brak limitu']
+	])('compares %j', (deal, expected) => {
+		expect(wishComparison(deal)).toBe(expected);
+	});
+
+	it.each([
+		[null, null, null, 'bez limitu'],
+		[4000, null, null, 'limit 40\u00a0zł'],
+		[null, 70, 5000, '70% rynku (50\u00a0zł)'],
+		[null, 70, null, '70% rynku'],
+		[4000, 70, 5000, 'limit 40\u00a0zł lub 70% rynku (50\u00a0zł)']
+	] as const)('names limit %s and %s%% of %s', (limit, percent, market, expected) => {
+		expect(wishLimit(limit, percent, market)).toBe(expected);
 	});
 });
 

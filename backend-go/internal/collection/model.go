@@ -161,8 +161,9 @@ type Edition struct {
 
 // CopyInput is the body of POST and PUT /api/copies. Price and purchase date
 // apply only to owned copies. MaxPriceCents, the most a wishlist copy may
-// cost, applies only to wishlist copies: the deal hunter alerts on listings
-// at or below it.
+// cost, and MaxMarketPercent, the share of the used market price it may
+// cost, apply only to wishlist copies: the deal hunter alerts on listings
+// at or below either.
 type CopyInput struct {
 	EditionID     int64   `json:"edition_id"`
 	Status        string  `json:"status" ts:"CopyStatus"`
@@ -173,6 +174,9 @@ type CopyInput struct {
 	Condition     *string `json:"condition" ts:"Condition"`
 	Notes         string  `json:"notes"`
 	MaxPriceCents *int64  `json:"max_price_cents"`
+	// MaxMarketPercent is 1 to 100: a listing at or under that percent of
+	// the used market price of the wished title and format alerts.
+	MaxMarketPercent *int `json:"max_market_percent,omitempty" ts:",null"`
 	// RequestKey makes a create safe to retry: a second create with the
 	// same key returns the first copy. Updates ignore it.
 	RequestKey *string `json:"request_key,omitempty"`
@@ -461,6 +465,14 @@ func (in *CopyInput) Normalize() *httpx.FieldError {
 	}
 	if in.Status == StatusOwned && in.MaxPriceCents != nil {
 		return fieldErr("max_price_cents", "applies only to wishlist copies")
+	}
+	if p := in.MaxMarketPercent; p != nil {
+		if *p < 1 || *p > 100 {
+			return fieldErr("max_market_percent", "must be between 1 and 100")
+		}
+		if in.Status == StatusOwned {
+			return fieldErr("max_market_percent", "applies only to wishlist copies")
+		}
 	}
 	if in.Status == StatusWishlist {
 		if in.PriceCents != nil {

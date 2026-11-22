@@ -46,20 +46,63 @@ export function limitComparison(price: number, limit: number | null): string {
 	return difference > 0 ? `${amount} pod limitem` : `${amount} ponad limit`;
 }
 
-/** The wish's limit as "limit 40 zł", or "bez limitu". */
-export function wishLimit(limit: number | null): string {
-	return limit == null ? 'bez limitu' : `limit ${dealPrice(limit)}`;
+/**
+ * The wish's rules as "limit 40 zł", "70% rynku (50 zł)" or both joined by "lub", naming the
+ * market price the percent applies to when there is a trusted one; "bez limitu" without either.
+ */
+export function wishLimit(
+	limit: number | null,
+	percent: number | null = null,
+	market: number | null = null
+): string {
+	const rules: string[] = [];
+	if (limit != null) rules.push(`limit ${dealPrice(limit)}`);
+	if (percent != null) {
+		rules.push(market == null ? `${percent}% rynku` : `${percent}% rynku (${dealPrice(market)})`);
+	}
+	return rules.length === 0 ? 'bez limitu' : rules.join(' lub ');
 }
 
-/** A listing at or under the price limit of the wish it matched. */
-export function isUnderLimit(o: Pick<Observation, 'price_cents' | 'max_price_cents'>): boolean {
-	return o.max_price_cents != null && o.price_cents <= o.max_price_cents;
+/** What decides whether a listing alerts: its price, its wish's limit and share of the market. */
+export type WishPrice = Pick<Observation, 'price_cents' | 'max_price_cents'> &
+	Partial<Pick<Observation, 'max_market_percent' | 'market_cents'>>;
+
+/**
+ * A listing at or under its wish's percent of the market price, the server's trusted used median
+ * for the wished title and format.
+ */
+export function isUnderMarket(o: WishPrice): boolean {
+	return (
+		o.max_market_percent != null &&
+		o.market_cents != null &&
+		o.price_cents * 100 <= o.market_cents * o.max_market_percent
+	);
 }
 
-/** How many listings are at or under their wish's price limit. */
-export function underLimitCount(
-	observations: Pick<Observation, 'price_cents' | 'max_price_cents'>[]
-): number {
+/** A listing at or under the price limit of the wish it matched, or under its market percent. */
+export function isUnderLimit(o: WishPrice): boolean {
+	return (o.max_price_cents != null && o.price_cents <= o.max_price_cents) || isUnderMarket(o);
+}
+
+/**
+ * How a price stands against the wish: against its share of the market when only that holds, as
+ * "5 zł pod 70% rynku", else against its limit, as limitComparison writes it.
+ */
+export function wishComparison(o: WishPrice): string {
+	const percent = o.max_market_percent;
+	const underLimit = o.max_price_cents != null && o.price_cents <= o.max_price_cents;
+	if (percent == null || underLimit || (o.max_price_cents != null && !isUnderMarket(o))) {
+		return limitComparison(o.price_cents, o.max_price_cents);
+	}
+	if (o.market_cents == null) return 'Brak ceny rynkowej';
+	const difference = Math.floor((o.market_cents * percent) / 100) - o.price_cents;
+	if (difference === 0) return `W ${percent}% rynku`;
+	const amount = dealPrice(Math.abs(difference));
+	return difference > 0 ? `${amount} pod ${percent}% rynku` : `${amount} ponad ${percent}% rynku`;
+}
+
+/** How many listings are at or under their wish's price limit or market percent. */
+export function underLimitCount(observations: WishPrice[]): number {
 	return observations.filter(isUnderLimit).length;
 }
 

@@ -235,6 +235,9 @@ func (r *Runner) Run(ctx context.Context) (RunResult, error) {
 	if err != nil {
 		return RunResult{}, err
 	}
+	for i := range holdings {
+		holdings[i].Want.Prepare()
+	}
 	x := &run{r: r, holdings: holdings, rules: rules, titles: titles, asOf: asOf, first: true}
 	x.res.Editions = len(holdings)
 	x.res.Errors = []string{}
@@ -356,9 +359,9 @@ func (x *run) search(ctx context.Context, src deals.Source, queries []string) er
 // listing that names another known title more specifically than a
 // holding's (deals.Titles.Outranks) is not a copy of that holding.
 func match(holdings []Holding, l *deals.Listing, rules deals.Rules, titles deals.Titles) *Holding {
+	text := deals.NewListingText(l.Title, rules)
 	for i := range holdings {
-		w := &holdings[i].Want
-		if w.Matches(l.Title) && !rules.RejectedFor(l.Title, w) && !titles.Outranks(w, l.Title) {
+		if text.Belongs(&holdings[i].Want, titles) {
 			return &holdings[i]
 		}
 	}

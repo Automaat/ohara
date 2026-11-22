@@ -17,12 +17,14 @@
 		type CopyStatus,
 		type FormIssue
 	} from '#lib/collection.js';
+	import { marketLabel, type MarketPrice } from '#lib/deals.js';
 
 	let {
 		form = $bindable(),
 		issue,
 		saving,
 		submitLabel,
+		market = null,
 		onsubmit,
 		oncancel
 	}: {
@@ -30,9 +32,14 @@
 		issue: FormIssue | null;
 		saving: boolean;
 		submitLabel: string;
+		/** The used market price of the copy's title and format, shown under a wish's limit. */
+		market?: MarketPrice | null;
 		onsubmit: () => void;
 		oncancel?: () => void;
 	} = $props();
+
+	const marketId = $props.id();
+	const marketLine = $derived(marketLabel(market));
 
 	const errorFor = (field: string) => (issue?.field === field ? issue.message : undefined);
 	const fieldKeys = [
@@ -80,7 +87,11 @@
 			placeholder="60"
 			bind:value={form.max_price}
 			error={errorFor('max_price_cents')}
+			aria-describedby={marketLine ? `${marketId}-market` : undefined}
 		/>
+		{#if marketLine}
+			<p class="market" id="{marketId}-market">{marketLine}</p>
+		{/if}
 	{/if}
 	<Field
 		label={form.status === 'owned' ? 'Sklep lub sprzedawca' : 'Gdzie szukać'}
@@ -123,6 +134,12 @@
 		display: grid;
 		gap: 1rem;
 		max-width: 40rem;
+	}
+	.market {
+		margin: -0.5rem 0 0;
+		color: var(--sui-text-muted);
+		font-size: 0.875rem;
+		font-variant-numeric: tabular-nums;
 	}
 	.actions {
 		display: flex;

@@ -15,6 +15,7 @@
 		type DataTableColumn
 	} from '@smykla-skalski/sui';
 	import { onDestroy, onMount, tick, untrack } from 'svelte';
+	import { MediaQuery } from 'svelte/reactivity';
 	import { afterNavigate, replaceState } from '$app/navigation';
 	import { page } from '$app/state';
 	import { errorMessage, request } from '#lib/api.js';
@@ -41,6 +42,8 @@
 		spentLabel,
 		statusLabels,
 		uncopiedTitles,
+		unpricedCount,
+		unpricedLabel,
 		withoutCopies,
 		type CollectionFilter,
 		type CollectionItem,
@@ -60,6 +63,7 @@
 	import type { QueueEntry } from '#lib/scan.js';
 	import CollectionFilterSheet from '#lib/components/CollectionFilterSheet.svelte';
 	import CollectionShelf from '#lib/components/CollectionShelf.svelte';
+	import type { ShelfPlace } from '#lib/shelf-drawing.js';
 	import TitleShelf from '#lib/components/TitleShelf.svelte';
 	import type { Snapshot } from './$types';
 
@@ -72,6 +76,8 @@
 		{ value: 'table', label: 'Tabela' }
 	];
 	let layout = $state<Layout>('shelf');
+	/** A phone always gets the shelf; the same width as the `max-width: 640px` rules below. */
+	const phone = new MediaQuery('(max-width: 640px)');
 
 	onMount(() => {
 		try {
@@ -118,6 +124,7 @@
 	let pendingUncopied: Promise<void> | undefined;
 
 	let results = $state<HTMLElement>();
+	let shelf = $state<CollectionShelf>();
 
 	/** Where the copies start on the page, so a position kept from them survives what loads above. */
 	function resultsTop(): number {
@@ -236,14 +243,16 @@
 	}
 
 	/**
-	 * Scrolls back to where the reader left the copies, once they are drawn. The position is
-	 * kept from the copies' top, so the header's counts and a queue notice that arrives later
-	 * cannot move the restored row.
+	 * Scrolls back to where the reader left the copies, once they are drawn: the shelf draws its
+	 * tiles in parts, so it first draws down to that place. The position is kept from the
+	 * copies' top, so the header's counts and a queue notice that arrives later cannot move the
+	 * restored row.
 	 */
 	async function restore(mine: number, overviewReady?: Promise<void>) {
 		if (!restoreScroll) return;
 		await overviewReady;
 		await tick();
+		if (mine === seq && restoreScroll) await shelf?.drawTo(resultsTop() + restoreScroll[1]);
 		if (mine === seq && restoreScroll) {
 			const [x, fromResults] = restoreScroll;
 			window.scrollTo(x, resultsTop() + fromResults);
@@ -397,15 +406,45 @@
 
 	// A no-break space keeps the line's height until the counts arrive, so nothing below moves.
 	const summary = $derived(overview ? shelfSummary(overview.totals) : '\u00a0');
+	/** Owned copies without a purchase price; the phone's header links to them. */
+	const unpriced = $derived(overview ? unpricedCount(overview.totals) : 0);
 	const rows = $derived(
 		sortCopies(filterCollection(collection?.items ?? [], filter) as Row[], sort)
 	);
 	/** "Bez egzemplarzy": the view lists titles that have no copy instead of copies. */
 	const listsTitles = $derived(filter.status === 'none');
+
+	/** Whether the copies showed as the shelf rather than the table. */
+	let shelfBefore: boolean | undefined;
+	/**
+	 * The tile at the top of the screen when the table took over from the shelf, as when a phone
+	 * turns sideways. The shelf that comes back starts with its first tiles only, so it draws down
+	 * to that tile and puts it back where it was.
+	 */
+	let shelfPlace: ShelfPlace | null = null;
+
+	$effect.pre(() => {
+		const shown = layout === 'shelf' || phone.current;
+		const was = shelfBefore;
+		shelfBefore = shown;
+		if (was === true && !shown) shelfPlace = shelf?.shownTile() ?? null;
+		if (was !== false || !shown || !shelfPlace) return;
+		const place = shelfPlace;
+		shelfPlace = null;
+		void tick().then(() => shelf?.showTile(place));
+	});
 	const titleRows = $derived(sortTitles(uncopiedTitles(uncopied ?? [], filter), sort));
 	const listed = $derived(listsTitles ? uncopied : collection);
+	/**
+	 * An empty collection greets the reader whatever the filter, except "Bez ceny", which keeps
+	 * "Nic nie pasuje" and its "Wyczyść filtry" like any filter that lists nothing.
+	 */
 	const emptyShelf = $derived(
-		!failure && !listsTitles && overview?.totals.copies === 0 && rows.length === 0
+		!failure &&
+			!listsTitles &&
+			filter.status !== 'unpriced' &&
+			overview?.totals.copies === 0 &&
+			rows.length === 0
 	);
 	const activeFilters = $derived(
 		(
@@ -435,11 +474,13 @@
 				label: formatLabels[filter.format],
 				remove: () => set('format', '')
 			},
-			(filter.status === 'owned' || filter.status === 'none') && {
-				key: 'status',
-				label: collectionStatusLabels[filter.status],
-				remove: () => set('status', '')
-			}
+			// The wishlist has its own chip beside the list.
+			filter.status &&
+				filter.status !== 'wishlist' && {
+					key: 'status',
+					label: collectionStatusLabels[filter.status],
+					remove: () => set('status', '')
+				}
 		].filter((choice) => choice !== false && choice !== '')
 	);
 </script>
@@ -473,7 +514,20 @@
 			{/if}
 			<SettingsSheet />
 		</div>
-		<p class="summary">{summary}</p>
+		<p class="summary">
+			{summary}
+			{#if unpriced > 0}
+				·
+				<button
+					type="button"
+					class="unpriced"
+					aria-pressed={filter.status === 'unpriced'}
+					onclick={() => setStatus(filter.status === 'unpriced' ? '' : 'unpriced')}
+				>
+					{unpricedLabel(unpriced)}
+				</button>
+			{/if}
+		</p>
 	</header>
 
 	{#if emptyShelf}
@@ -590,14 +644,10 @@
 		<div class="results" bind:this={results}>
 			{#if listsTitles}
 				<TitleShelf titles={titleRows} {loading} {failure} onretry={load} {empty} />
-			{:else if layout === 'shelf'}
-				<CollectionShelf {rows} {loading} {failure} onretry={load} {empty} />
+			{:else if layout === 'shelf' || phone.current}
+				<CollectionShelf bind:this={shelf} {rows} {loading} {failure} onretry={load} {empty} />
 			{:else}
-				<div class="phone-only">
-					<CollectionShelf {rows} {loading} {failure} onretry={load} {empty} />
-				</div>
 				<DataTable
-					class="desktop-only"
 					aria-label="Egzemplarze w kolekcji"
 					{columns}
 					{rows}
@@ -960,6 +1010,9 @@
 	}
 
 	.phone-add {
+		/* Above the touch target of the summary's "bez ceny" toggle where the two meet. */
+		position: relative;
+		z-index: 1;
 		align-items: center;
 		display: flex;
 		gap: var(--sui-space-2);
@@ -982,6 +1035,37 @@
 		margin: 0.25rem 0 0;
 		color: var(--sui-text-secondary);
 		font-size: 0.875rem;
+	}
+
+	/* A link-like toggle within the summary line, its touch target 44px tall. */
+	.unpriced {
+		position: relative;
+		padding: 0;
+		border: 0;
+		background: none;
+		color: var(--sui-brand-action-text);
+		font: inherit;
+		font-weight: var(--sui-weight-semibold);
+		text-decoration: underline;
+		text-underline-offset: 0.2em;
+		cursor: pointer;
+	}
+
+	.unpriced::before {
+		content: '';
+		position: absolute;
+		inset: -0.875rem -0.25rem;
+	}
+
+	.unpriced[aria-pressed='true'] {
+		color: var(--sui-text-primary);
+		text-decoration: none;
+	}
+
+	.unpriced:focus-visible {
+		outline: 2px solid var(--sui-focus);
+		outline-offset: 2px;
+		border-radius: 2px;
 	}
 
 	.title-details {

@@ -29,6 +29,8 @@
 		keywordPayload,
 		keywordsOf,
 		lastRunSummary,
+		marketFor,
+		marketPath,
 		matchedPath,
 		searchedFor,
 		segmentLabel,
@@ -39,6 +41,8 @@
 		type HunterStatus,
 		type Keyword,
 		type KeywordKind,
+		type MarketPrice,
+		type MarketView,
 		type Observation
 	} from '#lib/deals.js';
 
@@ -50,6 +54,7 @@
 	};
 
 	let deals = $state<Deals | null>(null);
+	let markets = $state<MarketPrice[]>([]);
 	let now = $state(new Date());
 	let segment = $state<DealSegment>('under');
 	let failure = $state<string | null>(null);
@@ -72,11 +77,13 @@
 	 * a navigation or a returning tab moves the segment and the badge together. The page asks again
 	 * when the tab becomes visible, so the other segments follow. An answer that arrives after a
 	 * later request's answer is dropped. The search counts as running while any answer says so.
+	 * The wishes' market prices load beside them without holding them back.
 	 */
 	async function load() {
 		const ticket = ++issued;
 		loading = true;
 		try {
+			void loadMarkets();
 			const [under, all, sent] = await Promise.all([
 				loadUnderLimit(fetch),
 				request<DealsView>(fetch, 'GET', matchedPath),
@@ -98,6 +105,22 @@
 		loading = false;
 		clearTimeout(poll);
 		if (deals?.status.running) poll = setTimeout(load, 3000);
+	}
+
+	/**
+	 * The wishes' market prices, asked beside the listings and drawn when they come, so a slow
+	 * answer never holds the listings back. A failed request keeps the last prices, and an answer
+	 * older than one already drawn is dropped.
+	 */
+	let marketsAsked = 0;
+	let marketsDrawn = 0;
+	async function loadMarkets() {
+		const ticket = ++marketsAsked;
+		const view = await request<MarketView>(fetch, 'GET', marketPath()).catch(() => null);
+		if (view && ticket > marketsDrawn) {
+			marketsDrawn = ticket;
+			markets = view.markets;
+		}
 	}
 
 	const dismissals = new DealDismissals({
@@ -277,7 +300,13 @@
 			{#if shown.length > 0}
 				<ul class="deals" aria-label={segmentLabel(segment, shown.length)}>
 					{#each shown as deal (deal.id)}
-						<li><DealCard {deal} ondismiss={() => void dismissDeal(deal)} /></li>
+						<li>
+							<DealCard
+								{deal}
+								market={marketFor(markets, deal.title_id, deal.format)}
+								ondismiss={() => void dismissDeal(deal)}
+							/>
+						</li>
 					{/each}
 				</ul>
 			{:else if segment === 'under' && lists.all.length > 0}

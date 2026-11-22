@@ -222,8 +222,8 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   50 results in the film category. The product title or its parenthesized
   translation must match the whole query. It takes the disc format from `nosnik`
   and passes it to the matcher. New copies with a positive price can match
-  when available or on preorder. Unavailable items, unsupported media and
-  products that list several titles separated by `/` are skipped. The
+  when available or on preorder. It skips unavailable items, unsupported
+  media, conflicting format labels and titles separated by `/`. The
   canary is `Blade Runner`. The list response carries neither the EAN nor
   Polish language details. The source fetches no product pages.
 - Winylownia (winylownia.pl, an IdoSell shop of new vinyl records) is a

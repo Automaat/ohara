@@ -5,6 +5,7 @@
     {"aId":1218175,"aName":"Red Sparrow / Kursk (Czerwona jaskółka)","aPrice":"59.99","dictionaryDcStatus":"DOSTEPNY24","nosnik":"BLU-RAY","url":"/red-sparrow-kursk,art1218175"},
     {"aId":1,"aName":"Past Lives","aPrice":"30.00","dictionaryDcStatus":"WKROTCE","nosnik":"BLU-RAY","url":"/past-lives,art1"},
     {"aId":2,"aName":"Past Lives","aPrice":"20.00","dictionaryDcStatus":"DOSTEPNY24","nosnik":"HD-DVD","url":"/past-lives,art2"},
-    {"aId":3,"aName":"Uncle Boonmee Who Can Recall His Past Lives","aPrice":"50.00","dictionaryDcStatus":"DOSTEPNY24","nosnik":"BLU-RAY","url":"/uncle-boonmee,art3"}
+    {"aId":3,"aName":"Uncle Boonmee Who Can Recall His Past Lives","aPrice":"50.00","dictionaryDcStatus":"DOSTEPNY24","nosnik":"BLU-RAY","url":"/uncle-boonmee,art3"},
+    {"aId":4,"aName":"Past Lives (4K restoration)","aPrice":"60.00","dictionaryDcStatus":"DOSTEPNY24","nosnik":"BLU-RAY","url":"/past-lives,art4"}
   ]
 }

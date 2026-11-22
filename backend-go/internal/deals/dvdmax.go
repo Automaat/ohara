@@ -106,9 +106,15 @@ func (p *dvdmaxProduct) listing() (Listing, bool) {
 	default:
 		return Listing{}, false
 	}
-	format, ok := map[string]string{"DVD": "DVD", "BLU-RAY": "Blu-ray", "BLU-RAY 4K": "4K UHD"}[p.Format]
+	format, ok := map[string]string{"DVD": "dvd", "BLU-RAY": "bluray", "BLU-RAY 4K": "uhd"}[p.Format]
 	// The site separates the titles in multi-film packages with a spaced slash.
 	if !ok || strings.Contains(p.Title, " / ") {
+		return Listing{}, false
+	}
+	title := strings.TrimSpace(p.Title) + " (" + formatLabels[format] + ")"
+	// A Blu-ray can advertise a 4K restoration in its title. The generic
+	// matcher reads that as a UHD disc, so leave out conflicting products.
+	if listingFormat(words(title)) != format {
 		return Listing{}, false
 	}
 	link, err := url.Parse(p.URL)
@@ -130,7 +136,7 @@ func (p *dvdmaxProduct) listing() (Listing, bool) {
 	condition := "new"
 	return Listing{
 		Source: DVDmax{}.Name(), ExternalID: strconv.FormatInt(p.ID, 10),
-		Title: strings.TrimSpace(p.Title) + " (" + format + ")", URL: link.String(),
+		Title: title, URL: link.String(),
 		PhotoURL: photo, PriceCents: cents, AcquiredAs: &condition, Kinds: []string{"movie"},
 	}, true
 }

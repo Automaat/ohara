@@ -4,28 +4,39 @@
 # with such a pair (ErrDuplicateVersion in backend-go/internal/db).
 #
 # Usage:
-#   scripts/check-migrations.sh                # the working tree
-#   scripts/check-migrations.sh BASE [HEAD]    # also against BASE
+#   scripts/check-migrations.sh                              # the working tree
+#   scripts/check-migrations.sh [--since SINCE] BASE [HEAD]  # also against BASE
 #
 # HEAD is a Git revision to read the migrations from instead of the working
-# tree. With BASE (a revision such as origin/main), a migration HEAD has and
-# BASE lacks must not take a version BASE already uses. Two PRs can each add
-# a 0018_*.sql under another name: both merge cleanly and each passes CI
-# against the main it started from, so only a check against the current
-# main catches the second one.
+# tree. With BASE (a revision such as origin/main), a migration HEAD adds
+# must not take a version BASE already uses for another file. HEAD adds what
+# it has and SINCE (default BASE) lacks: a PR stacked on another passes its
+# base branch as SINCE, so the parent's migrations stay the parent's to fix.
+# Two PRs can each add a 0018_*.sql under another name: both merge cleanly
+# and each passes CI against the main it started from, so only a check
+# against the current main catches the second one.
 set -euo pipefail
 
 dir=backend-go/internal/db/migrations
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
-if [[ $# -gt 2 || "${1:-}" == -* ]]; then
-    echo "usage: scripts/check-migrations.sh [BASE [HEAD]]" >&2
+usage() {
+    echo "usage: scripts/check-migrations.sh [[--since SINCE] BASE [HEAD]]" >&2
     exit 2
+}
+since=""
+if [[ "${1:-}" == --since ]]; then
+    [[ $# -ge 3 && -n "$2" ]] || usage
+    since="$2"
+    shift 2
+fi
+if [[ $# -gt 2 || "${1:-}" == -* ]]; then
+    usage
 fi
 base="${1:-}"
 head="${2:-}"
-for rev in "$base" "$head"; do
+for rev in "$since" "$base" "$head"; do
     if [[ -n "$rev" ]] && ! git rev-parse --verify --quiet "$rev^{commit}" >/dev/null; then
         echo "error: $rev is not a Git revision" >&2
         exit 2
@@ -86,7 +97,8 @@ if [[ -n "$base" ]]; then
         if [[ -n "$taken" ]]; then
             fail "$name" "$name takes version $v, which $base already uses for $taken; renumber it above $highest"
         fi
-    done < <(LC_ALL=C comm -23 <(printf '%s\n' "$head_names") <(printf '%s\n' "$base_names"))
+    done < <(LC_ALL=C comm -23 <(printf '%s\n' "$head_names") <(migrations "${since:-$base}") |
+        LC_ALL=C comm -23 - <(printf '%s\n' "$base_names"))
 fi
 
 if [[ "$status" -eq 0 ]]; then

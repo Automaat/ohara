@@ -574,12 +574,14 @@ and cuts the GitHub release, in that order. `:latest` comes only from CI on
   carry BuildKit's SBOM and max-mode provenance attestations.
 - CI's `migrations` job (`scripts/check-migrations.sh`) fails when two
   migrations share a version: a PR's merge commit, or a migration the PR
-  adds whose version the current `main` already uses (both files named),
-  and `main` itself after a merge. Nothing reruns a PR's CI when `main`
-  moves, so each push to `main` checks every open PR that adds a
-  migration against it and sets the `migrations against main` commit
-  status on its head (`migrations-open-prs`); a PR without migrations
-  gets none. A red status means renumbering above `main`'s highest.
+  adds to its base branch whose version the current `main` already uses
+  (both files named), and `main` itself after a merge. A PR stacked on
+  another answers only for its own migrations. Nothing reruns a PR's CI
+  when `main` moves, so each push to `main` checks every open PR that adds
+  a migration against the `main` of that moment and sets the
+  `migrations against main` commit status on its head
+  (`migrations-open-prs`); a PR without migrations gets none. A red status
+  means renumbering above `main`'s highest.
 - CI fails on known vulnerabilities (`scripts/check-vulnerabilities.sh`),
   on every push and PR and nightly: `govulncheck` for Go code the backend
   calls, under the go.mod toolchain; `npm audit` for high and critical

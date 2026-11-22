@@ -90,17 +90,25 @@ jobs:
 
   # Two PRs can each add a migration with one NNNN under another name: both
   # merge cleanly and each passes CI against the main it started from, then
-  # the app refuses to start. A PR run checks its merge commit and the main
-  # of the moment; a push to main checks main itself.
+  # the app refuses to start. A PR run checks its merge commit, and the
+  # migrations the PR adds to its base branch (the merge commit's first
+  # parent) against the main of the moment; a push to main checks main
+  # itself. A PR stacked on another one adds only its own migrations.
   migrations:
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
 
       - name: Migration versions are unique
         run: |
           git fetch --no-tags --depth=1 origin +refs/heads/main:refs/remotes/origin/main
-          ./scripts/check-migrations.sh origin/main
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+            ./scripts/check-migrations.sh --since HEAD^1 origin/main
+          else
+            ./scripts/check-migrations.sh origin/main
+          fi
 
   # Nothing reruns a PR's CI when main moves, and a PR that passed against
   # an older main still looks mergeable. The commit status this job puts on
@@ -109,7 +117,7 @@ jobs:
   migrations-open-prs:
     if: github.event_name == 'push'
     runs-on: ubuntu-26.04
-    # Queued in push order, so the newest main sets the last status.
+    # One run at a time, each against the main of when it runs.
     concurrency:
       group: migrations-open-prs
       cancel-in-progress: false
@@ -126,17 +134,24 @@ jobs:
         run: |
           set -euo pipefail
           run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-          gh pr list --state open --limit 1000 --json number --jq '.[].number' |
-            while read -r number; do
+          # The main of now, not the run's commit: a rerun of an older run
+          # must not turn a PR green that a newer main made red.
+          git fetch --no-tags --depth=1 origin +refs/heads/main:refs/remotes/origin/main
+          main="$(git rev-parse --short origin/main)"
+          gh pr list --state open --limit 1000 --json number,baseRefName --jq '.[] | "\(.number) \(.baseRefName)"' |
+            while read -r number base; do
               ref="refs/remotes/pr/$number"
-              git fetch --no-tags --depth=1 origin "+refs/pull/$number/head:$ref"
-              if git diff --quiet --diff-filter=A origin/main "$ref" -- 'backend-go/internal/db/migrations/*.sql'; then
+              base_ref="refs/remotes/pr-base/$number"
+              git fetch --no-tags --depth=1 origin "+refs/pull/$number/head:$ref" "+refs/heads/$base:$base_ref"
+              # Only what the PR adds to its base branch: a PR stacked on
+              # another one does not answer for its parent's migrations.
+              if git diff --quiet --diff-filter=A "$base_ref" "$ref" -- 'backend-go/internal/db/migrations/*.sql'; then
                 continue
               fi
               # Plain error lines: an annotation would mark main's run, not the PR.
-              if out="$(GITHUB_ACTIONS=false ./scripts/check-migrations.sh origin/main "$ref" 2>&1)"; then
+              if out="$(GITHUB_ACTIONS=false ./scripts/check-migrations.sh --since "$base_ref" origin/main "$ref" 2>&1)"; then
                 state=success
-                description="No migration version taken on main ${GITHUB_SHA:0:7}"
+                description="No migration version taken on main $main"
               else
                 state=failure
                 description="$(printf '%s\n' "$out" | sed -n '1s/^error: //p')"

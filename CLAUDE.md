@@ -188,7 +188,13 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   `Parse` turns raw JSON into candidates) and register in `cmd/api` with a
   cache TTL. Candidate `title`/`edition` fields match the POST bodies of
   `/api/titles` and `/api/editions`. A provider that only knows some
-  barcodes implements `lookup.Scoped`. Book candidates for the scanned ISBN
+  barcodes implements `lookup.Scoped`. The movie and music providers are a
+  `lookup.Fallback` for an ISBN-range code: they are asked in a second
+  round, only when no book provider returned a candidate (a failed one
+  counts as no answer and keeps its error). Both rounds together end within
+  17 s, under the client's 20 s request deadline: a second round after a
+  first that hit the 10 s provider timeout gets what is left. The stub
+  provider waits in that round too for an ISBN. Book candidates for the scanned ISBN
   from several providers merge into one; registration order is the field
   priority. Every provider gets `ohara_lookup_provider_requests_total`,
   `ohara_lookup_provider_errors_total` and `ohara_lookup_cache_hits_total`.
@@ -562,6 +568,21 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   title counts. `GET /api/collection?tag=` and `GET /api/titles?tag=`
   list what carries a tag, case aside; collection items carry their
   title's tags for the browser's filter.
+- A box set stays one title, edition and copy; its edition lists the
+  titles it holds (`edition_content`), of any kind:
+  `POST`/`PUT /api/editions` take `contents`, title IDs in their order
+  (repeats collapsed, at most 100; one that names no title, or the
+  edition's own, answers 422 on `contents`), and a `PUT` without them keeps
+  the stored list, `[]` clears it. Edition answers name them in
+  `contents`. A listed title cannot be deleted (409); deleting the edition
+  drops its list. `GET /api/titles/{id}` lists the box sets holding it in
+  `box_sets` (`owned` when the box set has an owned copy) and titles carry
+  `in_owned_box_set`, which Kolekcja's "Bez egzemplarzy" leaves out.
+  Collection items carry `contents`, so a search for a contained title's
+  name finds the box set's copy. Price, deals and valuation stay with the
+  box set's copy. The edition form's "Zawartość zestawu" picks existing
+  titles by name; the title page shows "W zestawie: <box set>", marked "na
+  półce" when owned.
 - A barcode no provider resolves goes to `scan_queue`; a trigger on `edition`
   removes it once an edition carries that barcode. `ohara_scan_queue_size`
   counts it on each scrape. The trigger keeps the entry it removes in

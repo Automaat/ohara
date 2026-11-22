@@ -154,3 +154,15 @@ func TestTVTitleTakesOnlyItsOwnSeasonsCover(t *testing.T) {
 		})
 	}
 }
+
+func TestBoxSetListsATVSeasonWithItsSeason(t *testing.T) {
+	a := newAPI(t)
+	box := a.title("movie", "Kolekcja seriali")
+	var season collection.Title
+	a.mustDo(http.MethodPost, "/api/titles", obj{"kind": "tv", "name": "Dark", "season": 2}, &season, http.StatusCreated)
+	var e collection.Edition
+	a.mustDo(http.MethodPost, "/api/editions", obj{"title_id": box, "format": "bluray", "contents": []int64{season.ID}}, &e, http.StatusCreated)
+	if len(e.Contents) != 1 || e.Contents[0].Kind != "tv" || e.Contents[0].Season == nil || *e.Contents[0].Season != 2 {
+		t.Fatalf("box set contents = %+v", e.Contents)
+	}
+}

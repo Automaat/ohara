@@ -166,8 +166,8 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   `PUT` without both fields keeps the stored series, and a title turned
   into another kind takes its series' name and number into a series of
   that kind. A series has an optional `total_volumes` (`PUT
-  /api/series/{id}`, the key required, null clears it). `GET
-  /api/series/{id}` lists its titles by number, those without one last, each
+/api/series/{id}`, the key required, null clears it). `GET
+/api/series/{id}` lists its titles by number, those without one last, each
   `owned`, `ordered`, `wishlist` or `none` by its copies (sold ones count as
   none), and `missing`: every number from 1 to the larger of the total and
   the highest number held whose title has no owned copy, with that title and

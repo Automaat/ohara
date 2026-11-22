@@ -20,7 +20,7 @@ import {
 	wantsCopy,
 	type TitleEdition
 } from './title-detail';
-import type { CopyValue, Estimate } from './valuation';
+import type { CopyValue, CopyValueDay, Estimate } from './valuation';
 
 const nbsp = (s: string | null | undefined) => s?.replace(/[\u00a0\u202f]/g, ' ');
 
@@ -386,6 +386,57 @@ describe('valueCard', () => {
 		expect(card?.usedAt).toBeNull();
 		expect(card?.delta).toBeNull();
 		expect(card?.paidAt).toBeCloseTo(((8999 - 1600) / (10300 - 1600)) * 100);
+	});
+
+	const day = (d: string, mid: number | null, copy_id = 7): CopyValueDay => ({
+		copy_id,
+		day: d,
+		floor_cents: 1600,
+		mid_cents: mid,
+		ceiling_cents: null
+	});
+
+	it("draws the trend of the copy's used value over its days", () => {
+		const card = valueCard(
+			copy(),
+			[valued()],
+			[
+				day('2026-09-01', 6000),
+				day('2026-09-01', 99999, 99),
+				day('2026-10-01', 6000),
+				day('2026-11-20', 7400),
+				day('2026-11-20', 1, 99)
+			]
+		);
+		expect(card?.trend).toEqual({ path: 'M4 32 L35.5 32 L88 4', end: { x: 88, y: 4 } });
+	});
+
+	it('leaves a gap on a day without a used value and ends on the last one', () => {
+		const card = valueCard(
+			copy(),
+			[valued()],
+			[
+				day('2026-09-01', 6000),
+				day('2026-10-01', null),
+				day('2026-11-20', 7400),
+				day('2026-11-21', null)
+			]
+		);
+		expect(card?.trend).toEqual({
+			path: 'M4 32 L4 32 M88 4 L88 4',
+			end: { x: 88, y: 4 }
+		});
+	});
+
+	it('shows no trend under two days with a used value', () => {
+		expect(valueCard(copy(), [valued()])?.trend).toBeNull();
+		expect(valueCard(copy(), [valued()], [day('2026-11-20', 7400)])?.trend).toBeNull();
+		expect(
+			valueCard(copy(), [valued()], [day('2026-11-19', null), day('2026-11-20', 7400)])?.trend
+		).toBeNull();
+		expect(
+			valueCard(copy(), [valued()], [day('2026-11-19', 7000, 99), day('2026-11-20', 7400)])?.trend
+		).toBeNull();
 	});
 
 	it('is null for a copy without prices, without a valuation or not owned', () => {

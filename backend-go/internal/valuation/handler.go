@@ -34,6 +34,7 @@ func NewHandler(store *Store, runner *Runner, logger *slog.Logger) *Handler {
 func (h *Handler) Mount(r chi.Router) {
 	r.Get("/valuation", h.view)
 	r.Get("/valuation/copies", h.titleCopies)
+	r.Get("/valuation/copies/history", h.copyHistory)
 	r.Get("/valuation/market", h.market)
 	r.Post("/valuation/run", h.run)
 }
@@ -105,6 +106,32 @@ func (h *Handler) titleCopies(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, h.logger, http.StatusOK, TitleCopies{Copies: copies})
+}
+
+// copyHistoryDays is how much of each copy's value history a title page
+// gets.
+const copyHistoryDays = 90
+
+// CopyHistory is the GET /api/valuation/copies/history?title_id= body:
+// the stored daily values of the title's copies, owned or not, over the
+// last Days days, by copy and oldest first.
+type CopyHistory struct {
+	Days    int       `json:"days"`
+	History []CopyDay `json:"history"`
+}
+
+func (h *Handler) copyHistory(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.URL.Query().Get("title_id"), 10, 64)
+	if err != nil || id <= 0 {
+		httpx.WriteFieldError(w, h.logger, &httpx.FieldError{Field: "title_id", Msg: "must be a positive integer"})
+		return
+	}
+	history, err := h.store.CopyHistory(r.Context(), id, copyHistoryDays)
+	if err != nil {
+		httpx.WriteInternal(w, r, h.logger, "copy value history", err)
+		return
+	}
+	httpx.WriteJSON(w, h.logger, http.StatusOK, CopyHistory{Days: copyHistoryDays, History: history})
 }
 
 // MarketView is the GET /api/valuation/market body: the used price of

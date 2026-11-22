@@ -301,6 +301,77 @@ func (s *Store) SaveDay(ctx context.Context, sum *Summary) (HistoryPoint, error)
 	return p, nil
 }
 
+// CopyDay is one day of a copy's value: its buy-back, used and new value
+// in grosze, null for a bound without prices that day.
+type CopyDay struct {
+	CopyID       int64  `json:"copy_id"`
+	Day          string `json:"day"`
+	FloorCents   *int64 `json:"floor_cents"`
+	MidCents     *int64 `json:"mid_cents"`
+	CeilingCents *int64 `json:"ceiling_cents"`
+}
+
+// SaveCopyDays stores each copy's value as of day (YYYY-MM-DD), replacing
+// every row an earlier run stored for that day. Rows of other days stay,
+// also those of a copy no longer owned. Each copy is held (FOR KEY SHARE)
+// until the commit, so a copy deleted since it was valued is left out
+// instead of failing the foreign key.
+func (s *Store) SaveCopyDays(ctx context.Context, day string, copies []CopyValue) error {
+	ids := make([]int64, len(copies))
+	floors := make([]*int64, len(copies))
+	mids := make([]*int64, len(copies))
+	ceilings := make([]*int64, len(copies))
+	for i := range copies {
+		c := &copies[i]
+		ids[i] = c.CopyID
+		floors[i] = estimateCents(c.Floor)
+		mids[i] = estimateCents(c.Mid)
+		ceilings[i] = estimateCents(c.Ceiling)
+	}
+	_, err := s.pool.Exec(ctx, `WITH valued AS (
+			SELECT c.id, v.floor_cents, v.mid_cents, v.ceiling_cents
+			FROM unnest($2::bigint[], $3::bigint[], $4::bigint[], $5::bigint[])
+				AS v (copy_id, floor_cents, mid_cents, ceiling_cents)
+			JOIN copy c ON c.id = v.copy_id
+			FOR KEY SHARE OF c
+		), dropped AS (
+			DELETE FROM copy_value_history WHERE day = $1::date AND copy_id <> ALL ($2::bigint[])
+		)
+		INSERT INTO copy_value_history (copy_id, day, floor_cents, mid_cents, ceiling_cents)
+		SELECT id, $1::date, floor_cents, mid_cents, ceiling_cents FROM valued
+		ON CONFLICT (copy_id, day) DO UPDATE SET floor_cents = EXCLUDED.floor_cents,
+			mid_cents = EXCLUDED.mid_cents, ceiling_cents = EXCLUDED.ceiling_cents,
+			computed_at = now()`, day, ids, floors, mids, ceilings)
+	if err != nil {
+		return fmt.Errorf("save copy days: %w", err)
+	}
+	return nil
+}
+
+// estimateCents is e's amount, nil for a bound without prices.
+func estimateCents(e *Estimate) *int64 {
+	if e == nil {
+		return nil
+	}
+	return &e.Cents
+}
+
+// CopyHistory returns the daily values of titleID's copies, owned or not,
+// over the last n days, by copy and oldest first.
+func (s *Store) CopyHistory(ctx context.Context, titleID int64, n int) ([]CopyDay, error) {
+	rows, err := s.pool.Query(ctx, `SELECT h.copy_id, to_char(h.day, 'YYYY-MM-DD'),
+			h.floor_cents, h.mid_cents, h.ceiling_cents
+		FROM copy_value_history h
+			JOIN copy c ON c.id = h.copy_id
+			JOIN edition e ON e.id = c.edition_id
+		WHERE e.title_id = $1 AND h.day > current_date - $2::int
+		ORDER BY h.copy_id, h.day`, titleID, n)
+	if err != nil {
+		return nil, fmt.Errorf("copy history: %w", err)
+	}
+	return pgx.CollectRows(rows, pgx.RowToStructByPos[CopyDay])
+}
+
 // History returns the value of each of the last n days, oldest first.
 func (s *Store) History(ctx context.Context, n int) ([]HistoryPoint, error) {
 	rows, err := s.pool.Query(ctx, `SELECT `+historyColumns+` FROM valuation_history

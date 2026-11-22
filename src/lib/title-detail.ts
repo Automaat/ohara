@@ -12,7 +12,13 @@ import {
 	type TitleDetail
 } from '#lib/collection.js';
 import { copyCount, editionCount, purchaseDate } from '#lib/polish.js';
-import { estimateValue, formatZl, type CopyValue } from '#lib/valuation.js';
+import {
+	copySparkline,
+	estimateValue,
+	formatZl,
+	type CopyValue,
+	type CopyValueDay
+} from '#lib/valuation.js';
 
 export type TitleEdition = TitleDetail['editions'][number];
 
@@ -226,15 +232,26 @@ export type ValueCard = {
 	paidAt: number | null;
 	/** The used value against the price paid in whole złoty, such as "−16 zł względem zakupu". */
 	delta: string | null;
+	/** The used value's trend over the stored days in a trendWidth × trendHeight box, null under two days with one. */
+	trend: { path: string; end: { x: number; y: number } } | null;
 };
+
+/** The size of a value card's trend. */
+export const trendWidth = 92;
+export const trendHeight = 36;
 
 /**
  * The "Wartość dziś" card of an owned copy, or null when the valuation has no price for it. The
  * bar runs from the buy-back offer (0 without one) to the new price, or to the higher of the used
  * value and the price paid when no shop sells it new; marks outside it sit at its ends. Without a
- * used value there is no used mark and no difference from the price paid.
+ * used value there is no used mark and no difference from the price paid. The trend follows the
+ * copy's used value over the days in history, leaving a gap on a day without one.
  */
-export function valueCard(c: Copy, values: readonly CopyValue[]): ValueCard | null {
+export function valueCard(
+	c: Copy,
+	values: readonly CopyValue[],
+	history: readonly CopyValueDay[] = []
+): ValueCard | null {
 	if (c.status !== 'owned') return null;
 	const v = values.find((value) => value.copy_id === c.id);
 	if (!v || (!v.floor && !v.mid && !v.ceiling)) return null;
@@ -250,7 +267,8 @@ export function valueCard(c: Copy, values: readonly CopyValue[]): ValueCard | nu
 		ceiling: estimateValue(v.ceiling),
 		usedAt: mid == null ? null : at(mid),
 		paidAt: paid == null ? null : at(paid),
-		delta: paid == null || mid == null ? null : `${signedZl(mid - paid)} względem zakupu`
+		delta: paid == null || mid == null ? null : `${signedZl(mid - paid)} względem zakupu`,
+		trend: copySparkline(history, c.id, trendWidth, trendHeight)
 	};
 }
 

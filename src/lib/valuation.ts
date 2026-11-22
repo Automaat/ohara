@@ -2,6 +2,7 @@ import { formatLabels, formatPLN, kindLabels } from '#lib/collection.js';
 import type {
 	Bound,
 	CopyValue,
+	CopyValueDay,
 	DiscogsGrade,
 	Estimate,
 	Gain,
@@ -16,6 +17,8 @@ import type {
 export type {
 	Bound,
 	CopyValue,
+	CopyValueDay,
+	CopyValueHistory,
 	DiscogsGrade,
 	Estimate,
 	Gain,
@@ -316,9 +319,9 @@ function scale(
 }
 
 /** Runs of consecutive rows where pick has a value. */
-function runs<T>(rows: HistoryRow[], pick: (r: HistoryRow) => T | null): [HistoryRow, T][][] {
-	const out: [HistoryRow, T][][] = [];
-	let run: [HistoryRow, T][] = [];
+function runs<R, T>(rows: R[], pick: (r: R) => T | null): [R, T][][] {
+	const out: [R, T][][] = [];
+	let run: [R, T][] = [];
 	for (const r of rows) {
 		const v = pick(r);
 		if (v === null) {
@@ -386,7 +389,36 @@ export function historyPaths(history: HistoryPoint[], width: number, height: num
  * used total leave a gap. Null under two days with one.
  */
 export function sparkline(history: HistoryPoint[], width: number, height: number, inset = 4) {
-	const rows = historyRows(history);
+	return usedSparkline(historyRows(history), width, height, inset);
+}
+
+/**
+ * A sparkline of one copy's used value over its stored days, drawn as `sparkline` draws the
+ * collection's: days without a used value leave a gap. Null under two days with one.
+ */
+export function copySparkline(
+	days: readonly CopyValueDay[],
+	copyID: number,
+	width: number,
+	height: number,
+	inset = 4
+) {
+	const own = days.filter((d) => d.copy_id === copyID);
+	const start = own[0] ? dayTimestamp(own[0].day) : 0;
+	const rows = own.map((d) => ({
+		x: (dayTimestamp(d.day) - start) / dayMilliseconds,
+		mid: d.mid_cents === null ? null : d.mid_cents / 100
+	}));
+	return usedSparkline(rows, width, height, inset);
+}
+
+/** The sparkline of rows' used values, x in days; null under two rows with one. */
+function usedSparkline(
+	rows: { x: number; mid: number | null }[],
+	width: number,
+	height: number,
+	inset: number
+) {
 	const valued = rows.filter((r) => r.mid !== null);
 	if (valued.length < 2) return null;
 	const s = scale(

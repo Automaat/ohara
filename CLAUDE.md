@@ -164,9 +164,11 @@ router answers 401 (`{"error": "..."}`, never a redirect) to a request
 without a non-empty `Remote-User` header, the one Traefik copies from
 Authelia's answer, so a request that skips the middleware reaches no handler,
 page or file. Only `GET /health` and `GET /metrics` stay open, for the Docker
-healthcheck and Prometheus, and `GET /share/…`, the wishlist's read-only
-share link (see [deals](docs/deals.md)), which the owner chose to open to
-anyone who has its unguessable token; each path is matched as chi routes
+healthcheck and Prometheus, `HEAD /health`, for monitors that probe with
+`HEAD` (it answers like `GET /health` without the body), and
+`GET /share/…`, the wishlist's read-only share link (see
+[deals](docs/deals.md)), which the owner chose to open to anyone who has
+its unguessable token; each path is matched as chi routes
 it, and a 401 still counts in `ohara_http_requests_total`. Production
 needs an Authelia bypass for `/share/` alone, the one prefix that serves
 anything without a login. The guard checks only that the

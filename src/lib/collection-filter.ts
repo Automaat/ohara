@@ -115,6 +115,14 @@ export function filterCollection(
 	);
 }
 
+/**
+ * The copies some Kolekcja filter can list: every copy but the wishes, which live in Okazje. What
+ * the sheet offers to filter by comes from these, so it offers nothing that only a wish carries.
+ */
+export function listableCopies<T extends Pick<CollectionItem, 'status'>>(items: readonly T[]): T[] {
+	return items.filter((item) => item.status !== 'wishlist');
+}
+
 /** Orders text by code point, as Go compares strings, so ties sort as the server sorts them. */
 function byCodePoint(a: string, b: string): number {
 	const [x, y] = [

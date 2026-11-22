@@ -201,8 +201,10 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   and ordered. Wishes are not had yet, so they live in Okazje (`/deals`)
   and on their title's page; no Kolekcja view, chip, search, sort, count
   or header summary shows them, an old `?status=wishlist` address reads
-  as the default list, and a shelf of wishes alone says "Półka jest
-  pusta" with a link to Okazje. The API still returns them. Kolekcja
+  as the default list, the sheet's "Tag" offers no tag only a wish
+  carries, and a shelf of wishes alone (or of wishes and sold copies)
+  says "Półka jest pusta" with a link to Okazje. The API still returns
+  them. Kolekcja
   loads all of `GET /api/collection` once per visit and filters,
   searches and counts it in the browser
   (`src/lib/collection-filter.ts`, the server's `Store.Collection` filter

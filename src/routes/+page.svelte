@@ -47,7 +47,7 @@
 		type CollectionFilter,
 		type CollectionItem
 	} from '#lib/collection.js';
-	import { filterCollection, locationsInUse } from '#lib/collection-filter.js';
+	import { filterCollection, listableCopies, locationsInUse } from '#lib/collection-filter.js';
 	import { tagKey } from '#lib/tags.js';
 	import {
 		collectionSortLabels,
@@ -279,7 +279,7 @@
 			rows.length === 0
 	);
 	/** The tags the loaded copies and titles carry, for the sheet's "Tag". */
-	const tags = $derived(tagsInUse(collection?.items ?? [], uncopied ?? []));
+	const tags = $derived(tagsInUse(listableCopies(collection?.items ?? []), uncopied ?? []));
 	/** The filtered tag as it was first saved, whatever case the address spells it in. */
 	const shownTag = $derived(
 		filter.tag ? (tags.find((t) => tagKey(t) === tagKey(filter.tag ?? '')) ?? filter.tag) : ''
@@ -637,12 +637,18 @@
 			{/snippet}
 		</EmptyState>
 	{:else if soldCount > 0}
-		<EmptyState title="Półka jest pusta" description="Wszystkie egzemplarze są sprzedane.">
+		<EmptyState
+			title="Półka jest pusta"
+			description={wishCount > 0
+				? 'Wszystkie egzemplarze są sprzedane, a lista życzeń czeka w Okazjach.'
+				: 'Wszystkie egzemplarze są sprzedane.'}
+		>
 			{#snippet action()}
 				<div class="empty-actions">
 					<Button tone="signal" onclick={() => setStatus('sold')}>
 						{`${collectionStatusLabels.sold} (${soldCount})`}
 					</Button>
+					{#if wishCount > 0}<Button href="/deals">Okazje</Button>{/if}
 					<Button href="/titles/new">Dodaj tytuł</Button>
 				</div>
 			{/snippet}

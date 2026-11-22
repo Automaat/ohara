@@ -260,6 +260,23 @@ for (const viewport of viewports) {
 			await expect(page).toHaveURL(/\/deals$/);
 		});
 
+		test('a shelf of sold copies and wishes names both', async ({ page }) => {
+			const view = {
+				items: [],
+				totals: { copies: 3, owned: 0, wishlist: 2, priced: 0, spent_cents: 0 }
+			};
+			await page.route('**/api/collection', (route) => route.fulfill({ json: view }));
+			await page.goto('/');
+			await expect(
+				page.getByText('Wszystkie egzemplarze są sprzedane, a lista życzeń czeka w Okazjach.', {
+					exact: true
+				})
+			).toBeVisible();
+			const results = page.locator('.results');
+			await expect(results.getByRole('button', { name: 'Sprzedane (1)' })).toBeVisible();
+			await expect(results.getByRole('link', { name: 'Okazje', exact: true })).toBeVisible();
+		});
+
 		test('a filtered address loads the collection once and counts all of it', async ({
 			page,
 			request

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { CollectionFilter, CollectionItem } from './collection';
 import {
 	filterCollection,
+	listableCopies,
 	locationsInUse,
 	lowerCase,
 	searchBarcode,
@@ -437,6 +438,19 @@ describe('wishes', () => {
 		['the loan filter', { loaned: true }]
 	] as [string, Partial<CollectionFilter>][])('%s lists none', (_name, filter) => {
 		expect(filterCollection(wished, { ...none, ...filter })).toEqual([]);
+	});
+});
+
+describe('listableCopies', () => {
+	it('keeps every copy but the wishes, in their order', () => {
+		const copies = [
+			item({ copy_id: 1, status: 'sold', tags: ['Sprzedane'] }),
+			item({ copy_id: 2, status: 'wishlist', tags: ['Tylko życzenie'] }),
+			item({ copy_id: 3, status: 'ordered' }),
+			item({ copy_id: 4 })
+		];
+		expect(listableCopies(copies).map((i) => i.copy_id)).toEqual([1, 3, 4]);
+		expect(listableCopies([])).toEqual([]);
 	});
 });
 

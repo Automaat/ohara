@@ -52,11 +52,12 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   never goes out at that price, even in a later run that no answer
   carries the listing. An answer contradicts it when it holds the
   listing under a title that matches no wish (a Blu-ray listing renamed
-  "4K UHD"), the canary's answer included, both so and under a matching
-  title, or without a price. `Store.Unmatch` takes the listing's row as
-  `Store.SendAlert` does, so a message already on its way goes out
-  first. An answer that matches the listing again within a wish's limit
-  queues it for that wish at the new price.
+  "4K UHD"), the canary's answer included, or without a price, also
+  next to the listing under a matching title with a price; that record
+  is not stored, so a sent alert stays sent. `Store.Unmatch` takes the
+  listing's row as `Store.SendAlert` does, so a message already on its
+  way goes out first. An answer that matches the listing again within a
+  wish's limit queues it for that wish at the new price.
   A hunt or valuation that matches a stored listing to another title (its
   edition's) moves it to that title and the matched edition and sets
   `moved_at`; a valuation match drops the wish it was recorded for. Its

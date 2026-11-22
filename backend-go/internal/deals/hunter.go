@@ -509,8 +509,9 @@ func (r *run) searchAll(ctx context.Context, src Source, f *Refused, queries []s
 // Expiring source, a stored listing of its scope the answer lacks is gone
 // (Store.UpdateGone). An offer the answer holds without a price
 // contradicts the stored price of its listing, whose unsent alert leaves
-// its wish (Store.Unmatch). err is the run's cancellation or a database
-// failure.
+// its wish (Store.Unmatch), and drops the listing from the answer even
+// where it also holds the listing with a price. err is the run's
+// cancellation or a database failure.
 func (r *run) ask(ctx context.Context, src Source, f *Refused, query string) ([]Listing, queryOutcome, error) {
 	if f.Skip() {
 		return nil, querySkipped, ctx.Err()
@@ -538,22 +539,26 @@ func (r *run) ask(ctx context.Context, src Source, f *Refused, query string) ([]
 	} else if err := r.h.store.MarkOffered(ctx, src.Name(), page.Seen); err != nil {
 		return nil, queryFailed, err
 	}
-	if err := r.contradict(ctx, map[string][]string{src.Name(): unpriced(page)}, nil); err != nil {
+	ids := unpriced(page)
+	if err := r.contradict(ctx, map[string][]string{src.Name(): ids}, nil); err != nil {
 		return nil, queryFailed, err
 	}
-	return page.Listings, querySucceeded, nil
+	return slices.DeleteFunc(page.Listings, func(l Listing) bool { return slices.Contains(ids, l.ExternalID) }),
+		querySucceeded, nil
 }
 
-// unpriced are the external IDs page.Seen names that none of its listings
-// has: offers the answer holds without a price.
+// unpriced are the external IDs of the offers page holds without a price:
+// those page.Seen names more often than its listings do, each once. A
+// listing the answer also holds with a price is left out of the answer.
 func unpriced(page Page) []string {
-	priced := make(map[string]bool, len(page.Listings))
+	priced := make(map[string]int, len(page.Listings))
 	for i := range page.Listings {
-		priced[page.Listings[i].ExternalID] = true
+		priced[page.Listings[i].ExternalID]++
 	}
 	var out []string
 	for _, id := range page.Seen {
-		if !priced[id] {
+		priced[id]--
+		if priced[id] == -1 {
 			out = append(out, id)
 		}
 	}
@@ -605,21 +610,29 @@ func (r *run) fail(msg string) {
 // A stored listing the answer holds under a title that matches no want
 // keeps its price, but its unsent alert leaves its wish (contradict): the
 // answer contradicts the listing the alert was queued for. So does an
-// answer that holds one listing both under a matching title and not.
+// answer that holds one listing both under a matching title and not, whose
+// matching record is not stored, so a sent alert stays sent.
 func (r *run) record(ctx context.Context, source string, listings []Listing, targets []coverageTarget) error {
 	r.res.Listings += len(listings)
 	refreshed := map[string]bool{}
 	unmatched := map[string][]string{}
+	contradicted := map[string]bool{}
+	picks := make([]*Want, len(listings))
 	for i := range listings {
 		l := &listings[i]
 		text := NewListingText(l.Title, r.rules)
 		text.medium = l.Medium
-		w := pickListing(r.wants, r.kinds[l.Source], l, text, r.titles)
-		r.coverListing(source, targets, l, text, w)
-		if w == nil {
-			if l.ExternalID != "" {
-				unmatched[l.Source] = append(unmatched[l.Source], l.ExternalID)
-			}
+		picks[i] = pickListing(r.wants, r.kinds[l.Source], l, text, r.titles)
+		r.coverListing(source, targets, l, text, picks[i])
+		key := listingKey(l.Source, l.ExternalID)
+		if picks[i] == nil && l.ExternalID != "" && !contradicted[key] {
+			contradicted[key] = true
+			unmatched[l.Source] = append(unmatched[l.Source], l.ExternalID)
+		}
+	}
+	for i := range listings {
+		l, w := &listings[i], picks[i]
+		if w == nil || contradicted[listingKey(l.Source, l.ExternalID)] {
 			continue
 		}
 		r.res.Matched++

@@ -605,6 +605,10 @@ func TestRunDropsAlertTheAnswerContradicts(t *testing.T) {
 		},
 		{name: "renamed next to the matching record", pages: map[string]Page{"": offers(listing, renamed(6500))}},
 		{name: "offered without a price", pages: map[string]Page{"": {Seen: []string{"171"}}}},
+		{
+			name:  "offered without a price next to the matching record",
+			pages: map[string]Page{"": {Listings: []Listing{listing}, Seen: []string{"171", "171"}}},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -642,6 +646,57 @@ func TestRunDropsAlertTheAnswerContradicts(t *testing.T) {
 			}
 			if got := notifier.messages(); len(got) != 1 || !strings.Contains(got[0], "45,00 zł (limit 50,00 zł)") {
 				t.Fatalf("sent %q, want one message at the new price", got)
+			}
+		})
+	}
+}
+
+// TestRunKeepsASentAlertAnAnswerContradicts: an answer that holds a
+// listing whose alert went out at 40 zł both at 35 zł under the matching
+// title and renamed or without a price sends nothing and leaves the alert
+// sent. An answer that only matches it at 35 zł alerts again.
+func TestRunKeepsASentAlertAnAnswerContradicts(t *testing.T) {
+	listing := Listing{
+		Source: "olx", ExternalID: "171", Title: "Blade Runner Blu-ray",
+		URL: "https://www.olx.pl/d/oferta/z-ID171.html", PriceCents: 4000,
+	}
+	cheaper := listing
+	cheaper.PriceCents = 3500
+	renamed := listing
+	renamed.Title, renamed.PriceCents = "Blade Runner Blu-ray 4K UHD", 6500
+	tests := []struct {
+		name string
+		page Page
+	}{
+		{"renamed", offers(cheaper, renamed)},
+		{"without a price", Page{Listings: []Listing{cheaper}, Seen: []string{"171", "171"}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pool := dbtest.Migrated(t)
+			copyID := wishlist(t, pool, wantBluray(new(int64(5000))))
+			olx := &pagedSource{pages: map[string]Page{"": offers(listing)}}
+			notifier := &fakeNotifier{}
+			h := newTestHunter(pool, notifier, olx)
+
+			if res := mustRun(t, h); res.Sent != 1 {
+				t.Fatalf("first run = %+v, want the alert sent", res)
+			}
+			olx.answer(map[string]Page{"": tt.page})
+			if res := mustRun(t, h); res.Sent != 0 {
+				t.Fatalf("contradicting run = %+v, want no message", res)
+			}
+			if n := count(t, pool, `SELECT count(*) FROM deal_alert
+				WHERE sent_at IS NOT NULL AND alerted_price_cents = 4000 AND copy_id = `+strconv.FormatInt(copyID, 10)); n != 1 {
+				t.Fatalf("sent alerts for the wish at 40 zł = %d, want the alert kept sent", n)
+			}
+
+			olx.answer(map[string]Page{"": offers(cheaper)})
+			if res := mustRun(t, h); res.Sent != 1 {
+				t.Fatalf("matching run = %+v, want the alert sent again", res)
+			}
+			if got := notifier.messages(); len(got) != 2 || !strings.Contains(got[1], "35,00 zł (było 40,00 zł, limit 50,00 zł)") {
+				t.Fatalf("sent %q, want a second message at 35 zł", got)
 			}
 		})
 	}

@@ -401,6 +401,25 @@ export function discogsRelease(c: CopyValue): number | null {
 	return priced ? (c.discogs_release_id ?? null) : null;
 }
 
+/** A number rounded to a whole magnitude with its sign; one that rounds to 0 has none. */
+function signedWhole(value: number, text: (magnitude: number) => string): string {
+	const magnitude = Math.round(Math.abs(value));
+	return signed(magnitude === 0 ? 0 : value, text(magnitude));
+}
+
+/**
+ * A copy's used value against what was paid for it, as on its title page: "+10 zł · +20%", in
+ * whole złoty and percent rounded from grosze. A copy bought for 0 zł has no percent, and one
+ * without a used value or a price shows a dash.
+ */
+export function copyGain(c: CopyValue): string {
+	if (!c.mid || c.price_cents == null) return '—';
+	const cents = c.mid.cents - c.price_cents;
+	const amount = signedWhole(cents / 100, formatZl);
+	if (c.price_cents <= 0) return amount;
+	return `${amount} · ${signedWhole((cents / c.price_cents) * 100, (n) => `${n}%`)}`;
+}
+
 /** A copy's format, or its kind, and what was paid for it: "Winyl · kupiono za 189,99 zł". */
 export function copyMeta(c: CopyValue): string {
 	const medium = c.format ? formatLabels[c.format] : kindLabels[c.kind];

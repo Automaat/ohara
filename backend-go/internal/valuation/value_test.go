@@ -321,3 +321,42 @@ func TestDiscogsMidSkipsGradesLeftOutOfTheNewestAnswer(t *testing.T) {
 		t.Fatalf("ceiling = %+v, want the last Mint suggestion", got.Ceiling)
 	}
 }
+
+func TestPolishBookEditionsPricedApart(t *testing.T) {
+	polish, english := "9788381880206", "9780441013593"
+	olx := func(edition int64, code string, cents int64) Price {
+		return Price{
+			EditionID: edition, TitleID: 7, Source: SourceOLX, Cents: cents, AcquiredAs: used(),
+			Kind: "book", Barcode: &code,
+		}
+	}
+	copies := func() []CopyValue {
+		return []CopyValue{
+			{CopyID: 1, EditionID: 70, TitleID: 7, Kind: "book", Barcode: &polish},
+			{CopyID: 2, EditionID: 71, TitleID: 7, Kind: "book", Barcode: &english},
+			{CopyID: 3, EditionID: 72, TitleID: 7, Kind: "book"},
+		}
+	}
+	mid := func(c CopyValue) any {
+		if c.Mid == nil {
+			return nil
+		}
+		return c.Mid.Cents
+	}
+
+	onlyEnglish := copies()
+	Value(onlyEnglish, NewRanges([]Price{olx(71, english, 3000)}))
+	if got := []any{mid(onlyEnglish[0]), mid(onlyEnglish[1]), mid(onlyEnglish[2])}; !reflect.DeepEqual(got, []any{nil, int64(3000), nil}) {
+		t.Errorf("mids with only an English listing = %v, want [<nil> 3000 <nil>]", got)
+	}
+
+	both := copies()
+	ranges := NewRanges([]Price{olx(71, english, 3000), olx(70, polish, 4000)})
+	Value(both, ranges)
+	if got := []any{mid(both[0]), mid(both[1]), mid(both[2])}; !reflect.DeepEqual(got, []any{int64(4000), int64(3000), int64(4000)}) {
+		t.Errorf("mids = %v, want [4000 3000 4000]", got)
+	}
+	if got := ranges.Markets(); len(got) != 1 || got[0].Cents != 3500 || got[0].Count != 2 {
+		t.Errorf("Markets() = %+v, want one market of both editions at 3500", got)
+	}
+}

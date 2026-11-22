@@ -226,6 +226,12 @@ One image, `ghcr.io/automaat/ohara`: the Go binary serves `/api`, `/health`,
   author's surname for books, the artist's words and a fitting medium for
   albums, where a listing naming no medium counts as a CD, minus the
   editable reject phrases a want's own name or artist does not contain),
+  skips lots of several titles: a count of titles ("3 filmy", "20 szt.",
+  "kolekcja filmów") unless a want's name makes it a set ("Trylogia"),
+  and, before the wanted name, a set word ("zestaw", "pakiet", "komplet")
+  or five discs or volumes or more ("5 płyt", "8 tomów"); past the name
+  those describe one title's edition ("6 płyt CD"), and one title on a
+  few discs ("2 płyty", "5xDVD") still matches,
   skips a want for a listing that names another title of its kind
   (wished, owned or neither) more specifically: one phrase, past media
   words and disc counts, holding every word of a want's name it carries

@@ -41,6 +41,7 @@
 	import { purchaseDate } from '#lib/polish.js';
 	import { LatestLoad, newRequestKey } from '#lib/scan.js';
 	import { copyRequest } from '#lib/title-detail.js';
+	import { TitleMarkets } from '#lib/title-market.svelte.js';
 
 	const id = $derived(Number(page.params.id));
 
@@ -122,6 +123,12 @@
 
 	$effect(() => {
 		void load(id);
+	});
+
+	/** The wish's market price, asked once the new copy's form shows a wish's limit. */
+	const markets = new TitleMarkets(fetch);
+	$effect(() => {
+		if (detail && adding && copyForm.status === 'wishlist') void markets.load(detail.title_id);
 	});
 
 	function startCopy() {
@@ -268,6 +275,7 @@
 						issue={copyIssue}
 						saving={savingCopy}
 						submitLabel="Zapisz egzemplarz"
+						market={markets.for(d.title_id, d.format)}
 						onsubmit={() => addCopy(d)}
 						oncancel={() => (adding = false)}
 					/>

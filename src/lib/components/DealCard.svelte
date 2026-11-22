@@ -6,12 +6,19 @@
 		dealPrice,
 		isUnderLimit,
 		limitComparison,
+		marketLabel,
 		sourceLabels,
 		wishLimit,
+		type MarketPrice,
 		type Observation
 	} from '#lib/deals.js';
 
-	let { deal, ondismiss }: { deal: Observation; ondismiss?: () => void } = $props();
+	let {
+		deal,
+		market = null,
+		ondismiss
+	}: { deal: Observation; market?: MarketPrice | null; ondismiss?: () => void } = $props();
+	const marketLine = $derived(marketLabel(market));
 	let failed = $state<string[]>([]);
 
 	const image = $derived(
@@ -69,6 +76,9 @@
 				{/if}
 				· {wishLimit(deal.max_price_cents)}
 			</span>
+			{#if marketLine}
+				<span class="market">{marketLine}</span>
+			{/if}
 			<span
 				class="alert"
 				class:sent={deal.alert === 'sent'}
@@ -203,6 +213,11 @@
 
 	.wish a {
 		color: inherit;
+	}
+
+	.market {
+		min-inline-size: 0;
+		overflow-wrap: anywhere;
 	}
 
 	.alert {

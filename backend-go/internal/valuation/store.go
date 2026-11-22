@@ -128,6 +128,41 @@ func prices(ctx context.Context, q querier, window time.Duration, titleID int64)
 	return pgx.CollectRows(rows, pgx.RowToStructByPos[Price])
 }
 
+// Markets returns the used price of each title and format the valuation
+// would give an owned copy of it: the middle of the OLX prices last seen
+// within window, from every edition of that title and format, an
+// unowned one's only when first seen after its last change. Without
+// titleID it values every title and format with a wish; with it, every
+// format of that title, wished, owned or neither. One with no used price
+// is left out.
+func (s *Store) Markets(ctx context.Context, window time.Duration, titleID int64) ([]Market, error) {
+	args := []any{pooledSources, window.Seconds()}
+	scope := ` AND (e.title_id, coalesce(e.format, '')) IN (
+			SELECT wished.title_id, coalesce(wished.format, '')
+			FROM copy c JOIN edition wished ON wished.id = c.edition_id
+			WHERE c.status = 'wishlist')`
+	if titleID != 0 {
+		args = append(args, titleID)
+		scope = ` AND e.title_id = $3`
+	}
+	rows, err := s.pool.Query(ctx, `SELECT o.edition_id, e.title_id, e.format, o.source,
+			o.price_cents, o.acquired_as, o.last_seen_at
+		FROM price_observation o JOIN edition e ON e.id = o.edition_id
+		WHERE o.source = ANY ($1)
+			AND o.last_seen_at > now() - make_interval(secs => $2)
+			AND (o.observed_at > e.updated_at
+				OR EXISTS (SELECT 1 FROM copy c WHERE c.edition_id = e.id AND c.status = 'owned'))`+scope,
+		args...)
+	if err != nil {
+		return nil, fmt.Errorf("markets: %w", err)
+	}
+	seen, err := pgx.CollectRows(rows, pgx.RowToStructByPos[Price])
+	if err != nil {
+		return nil, fmt.Errorf("markets: %w", err)
+	}
+	return NewRanges(seen).Markets(), nil
+}
+
 // Copies returns every owned copy with its edition and title, by title.
 func (s *Store) Copies(ctx context.Context) ([]CopyValue, error) {
 	return copies(ctx, s.pool, 0)

@@ -57,11 +57,12 @@ type Allegro struct {
 // `api allegro-login`. A tokenOp is also the first load of the stored
 // pair, which the lookup that starts it runs itself (see load).
 type tokenOp struct {
-	done    chan struct{}
-	refresh bool
-	chain   []string
-	access  string
-	err     error
+	done              chan struct{}
+	refresh           bool
+	loginCheckTimeout time.Duration
+	chain             []string
+	access            string
+	err               error
 	// abandoned marks a load that failed because the lookup running it
 	// gave up, so a lookup still waiting loads again.
 	abandoned bool
@@ -104,6 +105,8 @@ const tokenLeeway = time.Minute
 
 // defaultTokenTimeout bounds one token load, refresh and save.
 const defaultTokenTimeout = 20 * time.Second
+
+const maxLoginCheckTimeout = 500 * time.Millisecond
 
 // Name is "allegro".
 func (*Allegro) Name() string { return "allegro" }
@@ -220,7 +223,17 @@ func (a *Allegro) currentToken(ctx context.Context, force bool) (string, *tokenO
 // caller holds a.mu. The op may outlive the lookup that started it, so its
 // context drops the request's log info.
 func (a *Allegro) startOp(ctx context.Context, t Token, refresh bool) {
-	op := &tokenOp{done: make(chan struct{}), refresh: refresh, chain: append(slices.Clone(a.chain), t.Refresh)}
+	op := &tokenOp{
+		done: make(chan struct{}), refresh: refresh,
+		chain: append(slices.Clone(a.chain), t.Refresh),
+	}
+	if refresh && a.unsaved {
+		op.loginCheckTimeout = min(maxLoginCheckTimeout, a.timeout())
+		if deadline, ok := ctx.Deadline(); ok {
+			// Leave most of the lookup's time for OAuth and the catalog.
+			op.loginCheckTimeout = min(op.loginCheckTimeout, time.Until(deadline)/4)
+		}
+	}
 	a.op = op
 	go a.runOp(reqlog.Detach(context.WithoutCancel(ctx)), op, t)
 }
@@ -259,7 +272,16 @@ func (a *Allegro) load(ctx context.Context, op *tokenOp) {
 // the pair `api allegro-login` stores.
 func (a *Allegro) runOp(ctx context.Context, op *tokenOp, t Token) {
 	defer close(op.done)
-	if op.refresh {
+	saved := false
+	if op.loginCheckTimeout > 0 {
+		stored, newer := a.checkForNewLogin(ctx, op)
+		if newer {
+			t = stored
+			op.chain = []string{t.Refresh}
+			saved = a.now().Add(tokenLeeway).Before(t.Expiry)
+		}
+	}
+	if op.refresh && !saved {
 		next, err := a.refresh(ctx, t.Refresh)
 		if err != nil {
 			op.err = err
@@ -274,7 +296,9 @@ func (a *Allegro) runOp(ctx context.Context, op *tokenOp, t Token) {
 		t = next
 		op.chain = append(op.chain, t.Refresh)
 	}
-	t, saved := a.persist(ctx, t, op.chain)
+	if !saved {
+		t, saved = a.persist(ctx, t, op.chain)
+	}
 	op.access = t.Access
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -311,14 +335,29 @@ func (a *Allegro) save(ctx context.Context, t Token, chain []string) (Token, boo
 		stored, swapped, err := s.Swap(ctx, a.Name(), chain, t)
 		return stored, !swapped && err == nil, err
 	}
-	stored, ok, err := a.Store.Load(ctx, a.Name())
-	if err != nil {
-		return Token{}, false, err
-	}
-	if ok && !slices.Contains(chain, stored.Refresh) {
-		return stored, true, nil
+	stored, newer, err := a.loadNewLogin(ctx, chain)
+	if err != nil || newer {
+		return stored, newer, err
 	}
 	return Token{}, false, a.Store.Save(ctx, a.Name(), t)
+}
+
+func (a *Allegro) loadNewLogin(ctx context.Context, chain []string) (Token, bool, error) {
+	stored, ok, err := a.Store.Load(ctx, a.Name())
+	return stored, err == nil && ok && !slices.Contains(chain, stored.Refresh), err
+}
+
+func (a *Allegro) checkForNewLogin(ctx context.Context, op *tokenOp) (Token, bool) {
+	ctx, cancel := context.WithTimeout(ctx, op.loginCheckTimeout)
+	defer cancel()
+	stored, newer, err := a.loadNewLogin(ctx, op.chain)
+	if err != nil && ctx.Err() == nil {
+		stored, newer, err = a.loadNewLogin(ctx, op.chain)
+	}
+	if err != nil {
+		slog.WarnContext(ctx, "allegro: check for a stored login before refresh", "err", err)
+	}
+	return stored, newer
 }
 
 // refresh trades refreshToken for a new pair.

@@ -15,13 +15,15 @@ import (
 // DVDmaxURL is DVDmax's catalog search for product titles.
 const DVDmaxURL = "https://api.dvdmax.pl/app/v2/products/q/title/"
 
+const dvdmaxSource = "dvdmax"
+
 // DVDmax searches the first 50 products in the shop's film catalog.
 type DVDmax struct {
 	Client  *http.Client
 	BaseURL string
 }
 
-func (DVDmax) Name() string        { return "dvdmax" }
+func (DVDmax) Name() string        { return dvdmaxSource }
 func (DVDmax) PerQuery() bool      { return true }
 func (DVDmax) Kinds() []string     { return []string{"movie"} }
 func (DVDmax) CanaryQuery() string { return "Blade Runner" }
@@ -31,6 +33,12 @@ func (DVDmax) wishQueries(w *Want) []string { return w.queries(false) }
 // Search asks for films by title. The structured medium in the answer lets
 // the matcher distinguish DVD, Blu-ray and UHD after fetching the products.
 func (d DVDmax) Search(ctx context.Context, query string) ([]Listing, error) {
+	page, err := d.SearchPage(ctx, query)
+	return page.Listings, err
+}
+
+// SearchPage retains explicit unavailability even when the product cannot match.
+func (d DVDmax) SearchPage(ctx context.Context, query string) (Page, error) {
 	u := d.BaseURL + "?" + url.Values{
 		"title":        {query},
 		"page":         {"1"},
@@ -39,9 +47,9 @@ func (d DVDmax) Search(ctx context.Context, query string) ([]Listing, error) {
 	}.Encode()
 	body, err := get(ctx, d.Client, d.Name(), u, "application/json")
 	if err != nil {
-		return nil, fmt.Errorf("dvdmax: %w", err)
+		return Page{}, fmt.Errorf("dvdmax: %w", err)
 	}
-	return parseDVDmax(body, query)
+	return parseDVDmaxPage(body, query)
 }
 
 type dvdmaxProduct struct {
@@ -56,30 +64,47 @@ type dvdmaxProduct struct {
 }
 
 func parseDVDmax(body []byte, query string) ([]Listing, error) {
+	page, err := parseDVDmaxPage(body, query)
+	return page.Listings, err
+}
+
+func parseDVDmaxPage(body []byte, query string) (Page, error) {
 	var answer struct {
 		Products []dvdmaxProduct `json:"products"`
 	}
 	if err := json.Unmarshal(body, &answer); err != nil {
-		return nil, parseError{fmt.Errorf("dvdmax: decode: %w", err)}
+		return Page{}, parseError{fmt.Errorf("dvdmax: decode: %w", err)}
 	}
 	if answer.Products == nil {
-		return nil, parseError{errors.New("dvdmax: response has no products")}
+		return Page{}, parseError{errors.New("dvdmax: response has no products")}
 	}
-	var out []Listing
+	var page Page
 	queryWords := words(query)
 	for i := range answer.Products {
 		product := &answer.Products[i]
 		if product.ID <= 0 || strings.TrimSpace(product.Title) == "" {
-			return nil, parseError{errors.New("dvdmax: product has no ID or title")}
+			return Page{}, parseError{errors.New("dvdmax: product has no ID or title")}
+		}
+		if !product.available() {
+			if product.Status != "" {
+				page.Unavailable = append(page.Unavailable, strconv.FormatInt(product.ID, 10))
+			}
+			continue
 		}
 		if !dvdmaxTitleMatches(product.Title, queryWords) {
 			continue
 		}
 		if listing, ok := product.listing(); ok {
-			out = append(out, listing)
+			page.Listings = append(page.Listings, listing)
 		}
 	}
-	return out, nil
+	page.Listings = slices.DeleteFunc(page.Listings, func(l Listing) bool {
+		return slices.Contains(page.Unavailable, l.ExternalID)
+	})
+	for i := range page.Listings {
+		page.Seen = append(page.Seen, page.Listings[i].ExternalID)
+	}
+	return page, nil
 }
 
 // DVDmax's fuzzy search returns longer, unrelated titles containing the query.
@@ -100,12 +125,16 @@ func dvdmaxTitleMatches(title string, query []string) bool {
 	return false
 }
 
-func (p *dvdmaxProduct) listing() (Listing, bool) {
+func (p *dvdmaxProduct) available() bool {
 	switch p.Status {
 	case "DOSTEPNY24", "DOSTEPNY48H", "DOSTEPNY72H", "DOSTEPNY120", "DOSTEPNY48", "DOSTEPNY72", "DOSTEPNY336", "PROMOCJA", "ZAPOWIEDZ":
+		return true
 	default:
-		return Listing{}, false
+		return false
 	}
+}
+
+func (p *dvdmaxProduct) listing() (Listing, bool) {
 	format, ok := map[string]string{"DVD": "dvd", "BLU-RAY": "bluray", "BLU-RAY 4K": "uhd"}[p.Format]
 	// The site separates the titles in multi-film packages with a spaced slash.
 	if !ok || strings.Contains(p.Title, " / ") {

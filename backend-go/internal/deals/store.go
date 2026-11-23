@@ -55,16 +55,16 @@ var sources = []string{"olx", "bluedvd", "dvdmax", "winylownia", "swiatksiazki",
 // once no answer has offered them for discogsKeep (ForgetStale).
 var expiringSources = []string{DiscogsSource}
 
-// freshListing holds for a listing o the deals view may show and alert
-// on: one of a source that does not expire, or one an answer still holds
-// (not gone) and offered within discogsShown.
+// freshListing excludes explicitly unavailable DVDmax offers and requires
+// recent confirmation for sources with expiring listings.
 var freshListing = freshAt("now()")
 
 // freshAt is freshListing judged at the instant the SQL at names.
 func freshAt(at string) string {
-	return fmt.Sprintf(`(o.source <> ALL ('{%s}'::text[])
+	return fmt.Sprintf(`(o.source <> '%s' OR o.gone_at IS NULL)
+	AND (o.source <> ALL ('{%s}'::text[])
 	OR o.gone_at IS NULL AND o.last_offered_at > %s - make_interval(secs => %d))`,
-		strings.Join(expiringSources, ","), at, int(discogsShown.Seconds()))
+		dvdmaxSource, strings.Join(expiringSources, ","), at, int(discogsShown.Seconds()))
 }
 
 // mediumFits is SQL that holds when listing o can be what wish w's
@@ -182,27 +182,31 @@ func (s *Store) RefreshMarkets(ctx context.Context, wants []Want) error {
 }
 
 // Wants returns every wishlist copy with its edition and title, oldest
-// first, but those of TV series, which the hunter does not look for, and the market price of its title and format when it has a
-// market percent.
+// first, excluding TV seasons, and the market price of its title and
+// format when it has a market percent.
 func (s *Store) Wants(ctx context.Context) ([]Want, error) {
+	return s.wants(ctx, false)
+}
+
+func (s *Store) wants(ctx context.Context, includeTV bool) ([]Want, error) {
 	markets, err := s.marketTable(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("wants: %w", err)
 	}
 	rows, err := s.pool.Query(ctx, `SELECT c.id, e.id, t.id, t.kind, t.name, t.original_title,
-			t.polish_title, t.authors, e.format, e.barcode, c.max_price_cents, c.max_market_percent,
+			t.polish_title, t.season, t.authors, e.format, e.barcode, c.max_price_cents, c.max_market_percent,
 			CASE WHEN c.max_market_percent IS NOT NULL THEN m.cents END, c.exact_edition,
 			e.packaging, e.pl_voiceover, e.pl_subtitles, e.binding, e.discogs_release_id
 		FROM copy c JOIN edition e ON e.id = c.edition_id JOIN title t ON t.id = e.title_id
 		`+marketJoin("e", 1)+`
-		WHERE c.status = 'wishlist' AND t.kind <> 'tv' ORDER BY c.id`, markets.titles, markets.formats, markets.cents)
+		WHERE c.status = 'wishlist' AND ($4 OR t.kind <> 'tv') ORDER BY c.id`, markets.titles, markets.formats, markets.cents, includeTV)
 	if err != nil {
 		return nil, fmt.Errorf("wants: %w", err)
 	}
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Want, error) {
 		var w Want
 		err := row.Scan(&w.CopyID, &w.EditionID, &w.TitleID, &w.Kind, &w.Name, &w.OriginalTitle,
-			&w.PolishTitle, &w.Authors, &w.Format, &w.Barcode, &w.MaxPriceCents, &w.MaxMarketPercent,
+			&w.PolishTitle, &w.Season, &w.Authors, &w.Format, &w.Barcode, &w.MaxPriceCents, &w.MaxMarketPercent,
 			&w.MarketCents, &w.ExactEdition, &w.Packaging, &w.PLVoiceover, &w.PLSubtitles, &w.Binding, &w.DiscogsReleaseID)
 		return w, err
 	})
@@ -296,6 +300,8 @@ type observationRaw struct {
 	Title          string          `json:"title"`
 	Query          string          `json:"query,omitempty"`
 	Data           json.RawMessage `json:"data,omitempty"`
+	TVSeason       *int            `json:"tv_season"`
+	TVFormat       string          `json:"tv_format,omitempty"`
 }
 
 // listingSources are the sources whose stored listings keep their first
@@ -412,9 +418,14 @@ func (s *Store) record(ctx context.Context, l *Listing, w *Want, alert bool, asO
 
 // record is Store.record inside tx, which the caller commits.
 func record(ctx context.Context, tx pgx.Tx, l *Listing, w *Want, alert bool, asOf *time.Time) (bool, bool, error) {
-	raw, err := json.Marshal(observationRaw{
+	observation := observationRaw{
 		Title: l.Title, Data: l.Raw, PhotoURL: l.PhotoURL, WishlistCopyID: w.CopyID, Query: QueryKey(l.Query),
-	})
+		TVSeason: l.TVSeason,
+	}
+	if l.TVSeason != nil {
+		observation.TVFormat = listingFormat(words(l.Title))
+	}
+	raw, err := json.Marshal(observation)
 	if err != nil {
 		return false, false, fmt.Errorf("record: encode raw: %w", err)
 	}
@@ -503,17 +514,25 @@ func (s *Store) UpdateGone(ctx context.Context, source string, complete, seen []
 }
 
 // MarkOffered records that an answer of source held the listings with
-// externalIDs, priced or not, matching or not: their last_offered_at moves
-// to now and a gone one is no longer gone. last_seen_at and the price stay,
-// so the valuation window still counts only priced sightings. IDs of
-// listings never stored are ignored.
+// externalIDs without moving their priced sighting. DVDmax clears the gone
+// mark only once a matched offer refreshes the stored price.
 func (s *Store) MarkOffered(ctx context.Context, source string, externalIDs []string) error {
 	if len(externalIDs) == 0 {
 		return nil
 	}
-	if _, err := s.pool.Exec(ctx, `UPDATE price_observation SET gone_at = NULL, last_offered_at = now()
-		WHERE source = $1 AND external_id = ANY ($2)`, source, externalIDs); err != nil {
+	if _, err := s.pool.Exec(ctx, `UPDATE price_observation
+		SET gone_at = CASE WHEN source = $3 THEN gone_at END, last_offered_at = now()
+		WHERE source = $1 AND external_id = ANY ($2)`, source, externalIDs, dvdmaxSource); err != nil {
 		return fmt.Errorf("mark offered: %w", err)
+	}
+	return nil
+}
+
+// MarkUnavailable hides explicitly unavailable offers until a matched offer refreshes them.
+func (s *Store) MarkUnavailable(ctx context.Context, source string, externalIDs []string) error {
+	if _, err := s.pool.Exec(ctx, `UPDATE price_observation SET gone_at = now()
+		WHERE source = $1 AND external_id = ANY ($2) AND gone_at IS NULL`, source, externalIDs); err != nil {
+		return fmt.Errorf("mark unavailable: %w", err)
 	}
 	return nil
 }
@@ -839,7 +858,7 @@ func pendingAlerts(ctx context.Context, q querier, markets marketTable, only *in
 				OR $6 AND a.automatic AND c.max_price_cents IS NULL AND c.max_market_percent IS NULL
 					AND o.gone_at IS NULL AND c.id = coalesce(o.wishlist_copy_id, a.copy_id) AND `+wishOfListingTitle("c")+`)
 			AND o.dismissed_at IS NULL AND `+freshListing+` AND `+mediumFits("c")+`
-			AND `+wishNamedBy("c")+` AND `+huntedWish("c")+`
+			AND `+wishNamedBy("c")+` AND `+listingFitsKind("c")+`
 			AND (a.alerted_price_cents IS NULL OR o.price_cents < a.alerted_price_cents)
 			AND ($2::bigint IS NULL OR a.observation_id = $2)
 		ORDER BY a.created_at, a.observation_id`, MaxAttempts, only, markets.titles, markets.formats, markets.cents, automatic)
@@ -973,7 +992,7 @@ var allListings = `SELECT o.id, w.id AS wish_id
 		LEFT JOIN deal_alert a ON a.observation_id = o.id
 		LEFT JOIN copy w ON w.status = 'wishlist' AND w.id = coalesce(o.wishlist_copy_id, a.copy_id)
 			AND (o.wishlist_copy_id IS NOT NULL OR ` + wishOfListingTitle("w") + `) AND ` + wishNamedBy("w") + `
-			AND ` + huntedWish("w") + ` AND ` + mediumFits("w") + ` AND o.id <> ALL ($7)
+			AND ` + listingFitsKind("w") + ` AND ` + mediumFits("w") + ` AND o.id <> ALL ($7)
 		WHERE o.dismissed_at IS NULL AND o.source = ANY ($6) AND ` + freshListing + `
 		ORDER BY o.observed_at DESC, o.id DESC LIMIT $5`
 
@@ -1017,7 +1036,7 @@ func (a *storedAlbum) destinations() []any {
 func unverifiedAlbums(ctx context.Context, q pgx.Tx) ([]int64, error) {
 	var albums []int64
 	if err := q.QueryRow(ctx, `SELECT coalesce(array_agg(w.id), '{}') FROM copy w
-		WHERE w.status = 'wishlist' AND `+huntedWish("w")+` AND EXISTS (SELECT FROM edition ae
+		WHERE w.status = 'wishlist' AND EXISTS (SELECT FROM edition ae
 			JOIN title at ON at.id = ae.title_id WHERE ae.id = w.edition_id AND at.kind = 'music')`).Scan(&albums); err != nil {
 		return nil, err
 	}
@@ -1127,7 +1146,7 @@ type wishedCopies struct {
 func readWishedCopies(ctx context.Context, tx pgx.Tx) (wishedCopies, error) {
 	var w wishedCopies
 	if err := tx.QueryRow(ctx, `SELECT clock_timestamp(), coalesce(array_agg(w.id), '{}')
-		FROM copy w WHERE w.status = 'wishlist' AND `+huntedWish("w")).Scan(&w.cutoff, &w.ids); err != nil {
+		FROM copy w WHERE w.status = 'wishlist'`).Scan(&w.cutoff, &w.ids); err != nil {
 		return w, fmt.Errorf("wished copies: %w", err)
 	}
 	return w, nil
@@ -1198,7 +1217,7 @@ func wishedPage(ctx context.Context, tx pgx.Tx, f RecentFilter, markets marketTa
 	// it reads the few listings an alert alone ties to a copy first when most alerts are the
 	// hunter's own, instead of looking up the listing of every alert.
 	page, err := collectPage(tx.Query(ctx, `WITH wished AS MATERIALIZED (
-			SELECT w.id FROM copy w WHERE w.status = 'wishlist' AND `+huntedWish("w")+`)
+			SELECT w.id FROM copy w WHERE w.status = 'wishlist')
 		SELECT o.id, o.observed_at, w.id
 		FROM deal_alert a
 		JOIN wished ON wished.id = a.copy_id
@@ -1208,7 +1227,7 @@ func wishedPage(ctx context.Context, tx pgx.Tx, f RecentFilter, markets marketTa
 		`+marketJoin("ed", 3)+`
 		WHERE o.wishlist_copy_id IS NULL AND o.dismissed_at IS NULL AND o.source = ANY ($2) AND o.id <> ALL ($7)
 			AND `+fresh+` AND `+wishOfListingTitle("w")+` AND `+wishNamedBy("w")+`
-			AND `+mediumFits("w")+` AND `+cond+`
+			AND `+listingFitsKind("w")+` AND `+mediumFits("w")+` AND `+cond+`
 		ORDER BY o.observed_at DESC, o.id DESC LIMIT $1`,
 		f.Limit, sources, markets.titles, markets.formats, markets.cents, wishes.cutoff, unverified))
 	if err != nil {
@@ -1239,7 +1258,7 @@ func wishedPage(ctx context.Context, tx pgx.Tx, f RecentFilter, markets marketTa
 				`+marketJoin("ed", 3)+`
 				WHERE o.id = ANY ($1) AND o.id <> ALL ($7) AND o.dismissed_at IS NULL AND o.source = ANY ($2)
 					AND `+fresh+`
-					AND w.status = 'wishlist' AND `+huntedWish("w")+` AND `+wishNamedBy("w")+` AND `+cond+`)
+					AND w.status = 'wishlist' AND `+listingFitsKind("w")+` AND `+wishNamedBy("w")+` AND `+cond+`)
 			SELECT o.id, o.observed_at, w.id
 			FROM kept
 			JOIN price_observation o ON o.id = kept.id
@@ -1480,13 +1499,12 @@ func setDismissed(ctx context.Context, q querier, id int64, dismissed bool) erro
 	return nil
 }
 
-// SearchedWishCount returns how many wishlist copies the hunter looks for:
-// every wish but those of TV series, as Wants reads them.
-func (s *Store) SearchedWishCount(ctx context.Context) (int, error) {
+// SearchedWishCount returns how many wishlist copies the hunter looks for.
+func (s *Store) SearchedWishCount(ctx context.Context, includeTV bool) (int, error) {
 	var n int
 	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM copy c JOIN edition e ON e.id = c.edition_id
 		JOIN title t ON t.id = e.title_id
-		WHERE c.status = 'wishlist' AND t.kind <> 'tv'`).Scan(&n); err != nil {
+		WHERE c.status = 'wishlist' AND ($1 OR t.kind <> 'tv')`, includeTV).Scan(&n); err != nil {
 		return 0, fmt.Errorf("searched wish count: %w", err)
 	}
 	return n, nil

@@ -57,10 +57,7 @@ for (const viewport of viewports) {
 			else await target.click();
 		}
 
-		test('Okazje lists every wish with its facts, title link and edit link', async ({
-			page,
-			request
-		}) => {
+		test('Okazje lists every wish with its cover, facts and links', async ({ page, request }) => {
 			const run = `${viewport.name}-${Date.now()}`;
 			const film = `Wymarzony film ${run}`;
 			const book = `Wymarzona książka ${run}`;
@@ -84,6 +81,12 @@ for (const viewport of viewports) {
 			await expect(list).toBeVisible();
 			const filmCard = list.getByRole('listitem').filter({ hasText: film });
 			await expect(filmCard).toContainText(/Film · Blu-ray · limit 80\szł/);
+			const cover = filmCard.locator('img');
+			await cover.scrollIntoViewIfNeeded();
+			await expect(cover).toHaveAttribute('src', /\/pwa-192x192\.png$/);
+			await expect
+				.poll(() => cover.evaluate((image) => (image as HTMLImageElement).naturalWidth))
+				.toBeGreaterThan(0);
 			await expect(list.getByRole('listitem').filter({ hasText: book })).toContainText(
 				'Książka · Stanisław Lem'
 			);

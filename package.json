@@ -25,7 +25,7 @@
 		"@smykla-skalski/sui": "0.3.1",
 		"@sveltejs/adapter-static": "4.0.1",
 		"@sveltejs/kit": "3.4.0",
-		"@sveltejs/vite-plugin-svelte": "7.3.1",
+		"@sveltejs/vite-plugin-svelte": "7.3.2",
 		"@types/node": "26.6.6",
 		"@vitest/coverage-v8": "^5.0.0",
 		"fake-indexeddb": "6.2.8",

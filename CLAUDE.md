@@ -30,7 +30,7 @@ Same layout and tooling as `../baratie`. `package.json` and
     /discogs/          # Discogs API client: barcode search, marketplace stats, price suggestions, collection writes
     /discogscollection/ # POST /api/copies/{id}/discogs: an owned album copy into the Discogs collection
     /scanqueue/        # /api/scan-queue: barcodes the scanner could not resolve
-    /deals/            # wishlist deal hunter: OLX, BlueDVD, Winylownia, Świat Książki, Pepper sources, matcher, Telegram alerts
+    /deals/            # wishlist deal hunter: OLX, BlueDVD, DVDmax, Winylownia, Świat Książki, Pepper sources, matcher, Telegram alerts
     /wantlist/         # album wishes pushed to the Discogs wantlist (manual sync)
     /wishshare/        # the wishlist's read-only share link: owner API and the public /share/ pages
     /valuation/        # daily value of owned copies: OLX, SkupSzop buy-back, Discogs; value history
@@ -203,6 +203,8 @@ browser's `Host` (`changeOrigin: false`) so dev writes pass this check.
 | `OHARA_TELEGRAM_BOT_TOKEN`, `OHARA_TELEGRAM_CHAT_ID`                                         | unset (no alerts)                                  | Telegram bot for deal alerts; set both or neither                                                                                                          |
 | `OHARA_DEALS_AUTOMATIC_ALERTS`                                                               | `false`                                            | Send automatic price deals to the configured Telegram chat for wishes with neither manual limit                                                            |
 | `OHARA_BLUEDVD`                                                                              | `true`                                             | BlueDVD shop (WooCommerce Store API) in the deal hunter; `false` leaves it out of runs and `/metrics`                                                      |
+| `OHARA_DVDMAX`                                                                               | `true`                                             | DVDmax film search. Its canary is `Blade Runner`. Set `false` to disable it.                                                                               |
+| `OHARA_DEALS_DVDMAX_URL`                                                                     | public endpoint                                    | Point DVDmax at a test double                                                                                                                              |
 | `OHARA_SWIATKSIAZKI`                                                                         | `true`                                             | Świat Książki shop (GraphQL products search) in the deal hunter; `false` leaves it out of runs and `/metrics`                                              |
 | `OHARA_TEZEUSZ`                                                                              | `true`                                             | Search the Tezeusz used-book shop for wished books (deals only, not the valuation); `false` leaves it out of runs and `/metrics`                           |
 | `OHARA_WINYLOWNIA`                                                                           | `true`                                             | Winylownia vinyl shop (IdoSell search page) in the deal hunter, asked only for album wishes; `false` leaves it out of runs and `/metrics`                  |

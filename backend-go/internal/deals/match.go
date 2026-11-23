@@ -30,6 +30,7 @@ type Want struct {
 	Name             string
 	OriginalTitle    *string
 	PolishTitle      *string
+	Season           *int
 	Authors          []string
 	Format           *string
 	Barcode          *string
@@ -417,6 +418,7 @@ type ListingText struct {
 	// (Listing.Medium), empty when only its title does.
 	medium    string
 	releaseID int64
+	season    *int
 }
 
 // NewListingText readies a listing title for matching under rules.
@@ -514,11 +516,15 @@ var formatKeyword = map[string]string{"dvd": "dvd", "bluray": "blu-ray", "uhd": 
 // for an album ("Pink Floyd The Wall"), as album titles alone are often
 // generic. An album query names no medium: CD listings often do not.
 func (w *Want) Queries() []string {
+	return w.queries(true)
+}
+
+func (w *Want) queries(movieFormat bool) []string {
 	p := w.text()
 	// suffix is added unless q already has the word key.
 	suffix, key := "", ""
 	switch {
-	case w.Kind == "movie" && w.Format != nil:
+	case movieFormat && w.Kind == "movie" && w.Format != nil:
 		suffix = formatKeyword[*w.Format]
 		key = suffix
 	case w.Kind == "book":
@@ -958,8 +964,12 @@ func qualifies(w *Want, p *wantText, l *ListingText) bool {
 
 func (l *ListingText) qualification(w *Want, p *wantText) rejectionReason {
 	text := l.words
-	if w.Kind == "movie" && w.Format != nil && l.format != *w.Format {
+	tvSeason := w.Kind == "tv" && w.Season != nil
+	if (w.Kind == "movie" || tvSeason) && w.Format != nil && l.format != *w.Format {
 		return rejectionFormat
+	}
+	if tvSeason && (l.season == nil || *l.season != *w.Season) {
+		return rejectionTitle
 	}
 	if !editionNamed(w, l.details) {
 		return rejectionEdition
@@ -1053,7 +1063,8 @@ func (l *ListingText) endsTitle(j int, byline []string) bool {
 		return true
 	}
 	next := l.words[j]
-	return isMediaWord(next) || l.releaseYear(next) || inByline(byline, next)
+	return isMediaWord(next) || l.releaseYear(next) || inByline(byline, next) ||
+		l.season != nil && (next == "season" || next == "sezon")
 }
 
 // isMediaWord reports whether word names a medium: a media word, a word
@@ -1342,6 +1353,7 @@ func pickListing(wants []Want, kinds []string, l *Listing, text *ListingText, ti
 func (l *Listing) text(rules Rules) *ListingText {
 	text := NewListingText(l.Title, rules)
 	text.medium = l.Medium
+	text.season = l.TVSeason
 	if l.Source == DiscogsSource {
 		text.releaseID = l.DiscogsReleaseID
 	}

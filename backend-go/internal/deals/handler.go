@@ -75,7 +75,7 @@ func (h *Handler) Mount(r chi.Router) {
 }
 
 // View is the GET /api/deals body. Wishes counts the copies on the wishlist,
-// SearchedWishes those the hunter looks for (no TV series).
+// SearchedWishes those the enabled sources look for.
 type View struct {
 	Status         Status        `json:"status"`
 	Wishes         int           `json:"wishes"`
@@ -119,7 +119,7 @@ func (h *Handler) listDeals(w http.ResponseWriter, r *http.Request, matched bool
 		httpx.WriteInternal(w, r, h.logger, "wish count", err)
 		return
 	}
-	searched, err := h.store.SearchedWishCount(r.Context())
+	searched, err := h.store.SearchedWishCount(r.Context(), h.hunter.searchesTV())
 	if err != nil {
 		httpx.WriteInternal(w, r, h.logger, "searched wish count", err)
 		return

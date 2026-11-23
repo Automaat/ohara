@@ -181,7 +181,7 @@ func automaticAlertCandidates(ctx context.Context, q querier, sourceNames, exter
 		WHERE w.status = 'wishlist' AND w.max_price_cents IS NULL AND w.max_market_percent IS NULL
 			AND o.last_seen_at >= $4 AND o.dismissed_at IS NULL AND o.gone_at IS NULL
 			AND o.acquired_as IS NOT NULL AND `+freshListing+` AND `+wishOfListingTitle("w")+`
-			AND `+huntedWish("w")+` AND `+wishNamedBy("w")+` AND `+mediumFits("w")+`
+			AND `+listingFitsKind("w")+` AND `+wishNamedBy("w")+` AND `+mediumFits("w")+`
 		ORDER BY o.id`, sourceNames, externalIDs, copyIDs, asOf)
 	if err != nil {
 		return nil, fmt.Errorf("automatic alert candidates: %w", err)

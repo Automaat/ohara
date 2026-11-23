@@ -30,8 +30,9 @@ import (
 // when it does not; a listing with Kinds belongs to no want of another
 // kind. Medium is the album medium a source names apart from the title
 // ("vinyl", "cd", "cassette" or "other"), which makes the listing an
-// album's; empty leaves the medium to the title. DiscogsReleaseID is
-// the inventory release ID when Discogs supplies it.
+// album's; empty leaves the medium to the title. TVSeason is the season
+// named by a BlueDVD listing. DiscogsReleaseID is the inventory release ID
+// when Discogs supplies it.
 type Listing struct {
 	Source           string
 	ExternalID       string
@@ -44,6 +45,7 @@ type Listing struct {
 	Query            string
 	Medium           string
 	Kinds            []string
+	TVSeason         *int
 	DiscogsReleaseID int64
 }
 
@@ -102,13 +104,15 @@ func canaryQuery(src Source, configured string) string {
 
 // Page is a Pager's answer to one query. Seen holds the external ID of
 // every offer in the answer, also those Listings leave out (no price).
+// Unavailable holds IDs the source explicitly marks as unavailable.
 // Complete reports that the answer holds every offer the site has for the
 // query, not just its first page, so a stored listing the query found
 // before and Seen lacks is gone.
 type Page struct {
-	Listings []Listing
-	Seen     []string
-	Complete bool
+	Listings    []Listing
+	Seen        []string
+	Unavailable []string
+	Complete    bool
 }
 
 // Pager is a query source that tells a complete answer from a first page.

@@ -566,6 +566,9 @@ func newHunter(pool *pgxpool.Pool, lane *deals.Lane, logger *slog.Logger) (*deal
 	if envOr("OHARA_BLUEDVD", "true") == "true" {
 		sources = append(sources, deals.BlueDVD{Client: client, BaseURL: envOr("OHARA_DEALS_BLUEDVD_URL", deals.BlueDVDURL)})
 	}
+	if envOr("OHARA_DVDMAX", "true") == "true" {
+		sources = append(sources, deals.DVDmax{Client: client, BaseURL: envOr("OHARA_DEALS_DVDMAX_URL", deals.DVDmaxURL)})
+	}
 	if envOr("OHARA_WINYLOWNIA", "true") == "true" {
 		sources = append(sources, deals.Winylownia{Client: client, BaseURL: envOr("OHARA_DEALS_WINYLOWNIA_URL", deals.WinylowniaURL)})
 	}

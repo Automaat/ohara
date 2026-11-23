@@ -178,6 +178,13 @@ func (h *Hunter) Status() Status {
 	return s
 }
 
+func (h *Hunter) searchesTV() bool {
+	return slices.ContainsFunc(h.sources, func(src Source) bool {
+		kinds, ok := src.(KindSource)
+		return ok && src.Name() == blueDVDSource && slices.Contains(kinds.Kinds(), "tv")
+	})
+}
+
 // execute runs once and records the outcome, in the status and the
 // database; h.task calls it holding the one run. Times keep the
 // database's microseconds, so a restart restores the same status.
@@ -271,7 +278,8 @@ func (h *Hunter) Run(ctx context.Context) (RunResult, error) {
 	if err != nil {
 		return RunResult{}, err
 	}
-	wants, err := h.store.Wants(ctx)
+	searchesTV := h.searchesTV()
+	wants, err := h.store.wants(ctx, searchesTV)
 	if err != nil {
 		return RunResult{}, err
 	}
@@ -299,11 +307,11 @@ func (h *Hunter) Run(ctx context.Context) (RunResult, error) {
 	r.res.Errors = []string{}
 	r.res.coverage = &runCoverage{Rows: []*wishCoverage{}}
 	queries, queryWants := planQueries(wants)
-	r.queryWants = queryWants
 	r.res.Queries = len(queries)
 	if len(wants) > 0 || h.cfg.CanaryQuery != "" {
 		for _, src := range h.sources {
-			if err := r.search(ctx, src, r.queriesFor(src, queries)); err != nil {
+			r.queryWants = queryWants
+			if err := r.search(ctx, src, r.queriesFor(src, queries, searchesTV)); err != nil {
 				return r.res, err
 			}
 		}
@@ -327,23 +335,33 @@ func (h *Hunter) Run(ctx context.Context) (RunResult, error) {
 // queriesFor are the queries src is asked: all of them, or for a
 // KindSource only those of the wishes of its kinds, whose kinds the run
 // then keeps for matching the source's listings.
-func (r *run) queriesFor(src Source, all []string) []string {
+func (r *run) queriesFor(src Source, all []string, searchesTV bool) []string {
 	ks, ok := src.(KindSource)
-	if !ok {
+	if !ok && !searchesTV {
 		return all
 	}
-	kinds := ks.Kinds()
+	var kinds []string
+	if ok {
+		kinds = ks.Kinds()
+	}
+	if searchesTV && src.Name() != blueDVDSource {
+		if kinds == nil {
+			kinds = []string{"movie", "book", "music"}
+		} else {
+			kinds = slices.DeleteFunc(slices.Clone(kinds), func(kind string) bool { return kind == "tv" })
+		}
+	}
 	if r.kinds == nil {
 		r.kinds = map[string][]string{}
 	}
 	r.kinds[src.Name()] = kinds
-	var wants []Want
-	for i := range r.wants {
-		if slices.Contains(kinds, r.wants[i].Kind) {
-			wants = append(wants, r.wants[i])
-		}
+	query := (*Want).Queries
+	if catalog, ok := src.(interface{ wishQueries(*Want) []string }); ok {
+		query = catalog.wishQueries
 	}
-	return searchQueries(wants)
+	queries, owners := queriesBy(r.wants, kinds, query)
+	r.queryWants = owners
+	return queries
 }
 
 // searchQueries are the distinct queries of every want, in want order.
@@ -353,11 +371,18 @@ func searchQueries(wants []Want) []string {
 }
 
 func planQueries(wants []Want) ([]string, map[string][]*Want) {
+	return queriesBy(wants, nil, (*Want).Queries)
+}
+
+func queriesBy(wants []Want, kinds []string, query func(*Want) []string) ([]string, map[string][]*Want) {
 	var out []string
 	owners := map[string][]*Want{}
 	for i := range wants {
 		w := &wants[i]
-		for _, q := range w.Queries() {
+		if !allowsKind(kinds, w.Kind) {
+			continue
+		}
+		for _, q := range query(w) {
 			key := spelledKey(q)
 			previous := owners[key]
 			if len(previous) == 0 {
@@ -425,6 +450,9 @@ func (r *run) searchAll(ctx context.Context, src Source, f *Refused, queries []s
 	results := 0
 	var answered []Listing
 	var answeredOutcome queryOutcome
+	usesCanary := func(q string) bool {
+		return canary != "" && (q == canary || src.Name() == dvdmaxSource && spelledKey(q) == spelledKey(canary))
+	}
 	if canary != "" {
 		listings, outcome, err := r.ask(ctx, src, f, canary)
 		if err != nil {
@@ -433,7 +461,7 @@ func (r *run) searchAll(ctx context.Context, src Source, f *Refused, queries []s
 		r.canary(src, canary, outcome == querySucceeded, len(listings))
 		results += len(listings)
 		answered, answeredOutcome = listings, outcome
-		if outcome == querySucceeded && len(r.wants) > 0 && !slices.Contains(queries, canary) {
+		if outcome == querySucceeded && len(r.wants) > 0 && !slices.ContainsFunc(queries, usesCanary) {
 			if err := r.contradict(ctx, r.unmatchedOf(listings), nil); err != nil {
 				return err
 			}
@@ -441,7 +469,7 @@ func (r *run) searchAll(ctx context.Context, src Source, f *Refused, queries []s
 	}
 	for _, q := range queries {
 		listings, outcome := answered, answeredOutcome
-		if canary == "" || q != canary {
+		if !usesCanary(q) {
 			var err error
 			if listings, outcome, err = r.ask(ctx, src, f, q); err != nil {
 				return err
@@ -493,6 +521,14 @@ func (r *run) ask(ctx context.Context, src Source, f *Refused, query string) ([]
 		}
 		r.fail(err.Error())
 		return nil, queryFailed, nil
+	}
+	if len(page.Unavailable) > 0 {
+		if err := r.h.store.MarkUnavailable(ctx, src.Name(), page.Unavailable); err != nil {
+			return nil, queryFailed, err
+		}
+		if err := r.contradict(ctx, map[string][]string{src.Name(): page.Unavailable}, nil); err != nil {
+			return nil, queryFailed, err
+		}
 	}
 	if e, ok := src.(Expiring); ok {
 		if _, err := r.h.store.UpdateGone(ctx, src.Name(), []string{QueryKey(e.Scope())}, page.Seen, r.asOf); err != nil {
@@ -774,7 +810,7 @@ var (
 		"cd": "CD", "vinyl": "Winyl", "cassette": "Kaseta", FormatAudiobook: "Audiobook",
 	}
 	sourceLabels = map[string]string{
-		"olx": "OLX", "bluedvd": "BlueDVD", "winylownia": "Winylownia", "swiatksiazki": "Świat Książki", "pepper": "Pepper", "tezeusz": "Tezeusz",
+		"olx": "OLX", "bluedvd": "BlueDVD", "dvdmax": "DVDmax", "winylownia": "Winylownia", "swiatksiazki": "Świat Książki", "pepper": "Pepper", "tezeusz": "Tezeusz",
 		DiscogsSource: "Discogs",
 	}
 	stateLabels = map[string]string{"new": "nowy", "used": "używany"}

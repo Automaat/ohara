@@ -232,7 +232,8 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   translation must match the whole query. It takes the disc format from `nosnik`
   and passes it to the matcher. New copies with a positive price can match
   when available or on preorder. It skips unavailable items, unsupported
-  media, conflicting format labels and titles separated by `/`. An explicit
+  media, conflicting format labels and slash-separated bundles. A matching
+  title or alias may contain its own slash, as in Face/Off. An explicit
   unavailable status hides a stored offer and stops its pending alert until
   a new matching price is found. The `Blade Runner` canary shares its answer
   with equivalent wish queries. The list response carries neither the EAN nor

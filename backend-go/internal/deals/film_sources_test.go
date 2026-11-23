@@ -106,3 +106,30 @@ func TestDVDmaxCanaryAnswersACaseVariantOfTheWishlistQuery(t *testing.T) {
 		t.Fatalf("requests = %d, matched = %d, want one shared result", requests.Load(), run.Matched)
 	}
 }
+
+func TestDVDmaxRejectsSlashBundlesWithoutDroppingExactSlashTitles(t *testing.T) {
+	tests := []struct {
+		name  string
+		title string
+		query string
+		want  int
+	}{
+		{name: "slash between translations", title: "Past Lives (Poprzednie życie)/(Perfect Days)", query: "Poprzednie życie"},
+		{name: "slash between originals", title: "Red Sparrow/Kursk (Czerwona jaskółka)", query: "Czerwona jaskółka"},
+		{name: "spaced slash", title: "Red Sparrow / Kursk (Czerwona jaskółka)", query: "Czerwona jaskółka"},
+		{name: "exact original slash title", title: "Face/Off", query: "Face/Off", want: 1},
+		{name: "exact slash title with a translation", title: "Face/Off (Bez twarzy)", query: "Face/Off", want: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := fmt.Appendf(nil, `{"products":[{"aId":411,"aName":%q,"aPrice":"40.99",
+				"dictionaryDcStatus":"DOSTEPNY24","nosnik":"BLU-RAY","url":"/title,art411"}]}`, tt.title)
+
+			listings, err := parseDVDmax(body, tt.query)
+
+			if err != nil || len(listings) != tt.want {
+				t.Errorf("listings = %+v, err = %v, want %d listings", listings, err, tt.want)
+			}
+		})
+	}
+}

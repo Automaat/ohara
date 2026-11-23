@@ -117,8 +117,10 @@ func dvdmaxTitleMatches(title string, query []string) bool {
 	if slices.Equal(words(title), query) {
 		return true
 	}
+	slashes := strings.Count(title, "/")
 	for _, part := range strings.FieldsFunc(title, func(r rune) bool { return r == '(' || r == ')' }) {
-		if slices.Equal(words(part), query) {
+		// An alias must not ignore a slash that joins films elsewhere in the title.
+		if slices.Equal(words(part), query) && strings.Count(part, "/") == slashes {
 			return true
 		}
 	}

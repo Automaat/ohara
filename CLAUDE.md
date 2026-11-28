@@ -67,7 +67,8 @@ Detailed behavior lives in `docs/`; read a file before changing its area:
 - [valuation](docs/valuation.md): copy values, value history, market prices,
   the insurance report.
 - [scanner](docs/scanner.md): the scanner, pending scans and the scan queue.
-- [backend](docs/backend.md): the router's compression and `api seed`.
+- [backend](docs/backend.md): the router's compression, its panic and
+  timeout answers, and `api seed`.
 - [e2e](docs/e2e.md): the Playwright smoke suite.
 - [ci](docs/ci.md): vulnerability checks, the shared Go version and the
   release tag protection.

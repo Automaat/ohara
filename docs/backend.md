@@ -1,6 +1,7 @@
 # Backend details
 
-Read before changing the router's compression or `api seed`.
+Read before changing the router's compression, its panic and timeout
+answers or `api seed`.
 
 Moved from `CLAUDE.md`, whose conventions still apply.
 
@@ -18,6 +19,15 @@ Moved from `CLAUDE.md`, whose conventions still apply.
   weakens its `ETag` (a 304 for that weak `ETag` keeps it weak) and a
   compressed HEAD sends no `Content-Length`; a client without gzip keeps
   its ranges.
+- A handler panic gets the JSON 500 while the response is still
+  writable: the handler wrote nothing and did not hijack the connection.
+  A `Connection: Upgrade` header alone changes nothing; only a handler
+  that hijacked the connection gets nothing written after its panic. The
+  30 s timeout's JSON 504 goes only to a handler that returns normally
+  past the deadline without writing or hijacking; one that panics past it
+  gets the 500. A handler that wrote part of its answer and then panics
+  keeps that answer (status and body as written); the panic is still
+  logged.
 - `api seed` (`internal/seed`) fills an empty database with demo rows for
   every page in one transaction and sends no request; it refuses (exit 1,
   nothing changed) a database holding titles, listings, value history,
